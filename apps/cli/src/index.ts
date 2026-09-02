@@ -2,17 +2,19 @@
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
+import { runMarkWeb } from "./mark-web/server.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
-import { BLIND_METHOD, runReport } from "./report.ts";
+import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
 
 const USAGE = `decupa — bancada de medição
 
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
-  decupa mark --input <video|wav> --out <verdade.json> [--preview 500] [--start 0]
-      Marca fronteiras de palavra de ouvido, sem nunca exibir a predição do
-      alinhador. É a única forma de produzir verdade que o portão aceita.
+  decupa mark --input <video|wav> --out <verdade.json> [--web] [--port 7777]
+      Marca fronteiras de palavra sem nunca exibir a predição do alinhador.
+      --web abre um marcador no navegador com vídeo e forma de onda (é o
+      recomendado); sem ele, cai no modo terminal, só de ouvido.
 
   decupa measure --input <video|wav> --truth <verdade.json> [--model small] [--onsets-only] [--out <relatorio.json>]
       Mede o erro de fronteira de palavra do alinhamento contra fronteiras
@@ -80,10 +82,11 @@ async function main(argv: string[]): Promise<number> {
       `p50 ${error.p50Ms} ms · p90 ${error.p90Ms} ms · max ${error.maxMs} ms\n` +
       `portão (p90 <= ${GATE_P90_MS} ms): ${report.gatePassed ? "PASSOU" : "REPROVOU"}`,
     );
-    if (report.truthMethod !== BLIND_METHOD) {
+    if (!isBlindMethod(report.truthMethod)) {
       console.error(
         `\nAVISO: a verdade em ${values.truth} tem procedência ` +
-        `"${report.truthMethod ?? "não declarada"}", não "${BLIND_METHOD}".\n` +
+        `"${report.truthMethod ?? "não declarada"}", que não é uma das cegas ` +
+        `(${BLIND_METHODS.join(", ")}).\n` +
         `Se essas fronteiras saíram da própria transcrição, este número não ` +
         `mede nada — erro zero é consequência aritmética, não qualidade.\n` +
         `Refaça com: decupa mark --input ${values.input} --out ${values.truth}`,
@@ -101,11 +104,25 @@ async function main(argv: string[]): Promise<number> {
         out: { type: "string" },
         preview: { type: "string" },
         start: { type: "string" },
+        web: { type: "boolean" },
+        port: { type: "string" },
       },
     });
     if (!values.input || !values.out) {
       console.error("mark precisa de --input e --out");
       return 1;
+    }
+    if (values.web) {
+      const result = await runMarkWeb({
+        input: values.input,
+        outPath: values.out,
+        port: values.port ? Number(values.port) : undefined,
+      });
+      console.log(
+        `${result.boundariesMs.length} fronteiras marcadas às cegas · ` +
+        `gravado em ${result.outPath}`,
+      );
+      return 0;
     }
     const truth = await runMark({
       input: values.input,

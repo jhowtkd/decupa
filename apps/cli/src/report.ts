@@ -1,7 +1,13 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { GATE_P90_MS, type MeasureReport } from "./measure.ts";
 
-export const BLIND_METHOD = "blind-keyboard";
+/** Procedências que provam que a verdade não veio da predição do alinhador. */
+export const BLIND_METHODS = ["blind-keyboard", "blind-waveform"] as const;
+
+/** Ver a forma de onda não é trapaça: é o sinal acústico, não a saída do modelo. */
+export function isBlindMethod(method: string | null): boolean {
+  return method !== null && (BLIND_METHODS as readonly string[]).includes(method);
+}
 
 export interface ReportSummary {
   total: number;
@@ -22,7 +28,7 @@ export interface ReportSummary {
 export function aggregate(reports: MeasureReport[]): ReportSummary {
   const passed = reports.filter((r) => r.gatePassed).length;
   const worstP90Ms = reports.reduce((worst, r) => Math.max(worst, r.error.p90Ms), 0);
-  const unverifiedTruth = reports.filter((r) => r.truthMethod !== BLIND_METHOD).length;
+  const unverifiedTruth = reports.filter((r) => !isBlindMethod(r.truthMethod)).length;
   return {
     total: reports.length,
     passed,
@@ -52,8 +58,8 @@ export function renderReport(reports: MeasureReport[]): string {
         <td class="n">${r.error.p50Ms}</td>
         <td class="n">${r.error.p90Ms}</td>
         <td class="n">${r.error.maxMs}</td>
-        <td>${r.truthMethod === BLIND_METHOD
-          ? "cega"
+        <td>${isBlindMethod(r.truthMethod)
+          ? escapeHtml(r.truthMethod!.replace("blind-", "cega · "))
           : `<span class="warn">${escapeHtml(r.truthMethod ?? "não declarada")}</span>`}</td>
         <td>${r.gatePassed ? "PASSOU" : "REPROVOU"}</td>
       </tr>`)

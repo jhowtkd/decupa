@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>decupa · marcar fronteiras</title>
+<style>
+  :root {
+    --bg: #12171a; --panel: #1a2125; --line: #2a3439; --line-strong: #3c484e;
+    --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230; --ok: #63be97; --warn: #e0765c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 18px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex: none;
+  }
+  header .name { font-weight: 600; }
+  header .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+  header .count b { color: var(--accent); font-size: 1.15em; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit; font-weight: 600; padding: 7px 16px; border-radius: 5px;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1c2226; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  main { flex: 1; display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 16px 18px; min-height: 0; }
+  video { max-height: 44vh; border-radius: 6px; background: #000; display: block; }
+  .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .readout {
+    display: flex; align-items: baseline; gap: 20px;
+    font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
+  }
+  .readout .big { font-size: 1.9rem; font-weight: 600; letter-spacing: -.02em; }
+  .readout .lbl { color: var(--muted); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+  .readout .loop { color: var(--ok); font-size: .78rem; }
+  .readout .loop.off { color: var(--muted); }
+  canvas { display: block; width: 100%; border-radius: 6px; background: var(--panel); cursor: crosshair; }
+  #zoom { height: 190px; border: 1px solid var(--line); }
+  #overview { height: 62px; border: 1px solid var(--line); }
+  .hint { color: var(--muted); font-size: .78rem; }
+
+  footer {
+    flex: none; border-top: 1px solid var(--line); background: var(--panel);
+    padding: 10px 18px; display: flex; flex-wrap: wrap; gap: 6px 22px;
+    font-size: .78rem; color: var(--muted);
+  }
+  kbd {
+    font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: var(--ink);
+    background: #232c31; border: 1px solid var(--line-strong); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 6px;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: var(--ok); color: #10201a; font-weight: 600;
+    padding: 10px 20px; border-radius: 6px; opacity: 0; transition: opacity .2s;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--warn); color: #2a1410; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="name" id="name">…</span>
+  <span class="count"><b id="count">0</b> marcas</span>
+  <span class="spacer"></span>
+  <button id="mark">Marcar aqui</button>
+  <button id="undo">Desfazer</button>
+  <button id="save" class="primary">Salvar</button>
+</header>
+
+<main>
+  <video id="video" preload="auto" playsinline></video>
+  <div class="right">
+    <div class="readout">
+      <div>
+        <div class="lbl">cursor</div>
+        <div class="big" id="cursor">0 ms</div>
+      </div>
+      <div>
+        <div class="lbl">de</div>
+        <div class="big" id="total">—</div>
+      </div>
+      <div class="loop off" id="loopState">loop parado</div>
+    </div>
+    <canvas id="zoom"></canvas>
+    <div class="hint">
+      Clique na onda para mover o cursor. A palavra começa onde a energia sobe —
+      use o ouvido para confirmar.
+    </div>
+    <canvas id="overview"></canvas>
+  </div>
+</main>
+
+<footer>
+  <span><kbd>espaço</kbd> tocar em loop a partir do cursor</span>
+  <span><kbd>←</kbd><kbd>→</kbd> ±10 ms</span>
+  <span><kbd>⇧←</kbd><kbd>⇧→</kbd> ±50 ms</span>
+  <span><kbd>[</kbd><kbd>]</kbd> ±1 s</span>
+  <span><kbd>enter</kbd> marcar</span>
+  <span><kbd>⌫</kbd> apagar marca mais próxima</span>
+  <span><kbd>⌘S</kbd> salvar</span>
+</footer>
+
+<div id="toast"></div>
+
+<script>
+const LOOP_MS = 700;
+const ZOOM_HALF_MS = 1500;
+
+const el = (id) => document.getElementById(id);
+const video = el("video");
+const zoom = el("zoom");
+const overview = el("overview");
+
+let peaks = null;
+// Ganho só de exibição. Gravação com pico baixo desenha uma onda achatada, e
+// achatada esconde o ataque — que é exatamente o que se procura aqui. Não
+// altera nenhum dado, só a altura do traço.
+let displayGain = 1;
+let durationMs = 0;
+let cursorMs = 0;
+let marks = [];
+let looping = false;
+let saved = false;
+
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+function toast(message, isError) {
+  const node = el("toast");
+  node.textContent = message;
+  node.className = isError ? "show err" : "show";
+  setTimeout(() => { node.className = isError ? "err" : ""; }, 2200);
+}
+
+function fitCanvas(canvas) {
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.round(rect.width * ratio);
+  canvas.height = Math.round(rect.height * ratio);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { ctx, width: rect.width, height: rect.height };
+}
+
+/** Desenha a onda entre dois instantes, um traço vertical por pixel. */
+function drawWave(ctx, width, height, fromMs, toMs, color) {
+  if (!peaks) return;
+  const mid = height / 2;
+  const perMs = peaks.bucketsPerSecond / 1000;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x < width; x++) {
+    const t = fromMs + ((toMs - fromMs) * x) / width;
+    const bucket = Math.floor(t * perMs);
+    if (bucket < 0 || bucket >= peaks.max.length) continue;
+    const scale = mid * 0.94 * displayGain;
+    const top = mid - clamp(peaks.max[bucket] * scale, -mid, mid);
+    const bottom = mid - clamp(peaks.min[bucket] * scale, -mid, mid);
+    ctx.moveTo(x + 0.5, top);
+    ctx.lineTo(x + 0.5, Math.max(bottom, top + 1));
+  }
+  ctx.stroke();
+}
+
+function drawZoom() {
+  const { ctx, width, height } = fitCanvas(zoom);
+  ctx.clearRect(0, 0, width, height);
+
+  const fromMs = cursorMs - ZOOM_HALF_MS;
+  const toMs = cursorMs + ZOOM_HALF_MS;
+  const xOf = (ms) => ((ms - fromMs) / (toMs - fromMs)) * width;
+
+  // régua a cada 100 ms, com marca forte no segundo cheio
+  ctx.strokeStyle = "#232c31";
+  ctx.beginPath();
+  for (let ms = Math.ceil(fromMs / 100) * 100; ms < toMs; ms += 100) {
+    const x = Math.round(xOf(ms)) + 0.5;
+    ctx.moveTo(x, ms % 1000 === 0 ? 0 : height - 12);
+    ctx.lineTo(x, height);
+  }
+  ctx.stroke();
+
+  drawWave(ctx, width, height, fromMs, toMs, "#5d7480");
+
+  // marcas já feitas
+  ctx.strokeStyle = "#f2c230";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (const m of marks) {
+    if (m < fromMs || m > toMs) continue;
+    const x = Math.round(xOf(m)) + 0.5;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+  }
+  ctx.stroke();
+
+  // cabeça de reprodução
+  if (looping) {
+    const playMs = video.currentTime * 1000;
+    if (playMs >= fromMs && playMs <= toMs) {
+      ctx.strokeStyle = "#63be97";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(xOf(playMs)) + 0.5, 0);
+      ctx.lineTo(Math.round(xOf(playMs)) + 0.5, height);
+      ctx.stroke();
+    }
+  }
+
+  // cursor, sempre no centro
+  ctx.strokeStyle = "#e4e9e5";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(Math.round(width / 2) + 0.5, 0);
+  ctx.lineTo(Math.round(width / 2) + 0.5, height);
+  ctx.stroke();
+}
+
+function drawOverview() {
+  const { ctx, width, height } = fitCanvas(overview);
+  ctx.clearRect(0, 0, width, height);
+  drawWave(ctx, width, height, 0, durationMs, "#3c484e");
+
+  const xOf = (ms) => (ms / durationMs) * width;
+
+  ctx.fillStyle = "rgba(242,194,48,.16)";
+  ctx.fillRect(xOf(cursorMs - ZOOM_HALF_MS), 0, (ZOOM_HALF_MS * 2 / durationMs) * width, height);
+
+  ctx.strokeStyle = "#f2c230";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const m of marks) {
+    ctx.moveTo(Math.round(xOf(m)) + 0.5, 0);
+    ctx.lineTo(Math.round(xOf(m)) + 0.5, height);
+  }
+  ctx.stroke();
+
+  ctx.strokeStyle = "#e4e9e5";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(Math.round(xOf(cursorMs)) + 0.5, 0);
+  ctx.lineTo(Math.round(xOf(cursorMs)) + 0.5, height);
+  ctx.stroke();
+}
+
+function render() {
+  el("cursor").textContent = `${Math.round(cursorMs)} ms`;
+  el("count").textContent = String(marks.length);
+  el("loopState").textContent = looping ? "tocando em loop" : "loop parado";
+  el("loopState").className = looping ? "loop" : "loop off";
+  el("undo").disabled = marks.length === 0;
+  drawZoom();
+  drawOverview();
+}
+
+function setCursor(ms) {
+  cursorMs = clamp(Math.round(ms), 0, durationMs);
+  if (!looping) video.currentTime = cursorMs / 1000;
+  render();
+}
+
+function toggleLoop() {
+  looping = !looping;
+  if (looping) {
+    video.currentTime = cursorMs / 1000;
+    video.play().catch(() => { looping = false; render(); });
+  } else {
+    video.pause();
+    video.currentTime = cursorMs / 1000;
+  }
+  render();
+}
+
+function addMark() {
+  if (!marks.includes(cursorMs)) {
+    marks = [...marks, cursorMs].sort((a, b) => a - b);
+  }
+  render();
+}
+
+function removeNearest() {
+  if (marks.length === 0) return;
+  let best = 0;
+  for (let i = 1; i < marks.length; i++) {
+    if (Math.abs(marks[i] - cursorMs) < Math.abs(marks[best] - cursorMs)) best = i;
+  }
+  marks = marks.filter((_, i) => i !== best);
+  render();
+}
+
+async function save() {
+  el("save").disabled = true;
+  try {
+    const res = await fetch("/truth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ boundariesMs: marks }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "falhou ao salvar");
+    saved = true;
+    toast(`${body.count} marcas salvas — pode fechar a aba`);
+  } catch (error) {
+    el("save").disabled = false;
+    toast(String(error.message || error), true);
+  }
+}
+
+// O loop de reprodução: rebobina sempre que passa da janela, então mover o
+// cursor enquanto toca muda na hora o trecho que se ouve. É assim que se
+// encontra o ataque — nudge e escuta, sem parar.
+function tick() {
+  if (looping) {
+    const playMs = video.currentTime * 1000;
+    if (playMs < cursorMs - 30 || playMs > cursorMs + LOOP_MS) {
+      video.currentTime = cursorMs / 1000;
+    }
+    drawZoom();
+  }
+  requestAnimationFrame(tick);
+}
+
+function canvasTime(canvas, event, fromMs, toMs) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = (event.clientX - rect.left) / rect.width;
+  return fromMs + ratio * (toMs - fromMs);
+}
+
+zoom.addEventListener("pointerdown", (e) => {
+  setCursor(canvasTime(zoom, e, cursorMs - ZOOM_HALF_MS, cursorMs + ZOOM_HALF_MS));
+});
+overview.addEventListener("pointerdown", (e) => {
+  setCursor(canvasTime(overview, e, 0, durationMs));
+});
+el("save").addEventListener("click", save);
+el("undo").addEventListener("click", removeNearest);
+el("mark").addEventListener("click", () => { addMark(); el("mark").blur(); });
+
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault(); save(); return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  switch (e.key) {
+    case " ": e.preventDefault(); toggleLoop(); break;
+    case "ArrowLeft": e.preventDefault(); setCursor(cursorMs - (e.shiftKey ? 50 : 10)); break;
+    case "ArrowRight": e.preventDefault(); setCursor(cursorMs + (e.shiftKey ? 50 : 10)); break;
+    case "[": e.preventDefault(); setCursor(cursorMs - 1000); break;
+    case "]": e.preventDefault(); setCursor(cursorMs + 1000); break;
+    case "Enter": e.preventDefault(); addMark(); break;
+    case "Backspace": case "Delete": e.preventDefault(); removeNearest(); break;
+  }
+});
+
+window.addEventListener("resize", render);
+window.addEventListener("beforeunload", (e) => {
+  if (marks.length > 0 && !saved) { e.preventDefault(); e.returnValue = ""; }
+});
+
+(async function start() {
+  const [meta, peaksBody] = await Promise.all([
+    fetch("/meta").then((r) => r.json()),
+    fetch("/peaks").then((r) => r.json()),
+  ]);
+  peaks = peaksBody;
+  let loudest = 0;
+  for (let i = 0; i < peaks.max.length; i++) {
+    loudest = Math.max(loudest, peaks.max[i], -peaks.min[i]);
+  }
+  displayGain = loudest > 0 ? clamp(0.92 / loudest, 1, 24) : 1;
+  durationMs = meta.durationMs;
+  el("name").textContent = meta.name;
+  el("total").textContent = `${(durationMs / 1000).toFixed(1)} s`;
+  video.src = "/media";
+  video.addEventListener("loadeddata", render, { once: true });
+  render();
+  tick();
+})();
+</script>
+</body>
+</html>
