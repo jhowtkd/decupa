@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
+import { runMark } from "./mark.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
-import { runReport } from "./report.ts";
+import { BLIND_METHOD, runReport } from "./report.ts";
 
 const USAGE = `decupa — bancada de medição
 
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
+  decupa mark --input <video|wav> --out <verdade.json> [--preview 500] [--start 0]
+      Marca fronteiras de palavra de ouvido, sem nunca exibir a predição do
+      alinhador. É a única forma de produzir verdade que o portão aceita.
+
   decupa measure --input <video|wav> --truth <verdade.json> [--model small] [--out <relatorio.json>]
       Mede o erro de fronteira de palavra do alinhamento contra fronteiras
-      marcadas à mão. Portão da Fase 0: p90 <= ${GATE_P90_MS} ms.
+      marcadas às cegas. Portão da Fase 0: p90 <= ${GATE_P90_MS} ms.
 
   decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
       Junta relatórios de measure numa página só.
@@ -72,7 +77,44 @@ async function main(argv: string[]): Promise<number> {
       `p50 ${error.p50Ms} ms · p90 ${error.p90Ms} ms · max ${error.maxMs} ms\n` +
       `portão (p90 <= ${GATE_P90_MS} ms): ${report.gatePassed ? "PASSOU" : "REPROVOU"}`,
     );
+    if (report.truthMethod !== BLIND_METHOD) {
+      console.error(
+        `\nAVISO: a verdade em ${values.truth} tem procedência ` +
+        `"${report.truthMethod ?? "não declarada"}", não "${BLIND_METHOD}".\n` +
+        `Se essas fronteiras saíram da própria transcrição, este número não ` +
+        `mede nada — erro zero é consequência aritmética, não qualidade.\n` +
+        `Refaça com: decupa mark --input ${values.input} --out ${values.truth}`,
+      );
+      return 3;
+    }
     return report.gatePassed ? 0 : 2;
+  }
+
+  if (command === "mark") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        input: { type: "string" },
+        out: { type: "string" },
+        preview: { type: "string" },
+        start: { type: "string" },
+      },
+    });
+    if (!values.input || !values.out) {
+      console.error("mark precisa de --input e --out");
+      return 1;
+    }
+    const truth = await runMark({
+      input: values.input,
+      outPath: values.out,
+      previewMs: values.preview ? Number(values.preview) : undefined,
+      startMs: values.start ? Number(values.start) : undefined,
+    });
+    console.log(
+      `\n${truth.boundariesMs.length} fronteiras marcadas às cegas · ` +
+      `gravado em ${values.out}`,
+    );
+    return 0;
   }
 
   if (command === "report") {

@@ -15,7 +15,19 @@ export interface MeasureReport {
   truthBoundaries: number[];
   error: BoundaryError;
   gatePassed: boolean;
+  /**
+   * Procedência do arquivo de verdade. Só "blind-keyboard" (gravado pelo
+   * `decupa mark`) prova que as fronteiras não vieram da própria predição.
+   * Verdade derivada do alinhador mede zero por construção.
+   */
+  truthMethod: string | null;
   measuredAt: string;
+}
+
+/** Procedência declarada no arquivo de verdade, ou null se não houver. */
+export function loadTruthMethod(json: string): string | null {
+  const parsed = JSON.parse(json) as { method?: unknown };
+  return typeof parsed.method === "string" ? parsed.method : null;
 }
 
 /** Arquivo de verdade: `{ "boundariesMs": [120, 260, 520, ...] }`, em ms. */
@@ -46,7 +58,9 @@ export async function runMeasure(opts: {
   const language = opts.language ?? "pt";
   const model = opts.model ?? "small";
 
-  const truthBoundaries = loadTruthBoundaries(await readFile(opts.truthPath, "utf8"));
+  const truthJson = await readFile(opts.truthPath, "utf8");
+  const truthBoundaries = loadTruthBoundaries(truthJson);
+  const truthMethod = loadTruthMethod(truthJson);
   const transcript = await transcribe({ input: opts.input, language, model });
   const boundaries = wordBoundaries(transcript);
 
@@ -65,6 +79,7 @@ export async function runMeasure(opts: {
     truthBoundaries,
     error,
     gatePassed: evaluateGate(error),
+    truthMethod,
     measuredAt: new Date().toISOString(),
   };
 

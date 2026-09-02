@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { evaluateGate, loadTruthBoundaries } from "./measure.ts";
+import { evaluateGate, loadTruthBoundaries, loadTruthMethod } from "./measure.ts";
+
+describe("loadTruthMethod", () => {
+  it("lê a procedência quando o arquivo veio do decupa mark", () => {
+    expect(loadTruthMethod('{"boundariesMs":[1],"method":"blind-keyboard"}')).toBe(
+      "blind-keyboard",
+    );
+  });
+
+  it("devolve null quando o arquivo não declara procedência", () => {
+    expect(loadTruthMethod('{"boundariesMs":[1]}')).toBeNull();
+  });
+
+  it("preserva uma procedência desconhecida em vez de mentir que é cega", () => {
+    expect(loadTruthMethod('{"boundariesMs":[1],"method":"audacity"}')).toBe("audacity");
+  });
+
+  it("devolve null quando method não é string", () => {
+    expect(loadTruthMethod('{"boundariesMs":[1],"method":42}')).toBeNull();
+  });
+});
 
 describe("loadTruthBoundaries", () => {
   it("aceita o formato de arquivo de verdade", () => {

@@ -1,23 +1,35 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { GATE_P90_MS, type MeasureReport } from "./measure.ts";
 
+export const BLIND_METHOD = "blind-keyboard";
+
 export interface ReportSummary {
   total: number;
   passed: number;
   failed: number;
   worstP90Ms: number;
+  /** Trechos cuja verdade não foi marcada às cegas. */
+  unverifiedTruth: number;
   gatePassed: boolean;
 }
 
+/**
+ * O portão só libera quando todos os trechos passam **e** toda verdade tem
+ * procedência cega. Verdade amostrada da saída do alinhador produz p90 zero
+ * por construção — liberar o portão com ela seria declarar vitória sobre uma
+ * tautologia.
+ */
 export function aggregate(reports: MeasureReport[]): ReportSummary {
   const passed = reports.filter((r) => r.gatePassed).length;
   const worstP90Ms = reports.reduce((worst, r) => Math.max(worst, r.error.p90Ms), 0);
+  const unverifiedTruth = reports.filter((r) => r.truthMethod !== BLIND_METHOD).length;
   return {
     total: reports.length,
     passed,
     failed: reports.length - passed,
     worstP90Ms,
-    gatePassed: reports.length > 0 && passed === reports.length,
+    unverifiedTruth,
+    gatePassed: reports.length > 0 && passed === reports.length && unverifiedTruth === 0,
   };
 }
 
@@ -40,9 +52,20 @@ export function renderReport(reports: MeasureReport[]): string {
         <td class="n">${r.error.p50Ms}</td>
         <td class="n">${r.error.p90Ms}</td>
         <td class="n">${r.error.maxMs}</td>
+        <td>${r.truthMethod === BLIND_METHOD
+          ? "cega"
+          : `<span class="warn">${escapeHtml(r.truthMethod ?? "não declarada")}</span>`}</td>
         <td>${r.gatePassed ? "PASSOU" : "REPROVOU"}</td>
       </tr>`)
     .join("\n");
+
+  const provenanceWarning = summary.unverifiedTruth > 0
+    ? `<div class="verdict bad">
+  ${summary.unverifiedTruth} de ${summary.total} trechos têm verdade sem procedência
+  cega. Fronteiras amostradas da saída do alinhador produzem erro zero por
+  construção — essa medição não vale. Refaça com <code>decupa mark</code>.
+</div>`
+    : "";
 
   return `<!doctype html>
 <html lang="pt-BR">
@@ -60,9 +83,15 @@ export function renderReport(reports: MeasureReport[]): string {
   th { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #666; }
   td.n { font-variant-numeric: tabular-nums; text-align: right; }
   tr.bad td { background: #fdf3f1; }
+  .warn { color: #b34a33; font-weight: 600; }
+  code { background: #eee; padding: 1px 5px; border-radius: 3px; }
 </style>
 <h1>Erro de fronteira de palavra</h1>
-<p class="sub">Portão da Fase 0: p90 &le; ${GATE_P90_MS} ms em todos os trechos.</p>
+<p class="sub">
+  Portão da Fase 0: p90 &le; ${GATE_P90_MS} ms em todos os trechos, com verdade
+  marcada às cegas.
+</p>
+${provenanceWarning}
 <div class="verdict ${summary.gatePassed ? "ok" : "bad"}">
   ${summary.passed} de ${summary.total} trechos passaram · pior p90 ${summary.worstP90Ms} ms ·
   ${summary.gatePassed ? "PORTÃO LIBERADO" : "PORTÃO FECHADO"}
@@ -71,7 +100,7 @@ export function renderReport(reports: MeasureReport[]): string {
   <thead>
     <tr>
       <th>Trecho</th><th>Tokens</th><th>Casadas</th><th>Sem par</th>
-      <th>p50 ms</th><th>p90 ms</th><th>max ms</th><th>Veredito</th>
+      <th>p50 ms</th><th>p90 ms</th><th>max ms</th><th>Procedência</th><th>Veredito</th>
     </tr>
   </thead>
   <tbody>
