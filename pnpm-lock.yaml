@@ -44,6 +44,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/metrics:
+    dependencies:
+      '@decupa/core':
+        specifier: workspace:*
+        version: link:../core
+
 packages:
 
   '@jridgewell/sourcemap-codec@1.6.0':
