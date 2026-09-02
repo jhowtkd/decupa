@@ -1,0 +1,15 @@
+{
+  "name": "@decupa/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "decupa": "./src/index.ts" },
+  "dependencies": {
+    "@decupa/acoustics": "workspace:*",
+    "@decupa/core": "workspace:*",
+    "@decupa/goldedit": "workspace:*",
+    "@decupa/media": "workspace:*",
+    "@decupa/metrics": "workspace:*",
+    "@decupa/transcript": "workspace:*"
+  }
+}
