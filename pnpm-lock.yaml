@@ -18,6 +18,15 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.4.1)(vite@8.2.2(@types/node@26.4.1))
 
+  packages/acoustics:
+    dependencies:
+      '@decupa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@decupa/media':
+        specifier: workspace:*
+        version: link:../media
+
   packages/core: {}
 
   packages/media:
