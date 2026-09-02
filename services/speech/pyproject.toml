@@ -1,0 +1,9 @@
+[project]
+name = "decupa-speech"
+version = "0.1.0"
+description = "Sidecar de transcrição e alinhamento forçado do Decupa"
+requires-python = ">=3.11,<3.12"
+dependencies = ["whisperx"]
+
+[tool.uv]
+package = false
