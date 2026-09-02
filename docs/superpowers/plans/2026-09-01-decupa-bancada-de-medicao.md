@@ -183,7 +183,7 @@ export const TRUTH = {
   toneGapDurationMs: 2600,
   /** clip.mp4: 3000 ms, 320x240, 25 fps */
   clipDurationMs: 3000,
-  /** par raw.wav (6000 ms) -> edited.wav (3600 ms): estes intervalos foram removidos */
+  /** par raw.wav (6000 ms) -> edited.wav (4600 ms): estes intervalos foram removidos */
   removed: [
     { startMs: 1200, endMs: 2000 },
     { startMs: 3500, endMs: 4100 },
@@ -405,8 +405,8 @@ for f in clip.mp4 tone-gap.wav raw.wav edited.wav speech.wav; do
 done
 ```
 
-Expected: `clip.mp4 3.0`, `tone-gap.wav 2.6`, `raw.wav 6.0`, `edited.wav 3.6`, `speech.wav ~3.1`.
-Se `edited.wav` não der 3.6, o filtro de corte está errado — pare e conserte antes de seguir, porque a Task 7 depende desse número.
+Expected: `clip.mp4 3.0`, `tone-gap.wav 2.6`, `raw.wav 6.0`, `edited.wav 4.6`, `speech.wav ~3.1`.
+Se `edited.wav` não der 4.6 (6000 ms − 1400 ms removidos), o filtro de corte está errado — pare e conserte antes de seguir, porque a Task 7 depende desse número.
 
 - [ ] **Step 9: Commit**
 
@@ -2419,7 +2419,7 @@ describe("runGold", () => {
 
     expect(result.removed).toHaveLength(2);
     expect(result.rawDurationMs).toBe(6000);
-    expect(result.editedDurationMs).toBe(3600);
+    expect(result.editedDurationMs).toBe(4600);
     expect(Math.abs(result.removedMs - 1400)).toBeLessThanOrEqual(50);
 
     const written = JSON.parse(await readFile(outPath, "utf8"));
