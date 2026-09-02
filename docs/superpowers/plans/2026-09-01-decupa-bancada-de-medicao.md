@@ -640,7 +640,10 @@ describe("extractAudio", () => {
     const info = await probe(out);
     expect(info.sampleRate).toBe(16000);
     expect(info.audioCodec).toBe("pcm_s16le");
-    expect(info.durationMs).toBe(3000);
+    // O AAC do clip.mp4 declara 3,000 s no container, mas grava 130 quadros de
+    // 1024 amostras (133120 ≈ 3,019 s decodificadas). Tolerância para o padding.
+    expect(info.durationMs).toBeGreaterThanOrEqual(3000);
+    expect(info.durationMs).toBeLessThan(3100);
     expect((await stat(out)).size).toBeGreaterThan(0);
   });
 });
