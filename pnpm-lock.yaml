@@ -18,6 +18,27 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.4.1)(vite@8.2.2(@types/node@26.4.1))
 
+  apps/cli:
+    dependencies:
+      '@decupa/acoustics':
+        specifier: workspace:*
+        version: link:../../packages/acoustics
+      '@decupa/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@decupa/goldedit':
+        specifier: workspace:*
+        version: link:../../packages/goldedit
+      '@decupa/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      '@decupa/metrics':
+        specifier: workspace:*
+        version: link:../../packages/metrics
+      '@decupa/transcript':
+        specifier: workspace:*
+        version: link:../../packages/transcript
+
   packages/acoustics:
     dependencies:
       '@decupa/core':
