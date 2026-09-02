@@ -29,6 +29,15 @@ importers:
 
   packages/core: {}
 
+  packages/goldedit:
+    dependencies:
+      '@decupa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@decupa/media':
+        specifier: workspace:*
+        version: link:../media
+
   packages/media:
     dependencies:
       '@decupa/core':
