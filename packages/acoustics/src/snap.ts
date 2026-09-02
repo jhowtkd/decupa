@@ -22,7 +22,10 @@ export function snapCut(opts: {
 
   if (rms.length === 0) return { ms: targetMs, movedByMs: 0 };
 
-  const targetFrame = Math.round(targetMs / hopMs);
+  // O alvo é preso ao intervalo válido de quadros [0, rms.length - 1],
+  // para que alvos negativos ou além do fim nunca produzam janelas vazias
+  // nem resultados fora dos limites do envelope.
+  const targetFrame = Math.min(Math.max(0, Math.round(targetMs / hopMs)), rms.length - 1);
   const radius = Math.round(windowMs / hopMs);
   const lo = Math.max(0, targetFrame - radius);
   const hi = Math.min(rms.length - 1, targetFrame + radius);

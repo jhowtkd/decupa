@@ -46,4 +46,23 @@ describe("snapCut", () => {
     expect(atStart.ms).toBeGreaterThanOrEqual(0);
     expect(atEnd.ms).toBeLessThanOrEqual(2600);
   });
+
+  it("com alvo negativo, permanece dentro dos limites do envelope", async () => {
+    const pcm = await readPcm({ input: join(FIXTURES, "tone-gap.wav") });
+    const envelope = energyEnvelope(pcm, { hopMs: 10 });
+
+    const result = snapCut({ envelope, targetMs: -130, windowMs: 120 });
+
+    expect(result.ms).toBeGreaterThanOrEqual(0);
+    expect(result.ms).toBeLessThanOrEqual(2600);
+  });
+
+  it("devolve o alvo intacto para envelope vazio", () => {
+    const result = snapCut({
+      envelope: { hopMs: 10, rms: new Float32Array(0) },
+      targetMs: 500,
+    });
+
+    expect(result).toEqual({ ms: 500, movedByMs: 0 });
+  });
 });
