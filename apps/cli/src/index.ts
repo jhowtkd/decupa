@@ -139,4 +139,14 @@ async function main(argv: string[]): Promise<number> {
   return command === undefined ? 0 : 1;
 }
 
-process.exitCode = await main(process.argv.slice(2));
+try {
+  process.exitCode = await main(process.argv.slice(2));
+} catch (error) {
+  // Uma falha esperada (arquivo ausente, terminal errado) deve sair com uma
+  // frase, não com pilha de chamadas. A pilha só aparece se DECUPA_DEBUG=1.
+  console.error(error instanceof Error ? `erro: ${error.message}` : `erro: ${String(error)}`);
+  if (process.env.DECUPA_DEBUG === "1" && error instanceof Error) {
+    console.error(error.stack);
+  }
+  process.exitCode = 1;
+}

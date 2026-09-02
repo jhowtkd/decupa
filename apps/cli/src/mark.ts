@@ -201,7 +201,10 @@ export async function runMark(opts: {
   };
 
   if (!process.stdin.isTTY) {
-    throw new Error("mark precisa de um terminal interativo");
+    throw new Error(
+      "mark precisa de um terminal interativo — abra o Terminal e rode o " +
+      "comando lá, não por um pipe, script ou agente",
+    );
   }
 
   process.stdin.setRawMode(true);
