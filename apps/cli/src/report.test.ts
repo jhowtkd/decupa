@@ -18,6 +18,7 @@ const report = (
   error: { n: 20, p50Ms: p50, p90Ms: p90, maxMs: p90 + 10, meanMs: p50, unmatched: 0 },
   gatePassed: passed,
   truthMethod,
+  onsetsOnly: true,
   measuredAt: "2026-09-01T00:00:00.000Z",
 });
 

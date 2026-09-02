@@ -16,7 +16,22 @@ export function toTokens(words: RawWord[]): TranscriptToken[] {
   }));
 }
 
-/** Todas as fronteiras de palavra, ordenadas e sem repetição. */
+/**
+ * Só os ataques de palavra, ordenados e sem repetição.
+ *
+ * Onde a palavra começa é nítido no ouvido; onde termina não é — a vogal
+ * decai, tem aspiração e coarticulação. Marcação humana confiável é de ataque,
+ * e comparar marcação de ataque contra a lista completa de fronteiras casaria
+ * a marca com o final da palavra anterior sempre que houvesse pausa,
+ * subestimando o erro.
+ */
+export function wordOnsets(transcript: Transcript): number[] {
+  return [...new Set(transcript.tokens.map((token) => token.startMs))].sort(
+    (a, b) => a - b,
+  );
+}
+
+/** Todas as fronteiras de palavra — ataques e finais —, ordenadas e sem repetição. */
 export function wordBoundaries(transcript: Transcript): number[] {
   const unique = new Set<number>();
   for (const token of transcript.tokens) {

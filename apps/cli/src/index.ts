@@ -14,9 +14,10 @@ const USAGE = `decupa — bancada de medição
       Marca fronteiras de palavra de ouvido, sem nunca exibir a predição do
       alinhador. É a única forma de produzir verdade que o portão aceita.
 
-  decupa measure --input <video|wav> --truth <verdade.json> [--model small] [--out <relatorio.json>]
+  decupa measure --input <video|wav> --truth <verdade.json> [--model small] [--onsets-only] [--out <relatorio.json>]
       Mede o erro de fronteira de palavra do alinhamento contra fronteiras
-      marcadas às cegas. Portão da Fase 0: p90 <= ${GATE_P90_MS} ms.
+      marcadas às cegas. Use --onsets-only quando a marcação for só de ataques
+      de palavra. Portão da Fase 0: p90 <= ${GATE_P90_MS} ms.
 
   decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
       Junta relatórios de measure numa página só.
@@ -58,6 +59,7 @@ async function main(argv: string[]): Promise<number> {
         truth: { type: "string" },
         model: { type: "string" },
         out: { type: "string" },
+        "onsets-only": { type: "boolean" },
       },
     });
     if (!values.input || !values.truth) {
@@ -69,6 +71,7 @@ async function main(argv: string[]): Promise<number> {
       truthPath: values.truth,
       model: values.model,
       outPath: values.out,
+      onsetsOnly: values["onsets-only"] ?? false,
     });
     const { error } = report;
     console.log(

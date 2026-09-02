@@ -4,3 +4,4 @@ tests/fixtures/generated/
 services/speech/.venv/
 .DS_Store
 *.pcm
+work/

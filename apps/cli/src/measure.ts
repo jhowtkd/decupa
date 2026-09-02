@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { boundaryError, type BoundaryError } from "@decupa/metrics";
-import { transcribe, wordBoundaries } from "@decupa/transcript";
+import { transcribe, wordBoundaries, wordOnsets } from "@decupa/transcript";
 
 /** Limiares do portão da Fase 0. Ver a spec. */
 export const GATE_P90_MS = 50;
@@ -21,6 +21,8 @@ export interface MeasureReport {
    * Verdade derivada do alinhador mede zero por construção.
    */
   truthMethod: string | null;
+  /** true = comparou só contra ataques de palavra. Ver wordOnsets. */
+  onsetsOnly: boolean;
   measuredAt: string;
 }
 
@@ -54,15 +56,17 @@ export async function runMeasure(opts: {
   model?: string;
   toleranceMs?: number;
   outPath?: string;
+  onsetsOnly?: boolean;
 }): Promise<MeasureReport> {
   const language = opts.language ?? "pt";
   const model = opts.model ?? "small";
+  const onsetsOnly = opts.onsetsOnly ?? false;
 
   const truthJson = await readFile(opts.truthPath, "utf8");
   const truthBoundaries = loadTruthBoundaries(truthJson);
   const truthMethod = loadTruthMethod(truthJson);
   const transcript = await transcribe({ input: opts.input, language, model });
-  const boundaries = wordBoundaries(transcript);
+  const boundaries = onsetsOnly ? wordOnsets(transcript) : wordBoundaries(transcript);
 
   const error = boundaryError({
     predicted: boundaries,
@@ -80,6 +84,7 @@ export async function runMeasure(opts: {
     error,
     gatePassed: evaluateGate(error),
     truthMethod,
+    onsetsOnly,
     measuredAt: new Date().toISOString(),
   };
 

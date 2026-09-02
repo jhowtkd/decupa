@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toTokens, wordBoundaries } from "./tokens.ts";
+import { toTokens, wordBoundaries, wordOnsets } from "./tokens.ts";
 
 const words = [
   { text: "eu", startMs: 100, endMs: 260, confidence: 0.9, sentenceIndex: 0 },
@@ -30,6 +30,25 @@ describe("toTokens", () => {
 
   it("devolve lista vazia para entrada vazia", () => {
     expect(toTokens([])).toEqual([]);
+  });
+});
+
+describe("wordOnsets", () => {
+  it("devolve só os ataques, ignorando os finais", () => {
+    expect(wordOnsets({ language: "pt", tokens: toTokens(words) })).toEqual([100, 260, 520]);
+  });
+
+  it("ordena e remove repetição", () => {
+    const tokens = toTokens([
+      { text: "b", startMs: 300, endMs: 400, confidence: 1, sentenceIndex: 0 },
+      { text: "a", startMs: 100, endMs: 200, confidence: 1, sentenceIndex: 0 },
+      { text: "c", startMs: 300, endMs: 500, confidence: 1, sentenceIndex: 0 },
+    ]);
+    expect(wordOnsets({ language: "pt", tokens })).toEqual([100, 300]);
+  });
+
+  it("devolve lista vazia sem tokens", () => {
+    expect(wordOnsets({ language: "pt", tokens: [] })).toEqual([]);
   });
 });
 
