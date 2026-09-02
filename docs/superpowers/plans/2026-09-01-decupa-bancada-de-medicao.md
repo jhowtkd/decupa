@@ -2863,18 +2863,30 @@ Expected: PASS — 11 testes verdes (3 de gold, 8 de measure).
 
 - [ ] **Step 5: Rodar `measure` de verdade no fixture de fala**
 
-Primeiro, marcar as fronteiras à mão. Rodar a transcrição uma vez para ver os tempos, escolher ~8 fronteiras claras e gravá-las:
+> **Esta instrução foi reescrita depois de uma auditoria.** A versão anterior
+> mandava imprimir a transcrição e "corrigir o que estiver errado". Isso ancora
+> quem marca e produz verdade circular: numa execução real, as 9 fronteiras
+> gravadas eram todas subconjunto exato da saída do alinhador, e o p90 deu 0 ms
+> por aritmética, não por qualidade. **Nunca produza a verdade a partir da
+> predição.**
+
+Marcar as fronteiras **às cegas**, sem nunca ver a saída do alinhador. Use o
+comando dedicado, que toca janelas curtas a partir do cursor e nunca exibe
+predição:
 
 ```bash
 cd "/Users/jhonatan/Repos/Video editor"
-node --experimental-strip-types -e '
-import { transcribe } from "./packages/transcript/src/index.ts";
-const t = await transcribe({ input: "tests/fixtures/generated/speech.wav" });
-for (const k of t.tokens) console.log(`${k.text}\t${k.startMs}\t${k.endMs}`);
-'
+pnpm decupa mark \
+  --input tests/fixtures/generated/speech.wav \
+  --out /tmp/verdade-speech.json
 ```
 
-Conferir os tempos no áudio (por exemplo com `ffplay -ss`), corrigir o que estiver errado e gravar `/tmp/verdade-speech.json` no formato `{"boundariesMs":[...]}`. Depois:
+Ouça: se o cursor está no ataque da palavra, ela entra limpa; cedo demais, entra
+silêncio antes; tarde demais, a palavra entra decapitada. Ajuste com as setas
+(±10 ms) ou shift+setas (±50 ms), `enter` marca, `q` grava e sai.
+
+O arquivo gravado carrega `"method": "blind-keyboard"`. Sem esse carimbo o
+`measure` sai com código 3 e o `report` recusa liberar o portão — de propósito.
 
 ```bash
 pnpm decupa measure \
@@ -2883,7 +2895,11 @@ pnpm decupa measure \
   --out /tmp/relatorio.json
 ```
 
-Expected: imprime p50/p90/max e o veredito do portão. Neste fixture, que é fala sintética limpa, o esperado é PASSOU com folga. **O número que importa é o do material real do time** — este passo só confirma que o encanamento funciona ponta a ponta.
+Expected: imprime p50/p90/max e o veredito do portão. **O número que importa é o
+do material real do time** — este passo só confirma que o encanamento funciona
+ponta a ponta. E nove fronteiras de uma frase sintética não decidem nada: o
+portão de verdade pede ~200 fronteiras em 5 trechos, com os falantes recorrentes
+e com material que tem ruído e fala rápida.
 
 - [ ] **Step 6: Commit**
 
@@ -3151,12 +3167,17 @@ for par in rushes/*/; do
   pnpm decupa gold --raw "$par/bruto.mp4" --edited "$par/editado.mp4" --out "$par/gold.json"
 done
 
-# 2. Medir o alinhamento em cada trecho com fronteiras marcadas à mão
+# 2. Marcar as fronteiras às cegas, um trecho por vez (não pule esta etapa)
+for t in trechos/*.mp4; do
+  pnpm decupa mark --input "$t" --out "${t%.mp4}.verdade.json"
+done
+
+# 3. Medir o alinhamento contra as fronteiras marcadas
 for t in trechos/*.mp4; do
   pnpm decupa measure --input "$t" --truth "${t%.mp4}.verdade.json" --out "${t%.mp4}.medida.json"
 done
 
-# 3. Consolidar e olhar o veredito
+# 4. Consolidar e olhar o veredito
 pnpm decupa report --out bench/relatorio.html trechos/*.medida.json
 open bench/relatorio.html
 ```
@@ -3166,3 +3187,41 @@ open bench/relatorio.html
 ## Próximo plano
 
 `2026-XX-XX-decupa-bake-off-pipelines.md` — implementa os três pipelines A/B/C sobre este dataset e responde a segunda metade do portão da Fase 0. Depende de: `@decupa/goldedit` (dataset), `@decupa/metrics` (avaliação), chave da API do Gemini, e do dataset coletado com o comando `gold`.
+
+---
+
+## Adendo pós-auditoria (02/09/2026)
+
+A auditoria da execução encontrou um defeito que não estava no código, e sim no
+método: a verdade usada no `measure` tinha sido amostrada da saída do próprio
+alinhador. As 9 fronteiras eram subconjunto exato da predição, e `p90 = 0 ms`
+era consequência aritmética. A ferramenta estava certa; o insumo é que não media
+nada. Perturbar 4 fronteiras em 20–80 ms levou o p90 a 80 ms e fechou o portão,
+confirmando que a métrica é sensível.
+
+A origem foi este plano: o Step 5 da Task 13 mandava imprimir a transcrição
+antes de marcar. Três coisas foram feitas para que não se repita.
+
+**1. `decupa mark` — marcação cega.** `apps/cli/src/mark.ts`. Toca uma janela
+curta a partir do cursor e captura fronteiras pelo teclado, sem nunca ler,
+importar ou exibir a saída do alinhador. Lógica pura (`decodeKey`, `applyKey`,
+`formatTruthFile`) coberta por 18 testes; só o laço de TTY e a chamada do
+`ffplay` ficam sem teste.
+
+**2. Procedência no arquivo de verdade.** O `mark` grava
+`"method": "blind-keyboard"`. `loadTruthMethod` lê o campo e `MeasureReport`
+passa a carregar `truthMethod`.
+
+**3. O portão passou a exigir procedência.** `decupa measure` sai com **código 3**
+e imprime aviso quando a verdade não é cega. `aggregate` ganhou
+`unverifiedTruth` e só libera o portão quando todos os trechos passam **e** toda
+verdade é cega; o HTML mostra a coluna de procedência e um alerta no topo.
+
+Verificado contra o arquivo circular original: `measure` sai 3 com o aviso, e o
+`report` renderiza `PORTÃO FECHADO`. O cenário que passou despercebido agora é
+impossível de reportar como aprovação.
+
+**Estado da Fase 0:** o portão não está aprovado nem reprovado — está **não
+medido**. Não existe nenhuma evidência sobre a qualidade do alinhamento em
+PT-BR neste repositório. O caminho é marcar às cegas ~200 fronteiras em material
+real do time e rodar `measure`.
