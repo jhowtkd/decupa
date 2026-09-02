@@ -16,12 +16,16 @@ export const NUDGE_FINE_MS = 10;
 export const NUDGE_COARSE_MS = 50;
 export const ACCEPT_ADVANCE_MS = 120;
 export const SKIP_MS = 200;
+/** Salto grosso para atravessar pausa longa sem dezenas de toques. */
+export const JUMP_MS = 1000;
 
 export type MarkKey =
   | "nudgeBack"
   | "nudgeForward"
   | "nudgeBackCoarse"
   | "nudgeForwardCoarse"
+  | "jumpBack"
+  | "jumpForward"
   | "accept"
   | "back"
   | "skip"
@@ -61,6 +65,10 @@ export function decodeKey(sequence: string): MarkKey {
     case `${ESC}[1;2C`:
     case "K":
       return "nudgeForwardCoarse";
+    case "]":
+      return "jumpForward";
+    case "[":
+      return "jumpBack";
     case "\r":
     case "\n":
       return "accept";
@@ -97,6 +105,10 @@ export function applyKey(state: MarkState, key: MarkKey): MarkState {
       return withCursor(state, -NUDGE_COARSE_MS);
     case "nudgeForwardCoarse":
       return withCursor(state, NUDGE_COARSE_MS);
+    case "jumpBack":
+      return withCursor(state, -JUMP_MS);
+    case "jumpForward":
+      return withCursor(state, JUMP_MS);
     case "accept": {
       const boundaries = [...new Set([...state.boundaries, state.cursorMs])].sort(
         (a, b) => a - b,
@@ -139,6 +151,7 @@ export function formatTruthFile(opts: {
 const HELP = [
   "  ←/j  −10 ms      →/k  +10 ms",
   "  ⇧←/J −50 ms      ⇧→/K +50 ms",
+  "  [ −1 s           ] +1 s   (atravessar pausa)",
   "  espaço  ouvir a partir do cursor",
   "  enter   marcar fronteira aqui",
   "  b  desfazer      s  pular 200 ms      q  gravar e sair",

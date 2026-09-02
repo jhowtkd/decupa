@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACCEPT_ADVANCE_MS,
+  JUMP_MS,
   NUDGE_COARSE_MS,
   NUDGE_FINE_MS,
   SKIP_MS,
@@ -33,6 +34,11 @@ describe("decodeKey", () => {
     expect(decodeKey("K")).toBe("nudgeForwardCoarse");
   });
 
+  it("reconhece o salto de um segundo", () => {
+    expect(decodeKey("]")).toBe("jumpForward");
+    expect(decodeKey("[")).toBe("jumpBack");
+  });
+
   it("reconhece os comandos de sessão", () => {
     expect(decodeKey("\r")).toBe("accept");
     expect(decodeKey("\n")).toBe("accept");
@@ -58,6 +64,16 @@ describe("applyKey", () => {
   it("empurra o cursor pelo passo grosso", () => {
     expect(applyKey(state(), "nudgeForwardCoarse").cursorMs).toBe(1000 + NUDGE_COARSE_MS);
     expect(applyKey(state(), "nudgeBackCoarse").cursorMs).toBe(1000 - NUDGE_COARSE_MS);
+  });
+
+  it("salta um segundo para atravessar pausa longa", () => {
+    expect(applyKey(state(), "jumpForward").cursorMs).toBe(1000 + JUMP_MS);
+    expect(applyKey(state(), "jumpBack").cursorMs).toBe(1000 - JUMP_MS);
+  });
+
+  it("o salto também respeita os limites", () => {
+    expect(applyKey(state({ cursorMs: 200 }), "jumpBack").cursorMs).toBe(0);
+    expect(applyKey(state({ cursorMs: 2500 }), "jumpForward").cursorMs).toBe(3000);
   });
 
   it("prende o cursor entre zero e a duração", () => {
