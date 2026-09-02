@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
+import { runReport } from "./report.ts";
 
 const USAGE = `decupa — bancada de medição
 
@@ -11,6 +12,9 @@ const USAGE = `decupa — bancada de medição
   decupa measure --input <video|wav> --truth <verdade.json> [--model small] [--out <relatorio.json>]
       Mede o erro de fronteira de palavra do alinhamento contra fronteiras
       marcadas à mão. Portão da Fase 0: p90 <= ${GATE_P90_MS} ms.
+
+  decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
+      Junta relatórios de measure numa página só.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -69,6 +73,21 @@ async function main(argv: string[]): Promise<number> {
       `portão (p90 <= ${GATE_P90_MS} ms): ${report.gatePassed ? "PASSOU" : "REPROVOU"}`,
     );
     return report.gatePassed ? 0 : 2;
+  }
+
+  if (command === "report") {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: { out: { type: "string" } },
+      allowPositionals: true,
+    });
+    if (positionals.length === 0 || !values.out) {
+      console.error("report precisa de --out e ao menos um relatório .json");
+      return 1;
+    }
+    await runReport({ inputPaths: positionals, outPath: values.out });
+    console.log(`relatório de ${positionals.length} trechos em ${values.out}`);
+    return 0;
   }
 
   console.log(USAGE);
