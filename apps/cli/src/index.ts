@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { transcribe } from "@decupa/transcript";
+import { writeCondenseTranscript } from "./condense/prepare.ts";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
 import { runMarkWeb } from "./mark-web/server.ts";
@@ -23,6 +25,10 @@ const USAGE = `decupa — bancada de medição
 
   decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
       Junta relatórios de measure numa página só.
+
+  decupa condense-prep --input <video|wav> --out <transcript.json> [--model small]
+      Transcreve com o WhisperX do Decupa e grava no formato que o motor de
+      condense (video-agent-kit-plugin) espera.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -133,6 +139,28 @@ async function main(argv: string[]): Promise<number> {
     console.log(
       `\n${truth.boundariesMs.length} fronteiras marcadas às cegas · ` +
       `gravado em ${values.out}`,
+    );
+    return 0;
+  }
+
+  if (command === "condense-prep") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        input: { type: "string" },
+        out: { type: "string" },
+        model: { type: "string" },
+      },
+    });
+    if (!values.input || !values.out) {
+      console.error("condense-prep precisa de --input e --out");
+      return 1;
+    }
+    const transcript = await transcribe({ input: values.input, model: values.model });
+    const converted = await writeCondenseTranscript(transcript, values.out);
+    const words = converted.segments.reduce((n, s) => n + s.words.length, 0);
+    console.log(
+      `${converted.segments.length} segmentos, ${words} palavras -> ${values.out}`,
     );
     return 0;
   }
