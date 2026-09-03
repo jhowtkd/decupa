@@ -19,6 +19,12 @@ quê. Este documento assume zero contexto além do que está escrito aqui.
   palavra.
 - `ffmpeg`/`ffprobe` no PATH.
 
+Os comandos do procedimento (`pnpm decupa`, `python3 scripts/condense.py`)
+partem da **raiz deste repo**. O motor grava `out/` e `.video_agent/` no cwd,
+ou em `CLAUDE_PROJECT_DIR` se estiver setado. Para isolar um trabalho numa
+pasta (ex. `work/meu-corte`) sem poluir a raiz, exporte o caminho absoluto
+dessa pasta em `CLAUDE_PROJECT_DIR` e rode os comandos da raiz.
+
 ## O procedimento
 
 ### 1. Transcrever
@@ -108,8 +114,10 @@ python3 scripts/condense.py qc <saída.mp4>
 ```
 
 Isso audita o **arquivo renderizado**, não o plano. Gera duas imagens de
-evidência (`join_frames.jpg`, `join_waveforms.png`) — **abra as duas e olhe**
-antes de declarar pronto. `QC PASS` na saída de texto não substitui olhar a
+evidência (`join_frames.jpg`, `join_waveforms.png`) em
+`.video_agent/condense_qc/<stem>/` — `<stem>` é o nome do mp4 sem extensão,
+não ao lado do arquivo renderizado. **Abra as duas e olhe** antes de declarar
+pronto. `QC PASS` na saída de texto não substitui olhar a
 imagem: o relatório classifica o salto visual em cada corte como
 subtle/visible/severe, mas só a imagem mostra se aquele "subtle" ainda
 incomoda pra este material específico.
