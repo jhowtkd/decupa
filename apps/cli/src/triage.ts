@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -39,7 +40,13 @@ export interface TriageResult {
 }
 
 async function sha256(path: string): Promise<string> {
-  return createHash("sha256").update(await readFile(path)).digest("hex");
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
