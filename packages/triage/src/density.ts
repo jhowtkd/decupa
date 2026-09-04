@@ -48,6 +48,10 @@ export function applyDensityBudget(
       skipped.push({ candidate, why: "já saiu no passe 1" });
       continue;
     }
+    if (candidate.unit_ids.some((id) => droppedIds.has(id))) {
+      skipped.push({ candidate, why: "já saiu em candidato anterior deste passe" });
+      continue;
+    }
     if (survivors - droppedIds.size - candidate.unit_ids.length < 1) {
       skipped.push({ candidate, why: "dropar isto não deixaria unidade nenhuma de pé" });
       continue;

@@ -32,6 +32,18 @@ describe("applyDensityBudget", () => {
     expect(out.skipped[0]!.why).toMatch(/passe 1/);
   });
 
+  it("pula candidato sobreposto dentro do passe 2 sem cobrar o orçamento duas vezes", () => {
+    const out = applyDensityBudget(
+      [cand(["u001"], 1), cand(["u001", "u002"], 2), cand(["u003"], 3)],
+      index,
+      { budgetSeconds: 10, alreadyDropped: new Set() },
+    );
+    expect([...out.droppedIds].sort()).toEqual(["u001", "u003"]);
+    expect(out.applied).toHaveLength(2);
+    expect(out.skipped).toHaveLength(1);
+    expect(out.skipped[0]!.why).toMatch(/anterior deste passe/);
+  });
+
   it("pula id inexistente em vez de estourar", () => {
     const out = applyDensityBudget([cand(["u999"], 1), cand(["u002"], 2)],
       index, { budgetSeconds: 5, alreadyDropped: new Set() });

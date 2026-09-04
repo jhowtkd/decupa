@@ -10,7 +10,7 @@ import type { SpeechIndex } from "./speech-index.ts";
 export function keepListFrom(index: SpeechIndex, droppedIds: Set<string>): string {
   const kept = index.units.filter((u) => !droppedIds.has(u.id));
   if (kept.length === 0) {
-    throw new Error("a triagem dropou nenhuma unidade sobrando — não há o que cortar");
+    throw new Error("a triagem descartou todas as unidades — nenhuma unidade sobrou para o corte");
   }
 
   const ranges: string[] = [];

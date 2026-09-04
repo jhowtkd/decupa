@@ -70,6 +70,14 @@ describe("verifyClaims — bloco de retomada", () => {
     expect(v!.accepted).toBe(true);
   });
 
+  it("aceita bloco de tentativa única com texto similar ao restated_by", () => {
+    const [v] = verifyClaims(
+      [claim({ unit_ids: ["u004"], reason: "restart_block", restated_by: "u005" })],
+      index,
+    );
+    expect(v!.accepted).toBe(true);
+  });
+
   it("rejeita quando falta restated_by", () => {
     const [v] = verifyClaims(
       [claim({ unit_ids: ["u003", "u004", "u005"], reason: "restart_block" })],
