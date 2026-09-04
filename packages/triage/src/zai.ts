@@ -164,6 +164,23 @@ export class ZaiTriageModel implements TriageModel {
 
   private async ask(videoPath: string, instructions: string, text: string): Promise<string> {
     const dataUrl = await this.video(videoPath);
+    const payloadMb = (dataUrl.length * 3) / 4 / 1024 / 1024;
+    try {
+      return await this.post(dataUrl, instructions, text);
+    } catch (err) {
+      // Corpo grande demais chega como erro genérico do lado deles — medido em
+      // 2026-09-04: 14,9 MB de base64 devolveu "1234 internal network
+      // failure", enquanto 2,2 MB passou. Sem o tamanho junto da mensagem, a
+      // correlação fica invisível e a pessoa investiga a rede.
+      const hint = payloadMb > 5
+        ? ` (o vídeo virou ${payloadMb.toFixed(1)} MB em base64 — corpo grande já causou erro genérico aqui; ` +
+          "gere um proxy mais leve com `-vf fps=1,scale=270:480 -crf 32`)"
+        : "";
+      throw new Error(`${err instanceof Error ? err.message : String(err)}${hint}`);
+    }
+  }
+
+  private async post(dataUrl: string, instructions: string, text: string): Promise<string> {
     const res = await this.fetchImpl(this.baseUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
