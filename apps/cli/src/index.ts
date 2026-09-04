@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { detectSilence } from "@decupa/acoustics";
 import { transcribe } from "@decupa/transcript";
 import { writeCondenseTranscript } from "./condense/prepare.ts";
 import { runGold } from "./gold.ts";
@@ -26,9 +27,16 @@ const USAGE = `decupa — bancada de medição
   decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
       Junta relatórios de measure numa página só.
 
-  decupa condense-prep --input <video|wav> --out <transcript.json> [--model small]
+  decupa condense-prep --input <video|wav> --out <transcript.json> [--model small] [--no-trim]
       Transcreve com o WhisperX do Decupa e grava no formato que o motor de
-      condense (video-agent-kit-plugin) espera.
+      condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
+      alinhador esticou sobre o silêncio — use --no-trim para desligar.
+
+  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--model gemini-3.8-flash]
+      Decide o que é conteúdo do vídeo e o que não é, e devolve o keep-list
+      pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
+      contra o índice antes de virar corte. --target liga o passe de
+      densidade; sem ele, só estrutura.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -150,6 +158,7 @@ async function main(argv: string[]): Promise<number> {
         input: { type: "string" },
         out: { type: "string" },
         model: { type: "string" },
+        "no-trim": { type: "boolean" },
       },
     });
     if (!values.input || !values.out) {
@@ -157,11 +166,34 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
     const transcript = await transcribe({ input: values.input, model: values.model });
-    const converted = await writeCondenseTranscript(transcript, values.out);
+
+    // O alinhador estica a última palavra de um segmento sobre o silêncio que
+    // vem depois. Sem consertar isso, o motor de corte fica cego para essas
+    // pausas e elas sobrevivem inteiras dentro do clipe.
+    let silences;
+    if (!values["no-trim"]) {
+      silences = await detectSilence({
+        input: values.input,
+        thresholdDb: -35,
+        minDurationMs: 150,
+      });
+    }
+
+    const before = transcript.tokens.reduce((n, t) => n + (t.endMs - t.startMs), 0);
+    const converted = await writeCondenseTranscript(transcript, values.out, { silences });
+    const after = converted.segments.reduce(
+      (n, s) => n + s.words.reduce((m, w) => m + (w.end - w.start) * 1000, 0),
+      0,
+    );
     const words = converted.segments.reduce((n, s) => n + s.words.length, 0);
     console.log(
       `${converted.segments.length} segmentos, ${words} palavras -> ${values.out}`,
     );
+    if (silences) {
+      console.log(
+        `fim de palavra aparado: ${((before - after) / 1000).toFixed(1)}s de silêncio devolvidos como pausa`,
+      );
+    }
     return 0;
   }
 
@@ -177,6 +209,36 @@ async function main(argv: string[]): Promise<number> {
     }
     await runReport({ inputPaths: positionals, outPath: values.out });
     console.log(`relatório de ${positionals.length} trechos em ${values.out}`);
+    return 0;
+  }
+
+  if (command === "triage") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        index: { type: "string" },
+        video: { type: "string" },
+        out: { type: "string" },
+        target: { type: "string" },
+        model: { type: "string" },
+      },
+    });
+    if (!values.index || !values.video || !values.out) {
+      console.error("triage precisa de --index, --video e --out");
+      return 1;
+    }
+    const { runTriage } = await import("./triage.ts");
+    const result = await runTriage({
+      indexPath: values.index,
+      videoPath: values.video,
+      outDir: values.out,
+      targetSeconds: values.target ? Number(values.target) : undefined,
+      modelName: values.model,
+    });
+    const rejected = result.verdicts.filter((v) => !v.accepted).length;
+    console.log(`keep-list: ${result.keepList}`);
+    console.log(`${result.verdicts.length - rejected} alegação(ões) aplicada(s), ${rejected} rejeitada(s) · ${result.reportPath}`);
+    if (rejected > 0) console.log("Leia as rejeitadas no relatório antes de seguir.");
     return 0;
   }
 

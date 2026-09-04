@@ -38,6 +38,9 @@ importers:
       '@decupa/transcript':
         specifier: workspace:*
         version: link:../../packages/transcript
+      '@decupa/triage':
+        specifier: workspace:*
+        version: link:../../packages/triage
 
   packages/acoustics:
     dependencies:
