@@ -32,7 +32,7 @@ const USAGE = `decupa — bancada de medição
       condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
       alinhador esticou sobre o silêncio — use --no-trim para desligar.
 
-  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--model gemini-3.8-flash]
+  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider gemini|zai] [--model <id>]
       Decide o que é conteúdo do vídeo e o que não é, e devolve o keep-list
       pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
       contra o índice antes de virar corte. --target liga o passe de
@@ -221,10 +221,16 @@ async function main(argv: string[]): Promise<number> {
         out: { type: "string" },
         target: { type: "string" },
         model: { type: "string" },
+        provider: { type: "string" },
       },
     });
     if (!values.index || !values.video || !values.out) {
       console.error("triage precisa de --index, --video e --out");
+      return 1;
+    }
+    const provider = values.provider ?? "gemini";
+    if (provider !== "gemini" && provider !== "zai") {
+      console.error(`--provider aceita "gemini" ou "zai", não "${provider}"`);
       return 1;
     }
     const { runTriage } = await import("./triage.ts");
@@ -234,6 +240,7 @@ async function main(argv: string[]): Promise<number> {
       outDir: values.out,
       targetSeconds: values.target ? Number(values.target) : undefined,
       modelName: values.model,
+      provider,
     });
     const rejected = result.verdicts.filter((v) => !v.accepted).length;
     console.log(`keep-list: ${result.keepList}`);

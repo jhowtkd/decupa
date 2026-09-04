@@ -127,6 +127,14 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
       }
       return null;
     }
+    default: {
+      // Inalcançável pelo tipo, alcançável em runtime: provedor que só oferece
+      // `json_object` (sem `json_schema`) não obriga o enum, e o modelo pode
+      // inventar categoria. Sem este ramo a alegação era rejeitada com
+      // `failed: undefined`, e o relatório imprimia "falhou: undefined".
+      return `categoria de motivo desconhecida: \`${String(claim.reason)}\` — ` +
+        "esperado preroll, postroll, aside ou restart_block";
+    }
   }
 }
 

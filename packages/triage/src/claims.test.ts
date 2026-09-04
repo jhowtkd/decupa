@@ -129,6 +129,18 @@ describe("verifyClaims — aparte", () => {
   });
 });
 
+describe("verifyClaims — categoria inventada", () => {
+  it("rejeita reason fora do enum com uma frase que diz qual foi", () => {
+    // Provedor sem `json_schema` (Z.ai usa `json_object`) não obriga o enum.
+    // Sem um `default` no switch isto virava rejeição com `failed: undefined`,
+    // e o relatório imprimia "falhou: undefined".
+    const invalida = { unit_ids: ["u001"], reason: "porque_sim", restated_by: null, note: "" };
+    const [v] = verifyClaims([invalida as unknown as StructureClaim], index);
+    expect(v!.accepted).toBe(false);
+    expect(v!.accepted === false && v!.failed).toMatch(/porque_sim/);
+  });
+});
+
 describe("verifyClaims — id inventado", () => {
   it("rejeita em vez de estourar quando o modelo cita unidade inexistente", () => {
     const [v] = verifyClaims([claim({ unit_ids: ["u999"], reason: "preroll" })], index);

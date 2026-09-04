@@ -7,6 +7,7 @@ export type { ReportInput } from "./report.ts";
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
 export { DEFAULT_MODEL, GeminiTriageModel } from "./gemini.ts";
+export { parseDensityCandidates, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiTriageModel } from "./zai.ts";
 export { keepListFrom } from "./keeplist.ts";
 export { FakeTriageModel } from "./model.ts";
 export { buildUnitsBlock, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";

@@ -16,6 +16,8 @@ import {
   renderReport,
   verifyClaims,
   writeCache,
+  ZAI_DEFAULT_MODEL,
+  ZaiTriageModel,
   type DensityCandidate,
   type ReportInput,
   type StructureClaim,
@@ -28,9 +30,11 @@ export interface TriageOptions {
   videoPath: string;
   outDir: string;
   targetSeconds?: number;
-  /** Injetável para teste; em produção é o GeminiTriageModel. */
+  /** Injetável para teste; em produção vem de `provider`. */
   model?: TriageModel;
   modelName?: string;
+  /** Qual motor responde. Default: gemini. */
+  provider?: "gemini" | "zai";
 }
 
 export interface TriageResult {
@@ -50,8 +54,11 @@ async function sha256(path: string): Promise<string> {
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
-  const modelName = opts.modelName ?? DEFAULT_MODEL;
-  const model = opts.model ?? new GeminiTriageModel(modelName);
+  const provider = opts.provider ?? "gemini";
+  const modelName = opts.modelName ?? (provider === "zai" ? ZAI_DEFAULT_MODEL : DEFAULT_MODEL);
+  const model = opts.model ?? (provider === "zai"
+    ? new ZaiTriageModel({ model: modelName })
+    : new GeminiTriageModel(modelName));
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
   const unitsBlock = buildUnitsBlock(index);
 
