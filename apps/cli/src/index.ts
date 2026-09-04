@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import { detectSilence } from "@decupa/acoustics";
 import { transcribe } from "@decupa/transcript";
@@ -37,6 +38,10 @@ const USAGE = `decupa — bancada de medição
       pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
       contra o índice antes de virar corte. --target liga o passe de
       densidade; sem ele, só estrutura.
+
+  decupa limpar --input <vídeo> [--port 7788] [--provider gemini|zai]
+      Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
+      que não quer, exporta MP4, EDL ou transcrição.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -246,6 +251,34 @@ async function main(argv: string[]): Promise<number> {
     console.log(`keep-list: ${result.keepList}`);
     console.log(`${result.verdicts.length - rejected} alegação(ões) aplicada(s), ${rejected} rejeitada(s) · ${result.reportPath}`);
     if (rejected > 0) console.log("Leia as rejeitadas no relatório antes de seguir.");
+    return 0;
+  }
+
+  if (command === "limpar") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        input: { type: "string" },
+        port: { type: "string" },
+        provider: { type: "string" },
+      },
+    });
+    if (!values.input) {
+      console.error("limpar precisa de --input");
+      return 1;
+    }
+    const { startApp } = await import("./app/server.ts");
+    const app = await startApp({
+      input: values.input,
+      port: values.port ? Number(values.port) : undefined,
+      provider: values.provider,
+    });
+    const url = `http://127.0.0.1:${app.port}`;
+    console.log(`tela de limpeza aberta em ${url}`);
+    console.log("Ctrl+C para encerrar");
+    // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
+    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    await new Promise(() => {});  // fica de pé até Ctrl+C
     return 0;
   }
 

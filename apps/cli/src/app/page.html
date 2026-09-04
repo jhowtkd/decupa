@@ -1,3 +1,202 @@
 <!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>decupa</title></head>
-<body><script>window.__JOB__ = null;</script></body></html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>decupa · limpar fala</title>
+<style>
+  :root {
+    --bg: #12171a; --panel: #1a2125; --line: #2a3439;
+    --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230;
+    --ok: #63be97; --warn: #e0765c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.75 ui-serif, Georgia, serif;
+  }
+  header {
+    position: sticky; top: 0; display: flex; align-items: center; gap: 18px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    background: var(--panel); font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+  }
+  main { max-width: 44rem; margin: 0 auto; padding: 32px 20px 120px; }
+  button {
+    font: inherit; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  /* A unidade mantida é texto corrido. O X só aparece no hover, para não
+     poluir a leitura — que é o ponto da tela. */
+  .u { position: relative; }
+  .u .x {
+    opacity: 0; cursor: pointer; color: var(--warn);
+    font-family: ui-sans-serif, sans-serif; font-size: 11px; padding: 0 3px;
+  }
+  .u:hover .x { opacity: 1; }
+  /* Dropada: colapsa para um marcador com as primeiras palavras, e o texto
+     em volta se fecha. O título traz o texto inteiro. */
+  .gone {
+    display: inline-block; max-width: 12rem; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+    font-family: ui-sans-serif, sans-serif; font-size: 11px;
+    color: var(--muted); background: #ffffff0d; border: 1px dashed var(--line);
+    border-radius: 4px; padding: 0 6px; margin: 0 2px; cursor: pointer;
+  }
+  .gone:hover { color: var(--ink); border-color: var(--accent); }
+  .join { display: block; margin: 14px 0; font-family: ui-sans-serif, sans-serif; font-size: 12px; }
+  .join .flag { color: var(--warn); display: block; padding-left: 10px; border-left: 2px solid var(--warn); }
+  .join .hint { color: var(--muted); }
+  #stage { color: var(--muted); font-family: ui-sans-serif, sans-serif; }
+</style>
+</head>
+<body>
+<header>
+  <strong>decupa</strong>
+  <span id="stage">carregando…</span>
+  <span style="flex:1"></span>
+  <!-- Nascem desabilitados: sem review, keepList() estouraria em review.units
+       de null, e a pessoa clicaria durante os minutos de transcrição. -->
+  <button id="cancelar">cancelar</button>
+  <button id="triar" disabled>sugerir cortes</button>
+  <button id="edl" disabled>exportar EDL</button>
+  <button id="mp4" disabled>exportar MP4</button>
+  <button id="txt" disabled>transcrição</button>
+</header>
+<main id="prosa"></main>
+<script type="module">
+const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
+let review = null, kept = new Map(), timer = null;
+
+const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then((r) => r.json());
+
+// keepListFrom e expandKeepList vêm de /keeplist.js, servido pelo servidor a
+// partir do módulo testado em keeplist.ts. Não reimplementar aqui: é o único
+// parser na borda com o motor, e uma faixa errada corta no lugar errado sem
+// erro nenhum.
+import { expandKeepList, keepListFrom } from "/keeplist.js";
+
+const keepList = () =>
+  keepListFrom(review.units.filter((u) => kept.get(u.id)).map((u) => u.id));
+
+function render() {
+  const joinsBy = new Map(review.joins.map((j) => [j.afterUnitId, j]));
+  const main = document.getElementById("prosa");
+  main.replaceChildren();
+  for (const u of review.units) {
+    if (kept.get(u.id)) {
+      const span = document.createElement("span");
+      span.className = "u";
+      span.append(u.text + " ");
+      const x = document.createElement("span");
+      x.className = "x"; x.textContent = "✕"; x.title = "tirar este trecho";
+      x.onclick = () => { kept.set(u.id, false); render(); schedule(); };
+      span.append(x);
+      main.append(span);
+      const join = joinsBy.get(u.id);
+      if (join?.flags?.length) main.append(joinNode(join));
+    } else {
+      const mark = document.createElement("span");
+      mark.className = "gone";
+      mark.textContent = u.text;      // o CSS trunca; o título mostra inteiro
+      mark.title = `restaurar: ${u.text}`;
+      mark.onclick = () => { kept.set(u.id, true); render(); schedule(); };
+      main.append(mark);
+    }
+  }
+  document.getElementById("stage").textContent =
+    `${review.units.filter((u) => kept.get(u.id)).length}/${review.units.length} trechos · ` +
+    `${review.outputSeconds.toFixed(0)}s de ${review.sourceSeconds.toFixed(0)}s`;
+}
+
+function joinNode(join) {
+  const box = document.createElement("span");
+  box.className = "join";
+  for (const f of join.flags) {
+    const el = document.createElement("span");
+    el.className = "flag";
+    el.textContent = `⚠ ${f.message}`;
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = ` → ${f.hint}`;
+    el.append(hint);
+    box.append(el);
+  }
+  return box;
+}
+
+// Clique não re-planeja: 250ms depois do último, o servidor recalcula as
+// junções. Sem isso, um aviso de mid_thought_out apontaria para uma junção
+// que não existe mais.
+function schedule() {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    const r = await api("/keep", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: keepList() }),
+    });
+    if (r.review) { review = r.review; render(); }
+  }, 250);
+}
+
+async function poll() {
+  const j = await api("");
+  document.getElementById("stage").textContent = {
+    queued: "na fila…", transcribing: "transcrevendo (leva alguns minutos)…",
+    indexing: "medindo…", planning: "planejando…", cancelled: "cancelado",
+  }[j.stage] ?? j.stage;
+  if (j.stage === "error") { document.getElementById("stage").textContent = "erro: " + j.error; return; }
+  if (j.stage === "ready" && j.review) {
+    review = j.review;
+    kept = new Map(review.units.map((u) => [u.id, u.kept]));
+    for (const id of ["triar", "edl", "mp4", "txt"]) {
+      document.getElementById(id).disabled = false;
+    }
+    document.getElementById("cancelar").disabled = true;
+    render();
+    return;
+  }
+  if (j.stage !== "cancelled") setTimeout(poll, 1000);
+}
+
+document.getElementById("cancelar").onclick = async () => {
+  await api("/cancel", { method: "POST" });
+  document.getElementById("stage").textContent = "cancelado";
+};
+
+document.getElementById("triar").onclick = async () => {
+  const r = await api("/triage", { method: "POST" });
+  if (r.error) { alert(r.error); return; }
+  // Prévia, não aplicação muda: mostra o que cairia antes de mexer na tela.
+  const proposto = new Set(expandKeepList(r.keepList));
+  const cairiam = review.units.filter((u) => kept.get(u.id) && !proposto.has(u.id));
+  // Com o motivo que o modelo deu, não só o texto do trecho: a justificativa é
+  // o que permite discordar. E ela confabula quando não entende a unidade, o
+  // que só dá para perceber lendo.
+  const ok = confirm(
+    `A sugestão tira ${cairiam.length} trecho(s):\n\n` +
+    cairiam.map((u) => "· " + u.text.slice(0, 60)).join("\n") +
+    (r.motivos?.length ? "\n\nMotivos:\n" + r.motivos.join("\n") : "") +
+    "\n\nAplicar?",
+  );
+  if (!ok) return;
+  for (const u of review.units) kept.set(u.id, proposto.has(u.id));
+  render(); schedule();
+};
+
+for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["txt", "transcript"]]) {
+  document.getElementById(id).onclick = async () => {
+    const r = await api("/export", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind, keepList: keepList() }),
+    });
+    if (r.error) { alert(r.error); return; }
+    location.href = r.downloadUrl;
+  };
+}
+
+poll();
+</script>
+</body>
+</html>

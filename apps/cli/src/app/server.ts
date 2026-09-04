@@ -132,7 +132,7 @@ export async function startApp(opts: {
     const handle = async (): Promise<void> => {
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(page);
+        res.end(page.replace("window.__JOB__", JSON.stringify(job.id)));
         return;
       }
 

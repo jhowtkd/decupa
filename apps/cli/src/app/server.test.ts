@@ -36,11 +36,27 @@ async function bootComPlano(exec: FakeExecutor = new FakeExecutor()) {
 
 describe("startApp", () => {
   it("sobe numa porta e serve a página em /", async () => {
-    const { base } = await boot();
+    const { base, app } = await boot();
     const res = await fetch(base);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/text\/html/);
-    expect(await res.text()).toContain("<!doctype html>");
+    const html = await res.text();
+    expect(html).toContain("<!doctype html>");
+    // O token some; no lugar entra o id como literal JSON, que o script lê
+    // em `... || window.__JOB__` — sem isso a página polla `/jobs/undefined`.
+    expect(html).toContain(JSON.stringify(app.jobId));
+    expect(html).not.toContain("window.__JOB__");
+    expect(html).toContain("decupa · limpar fala");
+  });
+
+  it("serve o keeplist.js testado, não uma cópia", async () => {
+    const { base } = await boot();
+    const res = await fetch(`${base}/keeplist.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/javascript/);
+    const body = await res.text();
+    expect(body).toContain("export function keepListFrom");
+    expect(body).toContain("export function expandKeepList");
   });
 
   it("escuta só em 127.0.0.1", async () => {
