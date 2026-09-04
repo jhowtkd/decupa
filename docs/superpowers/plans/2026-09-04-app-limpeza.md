@@ -31,6 +31,7 @@
 |---|---|
 | `apps/cli/src/app/edl.ts` | clips + fps → texto CMX3600. Puro. |
 | `apps/cli/src/app/review.ts` | plano + índice → o `Review` que a página consome. Puro. |
+| `apps/cli/src/app/keeplist.js` | ids ⇄ string de faixas do `--keep`. Puro; servido à página. |
 | `apps/cli/src/app/jobs.ts` | estado do job em memória. Puro. |
 | `apps/cli/src/app/pipeline.ts` | invoca os comandos do motor; executor injetável. |
 | `apps/cli/src/app/server.ts` | rotas |
@@ -106,11 +107,28 @@ describe("buildEdl", () => {
   });
 
   it("encadeia o record timecode sem buraco entre eventos", () => {
-    // clipe 1 dura 3,118s = 94 quadros; o evento 2 começa exatamente ali
+    // Números conferidos rodando a conta, não estimados:
+    //   clipe 1: round(28.436×30) − round(25.318×30) = 853 − 760 = 93 quadros
+    //   clipe 2: round(35.141×30) − round(31.956×30) = 1054 − 959 = 95 quadros
+    // O record do evento 2 começa exatamente onde o do evento 1 terminou.
     const linhas = buildEdl({ clips, fps: 30, title: "c" })
       .split("\n").filter((l) => /^\d{3}\s/.test(l));
-    expect(linhas[0]).toContain("00:00:00:00 00:00:03:04");
-    expect(linhas[1]!).toContain("00:00:03:04 00:00:06:07");
+    expect(linhas[0]).toContain("00:00:00:00 00:00:03:03");
+    expect(linhas[1]!).toContain("00:00:03:03 00:00:06:08");
+  });
+
+  it("a duração no record bate com a duração na fonte, quadro a quadro", () => {
+    // Se estes dois divergirem, o Resolve importa com buraco ou sobreposição.
+    const linhas = buildEdl({ clips, fps: 30, title: "c" })
+      .split("\n").filter((l) => /^\d{3}\s/.test(l));
+    const frames = (tc: string) => {
+      const [h, m, s, f] = tc.split(":").map(Number);
+      return ((h! * 60 + m!) * 60 + s!) * 30 + f!;
+    };
+    for (const linha of linhas) {
+      const [srcIn, srcOut, recIn, recOut] = linha.trim().split(/\s+/).slice(4);
+      expect(frames(srcOut!) - frames(srcIn!)).toBe(frames(recOut!) - frames(recIn!));
+    }
   });
 
   it("recusa frame rate fracionário em vez de gerar timecode errado", () => {
@@ -191,7 +209,7 @@ export function buildEdl(opts: { clips: EdlClip[]; fps: number; title: string })
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `pnpm vitest run apps/cli/src/app/edl.test.ts`
-Expected: PASS, 11 testes.
+Expected: PASS, 12 testes.
 
 - [ ] **Step 5: Commit**
 
@@ -414,7 +432,7 @@ git commit -m "feat(app): monta o review que a página consome a partir do plano
 
 **Interfaces:**
 - Consumes: `Review` (Task 2).
-- Produces: `Stage`, `Job`, `JobStore` com `create`, `get`, `setStage`, `setReview`, `fail`, `cancel`, `keepListOf`, `setKeepList`.
+- Produces: `Stage`, `Job`, `JobStore` com `create`, `get`, `setStage`, `setReview`, `setKeepList`, `fail`, `cancel`.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -483,6 +501,18 @@ describe("JobStore", () => {
     store.cancel(id);
     store.setStage(id, "indexing");
     expect(store.get(id)!.stage).toBe("cancelled");
+  });
+
+  it("erro depois de cancelar não vira `error` na tela", () => {
+    // Matar o processo faz a etapa em andamento falhar. Se esse erro
+    // sobrescrevesse o cancelamento, a pessoa cancelaria, esperaria, e a tela
+    // acabaria dizendo "erro: ..." como se algo tivesse dado errado.
+    const store = new JobStore();
+    const { id } = store.create({ videoPath: "/v.mp4", workDir: "/w" });
+    store.cancel(id);
+    store.fail(id, "SIGTERM");
+    expect(store.get(id)!.stage).toBe("cancelled");
+    expect(store.get(id)!.error).toBeUndefined();
   });
 
   it("ignora operação em id inexistente sem estourar", () => {
@@ -561,6 +591,9 @@ export class JobStore {
   }
 
   fail(id: string, error: string): void {
+    // Cancelar vence: matar o processo faz a etapa falhar, e esse erro não
+    // pode virar "erro: SIGTERM" na tela de quem pediu para parar.
+    if (this.jobs.get(id)?.stage === "cancelled") return;
     this.mutate(id, { stage: "error", error }, true);
   }
 
@@ -573,7 +606,7 @@ export class JobStore {
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `pnpm vitest run apps/cli/src/app/jobs.test.ts`
-Expected: PASS, 9 testes.
+Expected: PASS, 10 testes.
 
 - [ ] **Step 5: Commit**
 
@@ -592,7 +625,7 @@ git commit -m "feat(app): estado do job em memória, com estágio terminal irrev
 
 **Interfaces:**
 - Consumes: nada de tasks anteriores em runtime.
-- Produces: `Executor`, `ExecResult`, `FakeExecutor`, `runIngest(...)`, `runPlan(...)`, `runTriage(...)`, `runRender(...)`, `makeTriageProxy(...)`.
+- Produces: `Executor`, `ExecResult`, `ExecCall`, `SpawnExecutor` (com `killAll()`), `FakeExecutor`, `preflight(...)`, `probeFps(...)`, `runIngest(...)`, `runPlan(...)`, `runTriage(...)`, `runRender(...)`, `makeTriageProxy(...)`.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -600,7 +633,7 @@ git commit -m "feat(app): estado do job em memória, com estágio terminal irrev
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { FakeExecutor, makeTriageProxy, runIngest, runPlan } from "./pipeline.ts";
+import { FakeExecutor, makeTriageProxy, probeFps, runIngest, runPlan } from "./pipeline.ts";
 
 const job = { id: "j1", videoPath: "/vid/aula.mp4", workDir: "/work/j1" };
 
@@ -670,6 +703,22 @@ describe("makeTriageProxy", () => {
     expect(exec.calls).toHaveLength(0);
   });
 });
+
+describe("probeFps", () => {
+  it("lê o frame rate como fração", async () => {
+    expect(await probeFps(job, new FakeExecutor({ stdout: "30/1\n" }))).toBe(30);
+  });
+
+  it("recusa fracionário com instrução do que fazer", async () => {
+    // 29,97 vira deriva crescente no timecode; ninguém percebe até o fim.
+    const exec = new FakeExecutor({ stdout: "30000/1001\n" });
+    await expect(probeFps(job, exec)).rejects.toThrow(/29\.97/);
+  });
+
+  it("estoura quando o ffprobe falha, em vez de assumir 30", async () => {
+    await expect(probeFps(job, new FakeExecutor({ code: 1 }))).rejects.toThrow(/ffprobe/);
+  });
+});
 ```
 
 - [ ] **Step 2: Rodar e ver falhar**
@@ -709,18 +758,31 @@ export interface PipelineJob {
 }
 
 export class SpawnExecutor implements Executor {
+  /** Processos vivos, para que `cancel` cumpra o que promete. Sem isto o
+   *  cancelamento só trocaria um enum e o WhisperX seguiria até o fim. */
+  private readonly running = new Set<ReturnType<typeof spawn>>();
+
   run(call: ExecCall): Promise<ExecResult> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn(call.command, call.args, {
         env: { ...process.env, ...call.env },
       });
+      this.running.add(child);
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d) => { stdout += String(d); });
       child.stderr.on("data", (d) => { stderr += String(d); });
-      child.on("error", reject);
-      child.on("close", (code) => resolvePromise({ code: code ?? 1, stdout, stderr }));
+      child.on("error", (err) => { this.running.delete(child); reject(err); });
+      child.on("close", (code) => {
+        this.running.delete(child);
+        resolvePromise({ code: code ?? 1, stdout, stderr });
+      });
     });
+  }
+
+  killAll(): void {
+    for (const child of this.running) child.kill("SIGTERM");
+    this.running.clear();
   }
 }
 
@@ -829,6 +891,58 @@ export async function runTriage(job: PipelineJob, exec: Executor, provider: stri
   return match[1]!.trim();
 }
 
+/**
+ * Confere o que a tabela de erros da spec promete, antes de começar o job.
+ * Sem isto a falta de um binário chega como stdout truncado de uma etapa que
+ * já rodou por minutos.
+ */
+export async function preflight(job: PipelineJob, exec: Executor): Promise<void> {
+  const readable = await access(job.videoPath).then(() => true, () => false);
+  if (!readable) throw new Error(`não consegui ler o vídeo em ${job.videoPath}`);
+
+  for (const bin of ["ffmpeg", "ffprobe"]) {
+    const { code } = await exec.run({ command: bin, args: ["-version"] });
+    if (code !== 0) throw new Error(`${bin} não está no PATH — instale com \`brew install ffmpeg\``);
+  }
+
+  const engine = process.env.VE_PLUGIN_ROOT ?? "work/video-agent-kit-plugin";
+  const hasEngine = await access(join(engine, "mcp", "ve_tools", "condense.py"))
+    .then(() => true, () => false);
+  if (!hasEngine) {
+    throw new Error(
+      `não achei o motor de condense em ${engine}. Clone jhowtkd/video-agent-kit-plugin ` +
+      "lá, ou aponte VE_PLUGIN_ROOT.",
+    );
+  }
+}
+
+/**
+ * Frame rate da fonte, para o EDL. Fracionário estoura aqui em vez de virar
+ * timecode errado em silêncio — material a 29,97 sai com deriva crescente, e
+ * ninguém percebe até a timeline dessincronizar no fim.
+ */
+export async function probeFps(job: PipelineJob, exec: Executor): Promise<number> {
+  const { code, stdout } = await exec.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=r_frame_rate", "-of", "default=nw=1:nk=1",
+      job.videoPath,
+    ],
+  });
+  if (code !== 0) throw new Error("ffprobe não conseguiu ler o frame rate do vídeo");
+
+  const [num, den] = stdout.trim().split("/").map(Number);
+  const fps = den ? num! / den! : num!;
+  if (!Number.isInteger(fps)) {
+    throw new Error(
+      `o vídeo tem ${fps.toFixed(2)} fps, e o EDL do v1 só gera non-drop-frame com ` +
+      "fps inteiro. Exporte MP4, ou converta a fonte para fps inteiro antes.",
+    );
+  }
+  return fps;
+}
+
 export async function runRender(job: PipelineJob, outPath: string, exec: Executor): Promise<string> {
   await must(exec, {
     command: "python3",
@@ -842,7 +956,7 @@ export async function runRender(job: PipelineJob, outPath: string, exec: Executo
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `pnpm vitest run apps/cli/src/app/pipeline.test.ts`
-Expected: PASS, 8 testes.
+Expected: PASS, 11 testes.
 
 - [ ] **Step 5: Commit**
 
@@ -853,25 +967,185 @@ git commit -m "feat(app): pipeline que invoca o motor, com executor injetável"
 
 ---
 
-## Task 5: Servidor
+## Task 5: Keep-list
+
+A conversão entre lista de ids e a string de faixas é **o único parser na
+borda com o motor**. Uma faixa errada produz um corte errado sem erro nenhum —
+por isso não fica no `<script>` da página, onde nada é testado.
+
+**Files:**
+- Create: `apps/cli/src/app/keeplist.js`
+- Test: `apps/cli/src/app/keeplist.test.ts`
+
+**Por que `.js` e não `.ts`, contra a convenção do repo:** a página importa
+este módulo direto no navegador, que não come TypeScript. As alternativas são
+piores: duplicar a lógica em JS traz de volta exatamente o bug de faixa que a
+extração existe para evitar, e transpilar no servidor adiciona uma etapa de
+build ao app que a spec decidiu não ter. JSDoc dá os tipos, o teste em `.ts`
+importa normalmente, e o servidor serve o arquivo verbatim.
+
+**Interfaces:**
+- Consumes: nada.
+- Produces: `keepListFrom(ids: string[]): string`, `expandKeepList(list: string): string[]`.
+
+- [ ] **Step 1: Escrever o teste que falha**
+
+`apps/cli/src/app/keeplist.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { expandKeepList, keepListFrom } from "./keeplist.js";
+
+describe("keepListFrom", () => {
+  it("comprime ids consecutivos numa faixa", () => {
+    expect(keepListFrom(["u001", "u002", "u003"])).toBe("u001-u003");
+  });
+
+  it("separa faixas quando há buraco", () => {
+    expect(keepListFrom(["u001", "u002", "u005"])).toBe("u001-u002 u005");
+  });
+
+  it("id solto sai sem hífen", () => {
+    expect(keepListFrom(["u007"])).toBe("u007");
+  });
+
+  it("devolve string vazia para lista vazia", () => {
+    expect(keepListFrom([])).toBe("");
+  });
+
+  it("preserva a largura do id acima de 999", () => {
+    // Reconstruir o fim como "u" + padStart(3) daria "u1000" contra "u999" e
+    // produziria faixa errada — corte no lugar errado, sem erro nenhum.
+    expect(keepListFrom(["u0999", "u1000", "u1001"])).toBe("u0999-u1001");
+  });
+});
+
+describe("expandKeepList", () => {
+  it("expande faixa", () => {
+    expect(expandKeepList("u001-u003")).toEqual(["u001", "u002", "u003"]);
+  });
+
+  it("expande faixas e ids soltos juntos", () => {
+    expect(expandKeepList("u001-u002 u005")).toEqual(["u001", "u002", "u005"]);
+  });
+
+  it("deriva a largura do padding do id recebido", () => {
+    expect(expandKeepList("u0999-u1001")).toEqual(["u0999", "u1000", "u1001"]);
+  });
+
+  it("devolve lista vazia para string vazia", () => {
+    expect(expandKeepList("   ")).toEqual([]);
+  });
+
+  it("é reversível com keepListFrom", () => {
+    const ids = ["u001", "u002", "u005", "u006", "u007", "u010"];
+    expect(expandKeepList(keepListFrom(ids))).toEqual(ids);
+  });
+});
+```
+
+- [ ] **Step 2: Rodar e ver falhar**
+
+Run: `pnpm vitest run apps/cli/src/app/keeplist.test.ts`
+Expected: FAIL — módulo não resolve.
+
+- [ ] **Step 3: Implementar**
+
+`apps/cli/src/app/keeplist.js`:
+
+```js
+/** @param {string} id @returns {number} */
+const numberOf = (id) => Number(id.slice(1));
+
+/**
+ * Ids mantidos → a string que o `--keep` do motor consome.
+ *
+ * Guarda o id de fim, nunca o número: reconstruir como `"u" + padStart(3)`
+ * quebraria em silêncio acima de 999 unidades — uma aula de duas horas chega
+ * lá — e produziria uma faixa que corta no lugar errado sem erro nenhum.
+ */
+/** @param {string[]} ids @returns {string} */
+export function keepListFrom(ids) {
+  /** @type {string[]} */
+  const ranges = [];
+  /** @type {string | null} */
+  let startId = null;
+  /** @type {string | null} */
+  let prevId = null;
+
+  for (const id of ids) {
+    if (prevId === null || numberOf(id) !== numberOf(prevId) + 1) {
+      if (startId) ranges.push(startId === prevId ? startId : `${startId}-${prevId}`);
+      startId = id;
+    }
+    prevId = id;
+  }
+  if (startId) ranges.push(startId === prevId ? startId : `${startId}-${prevId}`);
+  return ranges.join(" ");
+}
+
+/** A string do `--keep` → os ids que ela cobre. A largura do zero-padding vem
+ *  do próprio id recebido, não de um 3 fixo. */
+/** @param {string} list @returns {string[]} */
+export function expandKeepList(list) {
+  /** @type {string[]} */
+  const ids = [];
+  for (const part of list.trim().split(/\s+/).filter(Boolean)) {
+    const [from, to] = part.split("-");
+    const width = from.length - 1;
+    const first = numberOf(from);
+    const last = to ? numberOf(to) : first;
+    for (let n = first; n <= last; n += 1) ids.push(`u${String(n).padStart(width, "0")}`);
+  }
+  return ids;
+}
+```
+
+- [ ] **Step 4: Rodar e ver passar**
+
+Run: `pnpm vitest run apps/cli/src/app/keeplist.test.ts`
+Expected: PASS, 9 testes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/cli/src/app/keeplist.js apps/cli/src/app/keeplist.test.ts
+git commit -m "feat(app): conversão entre ids e a string de faixas do --keep"
+```
+
+---
+
+## Task 6: Servidor
 
 **Files:**
 - Create: `apps/cli/src/app/server.ts`
 - Test: `apps/cli/src/app/server.test.ts`
 
 **Interfaces:**
-- Consumes: `JobStore` (Task 3), `buildReview` (Task 2), `buildEdl` (Task 1), pipeline (Task 4).
+- Consumes: `JobStore` (Task 3), `buildReview` (Task 2), `buildEdl` (Task 1), pipeline (Task 4). Serve `keeplist.js` (Task 5) à página sem importá-lo.
 - Produces: `startApp(opts: { input: string; port?: number; provider?: string }): Promise<{ port: number; close(): Promise<void> }>`.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [ ] **Step 1: Criar o stub da página**
+
+`startApp` lê `page.html` no boot, e os testes desta task sobem o servidor —
+sem o arquivo, todos falham com ENOENT antes de exercitar rota nenhuma. A
+página de verdade vem na Task 7; aqui basta um esqueleto válido:
+
+```bash
+mkdir -p apps/cli/src/app
+printf '<!doctype html>\n<html lang="pt-BR"><head><meta charset="utf-8"><title>decupa</title></head>\n<body><script>window.__JOB__ = null;</script></body></html>\n' > apps/cli/src/app/page.html
+```
+
+- [ ] **Step 2: Escrever o teste que falha**
 
 `apps/cli/src/app/server.test.ts`:
 
 ```ts
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { FakeExecutor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -882,6 +1156,27 @@ async function boot() {
   const app = await startApp({ input: join(dir, "v.mp4"), port: 0, autoStart: false });
   stop = app.close;
   return { app, base: `http://127.0.0.1:${app.port}` };
+}
+
+/** Sobe com índice e plano já no disco, para exercitar o caminho de sucesso
+ *  sem rodar WhisperX nem o motor. */
+async function bootComPlano() {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
+  await mkdir(join(dir, "out"), { recursive: true });
+  const units = ["u001", "u002", "u003"].map((id, i) => ({ id, index: i, text: `t${i}` }));
+  await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({ units }), "utf8");
+  await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+    source_duration: 30, output_duration: 20,
+    clips: [{ unit_ids: ["u002", "u003"], start: 10, end: 30 }],
+    joins: [],
+  }), "utf8");
+
+  const exec = new FakeExecutor();
+  const app = await startApp({
+    input: join(dir, "v.mp4"), port: 0, autoStart: false, executor: exec, workDir: dir,
+  });
+  stop = app.close;
+  return { app, exec, base: `http://127.0.0.1:${app.port}` };
 }
 
 describe("startApp", () => {
@@ -926,28 +1221,61 @@ describe("startApp", () => {
     const body = await (await fetch(`${base}/jobs/${app.jobId}`)).json() as { stage: string };
     expect(body.stage).toBe("cancelled");
   });
+
+  it("keep devolve o review novo — o caminho que a tela usa a cada clique", async () => {
+    // Sem este teste, as rotas provadas são só as de erro; o happy path que a
+    // página exercita o tempo todo ficaria sem cobertura nenhuma.
+    const { base, app } = await bootComPlano();
+    const res = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u002-u003" }),
+    });
+    const body = await res.json() as { review: { units: { id: string; kept: boolean }[] } };
+    expect(res.status).toBe(200);
+    expect(body.review.units.find((u) => u.id === "u001")!.kept).toBe(false);
+    expect(body.review.units.find((u) => u.id === "u002")!.kept).toBe(true);
+  });
+
+  it("dois keeps seguidos não rodam dois planos ao mesmo tempo", async () => {
+    // condense_plan grava sempre no mesmo arquivo; dois processos em paralelo
+    // fazem o último a gravar vencer, e o review pode voltar do keep-list
+    // antigo — o aviso mentiroso que o debounce existia para evitar.
+    const { base, app, exec } = await bootComPlano();
+    const post = (keepList: string) => fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList }),
+    });
+    await Promise.all([post("u001-u002"), post("u002-u003")]);
+    const planos = exec.calls.filter((c) => c.args.includes("plan"));
+    expect(planos).toHaveLength(1);
+    expect(planos[0]!.args).toContain("u002-u003");
+  });
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [ ] **Step 3: Rodar e ver falhar**
 
 Run: `pnpm vitest run apps/cli/src/app/server.test.ts`
 Expected: FAIL — módulo não resolve.
 
-- [ ] **Step 3: Implementar**
+- [ ] **Step 4: Implementar**
 
 `apps/cli/src/app/server.ts`:
 
 ```ts
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { buildEdl } from "./edl.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  indexPath, planPath, runIngest, runPlan, runRender, runTriage,
-  SpawnExecutor, type Executor, type PipelineJob,
+  indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender,
+  runTriage, SpawnExecutor, type Executor, type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview } from "./review.ts";
 
@@ -988,34 +1316,60 @@ export async function startApp(opts: {
   executor?: Executor;
   /** false nos testes: não dispara o pipeline de verdade. */
   autoStart?: boolean;
+  /** só nos testes; em produção é derivado do caminho do vídeo. */
+  workDir?: string;
 }): Promise<AppHandle> {
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider ?? "gemini";
   const page = await readFile(join(HERE, "page.html"), "utf8");
 
-  const workDir = join(dirname(input), `.decupa-${basename(input).replace(/\.[^.]+$/, "")}`);
+  const workDir = opts.workDir
+    ?? join(dirname(input), `.decupa-${basename(input).replace(/\.[^.]+$/, "")}`);
   await mkdir(join(workDir, "out"), { recursive: true });
 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir };
 
-  /** Re-planeja e recarrega o review. Chamado no /keep e antes de exportar. */
+  // Fila de um: `condense_plan` grava sempre no mesmo condense_plan.json, e o
+  // debounce de 250 ms não impede que um segundo re-plano comece com o
+  // primeiro ainda rodando. Dois processos escrevendo o mesmo arquivo fazem o
+  // último a gravar vencer — e o review devolvido pode ser o do keep-list
+  // antigo, que é exatamente o aviso mentiroso que o debounce existia para
+  // evitar.
+  let planning: Promise<void> = Promise.resolve();
+  let pendingKeepList: string | null = null;
+
   async function replan(keepList: string): Promise<void> {
-    store.setStage(job.id, "planning");
-    await runPlan(pipelineJob, keepList, exec);
-    const review = buildReview(await readJson(planPath(pipelineJob)), await readJson(indexPath(pipelineJob)));
-    store.setReview(job.id, review, keepList);
+    pendingKeepList = keepList;
+    const mine = planning.then(async () => {
+      // Se outro pedido chegou enquanto este esperava, aquele é o atual:
+      // rodar este seria gastar processo para produzir um plano obsoleto.
+      if (pendingKeepList !== keepList) return;
+      store.setStage(job.id, "planning");
+      await runPlan(pipelineJob, keepList, exec);
+      const review = buildReview(
+        await readJson(planPath(pipelineJob)),
+        await readJson(indexPath(pipelineJob)),
+      );
+      store.setReview(job.id, review, keepList);
+    });
+    planning = mine.catch(() => {});
+    return mine;
   }
 
   async function ingest(): Promise<void> {
     try {
+      await preflight(pipelineJob, exec);
       await runIngest(pipelineJob, exec, (stage) => store.setStage(job.id, stage));
+      if (store.get(job.id)?.stage === "cancelled") return;
       const index = await readJson(indexPath(pipelineJob)) as { units: { id: string }[] };
       const all = `${index.units[0]!.id}-${index.units[index.units.length - 1]!.id}`;
       await replan(all);
     } catch (error) {
+      // `fail` não sobrescreve `cancelled`: matar o processo faz a etapa
+      // falhar, e esse erro não é notícia para quem pediu para parar.
       store.fail(job.id, error instanceof Error ? error.message : String(error));
     }
   }
@@ -1028,6 +1382,14 @@ export async function startApp(opts: {
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(page);
+        return;
+      }
+
+      if (url.pathname === "/keeplist.js") {
+        // O mesmo arquivo que o teste importa. Servir verbatim é o que garante
+        // que a página e o servidor concordam sobre o que é uma faixa.
+        res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+        res.end(await readFile(join(HERE, "keeplist.js"), "utf8"));
         return;
       }
 
@@ -1045,6 +1407,9 @@ export async function startApp(opts: {
 
         if (parts[2] === "cancel" && req.method === "POST") {
           store.cancel(current.id);
+          // Trocar o enum não para o WhisperX. Sem matar o processo, quem
+          // cancelou espera do mesmo jeito — que é o motivo de cancel existir.
+          if (exec instanceof SpawnExecutor) exec.killAll();
           sendJson(res, { ok: true });
           return;
         }
@@ -1065,8 +1430,13 @@ export async function startApp(opts: {
           const suggested = await runTriage(pipelineJob, exec, provider);
           const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
             .catch(() => "");
-          // Prévia: devolve a sugestão e o relatório, não aplica.
-          sendJson(res, { keepList: suggested, report });
+          // Prévia com motivo: a spec pede "quais, com o motivo que o modelo
+          // deu". As linhas de alegação aplicada do relatório trazem os ids e
+          // a justificativa; a página mostra isso antes de mexer na tela.
+          const motivos = report.split("\n")
+            .filter((l) => l.startsWith("- **"))
+            .map((l) => l.replace(/^-\s*/, "").replace(/\*\*/g, ""));
+          sendJson(res, { keepList: suggested, motivos, report });
           return;
         }
 
@@ -1078,7 +1448,10 @@ export async function startApp(opts: {
           const plan = await readJson(planPath(pipelineJob)) as Record<string, any>;
 
           if (kind === "edl") {
-            const fps = Math.round(Number(body.fps ?? 30));
+            // Do arquivo, nunca assumido: `probeFps` recusa fracionário com
+            // instrução, em vez de arredondar 29,97 para 30 e produzir
+            // timecode com deriva crescente que ninguém nota até o fim.
+            const fps = await probeFps(pipelineJob, exec);
             const out = join(workDir, "corte.edl");
             await writeFile(out, buildEdl({
               clips: plan.clips, fps, title: basename(input),
@@ -1111,13 +1484,16 @@ export async function startApp(opts: {
           };
           const path = files[parts[3]];
           if (!path) { sendJson(res, { error: "arquivo desconhecido" }, 404); return; }
-          const data = await readFile(path);
+          // Stream, não readFile: o MP4 de um talking-head de 4 minutos já
+          // passa de 300 MB, e carregá-lo inteiro na RAM para servir derruba o
+          // processo justamente no caminho secundário.
+          const { size } = await stat(path);
           res.writeHead(200, {
             "content-type": "application/octet-stream",
             "content-disposition": `attachment; filename="${basename(path)}"`,
-            "content-length": data.length,
+            "content-length": size,
           });
-          res.end(data);
+          await pipeline(createReadStream(path), res);
           return;
         }
       }
@@ -1148,28 +1524,28 @@ export async function startApp(opts: {
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [ ] **Step 5: Rodar e ver passar**
 
 Run: `pnpm vitest run apps/cli/src/app/server.test.ts`
-Expected: PASS, 6 testes.
+Expected: PASS, 8 testes.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/cli/src/app/server.ts apps/cli/src/app/server.test.ts
+git add apps/cli/src/app/server.ts apps/cli/src/app/server.test.ts apps/cli/src/app/page.html
 git commit -m "feat(app): servidor com rotas de job, keep, triagem, export e download"
 ```
 
 ---
 
-## Task 6: Página e comando
+## Task 7: Página e comando
 
 **Files:**
 - Create: `apps/cli/src/app/page.html`
 - Modify: `apps/cli/src/index.ts`
 
 **Interfaces:**
-- Consumes: `startApp` (Task 5).
+- Consumes: `startApp` (Task 6), `keepListFrom`/`expandKeepList` (Task 5).
 - Produces: o comando `decupa limpar`.
 
 - [ ] **Step 1: Escrever a página**
@@ -1236,38 +1612,29 @@ de cor, mesma tipografia):
   <strong>decupa</strong>
   <span id="stage">carregando…</span>
   <span style="flex:1"></span>
-  <button id="triar">sugerir cortes</button>
-  <button id="edl">exportar EDL</button>
-  <button id="mp4">exportar MP4</button>
-  <button id="txt">transcrição</button>
+  <!-- Nascem desabilitados: sem review, keepList() estouraria em review.units
+       de null, e a pessoa clicaria durante os minutos de transcrição. -->
+  <button id="cancelar">cancelar</button>
+  <button id="triar" disabled>sugerir cortes</button>
+  <button id="edl" disabled>exportar EDL</button>
+  <button id="mp4" disabled>exportar MP4</button>
+  <button id="txt" disabled>transcrição</button>
 </header>
 <main id="prosa"></main>
-<script>
+<script type="module">
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null;
 
 const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then((r) => r.json());
 
-function keepList() {
-  // Mesma string que o --keep do motor consome: faixas de ids consecutivos.
-  // Guarda o id de fim, não o número: reconstruir "u" + padStart(3) quebraria
-  // silenciosamente num vídeo com mais de 999 unidades, e o corte sairia
-  // errado sem nada avisar.
-  const ids = review.units.filter((u) => kept.get(u.id)).map((u) => u.id);
-  const num = (id) => Number(id.slice(1));
-  const out = [];
-  let startId = null, prevId = null;
-  for (const id of ids) {
-    if (prevId === null || num(id) !== num(prevId) + 1) {
-      if (startId) out.push(range(startId, prevId));
-      startId = id;
-    }
-    prevId = id;
-  }
-  if (startId) out.push(range(startId, prevId));
-  return out.join(" ");
-}
-const range = (startId, endId) => (startId === endId ? startId : `${startId}-${endId}`);
+// keepListFrom e expandKeepList vêm de /keeplist.js, servido pelo servidor a
+// partir do módulo testado em keeplist.ts. Não reimplementar aqui: é o único
+// parser na borda com o motor, e uma faixa errada corta no lugar errado sem
+// erro nenhum.
+import { expandKeepList, keepListFrom } from "/keeplist.js";
+
+const keepList = () =>
+  keepListFrom(review.units.filter((u) => kept.get(u.id)).map((u) => u.id));
 
 function render() {
   const joinsBy = new Map(review.joins.map((j) => [j.afterUnitId, j]));
@@ -1339,39 +1706,40 @@ async function poll() {
   if (j.stage === "ready" && j.review) {
     review = j.review;
     kept = new Map(review.units.map((u) => [u.id, u.kept]));
+    for (const id of ["triar", "edl", "mp4", "txt"]) {
+      document.getElementById(id).disabled = false;
+    }
+    document.getElementById("cancelar").disabled = true;
     render();
     return;
   }
   if (j.stage !== "cancelled") setTimeout(poll, 1000);
 }
 
+document.getElementById("cancelar").onclick = async () => {
+  await api("/cancel", { method: "POST" });
+  document.getElementById("stage").textContent = "cancelado";
+};
+
 document.getElementById("triar").onclick = async () => {
   const r = await api("/triage", { method: "POST" });
   if (r.error) { alert(r.error); return; }
   // Prévia, não aplicação muda: mostra o que cairia antes de mexer na tela.
-  const proposto = new Set(expand(r.keepList));
+  const proposto = new Set(expandKeepList(r.keepList));
   const cairiam = review.units.filter((u) => kept.get(u.id) && !proposto.has(u.id));
+  // Com o motivo que o modelo deu, não só o texto do trecho: a justificativa é
+  // o que permite discordar. E ela confabula quando não entende a unidade, o
+  // que só dá para perceber lendo.
   const ok = confirm(
     `A sugestão tira ${cairiam.length} trecho(s):\n\n` +
     cairiam.map((u) => "· " + u.text.slice(0, 60)).join("\n") +
+    (r.motivos?.length ? "\n\nMotivos:\n" + r.motivos.join("\n") : "") +
     "\n\nAplicar?",
   );
   if (!ok) return;
   for (const u of review.units) kept.set(u.id, proposto.has(u.id));
   render(); schedule();
 };
-
-function expand(list) {
-  // A largura do zero-padding vem do próprio id recebido, não de um 3 fixo.
-  const ids = [];
-  for (const part of list.trim().split(/\s+/).filter(Boolean)) {
-    const [a, b] = part.split("-");
-    const width = a.length - 1;
-    const from = Number(a.slice(1)), to = b ? Number(b.slice(1)) : from;
-    for (let n = from; n <= to; n += 1) ids.push("u" + String(n).padStart(width, "0"));
-  }
-  return ids;
-}
 
 for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["txt", "transcript"]]) {
   document.getElementById(id).onclick = async () => {
@@ -1484,32 +1852,38 @@ git commit -m "feat(app): página de revisão e comando decupa limpar"
 | Pipeline invoca o motor, `--drop-fillers hard` | 4 |
 | `CLAUDE_PROJECT_DIR` por job | 4 |
 | Proxy de triagem a `fps=1,scale=270:480` | 4 |
-| Rotas de job/keep/triagem/export/download/cancel | 5 |
-| `keepList` como string, recusa array | 5 |
-| Bind em `127.0.0.1` | 5 |
-| Export sempre re-planeja | 5 |
-| Prosa corrida, unidade colapsa, marcador com texto | 6 |
-| Debounce de 250 ms | 6 |
-| Triagem como prévia com confirmação | 6 |
-| Avisos de junção entre as palavras dos dois lados | 6 |
-| Entrada por `--input`, sem file picker | 6 |
-| Download em vez de path na tela | 5, 6 |
+| Rotas de job/keep/triagem/export/download/cancel | 6 |
+| `keepList` como string, recusa array | 6 |
+| Bind em `127.0.0.1` | 6 |
+| Export sempre re-planeja | 6 |
+| Prosa corrida, unidade colapsa, marcador com texto | 7 |
+| Debounce de 250 ms | 7 |
+| Triagem como prévia com motivos | 6, 7 |
+| Avisos de junção entre as palavras dos dois lados | 7 |
+| Entrada por `--input`, sem file picker | 7 |
+| Download em vez de path na tela | 6, 7 |
+| `preflight` da tabela de erros da spec | 4 |
+| fps lido do arquivo, fracionário recusado | 4, 6 |
+| `cancel` mata o processo, e o erro não sobrescreve | 3, 4, 6 |
+| Re-plano em fila de um | 6 |
+| Download em stream, sem carregar MP4 na RAM | 6 |
+| Botões travados até `ready`; cancelar durante a ingestão | 7 |
+| `keepList`/`expand` testados fora do navegador | 5 |
 
 **Consistência de tipos:** `Review`/`ReviewJoin`/`ReviewFlag` são definidos na
 Task 2 e consumidos como tal nas 3, 5 e 6. `PipelineJob` (Task 4) é um
 subconjunto de `Job` (Task 3) de propósito — o pipeline não precisa de estágio
 nem de review, e depender só do que usa mantém as duas testáveis em separado.
-`Executor`/`ExecCall`/`FakeExecutor` vivem na Task 4 e são injetados na 5.
+`Executor`/`ExecCall`/`FakeExecutor` vivem na Task 4 e são injetados na 6. `keeplist.js` (Task 5) é o mesmo arquivo que o teste importa e que o servidor serve à página — uma fonte, nunca duas.
 
 **Lacunas conhecidas, deliberadas:**
 
 - `spawn("open", ...)` é de macOS. O repo já é macOS-only na prática
   (`services/speech`, ffmpeg via Homebrew); se rodar noutro sistema, a falha é
   o navegador não abrir, e a URL fica impressa no terminal de qualquer forma.
-- O `fps` do EDL é enviado pela página com default 30 e não é lido do arquivo.
-  Ler via `ffprobe` no export é uma linha a mais na Task 5, mas exige o
-  binário e um teste com arquivo real — fica para quando houver material com
-  fps diferente de 30 para verificar contra.
 - `runRender` não reporta progresso. Render de vídeo longo fica com a tela
-  parada. O `condense_qc` está fora do v1 pelo mesmo motivo que o progresso de
-  render: são do caminho do MP4, e o caminho principal é o EDL.
+  parada. O `condense_qc` está fora do v1 pelo mesmo motivo: são do caminho do
+  MP4, e o caminho principal é o EDL.
+- `killAll()` manda SIGTERM em todos os filhos do executor. Como o app roda um
+  job por vez, isso é o mesmo que matar o job atual; se um dia houver mais de
+  um, precisa de escopo por job.
