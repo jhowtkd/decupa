@@ -15,7 +15,6 @@ produção — ver .mcp.json no próprio repo do motor.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -37,8 +36,15 @@ except ImportError as exc:
 
 
 def _print_result(result) -> int:
+    """Imprime e traduz falha do motor em código de saída.
+
+    As funções do motor sinalizam erro DEVOLVENDO ToolResult(text="[ERROR] ...")
+    em vez de levantar exceção. Sem esta checagem o wrapper sairia 0 num plano
+    que falhou, e um `&&` no shell — ou uma sessão seguindo o SKILL.md em
+    sequência — seguiria para o render em cima de um plano velho.
+    """
     print(result.text)
-    return 0
+    return 2 if result.text.lstrip().startswith("[ERROR]") else 0
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -52,6 +58,15 @@ def cmd_plan(args: argparse.Namespace) -> int:
     plan_args: dict = {"video_path": args.video, "keep": args.keep}
     if args.drop_fillers:
         plan_args["drop_fillers"] = args.drop_fillers
+    for flag, key in (
+        ("max_gap", "max_gap"),
+        ("lead_in", "lead_in"),
+        ("lead_out", "lead_out"),
+        ("min_clip", "min_clip"),
+    ):
+        value = getattr(args, flag)
+        if value is not None:
+            plan_args[key] = value
     result = condense_plan(plan_args, ctx)
     return _print_result(result)
 
@@ -83,6 +98,16 @@ def main() -> int:
     p_plan.add_argument("video")
     p_plan.add_argument("--keep", nargs="+", required=True, help='ex: u001-u003 u005-u022')
     p_plan.add_argument("--drop-fillers", choices=["hard", "aggressive"], default=None)
+    # Ritmo. O default do motor (max_gap 0.45, lead_out 0.22) é pensado para
+    # fala corrida; corte de Reels é bem mais seco. Ver o preset no SKILL.md.
+    p_plan.add_argument("--max-gap", type=float, default=None,
+                        help="teto de pausa interna, em segundos (motor: 0.45)")
+    p_plan.add_argument("--lead-in", type=float, default=None,
+                        help="folga antes de cada clipe (motor: 0.10)")
+    p_plan.add_argument("--lead-out", type=float, default=None,
+                        help="folga depois de cada clipe (motor: 0.22)")
+    p_plan.add_argument("--min-clip", type=float, default=None,
+                        help="duração mínima de clipe (motor: 0.60)")
     p_plan.set_defaults(func=cmd_plan)
 
     p_render = sub.add_parser("render", help="corta e renderiza a partir do plano")
