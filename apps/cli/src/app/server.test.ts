@@ -104,9 +104,11 @@ describe("startApp", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ keepList }),
     });
-    await Promise.all([post("u001-u002"), post("u002-u003")]);
+    const [first, second] = await Promise.all([post("u001-u002"), post("u002-u003")]);
     const planos = exec.calls.filter((c) => c.args.includes("plan"));
     expect(planos).toHaveLength(1);
     expect(planos[0]!.args).toContain("u002-u003");
+    expect((await first!.json() as { review?: unknown }).review).toBeDefined();
+    expect((await second!.json() as { review?: unknown }).review).toBeDefined();
   });
 });

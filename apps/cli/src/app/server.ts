@@ -95,7 +95,11 @@ export async function startApp(opts: {
       store.setReview(job.id, review, keepList);
     });
     planning = mine.catch(() => {});
-    return mine;
+    await mine;
+    // Keep supersedido não pode responder antes do vencedor gravar o review:
+    // a página faz `if (r.review) { review = r.review; render(); }` e um
+    // `{review: undefined}` rebobinaria a tela para o corte antigo.
+    if (pendingKeepList !== keepList) await planning;
   }
 
   async function ingest(): Promise<void> {
