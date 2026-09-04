@@ -27,14 +27,12 @@
     border-radius: 6px; padding: 6px 12px; cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
-  /* A unidade mantida é texto corrido. O X só aparece no hover, para não
-     poluir a leitura — que é o ponto da tela. */
-  .u { position: relative; }
-  .u .x {
-    opacity: 0; cursor: pointer; color: var(--warn);
-    font-family: ui-sans-serif, sans-serif; font-size: 11px; padding: 0 3px;
-  }
-  .u:hover .x { opacity: 1; }
+  /* A unidade inteira é o alvo de clique. Um ✕ dentro do fluxo, mesmo com
+     opacity:0, continua ocupando espaço: medido em 14,4 px por unidade, 446 px
+     ao todo num corte de 31 trechos — buracos visíveis num texto cuja única
+     função é ser lido corrido. */
+  .u { cursor: pointer; border-radius: 3px; transition: background 90ms; }
+  .u:hover { background: #e0765c26; box-shadow: 0 0 0 2px #e0765c26; }
   /* Dropada: colapsa para um marcador com as primeiras palavras, e o texto
      em volta se fecha. O título traz o texto inteiro. */
   .gone {
@@ -54,6 +52,7 @@
 <body>
 <header>
   <strong>decupa</strong>
+  <span style="color:var(--muted);font-size:12px">clique num trecho para tirá-lo · clique no marcador para trazer de volta</span>
   <span id="stage">carregando…</span>
   <span style="flex:1"></span>
   <!-- Nascem desabilitados: sem review, keepList() estouraria em review.units
@@ -89,10 +88,15 @@ function render() {
       const span = document.createElement("span");
       span.className = "u";
       span.append(u.text + " ");
-      const x = document.createElement("span");
-      x.className = "x"; x.textContent = "✕"; x.title = "tirar este trecho";
-      x.onclick = () => { kept.set(u.id, false); render(); schedule(); };
-      span.append(x);
+      span.title = "clique para tirar este trecho";
+      span.onclick = () => {
+        // Um clique que terminou uma seleção é alguém lendo, não editando —
+        // e a tela existe para ser lida.
+        if (String(document.getSelection() ?? "").length > 0) return;
+        kept.set(u.id, false);
+        render();
+        schedule();
+      };
       main.append(span);
       const join = joinsBy.get(u.id);
       if (join?.flags?.length) main.append(joinNode(join));
@@ -110,16 +114,59 @@ function render() {
     `${review.outputSeconds.toFixed(0)}s de ${review.sourceSeconds.toFixed(0)}s`;
 }
 
+// O motor emite os avisos em inglês. Este é o único texto da tela que carrega
+// julgamento editorial — é ele que diz que um corte lê errado — e deixá-lo na
+// língua do motor num app em português é falhar exatamente onde importa.
+// Conjunto fechado de oito códigos; qualquer outro cai no texto original.
+const AVISOS = {
+  mid_thought_out: {
+    msg: "o trecho anterior não fecha a frase, então o corte lê como pensamento interrompido",
+    dica: "estenda até a unidade que termina a frase, ou corte antes dela",
+  },
+  answer_without_question: {
+    msg: "a pergunta que este trecho respondia saiu no corte",
+    dica: "traga a pergunta de volta, ou comece num trecho que reafirme o assunto",
+  },
+  no_silence_at_cut: {
+    msg: "não há pausa neste ponto — o corte cai dentro da fala",
+    dica: "ouça esta junção antes de exportar",
+  },
+  mid_word_cut: {
+    msg: "o corte cai no meio de uma palavra",
+    dica: "isto é audível: ajuste o trecho",
+  },
+  broken_reference_in: {
+    msg: "o trecho seguinte se refere a algo que foi cortado",
+    dica: "traga de volta o que ele cita, ou corte o trecho seguinte junto",
+  },
+  orphan_connective_in: {
+    msg: "o trecho seguinte abre com conectivo apontando para algo que saiu",
+    dica: "traga o antecedente de volta, ou comece o corte depois do conectivo",
+  },
+  enumeration_gap: {
+    msg: "a enumeração perdeu um item no meio",
+    dica: "traga o item de volta, ou tire a enumeração inteira",
+  },
+  tight_filler_excision: {
+    msg: "a remoção de cacoete ficou colada demais na fala",
+    dica: "ouça esta junção antes de exportar",
+  },
+};
+
 function joinNode(join) {
   const box = document.createElement("span");
   box.className = "join";
   for (const f of join.flags) {
+    const pt = AVISOS[f.code];
     const el = document.createElement("span");
     el.className = "flag";
-    el.textContent = `⚠ ${f.message}`;
+    el.textContent = `⚠ ${pt ? pt.msg : f.message}`;
+    // O texto do motor fica no title: se a tradução resumir demais, o
+    // original continua a um hover de distância.
+    el.title = f.message;
     const hint = document.createElement("span");
     hint.className = "hint";
-    hint.textContent = ` → ${f.hint}`;
+    hint.textContent = ` → ${pt ? pt.dica : f.hint}`;
     el.append(hint);
     box.append(el);
   }

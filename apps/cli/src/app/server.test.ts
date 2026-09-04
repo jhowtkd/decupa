@@ -112,16 +112,28 @@ describe("startApp", () => {
     // condense_plan grava sempre no mesmo arquivo; dois processos em paralelo
     // fazem o último a gravar vencer, e o review pode voltar do keep-list
     // antigo — o aviso mentiroso que o debounce existia para evitar.
-    const { base, app, exec } = await bootComPlano();
+    // 25 ms por chamada: um plano de verdade custa ~174 ms, e um fake
+    // instantâneo termina antes do segundo pedido chegar — nenhuma
+    // concorrência seria observável, e o teste passaria por acidente.
+    const { base, app, exec } = await bootComPlano(new FakeExecutor({}, 25));
     const post = (keepList: string) => fetch(`${base}/jobs/${app.jobId}/keep`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ keepList }),
     });
     const [first, second] = await Promise.all([post("u001-u002"), post("u002-u003")]);
+
+    // A invariante é serialização, não coalescing: dois planos podem rodar,
+    // desde que nunca ao mesmo tempo. Exigir "exatamente um" obrigaria a
+    // produção a dormir antes de cada plano só para o segundo pedido chegar
+    // a tempo — latência real paga por uma otimização que o debounce de
+    // 250 ms da página já entrega.
+    expect(exec.maxConcurrent).toBe(1);
+
+    // E o último pedido é o que fica: um plano obsoleto não pode ser o
+    // vencedor, senão o aviso de junção descreveria um corte que já mudou.
     const planos = exec.calls.filter((c) => c.args.includes("plan"));
-    expect(planos).toHaveLength(1);
-    expect(planos[0]!.args).toContain("u002-u003");
+    expect(planos.at(-1)!.args).toContain("u002-u003");
     expect((await first!.json() as { review?: unknown }).review).toBeDefined();
     expect((await second!.json() as { review?: unknown }).review).toBeDefined();
   });

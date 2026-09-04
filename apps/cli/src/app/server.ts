@@ -106,12 +106,6 @@ export async function startApp(opts: {
   async function replan(keepList: string): Promise<void> {
     pendingKeepList = keepList;
     const mine = planning.then(async () => {
-      // Janela curta para que dois POSTs concorrentes (Promise.all no teste,
-      // dois cliques mais rápidos que o debounce na página) registrem o
-      // keep-list mais novo antes de este processo começar. `setImmediate`
-      // não chega: o segundo TCP chega ~1 ms depois, e o FakeExecutor já
-      // teria gravado o plano velho.
-      await new Promise<void>((r) => setTimeout(r, 50));
       // Se outro pedido chegou enquanto este esperava, aquele é o atual:
       // rodar este seria gastar processo para produzir um plano obsoleto.
       if (pendingKeepList !== keepList) return;

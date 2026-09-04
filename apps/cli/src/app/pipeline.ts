@@ -74,10 +74,37 @@ export class SpawnExecutor implements Executor {
 /** Roteiriza a saída para testar o pipeline sem rodar WhisperX. */
 export class FakeExecutor implements Executor {
   readonly calls: ExecCall[] = [];
-  constructor(private readonly result: Partial<ExecResult> = {}) {}
+  /** Maior número de chamadas simultâneas observado. É o que prova que a fila
+   *  do replan segura — um plano de verdade leva ~174 ms, e dois em paralelo
+   *  sobrescreveriam o mesmo condense_plan.json. */
+  maxConcurrent = 0;
+  private inFlight = 0;
+
+  private readonly result: Partial<ExecResult>;
+  /** Sem atraso o fake termina antes do próximo pedido chegar, e nenhuma
+   *  concorrência é observável. Com atraso ele modela o motor real. */
+  private readonly delayMs: number;
+
+  // Campos explícitos, não parameter properties: `node
+  // --experimental-strip-types` é strip-only e recusa `constructor(private x)`
+  // com "TypeScript parameter property is not supported". O vitest transpila
+  // de verdade e não reclama, então a suíte inteira fica verde enquanto
+  // `decupa limpar` morre no import.
+  constructor(result: Partial<ExecResult> = {}, delayMs = 0) {
+    this.result = result;
+    this.delayMs = delayMs;
+  }
+
   async run(call: ExecCall): Promise<ExecResult> {
     this.calls.push(call);
-    return { code: 0, stdout: "", stderr: "", ...this.result };
+    this.inFlight += 1;
+    this.maxConcurrent = Math.max(this.maxConcurrent, this.inFlight);
+    try {
+      if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
+      return { code: 0, stdout: "", stderr: "", ...this.result };
+    } finally {
+      this.inFlight -= 1;
+    }
   }
 }
 
