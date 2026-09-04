@@ -30,11 +30,13 @@ export interface TriageModel {
 /** Devolve respostas roteirizadas — inclusive erradas, de propósito. */
 export class FakeTriageModel implements TriageModel {
   readonly calls: { kind: "structure" | "density"; req: StructureRequest | DensityRequest }[] = [];
+  private readonly claims: StructureClaim[];
+  private readonly candidates: DensityCandidate[];
 
-  constructor(
-    private readonly claims: StructureClaim[] = [],
-    private readonly candidates: DensityCandidate[] = [],
-  ) {}
+  constructor(claims: StructureClaim[] = [], candidates: DensityCandidate[] = []) {
+    this.claims = claims;
+    this.candidates = candidates;
+  }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {
     this.calls.push({ kind: "structure", req });

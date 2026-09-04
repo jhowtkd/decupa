@@ -47,15 +47,17 @@ const DENSITY_SCHEMA = {
 
 export class GeminiTriageModel implements TriageModel {
   private readonly client: GoogleGenAI;
+  private readonly model: string;
   private uploaded: { uri: string; mimeType: string } | null = null;
 
-  constructor(private readonly model: string = DEFAULT_MODEL, apiKey = process.env.GEMINI_API_KEY) {
+  constructor(model: string = DEFAULT_MODEL, apiKey = process.env.GEMINI_API_KEY) {
     if (!apiKey) {
       throw new Error(
         "GEMINI_API_KEY não está setada. A triagem precisa dela para ler o vídeo. " +
         "Sem a chave, monte o keep-list na mão e passe direto pro `condense.py plan`.",
       );
     }
+    this.model = model;
     this.client = new GoogleGenAI({ apiKey });
   }
 
