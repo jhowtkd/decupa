@@ -62,21 +62,46 @@ A seção BUDGET no relatório já diz quanto dá pra cortar só com tightening 
 pausa e remoção de hesitação, sem tocar em conteúdo nenhum — leia antes de
 decidir o quanto cortar.
 
-### 2b. Triar (opcional, precisa de `GEMINI_API_KEY`)
+### 2b. Triar (opcional, precisa de chave de um provedor)
+
+Primeiro, **gere o proxy de triagem**. Não mande o vídeo original:
 
 ```bash
-pnpm decupa triage --index <pasta>/out/speech_index.json --video <vídeo> --out <pasta>/out
+ffmpeg -i <vídeo> -vf "fps=1,scale=270:480" -c:v libx264 -crf 32 -c:a aac -b:a 24k -ac 1 <pasta>/triage-proxy.mp4
 ```
 
-Devolve um keep-list proposto e `out/triage.md` com o que foi dropado, por
-quê, e **quais alegações do modelo foram rejeitadas por não conferirem com o
-índice**. Leia as rejeitadas: elas dizem onde o modelo estava errado, o que é
-o melhor sinal que existe de que ele pode estar errado em outro lugar também.
+Isso não é economia por escrúpulo. O modelo amostra vídeo a ~1 fps, então
+30 fps é pagar por 29 frames descartados a cada segundo — e um corpo grande
+demais volta como erro genérico do provedor, não como "arquivo grande". Medido
+em 2026-09-04: 11,2 MB viraram 14,9 MB em base64 e receberam
+`1234 Internal network failure`; 1,65 MB passaram. O áudio fica (em 24 kbps
+mono) porque entonação é sinal real de "está falando com a sala ou com quem
+assiste".
+
+```bash
+pnpm decupa triage --index <pasta>/out/speech_index.json --video <pasta>/triage-proxy.mp4 --out <pasta>/out --provider zai
+```
+
+`--provider` aceita `gemini` (precisa de `GEMINI_API_KEY`) ou `zai` (precisa
+de `ZAI_API_KEY`). Devolve um keep-list proposto e `out/triage.md` com o que
+foi dropado, por quê, e **quais alegações do modelo foram rejeitadas por não
+conferirem com o índice**. Leia as rejeitadas: elas dizem onde o modelo estava
+errado, o que é o melhor sinal que existe de que ele pode estar errado em
+outro lugar também.
 
 O keep-list que sai daqui é ponto de partida do passo 3, não substituto dele.
 A verificação rejeita alegação impossível; ela não certifica alegação correta.
 Um pré-rolo grande demais que engula a frase de abertura passa na verificação
 e só aparece na leitura da prosa, no passo 5.
+
+**Desconfie da justificativa, não só do veredicto.** As notas do relatório são
+prosa gerada, e o modelo confabula detalhe quando não entende a unidade. Caso
+real: sobre "Nossa, hoje o US está puxando muito, né?" (onde "o US" é erro de
+transcrição), ele escreveu "comentário sobre o equipamento/microfone" numa
+rodada e "pergunta sobre o desempenho do computador" em outra — a
+classificação estava certa nas duas, o assunto era invenção nas duas. Uma
+justificativa plausível e falsa é pior que nenhuma: ela dá confiança que não
+foi ganha.
 
 ### 3. Decidir o que fica (você, não o motor)
 

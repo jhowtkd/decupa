@@ -177,6 +177,27 @@ meses dá pra ler exatamente o que o modelo disse e por quê — sem isso, uma
 decisão de corte fica não-auditável, que é o custo que a escolha de mandar o
 vídeo junto trouxe.
 
+### O que a repetição mostrou (medido em 2026-09-04)
+
+Duas rodadas do passe 1 com cache limpo, `glm-5.3-flash` sobre o mesmo
+material. O `diff` das alegações cruas:
+
+- **`unit_ids`, `reason` e `restated_by`: idênticos** nas quatro alegações.
+- **`note`: diferente nas quatro.**
+
+Ou seja, a saída que vira corte é estável mesmo num provedor sem `seed` e com
+`thinking` obrigatório. O que oscila é a prosa.
+
+E oscila de um jeito informativo: a variação é maior justamente onde o modelo
+tem menos evidência. As notas de `preroll` e `restart_block` mudaram de
+redação; a de `aside` mudou de *assunto* — "equipamento/microfone" virou
+"desempenho do computador" — porque a unidade contém um erro de transcrição
+("o US") que o modelo preenche com um chute diferente a cada vez.
+
+Isso sugere um uso futuro: rodar o passe 1 duas vezes e marcar como baixa
+confiança as alegações cujas notas divergirem em conteúdo. Não construído —
+registrado porque a evidência apareceu de graça.
+
 ## Erros e degradação
 
 | Situação | Comportamento |
