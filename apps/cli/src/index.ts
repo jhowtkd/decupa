@@ -278,7 +278,18 @@ async function main(argv: string[]): Promise<number> {
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
     spawn("open", [url], { stdio: "ignore", detached: true }).unref();
-    await new Promise(() => {});  // fica de pé até Ctrl+C
+    await new Promise<void>((resolve) => {
+      let closing = false;
+      const shutdown = async () => {
+        if (closing) return;
+        closing = true;
+        await app.close();
+        resolve();
+        process.exit(0);
+      };
+      process.once("SIGINT", () => { void shutdown(); });
+      process.once("SIGTERM", () => { void shutdown(); });
+    });
     return 0;
   }
 

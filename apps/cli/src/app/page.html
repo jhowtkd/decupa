@@ -132,10 +132,22 @@ function joinNode(join) {
 function schedule() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
-    const r = await api("/keep", {
+    const list = keepList();
+    if (!list) {
+      document.getElementById("stage").textContent =
+        "pelo menos um trecho precisa permanecer";
+      return;
+    }
+    const res = await fetch(`/jobs/${jobId}/keep`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ keepList: keepList() }),
+      body: JSON.stringify({ keepList: list }),
     });
+    const r = await res.json();
+    if (!res.ok || r.error) {
+      document.getElementById("stage").textContent =
+        r.error ?? `erro ${res.status}`;
+      return;
+    }
     if (r.review) { review = r.review; render(); }
   }, 250);
 }

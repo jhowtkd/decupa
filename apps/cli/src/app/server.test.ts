@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeExecutor } from "./pipeline.ts";
+import { FakeExecutor, SpawnExecutor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -31,7 +31,7 @@ async function bootComPlano(exec: FakeExecutor = new FakeExecutor()) {
     input: join(dir, "v.mp4"), port: 0, autoStart: false, executor: exec, workDir: dir,
   });
   stop = app.close;
-  return { app, exec, base: `http://127.0.0.1:${app.port}` };
+  return { app, exec, base: `http://127.0.0.1:${app.port}`, dir };
 }
 
 describe("startApp", () => {
@@ -144,5 +144,94 @@ describe("startApp", () => {
     };
     expect(body.stage).toBe("error");
     expect(body.error).toMatch(/unidade u099 não existe/);
+  });
+
+  it("keep que falha depois de um review restaura ready e preserva o review", async () => {
+    // error é irreversível: fail depois do primeiro corte apagaria o poll.
+    const exec = new FakeExecutor();
+    let plans = 0;
+    const original = exec.run.bind(exec);
+    exec.run = async (call) => {
+      if (call.args.includes("plan")) {
+        plans += 1;
+        if (plans > 1) {
+          return { code: 1, stdout: "", stderr: "condense.py: unidade u099 não existe" };
+        }
+      }
+      return original(call);
+    };
+    const { base, app } = await bootComPlano(exec);
+    const first = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u002-u003" }),
+    });
+    expect(first.status).toBe(200);
+    const failed = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u001-u002" }),
+    });
+    expect(failed.status).toBe(500);
+    const body = await (await fetch(`${base}/jobs/${app.jobId}`)).json() as {
+      stage: string; review?: unknown;
+    };
+    expect(body.stage).toBe("ready");
+    expect(body.review).toBeDefined();
+  });
+
+  it("motivos da triagem vêm do Aplicado, não do Rejeitado", async () => {
+    const { base, app, dir } = await bootComPlano(new FakeExecutor({
+      stdout: "keep-list: u002-u003\n",
+    }));
+    await writeFile(join(dir, "out", "triage.md"), [
+      "# Triagem",
+      "",
+      "### Aplicado",
+      "",
+      "- **u001** — `preroll` — falando com o operador",
+      "",
+      "### Rejeitado (alegação não conferiu com o índice)",
+      "",
+      "- **u099** — `preroll` — chute inventado",
+      "  - falhou: não confere",
+      "",
+      "## Passe 2 — densidade",
+      "",
+      "- **u005** (rank 1) — pausa longa",
+      "- ~~u006~~ pulado: estoura orçamento",
+      "",
+    ].join("\n"), "utf8");
+    const res = await fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+    const body = await res.json() as { keepList: string; motivos: string[] };
+    expect(res.status).toBe(200);
+    expect(body.keepList).toBe("u002-u003");
+    expect(body.motivos.some((m) => m.includes("falando com o operador"))).toBe(true);
+    expect(body.motivos.join("\n")).not.toMatch(/u099/);
+    expect(body.motivos.some((m) => m.includes("u005") && m.includes("rank"))).toBe(true);
+    expect(body.motivos.join("\n")).not.toMatch(/u006/);
+  });
+
+  it("rejeita startApp se a porta já está ocupada", async () => {
+    const { app } = await boot();
+    const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
+    await expect(startApp({
+      input: join(dir, "v.mp4"), port: app.port, autoStart: false,
+    })).rejects.toMatchObject({ code: "EADDRINUSE" });
+  });
+
+  it("close mata processos do SpawnExecutor", async () => {
+    const exec = new SpawnExecutor();
+    const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
+    const app = await startApp({
+      input: join(dir, "v.mp4"), port: 0, autoStart: false, executor: exec,
+    });
+    stop = app.close;
+    const hung = exec.run({ command: "sleep", args: ["30"] });
+    await new Promise((r) => setTimeout(r, 80));
+    await app.close();
+    stop = null;
+    const result = await hung;
+    expect(result.code).not.toBe(0);
   });
 });

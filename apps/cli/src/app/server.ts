@@ -14,6 +14,35 @@ import { buildReview } from "./review.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/** Motivos da prévia: só o que o modelo aplicou. Rejeitado usa o mesmo
+ *  `- **ids**` e não pode aparecer como justificativa de corte. */
+function motivosFromReport(report: string): string[] {
+  const motivos: string[] = [];
+  let section: "aplicado" | "rejeitado" | "other" = "other";
+  for (const line of report.split("\n")) {
+    if (line.startsWith("#")) {
+      if (/^###\s+Aplicado\b/.test(line)) section = "aplicado";
+      else if (/^###\s+Rejeitado\b/.test(line)) section = "rejeitado";
+      else section = "other";
+      continue;
+    }
+    const clean = () => line.replace(/^-\s*/, "").replace(/\*\*/g, "");
+    if (section === "aplicado" && line.startsWith("- **")) {
+      motivos.push(clean());
+      continue;
+    }
+    if (
+      section !== "rejeitado"
+      && line.startsWith("- **")
+      && line.includes("(rank")
+      && !line.includes("~~")
+    ) {
+      motivos.push(clean());
+    }
+  }
+  return motivos;
+}
+
 function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -95,10 +124,13 @@ export async function startApp(opts: {
         );
         store.setReview(job.id, review, keepList);
       } catch (error) {
-        // GET /jobs/:id é o poll da página: sem `fail`, o POST devolve 500
-        // mas o estágio fica em planning para sempre. `fail` depois de
-        // cancel é no-op — quem pediu para parar não vê "erro: SIGTERM".
-        store.fail(job.id, error instanceof Error ? error.message : String(error));
+        // GET /jobs/:id é o poll da página. Sem review ainda (primeiro plano
+        // do ingest), fail é o certo. Com review, error é irreversível e o
+        // poll nunca voltaria a pintar o corte — volta a ready. O POST
+        // ainda estoura 500 com a mensagem do motor.
+        const current = store.get(job.id);
+        if (current?.review) store.setStage(job.id, "ready");
+        else store.fail(job.id, error instanceof Error ? error.message : String(error));
         throw error;
       }
     });
@@ -184,10 +216,7 @@ export async function startApp(opts: {
           // Prévia com motivo: a spec pede "quais, com o motivo que o modelo
           // deu". As linhas de alegação aplicada do relatório trazem os ids e
           // a justificativa; a página mostra isso antes de mexer na tela.
-          const motivos = report.split("\n")
-            .filter((l) => l.startsWith("- **"))
-            .map((l) => l.replace(/^-\s*/, "").replace(/\*\*/g, ""));
-          sendJson(res, { keepList: suggested, motivos, report });
+          sendJson(res, { keepList: suggested, motivos: motivosFromReport(report), report });
           return;
         }
 
@@ -260,7 +289,10 @@ export async function startApp(opts: {
     });
   });
 
-  await new Promise<void>((r) => server.listen(opts.port ?? 7788, "127.0.0.1", r));
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(opts.port ?? 7788, "127.0.0.1", resolve);
+  });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
 
@@ -269,6 +301,7 @@ export async function startApp(opts: {
   return {
     port, address: "127.0.0.1", jobId: job.id,
     close: async () => {
+      if (exec instanceof SpawnExecutor) exec.killAll();
       await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
     },
   };

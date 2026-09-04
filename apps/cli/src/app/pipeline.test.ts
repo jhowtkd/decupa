@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FakeExecutor,
@@ -39,6 +41,16 @@ describe("runIngest", () => {
   it("estoura com a saída do motor quando uma etapa falha", async () => {
     const exec = new FakeExecutor({ code: 2, stdout: "[ERROR] transcript inválido" });
     await expect(runIngest(job, exec, () => {})).rejects.toThrow(/transcript inválido/);
+  });
+
+  it("reusa transcript.json e só roda o índice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const exec = new FakeExecutor();
+    await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {});
+    expect(exec.calls).toHaveLength(1);
+    expect(exec.calls[0]!.args).toContain("index");
+    expect(exec.calls[0]!.args).not.toContain("condense-prep");
   });
 });
 

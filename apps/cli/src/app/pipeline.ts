@@ -105,12 +105,16 @@ export async function runIngest(
   exec: Executor,
   onStage: (stage: "transcribing" | "indexing") => void,
 ): Promise<void> {
-  onStage("transcribing");
-  await must(exec, {
-    command: "pnpm",
-    args: ["decupa", "condense-prep", "--input", job.videoPath, "--out", transcriptPath(job)],
-    env: envFor(job),
-  }, "a transcrição");
+  // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
+  const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
+  if (!hasTranscript) {
+    onStage("transcribing");
+    await must(exec, {
+      command: "pnpm",
+      args: ["decupa", "condense-prep", "--input", job.videoPath, "--out", transcriptPath(job)],
+      env: envFor(job),
+    }, "a transcrição");
+  }
 
   onStage("indexing");
   await must(exec, {
