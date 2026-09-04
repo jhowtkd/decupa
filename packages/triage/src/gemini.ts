@@ -67,8 +67,14 @@ export class GeminiTriageModel implements TriageModel {
       typeof f.state === "object" && f.state !== null && "name" in f.state
         ? (f.state as { name: string }).name
         : f.state;
+
+    const MAX_ATTEMPTS = 60; // 60 * 5s = 5 minutos
+    let attempts = 0;
     while (stateOf(file) !== "ACTIVE") {
       if (stateOf(file) === "FAILED") throw new Error(`o Gemini falhou ao processar ${path}`);
+      if (++attempts >= MAX_ATTEMPTS) {
+        throw new Error("tempo limite excedido aguardando processamento do vídeo no Gemini");
+      }
       await new Promise((r) => setTimeout(r, 5000));
       file = await this.client.files.get({ name: file.name! });
     }
@@ -81,12 +87,15 @@ export class GeminiTriageModel implements TriageModel {
     const interaction = await this.client.interactions.create({
       model: this.model,
       input: [
+        // O SDK @google/genai utiliza a string "agentic" diretamente (ProcessingEnum = "static" | "agentic" | string),
+        // em vez de um objeto { type: "agentic" }.
         { type: "video", uri: video.uri, mime_type: video.mimeType, processing: "agentic" },
         { type: "text", text: `${instructions}\n\n---\n\n${text}` },
       ],
-      response_format: { type: "text", mime_type: "application/json", schema },
-      temperature: 0,
-    } as any);
+      response_format: { type: "text", mime_type: "application/json", schema: schema as Record<string, unknown> },
+      // O parâmetro temperature é aceito pela API do Gemini, mas não está tipado diretamente no CreateModelInteraction do SDK.
+      ...({ temperature: 0 } as Record<string, unknown>),
+    });
     const parsed = JSON.parse(interaction.output_text ?? "{}") as Record<string, T[]>;
     return parsed[key] ?? [];
   }
