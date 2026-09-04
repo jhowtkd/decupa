@@ -104,11 +104,17 @@ filler que ele afetaria — `aggressive` corta soft filler marcado como
 
 ### 5. **Ler `condense_script.md` inteiro, em voz alta ou não, antes de seguir**
 
-Isso não é opcional e não é burocracia. Nesta mesma sessão, um corte que
-parecia limpo pela tabela de flags (dropar uma unidade marcada `s`/`C`/`A`)
-foi sinalizado pelo próprio `condense_plan` como `mid_thought_out`: a unidade
-anterior não tinha pontuação final, e o corte lia como frase truncada. Só a
-leitura da prosa contínua — não a tabela, não os flags — revelou o problema.
+Isso não é opcional e não é burocracia. Um corte pode estar limpo em toda
+unidade que a tabela de flags mostra e ainda assim ler como frase truncada:
+basta a unidade anterior não ter pontuação final para o `condense_plan`
+sinalizar `mid_thought_out`. A tabela mostra unidade por unidade; só a prosa
+contínua mostra o que sobrou entre elas.
+
+O caso mais caro é o oposto do que a tabela sugere: um bloco onde a pessoa
+tropeça e recomeça a mesma frase três, quatro vezes aparece como várias
+unidades pequenas com flags inofensivas, e a versão inteira da frase vem
+adiante. Ler a prosa é o que revela que o bloco todo sai e o corte cai na
+frase completa. Nenhum flag diz isso.
 
 O arquivo fica em `out/condense_script.md`, na pasta de onde você rodou o
 comando. Se alguma junção não soar como uma pessoa falando, **volte pro passo
@@ -137,6 +143,17 @@ pronto. `QC PASS` na saída de texto não substitui olhar a
 imagem: o relatório classifica o salto visual em cada corte como
 subtle/visible/severe, mas só a imagem mostra se aquele "subtle" ainda
 incomoda pra este material específico.
+
+O relatório termina pedindo **um veredicto por checkpoint em
+`out/condense_verify.md`**. Escreva o arquivo: cada aviso que ele levantou
+(flag de continuidade, salto `severe`, `scene_change`) recebe uma linha
+dizendo se você aceitou e por quê, ou o que mudou no keep-list por causa
+dele. Um aviso aceito conscientemente e um aviso não lido são indistinguíveis
+depois — este arquivo é a única coisa que os separa.
+
+Aviso comum e legítimo de aceitar: `answer_without_question` disparado por
+uma unidade que termina em "né?" ou "tá?". O detector de pergunta em PT-BR lê
+o marcador de fim de frase como interrogação; não havia resposta pra órfãnar.
 
 ### 8. Entregar
 
