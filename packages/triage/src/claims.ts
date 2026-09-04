@@ -119,10 +119,9 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
       if (ctx.claimed.has(target.id)) {
         return "`restated_by` também está sendo dropada, então nada resta dizendo a frase";
       }
-      const repeats =
-        units.some((a, i) =>
-          units.slice(i + 1).some((b) => similarity(a.text, b.text) >= RESTATEMENT_THRESHOLD),
-        ) || units.some((u) => similarity(u.text, target.text) >= RESTATEMENT_THRESHOLD);
+      const repeats = units.some((a, i) =>
+        units.slice(i + 1).some((b) => similarity(a.text, b.text) >= RESTATEMENT_THRESHOLD),
+      );
       if (!repeats) {
         return `nenhum par do bloco é quase-verbatim (limiar ${RESTATEMENT_THRESHOLD})`;
       }

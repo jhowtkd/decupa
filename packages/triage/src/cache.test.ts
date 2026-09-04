@@ -25,6 +25,12 @@ describe("cacheKey", () => {
     expect(cacheKey({ ...parts, pass: "density" })).not.toBe(cacheKey(parts));
   });
 
+  it("muda quando o orçamento de densidade muda", () => {
+    const d1 = cacheKey({ ...parts, pass: "density", budgetSeconds: 10.0 });
+    const d2 = cacheKey({ ...parts, pass: "density", budgetSeconds: 20.0 });
+    expect(d1).not.toBe(d2);
+  });
+
   it("é seguro como nome de arquivo", () => {
     expect(cacheKey(parts)).toMatch(/^[a-f0-9]{64}$/);
   });

@@ -8,6 +8,7 @@ export interface CacheKeyParts {
   promptVersion: string;
   model: string;
   pass: "structure" | "density";
+  budgetSeconds?: number;
 }
 
 /**
@@ -16,10 +17,15 @@ export interface CacheKeyParts {
  * decisão, e daqui a seis meses dá para ler o que o modelo disse e por quê.
  *
  * O passe entra na chave para que mudar `--target` re-rode só a densidade.
+ * O orçamento de tempo também entra quando o passe é de densidade.
  */
 export function cacheKey(parts: CacheKeyParts): string {
+  const elements = [parts.videoSha, parts.indexSha, parts.promptVersion, parts.model, parts.pass];
+  if (parts.pass === "density" && parts.budgetSeconds !== undefined) {
+    elements.push(parts.budgetSeconds.toFixed(1));
+  }
   return createHash("sha256")
-    .update([parts.videoSha, parts.indexSha, parts.promptVersion, parts.model, parts.pass].join(" "))
+    .update(elements.join(" "))
     .digest("hex");
 }
 

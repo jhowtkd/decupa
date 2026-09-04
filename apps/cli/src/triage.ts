@@ -58,8 +58,8 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const cacheDir = join(opts.outDir, "triage_cache");
   await mkdir(cacheDir, { recursive: true });
   const shas = { videoSha: await sha256(opts.videoPath), indexSha: await sha256(opts.indexPath) };
-  const keyOf = (pass: "structure" | "density") =>
-    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, pass });
+  const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
+    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, pass, budgetSeconds });
 
   // Passe 1 — estrutura
   const structureKey = keyOf("structure");
@@ -76,7 +76,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   if (opts.targetSeconds !== undefined) {
     const floor = index.losslessFloorSeconds > 0 ? index.losslessFloorSeconds : index.sourceDurationSeconds;
     const budgetSeconds = Math.max(0, floor - opts.targetSeconds);
-    const densityKey = keyOf("density");
+    const densityKey = keyOf("density", budgetSeconds);
     let candidates = await readCache<DensityCandidate[]>(cacheDir, densityKey);
     if (candidates === null) {
       candidates = await model.density({ unitsBlock, videoPath: opts.videoPath, budgetSeconds });

@@ -95,8 +95,9 @@ export class GeminiTriageModel implements TriageModel {
         { type: "text", text: `${instructions}\n\n---\n\n${text}` },
       ],
       response_format: { type: "text", mime_type: "application/json", schema: schema as Record<string, unknown> },
-      // O parâmetro temperature é aceito pela API do Gemini, mas não está tipado diretamente no CreateModelInteraction do SDK.
-      ...({ temperature: 0 } as Record<string, unknown>),
+      generation_config: {
+        seed: 0,
+      },
     });
     const parsed = JSON.parse(interaction.output_text ?? "{}") as Record<string, T[]>;
     return parsed[key] ?? [];

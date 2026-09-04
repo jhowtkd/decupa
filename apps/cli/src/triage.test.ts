@@ -77,4 +77,21 @@ describe("runTriage", () => {
     expect(model.calls.filter((c) => c.kind === "density")).toHaveLength(1);
     expect(out.keepList).toBe("u001-u003 u005");
   });
+
+  it("re-executa densidade quando targetSeconds muda e reusa cache quando é igual", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    const model1 = new FakeTriageModel([], [{ unit_ids: ["u004"], note: "aparte", rank: 1 }]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model1, targetSeconds: 18 });
+    expect(model1.calls.filter((c) => c.kind === "density")).toHaveLength(1);
+
+    // Alvo diferente: deve invalidar a densidade e consultar o modelo novamente
+    const model2 = new FakeTriageModel([], [{ unit_ids: ["u004"], note: "aparte", rank: 1 }]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model2, targetSeconds: 15 });
+    expect(model2.calls.filter((c) => c.kind === "density")).toHaveLength(1);
+
+    // Mesmo alvo: deve bater no cache sem chamar o modelo
+    const model3 = new FakeTriageModel([], [{ unit_ids: ["u004"], note: "aparte", rank: 1 }]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model3, targetSeconds: 15 });
+    expect(model3.calls.filter((c) => c.kind === "density")).toHaveLength(0);
+  });
 });
