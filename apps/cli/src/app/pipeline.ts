@@ -30,25 +30,43 @@ export class SpawnExecutor implements Executor {
   private readonly running = new Set<ReturnType<typeof spawn>>();
 
   run(call: ExecCall): Promise<ExecResult> {
-    return new Promise((resolvePromise, reject) => {
+    return new Promise((resolvePromise) => {
+      // detached: o filho vira líder do grupo; killAll manda SIGTERM no grupo
+      // inteiro (pnpm → WhisperX), não só no processo direto.
       const child = spawn(call.command, call.args, {
         env: { ...process.env, ...call.env },
+        detached: true,
       });
       this.running.add(child);
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", (d) => { stdout += String(d); });
-      child.stderr.on("data", (d) => { stderr += String(d); });
-      child.on("error", (err) => { this.running.delete(child); reject(err); });
-      child.on("close", (code) => {
+      let settled = false;
+      const settle = (result: ExecResult) => {
+        if (settled) return;
+        settled = true;
         this.running.delete(child);
-        resolvePromise({ code: code ?? 1, stdout, stderr });
+        resolvePromise(result);
+      };
+      child.stdout?.on("data", (d) => { stdout += String(d); });
+      child.stderr?.on("data", (d) => { stderr += String(d); });
+      // ENOENT e afins viram code !== 0: o preflight mapeia para a mensagem
+      // de PATH, em vez de rejeitar a Promise e cair como erro genérico.
+      child.on("error", (err) => {
+        settle({ code: 1, stdout: "", stderr: err.message });
+      });
+      child.on("close", (code) => {
+        settle({ code: code ?? 1, stdout, stderr });
       });
     });
   }
 
   killAll(): void {
-    for (const child of this.running) child.kill("SIGTERM");
+    for (const child of this.running) {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGTERM"); } catch { /* já saiu */ }
+      }
+      child.kill("SIGTERM");
+    }
     this.running.clear();
   }
 }
@@ -170,6 +188,17 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
   for (const bin of ["ffmpeg", "ffprobe"]) {
     const { code } = await exec.run({ command: bin, args: ["-version"] });
     if (code !== 0) throw new Error(`${bin} não está no PATH — instale com \`brew install ffmpeg\``);
+  }
+
+  // Sidecar de fala = `uv run python transcribe.py` em services/speech — não é daemon.
+  const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"] });
+  const speechScript = join("services", "speech", "transcribe.py");
+  const hasSpeech = await access(speechScript).then(() => true, () => false);
+  if (uvCode !== 0 || !hasSpeech) {
+    throw new Error(
+      "o sidecar de fala está fora do ar — precisa do `uv` no PATH e de " +
+      "`services/speech/transcribe.py`. Veja `services/speech/README.md`.",
+    );
   }
 
   const engine = process.env.VE_PLUGIN_ROOT ?? "work/video-agent-kit-plugin";

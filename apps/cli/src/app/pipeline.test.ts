@@ -1,7 +1,23 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FakeExecutor, makeTriageProxy, probeFps, runIngest, runPlan } from "./pipeline.ts";
+import {
+  FakeExecutor,
+  makeTriageProxy,
+  preflight,
+  probeFps,
+  runIngest,
+  runPlan,
+  SpawnExecutor,
+  type ExecCall,
+  type Executor,
+} from "./pipeline.ts";
 
 const job = { id: "j1", videoPath: "/vid/aula.mp4", workDir: "/work/j1" };
+const realJob = {
+  id: "j1",
+  videoPath: resolve("tests/fixtures/generated/clip.mp4"),
+  workDir: "/work/j1",
+};
 
 describe("runIngest", () => {
   it("transcreve, indexa e reporta cada estágio na ordem", async () => {
@@ -83,5 +99,26 @@ describe("probeFps", () => {
 
   it("estoura quando o ffprobe falha, em vez de assumir 30", async () => {
     await expect(probeFps(job, new FakeExecutor({ code: 1 }))).rejects.toThrow(/ffprobe/);
+  });
+});
+
+describe("SpawnExecutor", () => {
+  it("resolve com code !== 0 quando o binário não existe, em vez de rejeitar", async () => {
+    const exec = new SpawnExecutor();
+    const result = await exec.run({ command: "definitely-not-a-binary-xyz", args: [] });
+    expect(result.code).not.toBe(0);
+  });
+});
+
+describe("preflight", () => {
+  it("diz que o sidecar de fala está fora do ar quando uv falta", async () => {
+    const exec: Executor = {
+      async run(call: ExecCall) {
+        if (call.command === "uv") return { code: 1, stdout: "", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    await expect(preflight(realJob, exec)).rejects.toThrow(/sidecar de fala/);
+    await expect(preflight(realJob, exec)).rejects.toThrow(/services\/speech\/README\.md/);
   });
 });
