@@ -11,6 +11,58 @@ const transcript: Transcript = {
   ],
 };
 
+describe("toCondenseTranscript com silêncios (conserto de fim inflado)", () => {
+  // silêncio detectado de 1000ms a 2000ms
+  const silences = [{ startMs: 1000, endMs: 2000 }];
+
+  it("encolhe a palavra cujo fim foi esticado pelo alinhador", () => {
+    const inflated: Transcript = {
+      language: "pt",
+      tokens: [
+        { id: "w_000000", text: "promessa", startMs: 0, endMs: 1500, confidence: 0.9, sentenceIndex: 0 },
+      ],
+    };
+    const out = toCondenseTranscript(inflated, { silences });
+    // som acaba em ~1000ms; sobra a folga de cauda, nada perto de 1500
+    expect(out.segments[0]!.words[0]!.end).toBeLessThan(1.2);
+    expect(out.segments[0]!.words[0]!.end).toBeGreaterThan(0.95);
+  });
+
+  it("puxa o fim do segmento junto com a última palavra", () => {
+    const inflated: Transcript = {
+      language: "pt",
+      tokens: [
+        { id: "w_000000", text: "a", startMs: 0, endMs: 200, confidence: 0.9, sentenceIndex: 0 },
+        { id: "w_000001", text: "promessa", startMs: 210, endMs: 1500, confidence: 0.9, sentenceIndex: 0 },
+      ],
+    };
+    const out = toCondenseTranscript(inflated, { silences });
+    expect(out.segments[0]!.end).toBe(out.segments[0]!.words[1]!.end);
+    expect(out.segments[0]!.end).toBeLessThan(1.2);
+  });
+
+  it("não mexe em palavra de duração normal", () => {
+    const normal: Transcript = {
+      language: "pt",
+      tokens: [
+        { id: "w_000000", text: "oi", startMs: 100, endMs: 400, confidence: 0.9, sentenceIndex: 0 },
+      ],
+    };
+    const out = toCondenseTranscript(normal, { silences });
+    expect(out.segments[0]!.words[0]!.end).toBeCloseTo(0.4, 6);
+  });
+
+  it("sem silêncios, não apara nada (comportamento anterior preservado)", () => {
+    const inflated: Transcript = {
+      language: "pt",
+      tokens: [
+        { id: "w_000000", text: "promessa", startMs: 0, endMs: 1500, confidence: 0.9, sentenceIndex: 0 },
+      ],
+    };
+    expect(toCondenseTranscript(inflated).segments[0]!.words[0]!.end).toBeCloseTo(1.5, 6);
+  });
+});
+
 describe("toCondenseTranscript", () => {
   it("agrupa tokens por sentenceIndex em segmentos", () => {
     const out = toCondenseTranscript(transcript);
