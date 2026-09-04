@@ -137,6 +137,20 @@ describe("verifyClaims — id inventado", () => {
   });
 });
 
+describe("verifyClaims — índice sem unidades", () => {
+  it("rejeita alegação defensivamente se o índice não tiver unidades", () => {
+    const emptyIndex = {
+      units: [],
+      topicRuns: [],
+      losslessFloorSeconds: 0,
+      sourceDurationSeconds: 0,
+    };
+    const [v] = verifyClaims([claim({ unit_ids: ["u001"], reason: "preroll" })], emptyIndex);
+    expect(v!.accepted).toBe(false);
+    expect(v!.accepted === false && v!.failed).toMatch(/não possui unidades/);
+  });
+});
+
 describe("ordem de avaliação", () => {
   it("é independente da ordem das alegações", () => {
     const a = claim({ unit_ids: ["u001", "u002"], reason: "preroll" });

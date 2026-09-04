@@ -30,6 +30,14 @@ export type Verdict =
  * qualquer rejeição. Sem isso, a ordem das alegações mudaria o resultado.
  */
 export function verifyClaims(claims: StructureClaim[], index: SpeechIndex): Verdict[] {
+  if (index.units.length === 0) {
+    return claims.map((claim) => ({
+      claim,
+      accepted: false as const,
+      failed: "índice de fala não possui unidades",
+    }));
+  }
+
   const claimed = new Set<string>();
   for (const c of claims) for (const id of c.unit_ids) claimed.add(id);
 
