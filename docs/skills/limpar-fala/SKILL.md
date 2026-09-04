@@ -62,9 +62,25 @@ A seção BUDGET no relatório já diz quanto dá pra cortar só com tightening 
 pausa e remoção de hesitação, sem tocar em conteúdo nenhum — leia antes de
 decidir o quanto cortar.
 
+### 2b. Triar (opcional, precisa de `GEMINI_API_KEY`)
+
+```bash
+pnpm decupa triage --index <pasta>/out/speech_index.json --video <vídeo> --out <pasta>/out
+```
+
+Devolve um keep-list proposto e `out/triage.md` com o que foi dropado, por
+quê, e **quais alegações do modelo foram rejeitadas por não conferirem com o
+índice**. Leia as rejeitadas: elas dizem onde o modelo estava errado, o que é
+o melhor sinal que existe de que ele pode estar errado em outro lugar também.
+
+O keep-list que sai daqui é ponto de partida do passo 3, não substituto dele.
+A verificação rejeita alegação impossível; ela não certifica alegação correta.
+Um pré-rolo grande demais que engula a frase de abertura passa na verificação
+e só aparece na leitura da prosa, no passo 5.
+
 ### 3. Decidir o que fica (você, não o motor)
 
-Monte uma lista de unidades a manter (`keep`), como faixas: `u001-u003
+Monte ou ajuste a lista de unidades a manter (`keep`), como faixas: `u001-u003
 u005-u022`. Regras que valem sempre:
 
 - **Nunca termine um clipe numa unidade flagada `!`** sem checar o que vem
