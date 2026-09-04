@@ -17,7 +17,7 @@ async function boot() {
 
 /** Sobe com índice e plano já no disco, para exercitar o caminho de sucesso
  *  sem rodar WhisperX nem o motor. */
-async function bootComPlano() {
+async function bootComPlano(exec: FakeExecutor = new FakeExecutor()) {
   const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
   await mkdir(join(dir, "out"), { recursive: true });
   const units = ["u001", "u002", "u003"].map((id, i) => ({ id, index: i, text: `t${i}` }));
@@ -27,8 +27,6 @@ async function bootComPlano() {
     clips: [{ unit_ids: ["u002", "u003"], start: 10, end: 30 }],
     joins: [],
   }), "utf8");
-
-  const exec = new FakeExecutor();
   const app = await startApp({
     input: join(dir, "v.mp4"), port: 0, autoStart: false, executor: exec, workDir: dir,
   });
@@ -110,5 +108,25 @@ describe("startApp", () => {
     expect(planos[0]!.args).toContain("u002-u003");
     expect((await first!.json() as { review?: unknown }).review).toBeDefined();
     expect((await second!.json() as { review?: unknown }).review).toBeDefined();
+  });
+
+  it("keep que falha no motor deixa o job em error, não em planning", async () => {
+    // GET /jobs/:id é o que a página polla. Sem store.fail, o POST devolve
+    // 500 com a saída do motor mas o estágio fica em planning para sempre.
+    const { base, app } = await bootComPlano(new FakeExecutor({
+      code: 1,
+      stderr: "condense.py: unidade u099 não existe",
+    }));
+    const res = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u002-u003" }),
+    });
+    expect(res.status).toBe(500);
+    const body = await (await fetch(`${base}/jobs/${app.jobId}`)).json() as {
+      stage: string; error?: string;
+    };
+    expect(body.stage).toBe("error");
+    expect(body.error).toMatch(/unidade u099 não existe/);
   });
 });

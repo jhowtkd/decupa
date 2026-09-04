@@ -86,13 +86,21 @@ export async function startApp(opts: {
       // Se outro pedido chegou enquanto este esperava, aquele é o atual:
       // rodar este seria gastar processo para produzir um plano obsoleto.
       if (pendingKeepList !== keepList) return;
-      store.setStage(job.id, "planning");
-      await runPlan(pipelineJob, keepList, exec);
-      const review = buildReview(
-        await readJson(planPath(pipelineJob)),
-        await readJson(indexPath(pipelineJob)),
-      );
-      store.setReview(job.id, review, keepList);
+      try {
+        store.setStage(job.id, "planning");
+        await runPlan(pipelineJob, keepList, exec);
+        const review = buildReview(
+          await readJson(planPath(pipelineJob)),
+          await readJson(indexPath(pipelineJob)),
+        );
+        store.setReview(job.id, review, keepList);
+      } catch (error) {
+        // GET /jobs/:id é o poll da página: sem `fail`, o POST devolve 500
+        // mas o estágio fica em planning para sempre. `fail` depois de
+        // cancel é no-op — quem pediu para parar não vê "erro: SIGTERM".
+        store.fail(job.id, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
     });
     planning = mine.catch(() => {});
     await mine;
