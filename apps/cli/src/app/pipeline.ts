@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface ExecResult {
@@ -267,6 +267,39 @@ export async function runTriage(job: PipelineJob, exec: Executor, provider: stri
   return match[1]!.trim();
 }
 
+const TERMINAL_PUNCT_RE = /_TERMINAL_PUNCT\s*=\s*"([^"]*)"/;
+
+/**
+ * O motor upstream só traz pontuação CJK mais `!?…` em `_TERMINAL_PUNCT` — sem
+ * o ponto ASCII, 37 das 42 unidades do ritmo entram como frase inacabada:
+ * `splitTakes` para de fechar take, a penalidade de "sem pontuação" cai em
+ * quase todo mundo, e a escolha de retake vira ruído. Medido no material do
+ * ritmo, o corte muda em quatro unidades — um fragmento, um retake repetido e
+ * um aparte que deviam sair, ficam.
+ *
+ * A checagem mora aqui, e não num teste, porque o gold roda sobre índice
+ * congelado: a suíte fica verde enquanto a saída de produção degrada. Um clone
+ * novo do motor passa no teste de existência e falha exatamente assim.
+ *
+ * Devolve a mensagem do problema, ou `null` se o motor está bom.
+ */
+export async function enginePatchError(engine: string): Promise<string | null> {
+  const lang = join(engine, "mcp", "ve_tools", "condense_lang.py");
+  const src = await readFile(lang, "utf8").catch(() => null);
+  if (src === null) return `não consegui ler ${lang} para conferir o patch de pontuação`;
+
+  const match = TERMINAL_PUNCT_RE.exec(src);
+  if (!match) return `não achei \`_TERMINAL_PUNCT\` em ${lang} — motor em versão inesperada`;
+  if (!match[1]!.includes(".")) {
+    return (
+      `o motor em ${engine} está sem o patch de pontuação PT-BR: falta o ponto ASCII ` +
+      "em `_TERMINAL_PUNCT` (mcp/ve_tools/condense_lang.py). Sem ele o índice marca " +
+      "frase inacabada demais e o corte degrada em silêncio."
+    );
+  }
+  return null;
+}
+
 /**
  * Confere o que a tabela de erros da spec promete, antes de começar o job.
  * Sem isto a falta de um binário chega como stdout truncado de uma etapa que
@@ -302,6 +335,9 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
       "lá, ou aponte VE_PLUGIN_ROOT.",
     );
   }
+
+  const patchError = await enginePatchError(engine);
+  if (patchError) throw new Error(patchError);
 }
 
 /**

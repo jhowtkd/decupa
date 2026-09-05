@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  enginePatchError,
   FakeExecutor,
   makeTriageProxy,
   preflight,
@@ -20,6 +21,27 @@ const realJob = {
   videoPath: resolve("tests/fixtures/generated/clip.mp4"),
   workDir: "/work/j1",
 };
+
+/** Todo binário responde bem — isola a etapa que o teste quer olhar. */
+const okExec: Executor = {
+  async run() {
+    return { code: 0, stdout: "", stderr: "" };
+  },
+};
+
+/** Motor mínimo: só o que o preflight abre, com o léxico que o teste pede. */
+async function writeFakeEngine(terminalPunct: string): Promise<string> {
+  const engine = await mkdtemp(join(tmpdir(), "motor-"));
+  const tools = join(engine, "mcp", "ve_tools");
+  await mkdir(tools, { recursive: true });
+  await writeFile(join(tools, "condense.py"), "# motor de mentira\n", "utf8");
+  await writeFile(
+    join(tools, "condense_lang.py"),
+    `_TERMINAL_PUNCT = "${terminalPunct}"\n_CLAUSE_PUNCT = "，,、；;：:"\n`,
+    "utf8",
+  );
+  return engine;
+}
 
 describe("runIngest", () => {
   it("transcreve, indexa, tenta o visual e reporta cada estágio na ordem", async () => {
@@ -170,5 +192,55 @@ describe("preflight", () => {
     };
     await expect(preflight(realJob, exec)).rejects.toThrow(/sidecar de fala/);
     await expect(preflight(realJob, exec)).rejects.toThrow(/services\/speech\/README\.md/);
+  });
+
+  it("para quando o motor está sem o patch de pontuação PT-BR", async () => {
+    // Um clone novo do motor passa no teste de existência: o que degrada o
+    // corte é o conteúdo, não a ausência. Sem esta checagem a suíte fica verde
+    // — o gold lê índice congelado — enquanto a produção volta a marcar quase
+    // toda unidade como frase inacabada.
+    const engine = await writeFakeEngine("。．！？!?…");
+    const previous = process.env.VE_PLUGIN_ROOT;
+    process.env.VE_PLUGIN_ROOT = engine;
+    try {
+      await expect(preflight(realJob, okExec)).rejects.toThrow(/sem o patch de pontuação/);
+    } finally {
+      if (previous === undefined) delete process.env.VE_PLUGIN_ROOT;
+      else process.env.VE_PLUGIN_ROOT = previous;
+    }
+  });
+
+  it("segue quando o motor tem o ponto ASCII", async () => {
+    const engine = await writeFakeEngine("。．！？!?….");
+    const previous = process.env.VE_PLUGIN_ROOT;
+    process.env.VE_PLUGIN_ROOT = engine;
+    try {
+      await expect(preflight(realJob, okExec)).resolves.toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.VE_PLUGIN_ROOT;
+      else process.env.VE_PLUGIN_ROOT = previous;
+    }
+  });
+});
+
+describe("enginePatchError", () => {
+  it("aceita o motor patchado e recusa o de upstream", async () => {
+    expect(await enginePatchError(await writeFakeEngine("。．！？!?…."))).toBeNull();
+    expect(await enginePatchError(await writeFakeEngine("。．！？!?…")))
+      .toMatch(/sem o patch de pontuação/);
+  });
+
+  it("avisa quando não dá para ler o arquivo, em vez de deixar passar", async () => {
+    // Não conseguir conferir não é o mesmo que estar bom: em caso de dúvida o
+    // preflight para, porque a falha alternativa é silenciosa.
+    expect(await enginePatchError(join(tmpdir(), "motor-que-nao-existe")))
+      .toMatch(/não consegui ler/);
+  });
+
+  it("avisa quando o símbolo sumiu — motor em versão inesperada", async () => {
+    const engine = await mkdtemp(join(tmpdir(), "motor-"));
+    await mkdir(join(engine, "mcp", "ve_tools"), { recursive: true });
+    await writeFile(join(engine, "mcp", "ve_tools", "condense_lang.py"), "# vazio\n", "utf8");
+    expect(await enginePatchError(engine)).toMatch(/não achei `_TERMINAL_PUNCT`/);
   });
 });
