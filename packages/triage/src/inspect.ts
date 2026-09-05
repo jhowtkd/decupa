@@ -1,5 +1,6 @@
 import { verifyClaims, type StructureClaim } from "./claims.ts";
 import type { InspectVerdict } from "./model.ts";
+import { MAX_INDEX_GAP } from "./retakes.ts";
 import {
   MOTOR_DUPLICATE_THRESHOLD,
   characterSimilarity,
@@ -27,7 +28,7 @@ function motorBetween(a: IndexUnit, b: IndexUnit): number | null {
   return null;
 }
 
-/** Take posterior que ainda fica e restabelece a frase. Sem isso, inspect não dropa. */
+/** Take posterior na janela de retake que ainda fica. Sem isso, inspect não dropa. */
 function laterSubstitute(
   unit: IndexUnit,
   index: SpeechIndex,
@@ -36,6 +37,7 @@ function laterSubstitute(
   for (const other of index.units) {
     if (other.id === unit.id || dropped.has(other.id)) continue;
     if (other.index <= unit.index) continue;
+    if (other.index - unit.index > MAX_INDEX_GAP) break;
     const motor = motorBetween(unit, other);
     if (
       isRestatement(unit.text, other.text, motor)
@@ -52,7 +54,7 @@ export function normalizeInspectVerdict(raw: unknown, unitId: string): InspectVe
   const d = o.decision;
   const decision = d === "drop" || d === "keep" || d === "unsure" ? d : "unsure";
   return {
-    unitId: String(o.unitId ?? o.unit_id ?? unitId),
+    unitId,
     decision,
     note: String(o.note ?? ""),
   };

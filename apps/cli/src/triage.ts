@@ -183,7 +183,17 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       });
       let verdict = await readCache<InspectVerdict>(cacheDir, inspectKey);
       if (verdict === null) {
-        verdict = await model.inspect({ unitId: u.id, frames });
+        try {
+          verdict = await model.inspect({ unitId: u.id, frames });
+        } catch {
+          inspectFlags.push({
+            unitId: u.id,
+            code: "looks_away",
+            source: "visual",
+            message: "inspect: resposta inválida, para revisão",
+          });
+          continue;
+        }
         await writeCache(cacheDir, inspectKey, verdict);
       }
       inspectVerdicts.push(verdict);

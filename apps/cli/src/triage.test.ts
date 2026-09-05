@@ -152,6 +152,19 @@ describe("runTriage — inspect", () => {
     expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
   });
 
+  it("inspect que estoura vira flag e não aborta a triagem", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model = new FakeTriageModel();
+    model.inspect = async () => {
+      throw new Error("a resposta do modelo não é JSON: {{{");
+    };
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model, visual, extractFrames: frames,
+    });
+    expect(out.keepList).toBe("u001-u005");
+    expect(out.reviewFlags.some((f) => f.unitId === "u004" && /inválida/.test(f.message))).toBe(true);
+  });
+
   it("não chama inspect em unidade que não está ambígua", async () => {
     const { dir, indexPath, videoPath, frames } = await withVisual();
     const model = new FakeTriageModel();

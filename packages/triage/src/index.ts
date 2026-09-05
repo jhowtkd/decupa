@@ -32,7 +32,7 @@ export {
   similarity,
 } from "./similarity.ts";
 export { hasDirectorCue } from "./cues.ts";
-export { retakeClaims } from "./retakes.ts";
+export { MAX_INDEX_GAP, retakeClaims } from "./retakes.ts";
 export { mechanicalClaims, mechanicalKeepList } from "./mechanical.ts";
 export {
   HAND_ON_FACE_AMBIGUOUS,

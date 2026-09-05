@@ -37,8 +37,9 @@ describe("normalizeInspectVerdict", () => {
     });
   });
 
-  it("prefere unitId do payload, senão o argumento", () => {
-    expect(normalizeInspectVerdict({ unitId: "u002", decision: "keep" }, "u001").unitId).toBe("u002");
+  it("sempre usa o unitId do pedido, nunca o do modelo", () => {
+    expect(normalizeInspectVerdict({ unitId: "u002", decision: "keep" }, "u001").unitId).toBe("u001");
+    expect(normalizeInspectVerdict({ unit_id: "u009", decision: "drop" }, "u003").unitId).toBe("u003");
   });
 });
 
@@ -103,6 +104,32 @@ describe("applyInspect", () => {
     );
     expect(out.claims).toEqual([]);
     expect(out.flags).toEqual([]);
+  });
+
+  it("frase igual fora da janela de retake não vira claim — só flag", () => {
+    const far = parseSpeechIndex({
+      source_duration: 40,
+      budget: { lossless_floor_seconds: 20 },
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Isso não escala." },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "Outro assunto." },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ainda outro." },
+        { id: "u004", index: 3, start: 9, end: 11, duration: 2, text: "Mais um." },
+        { id: "u005", index: 4, start: 12, end: 14, duration: 2, text: "Isso não escala." },
+      ],
+    });
+    const out = applyInspect(
+      [{ unitId: "u001", decision: "drop", note: "olhou para o lado" }],
+      far,
+      new Set(),
+    );
+    expect(out.claims).toEqual([]);
+    expect(out.flags).toEqual([{
+      unitId: "u001",
+      code: "looks_away",
+      source: "visual",
+      message: "olhou para o lado",
+    }]);
   });
 });
 

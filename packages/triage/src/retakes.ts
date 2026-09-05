@@ -20,7 +20,7 @@ import { looksLikeDeadAir, type IndexUnit, type SpeechIndex } from "./speech-ind
 import type { VisualUnitFlags } from "./visual.ts";
 
 /** Contíguo ou a até 2 unidades de distância → diferença de index no máximo 3. */
-const MAX_INDEX_GAP = 3;
+export const MAX_INDEX_GAP = 3;
 const DEAD_AIR_PENALTY = 100;
 const VISUAL_PENALTY = 20;
 const SHORT_DURATION_PENALTY = 10;
