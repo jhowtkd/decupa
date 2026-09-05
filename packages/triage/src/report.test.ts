@@ -54,6 +54,26 @@ describe("renderReport", () => {
     expect(out).toMatch(/nada/i);
   });
 
+  it("seção Modelo lista alegação sem source preenchido na mão", () => {
+    const semSource = {
+      accepted: true as const,
+      claim: {
+        unit_ids: ["u001", "u002"],
+        reason: "preroll" as const,
+        restated_by: null,
+        note: "falando com o operador",
+      },
+    };
+    const out = renderReport({
+      ...base,
+      verdicts: [semSource as (typeof base.verdicts)[number]],
+    });
+    const modelo = out.slice(out.indexOf("## Modelo"), out.indexOf("## Visual"));
+    expect(modelo).toContain("falando com o operador");
+    expect(modelo).toContain("u001");
+    expect(modelo).not.toContain("Nada neste passe");
+  });
+
   it("separa mecânico, modelo, visual e para revisão", () => {
     const out = renderReport({
       ...base,

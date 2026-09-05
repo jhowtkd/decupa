@@ -11,6 +11,20 @@ import { INSPECT_INSTRUCTIONS, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 
 export const DEFAULT_MODEL = "gemini-3.8-flash";
 
+/**
+ * A resposta estruturada do Gemini não traz `source` (o schema não tem o
+ * campo). Sem isto a alegação some da seção Modelo do relatório.
+ */
+export function stampModelClaims(claims: Array<Partial<StructureClaim> & Pick<StructureClaim, "unit_ids" | "reason">>): StructureClaim[] {
+  return claims.map((c) => ({
+    unit_ids: c.unit_ids,
+    reason: c.reason,
+    restated_by: c.restated_by ?? null,
+    note: String(c.note ?? ""),
+    source: c.source === "mechanical" || c.source === "visual" ? c.source : "model",
+  }));
+}
+
 const STRUCTURE_SCHEMA = {
   type: "object",
   properties: {
@@ -125,8 +139,8 @@ export class GeminiTriageModel implements TriageModel {
     const claims = await this.ask<StructureClaim>(
       req.videoPath, STRUCTURE_INSTRUCTIONS, req.unitsBlock, STRUCTURE_SCHEMA, "claims",
     );
-    // `restated_by` é opcional no schema; normalizar para o que claims.ts espera.
-    return claims.map((c) => ({ ...c, restated_by: c.restated_by ?? null }));
+    // `restated_by` é opcional no schema; `source` o schema nem tem.
+    return stampModelClaims(claims);
   }
 
   async density(req: DensityRequest): Promise<DensityCandidate[]> {

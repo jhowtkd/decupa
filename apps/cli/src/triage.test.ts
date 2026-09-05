@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
 import { describe, expect, it } from "vitest";
-import { runTriage } from "./triage.ts";
+import { resolveInspectVideoPath, runTriage } from "./triage.ts";
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "triage-cli-"));
@@ -117,6 +117,56 @@ describe("runTriage", () => {
     const out = await runTriage({ indexPath, videoPath, outDir: dir, model: new FakeTriageModel([]) });
     expect(out.keepList).toBe("u003-u005");
     expect(out.verdicts.some((v) => v.accepted && v.claim.source === "mechanical")).toBe(true);
+  });
+
+  it("não deixa o modelo dropar o take que o mecânico deixou", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-occupy-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 20,
+      budget: { lossless_floor_seconds: 10 },
+      topic_runs: [{ keyword: "instituição", unit_ids: ["u001", "u003"] }],
+      trim_candidates: [{
+        id: "u002",
+        seconds: 4.4,
+        text: "Quem estuda na instituição quer sentir pertecente",
+        reasons: ["almost no content for its length", "very slow (1.1 chars/s) — dead air inside the sentence"],
+      }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 4, duration: 4, text: "Quem estuda na instituição quer sentir pertecente.", has_terminal_punct: true, word_count: 7 },
+        { id: "u002", index: 1, start: 5, end: 9.4, duration: 4.4, text: "Quem estuda na instituição quer sentir pertecente", has_terminal_punct: false, word_count: 7, cps: 1.12, near_duplicate_of: "u001", similarity: 0.95 },
+        { id: "u003", index: 2, start: 10, end: 13, duration: 3, text: "Aí você tendo isso em mente fala com a instituição.", has_terminal_punct: true, word_count: 10 },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "retake", restated_by: "u002", note: "chute", source: "model" },
+    ]);
+    const out = await runTriage({ indexPath, videoPath, outDir: dir, model });
+    expect(out.keepList).toContain("u001");
+    expect(out.verdicts.some((v) =>
+      v.accepted && v.claim.source === "model" && v.claim.unit_ids.includes("u001"),
+    )).toBe(false);
+  });
+});
+
+describe("resolveInspectVideoPath", () => {
+  it("prefere visual-proxy.mp4 quando existe ao lado do vídeo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inspect-proxy-"));
+    const videoPath = join(dir, "triage-proxy.mp4");
+    const visual = join(dir, "visual-proxy.mp4");
+    await writeFile(videoPath, "triage", "utf8");
+    await writeFile(visual, "visual", "utf8");
+    expect(await resolveInspectVideoPath(videoPath, join(dir, "out"))).toBe(visual);
+  });
+
+  it("cai no vídeo da triagem quando visual-proxy não existe", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inspect-proxy-"));
+    const videoPath = join(dir, "triage-proxy.mp4");
+    await writeFile(videoPath, "triage", "utf8");
+    expect(await resolveInspectVideoPath(videoPath, join(dir, "out"))).toBe(videoPath);
   });
 });
 

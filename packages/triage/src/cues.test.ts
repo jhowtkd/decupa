@@ -10,6 +10,11 @@ describe("hasDirectorCue", () => {
     expect(hasDirectorCue("Agora vai, calma aí, calma aí, calma aí, tá vindo aqui, tá vindo aqui, tá ligando, tá dum boot.")).toBe(true);
   });
 
+  it("casa frase isolada com acento (calma aí / corta aí)", () => {
+    expect(hasDirectorCue("calma aí")).toBe(true);
+    expect(hasDirectorCue("corta aí")).toBe(true);
+  });
+
   it("é false no gancho u005", () => {
     expect(hasDirectorCue("Dicas pra você parar de ser chatão nas redes sociais.")).toBe(false);
   });

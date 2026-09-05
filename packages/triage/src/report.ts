@@ -28,7 +28,7 @@ function sourceSection(
   source: Verdict["claim"]["source"],
   verdicts: Verdict[],
 ): string[] {
-  const of = verdicts.filter((v) => v.claim.source === source);
+  const of = verdicts.filter((v) => (v.claim.source ?? "model") === source);
   const accepted = of.filter((v) => v.accepted);
   const rejected = of.filter((v) => !v.accepted);
   const lines: string[] = [`## ${title}`, ""];

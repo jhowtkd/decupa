@@ -90,7 +90,7 @@ export function applyInspect(
           note: verdict.note || `inspect: olhando para o operador; fica ${sub.id}`,
           source: "visual",
         };
-        const [v] = verifyClaims([claim], index);
+        const [v] = verifyClaims([claim], index, occupied);
         if (v?.accepted) {
           claims.push(claim);
           occupied.add(unit.id);

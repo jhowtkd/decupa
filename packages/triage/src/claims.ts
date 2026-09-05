@@ -45,8 +45,15 @@ export type Verdict =
  * Ordem de avaliação: "unidade que fica" significa *não reivindicada por
  * nenhuma alegação deste passe* — conjunto calculado uma vez, antes de
  * qualquer rejeição. Sem isso, a ordem das alegações mudaria o resultado.
+ *
+ * `alreadyDropped` entra em `claimed` (passe mecânico, inspect). Sem isso o
+ * modelo pode dropar o take que o mecânico deixou (u016 depois de u015).
  */
-export function verifyClaims(claims: StructureClaim[], index: SpeechIndex): Verdict[] {
+export function verifyClaims(
+  claims: StructureClaim[],
+  index: SpeechIndex,
+  alreadyDropped: Iterable<string> = [],
+): Verdict[] {
   if (index.units.length === 0) {
     return claims.map((claim) => ({
       claim,
@@ -55,7 +62,7 @@ export function verifyClaims(claims: StructureClaim[], index: SpeechIndex): Verd
     }));
   }
 
-  const claimed = new Set<string>();
+  const claimed = new Set<string>(alreadyDropped);
   for (const c of claims) for (const id of c.unit_ids) claimed.add(id);
 
   const span = topicSpan(index);

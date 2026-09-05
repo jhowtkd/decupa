@@ -345,6 +345,47 @@ describe("verifyClaims — fala com operador", () => {
   });
 });
 
+describe("verifyClaims — ocupação de passe anterior", () => {
+  const pair = parseSpeechIndex({
+    source_duration: 20,
+    budget: { lossless_floor_seconds: 10 },
+    topic_runs: [],
+    units: [
+      { id: "u015", index: 0, start: 0, end: 5, duration: 5, text: "E cada um desse está em um nível completamente diferente." },
+      { id: "u016", index: 1, start: 6, end: 9, duration: 3, text: "E cada um desse está em um nível completamente diferente" },
+      { id: "u017", index: 2, start: 10, end: 12, duration: 2, text: "de comunicação com sua instituição." },
+    ],
+  });
+
+  it("aceita dropar u015 apontando u016 quando ninguém ocupou u016", () => {
+    const [v] = verifyClaims(
+      [claim({ unit_ids: ["u015"], reason: "retake", restated_by: "u016" })],
+      pair,
+    );
+    expect(v!.accepted).toBe(true);
+  });
+
+  it("rejeita retake cujo restated_by o passe anterior já dropou", () => {
+    const [v] = verifyClaims(
+      [claim({ unit_ids: ["u015"], reason: "retake", restated_by: "u016" })],
+      pair,
+      ["u016"],
+    );
+    expect(v!.accepted).toBe(false);
+    expect(v!.accepted === false && v!.failed).toMatch(/dropada/);
+  });
+
+  it("não deixa o modelo dropar u016 depois que u015 já saiu", () => {
+    const [v] = verifyClaims(
+      [claim({ unit_ids: ["u016"], reason: "retake", restated_by: "u015" })],
+      pair,
+      ["u015"],
+    );
+    expect(v!.accepted).toBe(false);
+    expect(v!.accepted === false && v!.failed).toMatch(/dropada/);
+  });
+});
+
 describe("acceptedDropIds", () => {
   it("junta só os ids das alegações aceitas", () => {
     const verdicts = verifyClaims(

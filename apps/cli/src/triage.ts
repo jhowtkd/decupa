@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   acceptedDropIds,
@@ -94,6 +94,29 @@ async function loadVisual(opts: TriageOptions): Promise<VisualUnitFlags[] | unde
   return undefined;
 }
 
+/**
+ * Inspect lê JPEGs: `visual-proxy.mp4` (4 fps) se existir no work dir,
+ * senão o vídeo da triagem (triage-proxy / original).
+ */
+export async function resolveInspectVideoPath(videoPath: string, outDir: string): Promise<string> {
+  const candidates = [
+    join(dirname(videoPath), "visual-proxy.mp4"),
+    join(dirname(outDir), "visual-proxy.mp4"),
+  ];
+  const seen = new Set<string>();
+  for (const p of candidates) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    try {
+      await access(p);
+      return p;
+    } catch {
+      // próximo candidato
+    }
+  }
+  return videoPath;
+}
+
 /** 3–4 JPEGs da unidade, via ffmpeg. Falha → lista vazia (inspect não roda). */
 export async function extractUnitFrames(
   videoPath: string,
@@ -149,7 +172,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     claims = await model.structure({ unitsBlock, videoPath: opts.videoPath });
     await writeCache(cacheDir, structureKey, claims);
   }
-  const modelVerdicts = verifyClaims(claims, index);
+  const modelVerdicts = verifyClaims(claims, index, dropped);
   for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
   const verdicts: Verdict[] = [...mechanicalVerdicts, ...modelVerdicts];
 
@@ -159,8 +182,9 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const inspectKept = new Set<string>();
   if (visual && visual.length > 0) {
     const framesDir = join(opts.outDir, "inspect_frames");
+    const inspectVideo = await resolveInspectVideoPath(opts.videoPath, opts.outDir);
     const extract = opts.extractFrames ?? ((unit: { id: string; start: number; end: number }) =>
-      extractUnitFrames(opts.videoPath, unit, framesDir));
+      extractUnitFrames(inspectVideo, unit, framesDir));
 
     for (const u of visual) {
       if (!u.ambiguous || dropped.has(u.id)) continue;
@@ -202,7 +226,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
 
     const outcome = applyInspect(inspectVerdicts, index, dropped);
     inspectFlags = [...inspectFlags, ...outcome.flags];
-    const inspectVerified = verifyClaims(outcome.claims, index);
+    const inspectVerified = verifyClaims(outcome.claims, index, dropped);
     for (const id of acceptedDropIds(inspectVerified)) dropped.add(id);
     verdicts.push(...inspectVerified);
   }
