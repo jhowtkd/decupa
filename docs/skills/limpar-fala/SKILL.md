@@ -62,9 +62,19 @@ A seção BUDGET no relatório já diz quanto dá pra cortar só com tightening 
 pausa e remoção de hesitação, sem tocar em conteúdo nenhum — leia antes de
 decidir o quanto cortar.
 
-### 2b. Triar (opcional, precisa de chave de um provedor)
+### 2b. Triar (passe mecânico; LLM é extra)
 
-Primeiro, **gere o proxy de triagem**. Não mande o vídeo original:
+O passe 0 é **mecânico e offline**: retakes, fala com o operador, ar morto. Não
+precisa de chave. O keep-list gold do ritmo sai daqui, sem modelo.
+
+O LLM (passe 1) é extra: confirma o que o mecânico não cobre, e só entra com
+`--provider`. Sem chave, use o keep-list mecânico e siga para o passo 3.
+
+**Retake: fica o take de depois**, salvo se o de depois for penalizado (ar
+morto ou visual ruim). Sem take substituto, a unidade não cai — só vai para
+revisão.
+
+Se for usar o modelo, **gere o proxy de triagem**. Não mande o vídeo original:
 
 ```bash
 ffmpeg -i <vídeo> -vf "fps=1,scale=270:480" -c:v libx264 -crf 32 -c:a aac -b:a 24k -ac 1 <pasta>/triage-proxy.mp4
@@ -93,6 +103,27 @@ O keep-list que sai daqui é ponto de partida do passo 3, não substituto dele.
 A verificação rejeita alegação impossível; ela não certifica alegação correta.
 Um pré-rolo grande demais que engula a frase de abertura passa na verificação
 e só aparece na leitura da prosa, no passo 5.
+
+### 2c. Índice visual (opcional)
+
+Proxy dedicado a 4 fps (o de triagem, 1 fps, é esparso demais) e sidecar
+MediaPipe em `services/vision`:
+
+```bash
+ffmpeg -i <vídeo> -vf "fps=4,scale=540:960" -c:v libx264 -crf 32 -an <pasta>/visual-proxy.mp4
+uv run --directory services/vision python visual_index.py \
+  --video <pasta>/visual-proxy.mp4 \
+  --index <pasta>/out/speech_index.json \
+  --fps 4 > <pasta>/out/visual_index.json
+```
+
+O JSON é por unidade (`look_down_ratio`, `hand_on_face_ratio`, `samples[]`),
+nunca timestamp de corte. Unidade visualmente ruim **sem** retake não dropa:
+vai para "para revisão" e como badge na tela. Faixa ambígua (25–50%) pede
+confirmação ao LLM de visão (`inspect`) com 3–4 JPEGs **só daquela unidade**.
+
+No app (`decupa limpar`) o estágio `visual` roda sozinho depois do índice; se
+o sidecar não estiver instalado, avisa e segue sem visual.
 
 **Desconfie da justificativa, não só do veredicto.** As notas do relatório são
 prosa gerada, e o modelo confabula detalhe quando não entende a unidade. Caso
