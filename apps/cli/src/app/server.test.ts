@@ -224,6 +224,63 @@ describe("startApp", () => {
     expect(body.motivos.join("\n")).not.toMatch(/u006/);
   });
 
+  it("prefere drop e reviewFlags do triage.json ao parse do markdown", async () => {
+    const { base, app, dir } = await bootComPlano(new FakeExecutor({
+      stdout: "keep-list: u002-u003\n",
+    }));
+    await writeFile(join(dir, "out", "triage.json"), JSON.stringify({
+      keepList: "u002-u003",
+      drop: [{ unit_ids: ["u001"], reason: "preroll", note: "pré-rolo", source: "mechanical", restated_by: null }],
+      reviewFlags: [{ unitId: "u003", code: "looks_away", source: "visual", message: "sem substituto" }],
+    }), "utf8");
+    const res = await fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+    const body = await res.json() as {
+      drop: { unit_ids: string[] }[];
+      reviewFlags: { unitId: string }[];
+    };
+    expect(body.drop[0]!.unit_ids).toEqual(["u001"]);
+    expect(body.reviewFlags[0]!.unitId).toBe("u003");
+  });
+
+  it("a página mostra aviso do job e separa vai cair de olhe isto", async () => {
+    const { base } = await boot();
+    const html = await (await fetch(base)).text();
+    expect(html).toContain('id="aviso"');
+    expect(html).toContain("j.warning");
+    expect(html).toContain("vai cair (retake limpo)");
+    expect(html).toContain("olhe isto (sem substituto)");
+  });
+
+  it("keep anexa visual_in_point quando visual_index.json existe", async () => {
+    const { base, app, dir } = await bootComPlano();
+    await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+      source_duration: 30, output_duration: 20,
+      clips: [{ unit_ids: ["u002", "u003"], start: 10, end: 30 }],
+      joins: [{
+        outgoing_unit: "u002", incoming_unit: "u003",
+        removed_seconds: 2, outgoing_tail: "a", incoming_head: "b",
+        source_out: 10, source_in: 12, flags: [],
+      }],
+    }), "utf8");
+    await writeFile(join(dir, "out", "visual_index.json"), JSON.stringify({
+      units: [{
+        id: "u003",
+        look_down_ratio: 0, look_side_ratio: 0, hand_on_face_ratio: 0.4, face_missing_ratio: 0,
+        samples: [{ t: 12.0, look_down: false, look_side: false, hand_on_face: true, face: true }],
+      }],
+    }), "utf8");
+    const res = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u002-u003" }),
+    });
+    const body = await res.json() as {
+      review: { joins: { flags: { code: string; hint: string }[] }[] };
+    };
+    expect(body.review.joins[0]!.flags.some((f) => f.code === "visual_in_point")).toBe(true);
+    expect(body.review.joins[0]!.flags.find((f) => f.code === "visual_in_point")!.hint).toMatch(/in-point/);
+  });
+
   it("rejeita startApp se a porta já está ocupada", async () => {
     const { app } = await boot();
     const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));

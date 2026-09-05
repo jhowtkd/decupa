@@ -8,9 +8,9 @@ import { buildEdl } from "./edl.ts";
 import { JobStore } from "./jobs.ts";
 import {
   indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender,
-  runTriage, SpawnExecutor, type Executor, type PipelineJob,
+  runTriage, SpawnExecutor, visualIndexPath, type Executor, type PipelineJob,
 } from "./pipeline.ts";
-import { buildReview } from "./review.ts";
+import { buildReview, type ReviewUnitFlag } from "./review.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -64,6 +64,29 @@ async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+async function maybeVisual(job: PipelineJob): Promise<unknown | undefined> {
+  try {
+    return await readJson(visualIndexPath(job));
+  } catch {
+    return undefined;
+  }
+}
+
+async function maybeInspectFlags(workDir: string): Promise<Record<string, ReviewUnitFlag[]>> {
+  try {
+    const raw = await readJson(join(workDir, "out", "triage.json")) as {
+      reviewFlags?: { unitId: string; code: string; source: string; message: string }[];
+    };
+    const map: Record<string, ReviewUnitFlag[]> = {};
+    for (const f of raw.reviewFlags ?? []) {
+      (map[f.unitId] ??= []).push({ code: f.code, source: f.source, message: f.message });
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export interface AppHandle {
   port: number;
   address: string;
@@ -115,6 +138,8 @@ export async function startApp(opts: {
         const review = buildReview(
           await readJson(planPath(pipelineJob)),
           await readJson(indexPath(pipelineJob)),
+          await maybeVisual(pipelineJob),
+          await maybeInspectFlags(workDir),
         );
         store.setReview(job.id, review, keepList);
       } catch (error) {
@@ -208,10 +233,27 @@ export async function startApp(opts: {
           const suggested = await runTriage(pipelineJob, exec, provider);
           const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
             .catch(() => "");
-          // Prévia com motivo: a spec pede "quais, com o motivo que o modelo
-          // deu". As linhas de alegação aplicada do relatório trazem os ids e
-          // a justificativa; a página mostra isso antes de mexer na tela.
-          sendJson(res, { keepList: suggested, motivos: motivosFromReport(report), report });
+          // Preferir campos estruturados (drop / reviewFlags) em vez de
+          // parsear o markdown — o relatório muda de forma, a prévia não.
+          let drop: unknown[] | undefined;
+          let reviewFlags: unknown[] | undefined;
+          try {
+            const json = await readJson(join(workDir, "out", "triage.json")) as {
+              drop?: unknown[];
+              reviewFlags?: unknown[];
+            };
+            drop = json.drop;
+            reviewFlags = json.reviewFlags;
+          } catch {
+            // triage.json é novo; fallback no markdown.
+          }
+          sendJson(res, {
+            keepList: suggested,
+            motivos: motivosFromReport(report),
+            drop,
+            reviewFlags,
+            report,
+          });
           return;
         }
 

@@ -43,10 +43,15 @@
     border-radius: 4px; padding: 0 6px; margin: 0 2px; cursor: pointer;
   }
   .gone:hover { color: var(--ink); border-color: var(--accent); }
+  .flag-badge {
+    display: inline-block; width: 0.42em; height: 0.42em; margin: 0 0.1em 0.35em;
+    border-radius: 50%; background: var(--warn); vertical-align: super; opacity: 0.75;
+  }
   .join { display: block; margin: 14px 0; font-family: ui-sans-serif, sans-serif; font-size: 12px; }
   .join .flag { color: var(--warn); display: block; padding-left: 10px; border-left: 2px solid var(--warn); }
   .join .hint { color: var(--muted); }
   #stage { color: var(--muted); font-family: ui-sans-serif, sans-serif; }
+  #aviso { color: var(--warn); font-family: ui-sans-serif, sans-serif; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -54,6 +59,7 @@
   <strong>decupa</strong>
   <span style="color:var(--muted);font-size:12px">clique num trecho para tirá-lo · clique no marcador para trazer de volta</span>
   <span id="stage">carregando…</span>
+  <span id="aviso"></span>
   <span style="flex:1"></span>
   <!-- Nascem desabilitados: sem review, keepList() estouraria em review.units
        de null, e a pessoa clicaria durante os minutos de transcrição. -->
@@ -88,7 +94,16 @@ function render() {
       const span = document.createElement("span");
       span.className = "u";
       span.append(u.text + " ");
-      span.title = "clique para tirar este trecho";
+      const reasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
+      if (reasons.length) {
+        const badge = document.createElement("span");
+        badge.className = "flag-badge";
+        badge.title = reasons.join(" · ");
+        span.append(badge);
+      }
+      span.title = reasons.length
+        ? reasons.join(" · ")
+        : "clique para tirar este trecho";
       span.onclick = () => {
         // Um clique que terminou uma seleção é alguém lendo, não editando —
         // e a tela existe para ser lida.
@@ -104,7 +119,10 @@ function render() {
       const mark = document.createElement("span");
       mark.className = "gone";
       mark.textContent = u.text;      // o CSS trunca; o título mostra inteiro
-      mark.title = `restaurar: ${u.text}`;
+      const goneReasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
+      mark.title = goneReasons.length
+        ? `restaurar: ${u.text}\n${goneReasons.join(" · ")}`
+        : `restaurar: ${u.text}`;
       mark.onclick = () => { kept.set(u.id, true); render(); schedule(); };
       main.append(mark);
     }
@@ -150,6 +168,10 @@ const AVISOS = {
   tight_filler_excision: {
     msg: "a remoção de cacoete ficou colada demais na fala",
     dica: "ouça esta junção antes de exportar",
+  },
+  visual_in_point: {
+    msg: "a junção entra com um problema visual (mão no rosto, olhar baixo ou sem rosto)",
+    dica: "mova o in-point +0,4s no EDL",
   },
 };
 
@@ -201,6 +223,7 @@ function schedule() {
 
 async function poll() {
   const j = await api("");
+  document.getElementById("aviso").textContent = j.warning ?? "";
   document.getElementById("stage").textContent = {
     queued: "na fila…", transcribing: "transcrevendo (leva alguns minutos)…",
     indexing: "medindo…", visual: "índice visual (opcional)…",
@@ -234,12 +257,19 @@ document.getElementById("triar").onclick = async () => {
   // Com o motivo que o modelo deu, não só o texto do trecho: a justificativa é
   // o que permite discordar. E ela confabula quando não entende a unidade, o
   // que só dá para perceber lendo.
-  const ok = confirm(
-    `A sugestão tira ${cairiam.length} trecho(s):\n\n` +
-    cairiam.map((u) => "· " + u.text.slice(0, 60)).join("\n") +
-    (r.motivos?.length ? "\n\nMotivos:\n" + r.motivos.join("\n") : "") +
-    "\n\nAplicar?",
+  const dropLines = (r.drop ?? []).map((d) =>
+    "· " + d.unit_ids.join(", ") + " — " + d.reason + " — " + d.note
   );
+  const lookLines = (r.reviewFlags ?? []).map((f) =>
+    "· " + f.unitId + " — " + f.message
+  );
+  const preview = (r.drop || r.reviewFlags)
+    ? `vai cair (retake limpo):\n${dropLines.join("\n") || "· nenhum"}\n\n` +
+      `olhe isto (sem substituto):\n${lookLines.join("\n") || "· nenhum"}`
+    : `A sugestão tira ${cairiam.length} trecho(s):\n\n` +
+      cairiam.map((u) => "· " + u.text.slice(0, 60)).join("\n") +
+      (r.motivos?.length ? "\n\nMotivos:\n" + r.motivos.join("\n") : "");
+  const ok = confirm(preview + "\n\nAplicar?");
   if (!ok) return;
   for (const u of review.units) kept.set(u.id, proposto.has(u.id));
   render(); schedule();

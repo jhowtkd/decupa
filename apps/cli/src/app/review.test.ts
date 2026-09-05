@@ -38,7 +38,7 @@ describe("buildReview", () => {
 
   it("inclui as dropadas — é o que permite restaurar sem re-planejar", () => {
     expect(buildReview(plan, index).units[0]).toEqual({
-      id: "u001", text: "Eu esqueci o começo.", kept: false,
+      id: "u001", text: "Eu esqueci o começo.", kept: false, flags: [],
     });
   });
 
@@ -77,4 +77,85 @@ describe("buildReview", () => {
   it("estoura em índice sem units em vez de devolver review vazio", () => {
     expect(() => buildReview(plan, { units: [] })).toThrow(/units/);
   });
+
+  it("sem visual_index o 3º argumento é opcional e os testes antigos seguem", () => {
+    expect(buildReview(plan, index).joins[0]!.flags.some((f) => f.code === "visual_in_point")).toBe(false);
+  });
+
+  it("marca visual_in_point quando o sample da entrada tem mão no rosto", () => {
+    const planComTempo = {
+      ...plan,
+      joins: [{ ...plan.joins[0], source_out: 10.0, source_in: 12.0 }],
+    };
+    const visual = {
+      units: [
+        {
+          id: "u002",
+          look_down_ratio: 0,
+          look_side_ratio: 0,
+          hand_on_face_ratio: 0,
+          face_missing_ratio: 0,
+          samples: [
+            { t: 9.9, look_down: false, look_side: false, hand_on_face: false, face: true },
+          ],
+        },
+        {
+          id: "u003",
+          look_down_ratio: 0,
+          look_side_ratio: 0,
+          hand_on_face_ratio: 0.3,
+          face_missing_ratio: 0,
+          samples: [
+            { t: 11.9, look_down: false, look_side: false, hand_on_face: true, face: true },
+            { t: 12.4, look_down: false, look_side: false, hand_on_face: false, face: true },
+          ],
+        },
+      ],
+    };
+    const [join] = buildReview(planComTempo, index, visual).joins;
+    const flag = join!.flags.find((f) => f.code === "visual_in_point");
+    expect(flag).toBeDefined();
+    expect(flag!.hint).toBe("entra com a mão no rosto; mova o in-point +0,4s");
+    expect(flag!.message).toMatch(/mão no rosto/);
+  });
+
+  it("marca visual_in_point em look_down ou sem rosto no in-point", () => {
+    const planComTempo = {
+      ...plan,
+      joins: [{ ...plan.joins[0], source_out: 10.0, source_in: 12.0, flags: [] }],
+    };
+    const visual = {
+      units: [{
+        id: "u003",
+        look_down_ratio: 0.4,
+        look_side_ratio: 0,
+        hand_on_face_ratio: 0,
+        face_missing_ratio: 0,
+        samples: [{ t: 12.0, look_down: true, look_side: false, hand_on_face: false, face: true }],
+      }],
+    };
+    const flag = buildReview(planComTempo, index, visual).joins[0]!.flags.find((f) => f.code === "visual_in_point");
+    expect(flag!.hint).toMatch(/in-point \+0,4s/);
+  });
+
+  it("propaga flags visuais da unidade e extraFlags de inspect", () => {
+    const visual = {
+      units: [{
+        id: "u002",
+        look_down_ratio: 0.6,
+        look_side_ratio: 0,
+        hand_on_face_ratio: 0,
+        face_missing_ratio: 0,
+        samples: [],
+      }],
+    };
+    const extra = {
+      u003: [{ code: "looks_away", source: "visual", message: "inspect: olhou para o operador" }],
+    };
+    const { units } = buildReview(plan, index, visual, extra);
+    expect(units.find((u) => u.id === "u002")!.flags.some((f) => f.code === "looks_away")).toBe(true);
+    expect(units.find((u) => u.id === "u003")!.flags[0]!.message).toMatch(/inspect/);
+    expect(units.find((u) => u.id === "u001")!.flags).toEqual([]);
+  });
 });
+

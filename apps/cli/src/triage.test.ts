@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
 import { describe, expect, it } from "vitest";
 import { runTriage } from "./triage.ts";
@@ -118,3 +119,99 @@ describe("runTriage", () => {
     expect(out.verdicts.some((v) => v.accepted && v.claim.source === "mechanical")).toBe(true);
   });
 });
+
+describe("runTriage — inspect", () => {
+  async function withVisual() {
+    const { dir, indexPath, videoPath } = await fixture();
+    const visual = [{
+      id: "u004",
+      looksAway: false,
+      handOnFace: false,
+      noFace: false,
+      ambiguous: true,
+      samples: [],
+    }];
+    const frames = async (unit: { id: string }) => {
+      const path = join(dir, `${unit.id}.jpg`);
+      await writeFile(path, "jpeg-fake", "utf8");
+      return [path];
+    };
+    return { dir, indexPath, videoPath, visual, frames };
+  }
+
+  it("inspect drop sem substituto não muda o keep-list — só flag", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "olhando para o operador" },
+    ]);
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model, visual, extractFrames: frames,
+    });
+    expect(out.keepList).toBe("u001-u005");
+    expect(out.reviewFlags.some((f) => f.unitId === "u004" && f.code === "looks_away")).toBe(true);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+  });
+
+  it("não chama inspect em unidade que não está ambígua", async () => {
+    const { dir, indexPath, videoPath, frames } = await withVisual();
+    const model = new FakeTriageModel();
+    await runTriage({
+      indexPath, videoPath, outDir: dir, model,
+      visual: [{
+        id: "u004", looksAway: true, handOnFace: false, noFace: false,
+        ambiguous: false, samples: [],
+      }],
+      extractFrames: frames,
+    });
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+  });
+
+  it("reusa cache do inspect na segunda corrida", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model1 = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "unsure", note: "não dá" },
+    ]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model1, visual, extractFrames: frames });
+    expect(model1.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+
+    const model2 = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "não deveria ser chamado" },
+    ]);
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model: model2, visual, extractFrames: frames,
+    });
+    expect(model2.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+    expect(out.reviewFlags.some((f) => f.message.includes("não dá"))).toBe(true);
+  });
+
+  it("fake inspect no ouro ritmo não muda o keep-list gold", async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixtures = join(here, "../../../packages/triage/fixtures");
+    const gold = (await readFile(join(fixtures, "ritmo.keep.txt"), "utf8")).trim();
+    const dir = await mkdtemp(join(tmpdir(), "triage-gold-"));
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    const visual = JSON.parse(await readFile(join(fixtures, "ritmo.visual_index.json"), "utf8"));
+    const { parseVisualIndex } = await import("@decupa/triage");
+    const parsed = parseVisualIndex(visual);
+    const frames = async (unit: { id: string }) => {
+      const path = join(dir, `${unit.id}.jpg`);
+      await writeFile(path, "jpeg-fake", "utf8");
+      return [path];
+    };
+    const model = new FakeTriageModel([], [], [
+      { unitId: "u020", decision: "drop", note: "olhando para o operador" },
+    ]);
+    const out = await runTriage({
+      indexPath: join(fixtures, "ritmo.speech_index.json"),
+      videoPath,
+      outDir: dir,
+      model,
+      visual: parsed,
+      extractFrames: frames,
+    });
+    expect(out.keepList).toBe(gold);
+    expect(out.reviewFlags.some((f) => f.unitId === "u020")).toBe(true);
+  });
+});
+
