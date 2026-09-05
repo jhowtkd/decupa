@@ -12,6 +12,7 @@ const base = {
         reason: "preroll" as const,
         restated_by: null,
         note: "falando com o operador",
+        source: "model" as const,
       },
     },
     {
@@ -22,6 +23,7 @@ const base = {
         reason: "preroll" as const,
         restated_by: null,
         note: "chute",
+        source: "model" as const,
       },
     },
   ],

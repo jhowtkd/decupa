@@ -1,15 +1,32 @@
-import { RESTATEMENT_THRESHOLD, similarity } from "./similarity.ts";
+import { hasDirectorCue } from "./cues.ts";
+import {
+  MOTOR_DUPLICATE_THRESHOLD,
+  RESTATEMENT_THRESHOLD,
+  characterSimilarity,
+  isRestatement,
+  similarity,
+} from "./similarity.ts";
 import { topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
 
 /** Categoria fechada. O modelo escolhe uma; o código confere a escolha. */
-export type DropReason = "preroll" | "postroll" | "aside" | "restart_block";
+export type DropReason =
+  | "preroll"
+  | "postroll"
+  | "aside"
+  | "restart_block"
+  | "retake"
+  | "dead_air"
+  | "director_cue";
+
+export type ClaimSource = "mechanical" | "model" | "visual";
 
 export interface StructureClaim {
   unit_ids: string[];
   reason: DropReason;
-  /** Só para `restart_block`: a unidade posterior que diz a frase inteira. */
+  /** Take que fica: obrigatório em `restart_block` e `retake`. */
   restated_by: string | null;
   note: string;
+  source: ClaimSource;
 }
 
 export type Verdict =
@@ -100,7 +117,7 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
     }
     case "aside": {
       for (const unit of units) {
-        if (ctx.inTopicRun.has(unit.id)) {
+        if (ctx.inTopicRun.has(unit.id) && !hasDirectorCue(unit.text)) {
           return `${unit.id} pertence a um topic_run, então é assunto do vídeo, não aparte`;
         }
       }
@@ -125,6 +142,49 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
       if (!repeats) {
         return `nenhum par do bloco é quase-verbatim (limiar ${RESTATEMENT_THRESHOLD})`;
       }
+      // Similaridade com restated_by é extra, não obrigatória: o caso de
+      // aceitação u003–u005 vs u007 ("Isso não escala" / "Dessa forma, não
+      // escala a comunicação.") não passa em isRestatement.
+      return null;
+    }
+    case "retake": {
+      if (!claim.restated_by) return "retake sem `restated_by`";
+      const target = ctx.index.units.find((u) => u.id === claim.restated_by);
+      if (!target) return `unidade ${claim.restated_by} não existe no índice`;
+      if (units.some((u) => u.id === target.id)) {
+        return "`restated_by` não pode estar no conjunto dropado";
+      }
+      if (ctx.claimed.has(target.id)) {
+        return "`restated_by` também está sendo dropada, então nada resta dizendo a frase";
+      }
+      // Pode ser anterior: o take de depois perde quando tem ar morto (u020 vs u021–u023).
+      const droppedText = units.map((u) => u.text).join(" ");
+      const motorSim = motorSimilarityBetween(units, target);
+      if (!isRestatement(droppedText, target.text, motorSim)
+        && characterSimilarity(droppedText, target.text) < MOTOR_DUPLICATE_THRESHOLD) {
+        return "o bloco dropado não é retomada de `restated_by` (sem similaridade suficiente)";
+      }
+      return null;
+    }
+    case "dead_air": {
+      if (units.length !== 1) return "ar morto cobre só uma unidade";
+      const unit = units[0]!;
+      const candidate = (ctx.index.trimCandidates ?? []).find((t) => t.id === unit.id);
+      if (!candidate) return `${unit.id} não está em trim_candidates`;
+      if (!looksLikeDeadAir(candidate.reasons)) {
+        return `${unit.id} está em trim_candidates, mas as reasons não falam de ar morto`;
+      }
+      if (ctx.claimed.size >= ctx.index.units.length) {
+        return "ar morto não pode ser o único conteúdo que resta";
+      }
+      return null;
+    }
+    case "director_cue": {
+      for (const unit of units) {
+        if (!hasDirectorCue(unit.text)) {
+          return `${unit.id} não casa no léxico de fala com o operador`;
+        }
+      }
       return null;
     }
     default: {
@@ -133,9 +193,35 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
       // inventar categoria. Sem este ramo a alegação era rejeitada com
       // `failed: undefined`, e o relatório imprimia "falhou: undefined".
       return `categoria de motivo desconhecida: \`${String(claim.reason)}\` — ` +
-        "esperado preroll, postroll, aside ou restart_block";
+        "esperado preroll, postroll, aside, restart_block, retake, dead_air ou director_cue";
     }
   }
+}
+
+function motorSimilarityBetween(dropped: IndexUnit[], target: IndexUnit): number | null {
+  let best: number | null = null;
+  for (const unit of dropped) {
+    const score = pairMotorScore(unit, target);
+    if (score != null && (best == null || score > best)) best = score;
+  }
+  return best;
+}
+
+function pairMotorScore(a: IndexUnit, b: IndexUnit): number | null {
+  if (a.nearDuplicateOf === b.id && a.similarity != null) return a.similarity;
+  if (b.nearDuplicateOf === a.id && b.similarity != null) return b.similarity;
+  return null;
+}
+
+function looksLikeDeadAir(reasons: string[]): boolean {
+  return reasons.some((r) => {
+    const t = r.toLowerCase();
+    return t.includes("dead air")
+      || t.includes("almost no content")
+      || t.includes("no content")
+      || t.includes("chars/s")
+      || t.includes("very slow");
+  });
 }
 
 export function acceptedDropIds(verdicts: Verdict[]): Set<string> {

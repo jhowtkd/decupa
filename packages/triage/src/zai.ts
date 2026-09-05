@@ -104,6 +104,7 @@ export function parseStructureClaims(text: string): StructureClaim[] {
       reason: c.reason,
       restated_by: c.restated_by ?? null,
       note: String(c.note ?? ""),
+      source: c.source === "mechanical" || c.source === "visual" ? c.source : "model",
     }));
 }
 
