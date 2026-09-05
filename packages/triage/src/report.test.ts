@@ -54,6 +54,38 @@ describe("renderReport", () => {
     expect(out).toMatch(/nada/i);
   });
 
+  it("separa mecânico, modelo, visual e para revisão", () => {
+    const out = renderReport({
+      ...base,
+      verdicts: [
+        {
+          accepted: true as const,
+          claim: {
+            unit_ids: ["u015"],
+            reason: "retake" as const,
+            restated_by: "u016",
+            note: "retomada da mesma frase; fica u016",
+            source: "mechanical" as const,
+          },
+        },
+        ...base.verdicts,
+      ],
+      reviewFlags: [{
+        unitId: "u020",
+        code: "looks_away",
+        source: "visual",
+        message: "olhando para o operador, sem take substituto",
+      }],
+    });
+    expect(out).toContain("## Mecânico");
+    expect(out).toContain("## Modelo");
+    expect(out).toContain("## Visual");
+    expect(out).toContain("## Para revisão");
+    expect(out).toContain("fica **u016** · sai **u015**");
+    expect(out).toContain("u020");
+    expect(out).toContain("sem take substituto");
+  });
+
   it("renderiza candidatos do passe de densidade quando presentes", () => {
     const out = renderReport({
       ...base,

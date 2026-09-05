@@ -79,3 +79,25 @@ export function parseVisualIndex(raw: unknown): VisualUnitFlags[] {
 export function flagsFor(id: string, parsed: VisualUnitFlags[]): VisualUnitFlags | undefined {
   return parsed.find((u) => u.id === id);
 }
+
+/** Sample do índice visual mais próximo de um instante de corte. */
+export function nearestSample(samples: VisualSample[], t: number): VisualSample | undefined {
+  if (samples.length === 0) return undefined;
+  let best = samples[0]!;
+  let bestDist = Math.abs(best.t - t);
+  for (let i = 1; i < samples.length; i += 1) {
+    const s = samples[i]!;
+    const dist = Math.abs(s.t - t);
+    if (dist < bestDist) {
+      best = s;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+/** Junção ruim: mão no rosto, olhar baixo ou sem rosto. */
+export function sampleLooksBadAtJoin(sample: VisualSample | undefined): boolean {
+  if (!sample) return false;
+  return sample.handOnFace || sample.lookDown || !sample.face;
+}

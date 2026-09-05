@@ -1,8 +1,12 @@
 import { readFile } from "node:fs/promises";
 import type { StructureClaim } from "./claims.ts";
 import { DENSITY_INSTRUCTIONS } from "./density.ts";
-import type { DensityCandidate, DensityRequest, StructureRequest, TriageModel } from "./model.ts";
-import { STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
+import { normalizeInspectVerdict } from "./inspect.ts";
+import type {
+  DensityCandidate, DensityRequest, InspectRequest, InspectVerdict,
+  StructureRequest, TriageModel,
+} from "./model.ts";
+import { INSPECT_INSTRUCTIONS, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 
 export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
 
@@ -35,8 +39,8 @@ const STRUCTURE_SHAPE = `Responda com um objeto JSON desta forma exata:
   {"unit_ids": ["u001","u002"], "reason": "preroll", "restated_by": null, "note": "por que isto não é o vídeo"}
 ]}
 
-"reason" só pode ser um destes quatro: "preroll", "postroll", "aside", "restart_block".
-"restated_by" é null exceto em "restart_block". Se nada se encaixar, "claims" é [].`;
+"reason" só pode ser um destes: "preroll", "postroll", "aside", "restart_block", "retake", "dead_air", "director_cue".
+"restated_by" é null exceto em "restart_block" e "retake". Se nada se encaixar, "claims" é [].`;
 
 const DENSITY_SHAPE = `Responda com um objeto JSON desta forma exata:
 
@@ -45,6 +49,12 @@ const DENSITY_SHAPE = `Responda com um objeto JSON desta forma exata:
 ]}
 
 "rank" é inteiro; 1 sai primeiro. Se nada puder sair, "candidates" é [].`;
+
+const INSPECT_SHAPE = `Responda com um objeto JSON desta forma exata:
+
+{"unitId": "u001", "decision": "unsure", "note": "por que drop, keep ou unsure"}
+
+"decision" só pode ser "drop", "keep" ou "unsure". Nunca devolva tempo.`;
 
 /** Extrai o texto da resposta, ou estoura dizendo por que não deu. */
 export function readChoice(raw: unknown): string {
@@ -106,6 +116,10 @@ export function parseStructureClaims(text: string): StructureClaim[] {
       note: String(c.note ?? ""),
       source: c.source === "mechanical" || c.source === "visual" ? c.source : "model",
     }));
+}
+
+export function parseInspectVerdict(text: string, unitId: string): InspectVerdict {
+  return normalizeInspectVerdict(parseJsonPayload(text), unitId);
 }
 
 export function parseDensityCandidates(text: string): DensityCandidate[] {
@@ -227,5 +241,58 @@ export class ZaiTriageModel implements TriageModel {
         req.unitsBlock,
       ),
     );
+  }
+
+  async inspect(req: InspectRequest): Promise<InspectVerdict> {
+    const images: { type: "image_url"; image_url: { url: string } }[] = [];
+    for (const frame of req.frames) {
+      const bytes = await readFile(frame);
+      images.push({
+        type: "image_url",
+        image_url: { url: `data:image/jpeg;base64,${bytes.toString("base64")}` },
+      });
+    }
+    const text = await this.postImages(
+      images,
+      `${INSPECT_INSTRUCTIONS}\n\n${INSPECT_SHAPE}`,
+      `unidade: ${req.unitId}`,
+    );
+    return parseInspectVerdict(text, req.unitId);
+  }
+
+  /** Só os JPEGs da unidade — nunca o vídeo inteiro. */
+  private async postImages(
+    images: { type: "image_url"; image_url: { url: string } }[],
+    instructions: string,
+    text: string,
+  ): Promise<string> {
+    const res = await this.fetchImpl(this.baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [{
+          role: "user",
+          content: [
+            ...images,
+            { type: "text", text: `${instructions}\n\n---\n\n${text}` },
+          ],
+        }],
+        response_format: { type: "json_object" },
+        max_tokens: this.maxTokens,
+      }),
+    });
+
+    const raw = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`HTTP ${res.status} da Z.ai, corpo não-JSON: ${raw.slice(0, 200)}`);
+    }
+    if (!res.ok && !(parsed as any)?.error) {
+      throw new Error(`HTTP ${res.status} da Z.ai: ${raw.slice(0, 200)}`);
+    }
+    return readChoice(parsed);
   }
 }

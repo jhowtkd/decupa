@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   flagsFor,
+  nearestSample,
   parseVisualIndex,
+  sampleLooksBadAtJoin,
   type VisualUnitFlags,
 } from "./visual.ts";
 
@@ -79,5 +81,28 @@ describe("parseVisualIndex — sinais", () => {
 
   it("recusa JSON sem units", () => {
     expect(() => parseVisualIndex({})).toThrow(/units/);
+  });
+});
+
+describe("nearestSample", () => {
+  const samples = [
+    { t: 10.0, lookDown: false, lookSide: false, handOnFace: false, face: true },
+    { t: 10.4, lookDown: true, lookSide: false, handOnFace: true, face: true },
+    { t: 10.8, lookDown: false, lookSide: false, handOnFace: false, face: true },
+  ];
+
+  it("escolhe o sample mais perto do instante", () => {
+    expect(nearestSample(samples, 10.45)?.t).toBe(10.4);
+  });
+
+  it("devolve undefined sem samples", () => {
+    expect(nearestSample([], 1)).toBeUndefined();
+  });
+
+  it("sampleLooksBadAtJoin liga em mão, olhar baixo ou sem rosto", () => {
+    expect(sampleLooksBadAtJoin(samples[1])).toBe(true);
+    expect(sampleLooksBadAtJoin(samples[0])).toBe(false);
+    expect(sampleLooksBadAtJoin({ t: 1, lookDown: false, lookSide: true, handOnFace: false, face: false })).toBe(true);
+    expect(sampleLooksBadAtJoin(undefined)).toBe(false);
   });
 });

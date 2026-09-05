@@ -34,6 +34,13 @@ describe("cacheKey", () => {
   it("é seguro como nome de arquivo", () => {
     expect(cacheKey(parts)).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("o passe inspect muda com unitId e com o hash dos frames", () => {
+    const inspect = { ...parts, pass: "inspect" as const, unitId: "u020", framesSha: "aaa" };
+    expect(cacheKey(inspect)).not.toBe(cacheKey({ ...inspect, unitId: "u021" }));
+    expect(cacheKey(inspect)).not.toBe(cacheKey({ ...inspect, framesSha: "bbb" }));
+    expect(cacheKey(inspect)).not.toBe(cacheKey(parts));
+  });
 });
 
 describe("readCache / writeCache", () => {

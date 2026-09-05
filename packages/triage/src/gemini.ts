@@ -1,8 +1,13 @@
+import { readFile } from "node:fs/promises";
 import { GoogleGenAI } from "@google/genai";
 import type { StructureClaim } from "./claims.ts";
-import type { DensityCandidate, DensityRequest, StructureRequest, TriageModel } from "./model.ts";
+import { normalizeInspectVerdict } from "./inspect.ts";
+import type {
+  DensityCandidate, DensityRequest, InspectRequest, InspectVerdict,
+  StructureRequest, TriageModel,
+} from "./model.ts";
 import { DENSITY_INSTRUCTIONS } from "./density.ts";
-import { STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
+import { INSPECT_INSTRUCTIONS, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 
 export const DEFAULT_MODEL = "gemini-3.8-flash";
 
@@ -15,7 +20,10 @@ const STRUCTURE_SCHEMA = {
         type: "object",
         properties: {
           unit_ids: { type: "array", items: { type: "string" } },
-          reason: { type: "string", enum: ["preroll", "postroll", "aside", "restart_block"] },
+          reason: {
+            type: "string",
+            enum: ["preroll", "postroll", "aside", "restart_block", "retake", "dead_air", "director_cue"],
+          },
           restated_by: { type: "string", nullable: true },
           note: { type: "string" },
         },
@@ -43,6 +51,16 @@ const DENSITY_SCHEMA = {
     },
   },
   required: ["candidates"],
+} as const;
+
+const INSPECT_SCHEMA = {
+  type: "object",
+  properties: {
+    unitId: { type: "string" },
+    decision: { type: "string", enum: ["drop", "keep", "unsure"] },
+    note: { type: "string" },
+  },
+  required: ["decision", "note"],
 } as const;
 
 export class GeminiTriageModel implements TriageModel {
@@ -117,5 +135,28 @@ export class GeminiTriageModel implements TriageModel {
       `${DENSITY_INSTRUCTIONS}\n\nOrçamento: ${req.budgetSeconds.toFixed(1)} segundos.`,
       req.unitsBlock, DENSITY_SCHEMA, "candidates",
     );
+  }
+
+  async inspect(req: InspectRequest): Promise<InspectVerdict> {
+    const images = [];
+    for (const frame of req.frames) {
+      const bytes = await readFile(frame);
+      images.push({
+        type: "image" as const,
+        data: bytes.toString("base64"),
+        mime_type: "image/jpeg" as const,
+      });
+    }
+    const interaction = await this.client.interactions.create({
+      model: this.model,
+      input: [
+        ...images,
+        { type: "text", text: `${INSPECT_INSTRUCTIONS}\n\n---\n\nunidade: ${req.unitId}` },
+      ],
+      response_format: { type: "text", mime_type: "application/json", schema: INSPECT_SCHEMA },
+      generation_config: { seed: 0 },
+    });
+    const parsed = JSON.parse(interaction.output_text ?? "{}") as unknown;
+    return normalizeInspectVerdict(parsed, req.unitId);
   }
 }

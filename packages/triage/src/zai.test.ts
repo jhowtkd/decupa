@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDensityCandidates, parseStructureClaims, readChoice } from "./zai.ts";
+import { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice } from "./zai.ts";
 
 /** Forma de resposta do Chat Completions da Z.ai. */
 const body = (message: Record<string, unknown>, finish = "stop") => ({
@@ -84,6 +84,21 @@ describe("parseStructureClaims", () => {
   it("descarta entrada sem unit_ids utilizável", () => {
     const ruim = { reason: "preroll", note: "sem ids" };
     expect(parseStructureClaims(JSON.stringify({ claims: [ruim] }))).toEqual([]);
+  });
+});
+
+describe("parseInspectVerdict", () => {
+  it("lê decision e note", () => {
+    const out = parseInspectVerdict(
+      JSON.stringify({ unitId: "u020", decision: "drop", note: "olhou para o lado" }),
+      "u020",
+    );
+    expect(out.decision).toBe("drop");
+    expect(out.note).toMatch(/olhou/);
+  });
+
+  it("vira unsure se a decisão vier fora do enum", () => {
+    expect(parseInspectVerdict('{"decision":"talvez"}', "u001").decision).toBe("unsure");
   });
 });
 

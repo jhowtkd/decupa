@@ -7,8 +7,10 @@ export interface CacheKeyParts {
   indexSha: string;
   promptVersion: string;
   model: string;
-  pass: "structure" | "density";
+  pass: "structure" | "density" | "inspect";
   budgetSeconds?: number;
+  unitId?: string;
+  framesSha?: string;
 }
 
 /**
@@ -23,6 +25,10 @@ export function cacheKey(parts: CacheKeyParts): string {
   const elements = [parts.videoSha, parts.indexSha, parts.promptVersion, parts.model, parts.pass];
   if (parts.pass === "density" && parts.budgetSeconds !== undefined) {
     elements.push(parts.budgetSeconds.toFixed(1));
+  }
+  if (parts.pass === "inspect") {
+    elements.push(parts.unitId ?? "");
+    elements.push(parts.framesSha ?? "");
   }
   return createHash("sha256")
     .update(elements.join(" "))

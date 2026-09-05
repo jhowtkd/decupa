@@ -1,17 +1,22 @@
 export type { ClaimSource, DropReason, StructureClaim, Verdict } from "./claims.ts";
-export type { DensityCandidate, DensityRequest, StructureRequest, TriageModel } from "./model.ts";
+export type {
+  DensityCandidate, DensityRequest, InspectRequest, InspectVerdict,
+  StructureRequest, TriageModel,
+} from "./model.ts";
 export type { IndexUnit, SpeechIndex, TopicRun, TrimCandidate } from "./speech-index.ts";
 export type { CacheKeyParts } from "./cache.ts";
+export type { InspectFlag, InspectOutcome } from "./inspect.ts";
 export type { ReportInput } from "./report.ts";
 export type { VisualFlagCode, VisualSample, VisualUnitFlags } from "./visual.ts";
 
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
 export { DEFAULT_MODEL, GeminiTriageModel } from "./gemini.ts";
-export { parseDensityCandidates, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiTriageModel } from "./zai.ts";
+export { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiTriageModel } from "./zai.ts";
 export { keepListFrom } from "./keeplist.ts";
 export { FakeTriageModel } from "./model.ts";
-export { buildUnitsBlock, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
+export { applyInspect, flagsWithoutSubstitute, normalizeInspectVerdict } from "./inspect.ts";
+export { buildUnitsBlock, INSPECT_INSTRUCTIONS, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 export { renderReport } from "./report.ts";
 export { cacheKey, readCache, writeCache } from "./cache.ts";
 export { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
@@ -37,5 +42,7 @@ export {
   NO_FACE_AMBIGUOUS,
   NO_FACE_BAD,
   flagsFor,
+  nearestSample,
   parseVisualIndex,
+  sampleLooksBadAtJoin,
 } from "./visual.ts";

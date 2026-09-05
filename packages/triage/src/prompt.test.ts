@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROMPT_VERSION, STRUCTURE_INSTRUCTIONS, buildUnitsBlock } from "./prompt.ts";
+import { INSPECT_INSTRUCTIONS, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS, buildUnitsBlock } from "./prompt.ts";
 import { parseSpeechIndex } from "./speech-index.ts";
 
 const index = parseSpeechIndex({
@@ -42,6 +42,36 @@ describe("STRUCTURE_INSTRUCTIONS", () => {
   });
 
   it("tem versão fixada, que entra na chave de cache", () => {
-    expect(PROMPT_VERSION).toMatch(/^v\d+$/);
+    expect(PROMPT_VERSION).toBe("v2");
+  });
+
+  it("explica retake, dead_air e director_cue", () => {
+    expect(STRUCTURE_INSTRUCTIONS).toContain('"retake"');
+    expect(STRUCTURE_INSTRUCTIONS).toContain('"dead_air"');
+    expect(STRUCTURE_INSTRUCTIONS).toContain('"director_cue"');
+  });
+
+  it("lista pistas de fala com o operador", () => {
+    for (const cue of ["corta essa", "vou repetir", "calma aí", "perdão", "agora vai", "ih foi"]) {
+      expect(STRUCTURE_INSTRUCTIONS).toContain(cue);
+    }
+  });
+
+  it("pede retake de unidade única com restated_by", () => {
+    expect(STRUCTURE_INSTRUCTIONS).toMatch(/unidade só/);
+    expect(STRUCTURE_INSTRUCTIONS).toContain("restated_by");
+  });
+
+  it("na dúvida, não reivindica", () => {
+    expect(STRUCTURE_INSTRUCTIONS).toMatch(/Na dúvida, não reivindique/);
+  });
+});
+
+describe("INSPECT_INSTRUCTIONS", () => {
+  it("proíbe tempo e pede drop/keep/unsure", () => {
+    expect(INSPECT_INSTRUCTIONS.toLowerCase()).toContain("nunca");
+    expect(INSPECT_INSTRUCTIONS).toContain("drop");
+    expect(INSPECT_INSTRUCTIONS).toContain("keep");
+    expect(INSPECT_INSTRUCTIONS).toContain("unsure");
   });
 });
