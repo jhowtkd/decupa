@@ -1,0 +1,3190 @@
+{
+  "video_path": "/Users/jhonatan/Repos/Video editor/work/ritmo/proxy.mp4",
+  "video_sha256": "e0555097c429a91aa9c8435965e8cd8d8043371ac9209525e14cfd6852a4974a",
+  "transcript_path": "/Users/jhonatan/Repos/Video editor/work/corte-contexto/transcript.json",
+  "transcript_sha256": "a2f1daaf7f72ce54331da6a76eb168c549a7ac96c57923bf2f1d336fbfe484b9",
+  "language": "pt",
+  "timing_source": "word_timestamps",
+  "source_duration": 245.502,
+  "audio": {
+    "mean_volume_db": -36.3,
+    "max_volume_db": -8.1,
+    "silence_db": -32.0,
+    "silence_db_reason": "fixed default",
+    "min_silence_seconds": 0.1,
+    "pause_count": 203,
+    "silence_seconds": 164.937,
+    "pause_detection": {
+      "verdict": "plausible",
+      "detected_silence_ratio": 0.672,
+      "note": "203 pause(s) totalling 164.9s, consistent with the 143.8s the transcript leaves outside speech. Boundaries should find real breaths to snap to."
+    }
+  },
+  "segmentation": {
+    "unit_pause_seconds": 0.55,
+    "max_unit_seconds": 14.0,
+    "asr_segment_count": 27,
+    "unit_count": 42
+  },
+  "totals": {
+    "source_duration": 245.502,
+    "speech_seconds": 101.729,
+    "gap_seconds": 143.773,
+    "inter_unit_gap_seconds": 134.832,
+    "head_tail_seconds": 8.941,
+    "long_gap_excess_seconds": 117.087,
+    "removable_disfluency_seconds": 0,
+    "soft_filler_seconds": 1.935,
+    "near_duplicate_seconds": 5.578,
+    "unit_count": 42,
+    "speakers": [],
+    "speaker_count": 0,
+    "question_count": 9,
+    "units_without_terminal_punct": 15
+  },
+  "budget": {
+    "lossless_floor_seconds": 120.179,
+    "lossless_floor_ratio": 0.49,
+    "free_savings_seconds": 125.323,
+    "suggested_targets": {
+      "light": {
+        "seconds": 196.4,
+        "ratio": 0.8,
+        "needs_content_dropped": false,
+        "content_seconds_to_drop": 0.0
+      },
+      "medium": {
+        "seconds": 147.3,
+        "ratio": 0.6,
+        "needs_content_dropped": false,
+        "content_seconds_to_drop": 0.0
+      },
+      "aggressive": {
+        "seconds": 98.2,
+        "ratio": 0.4,
+        "needs_content_dropped": true,
+        "content_seconds_to_drop": 22.0
+      }
+    },
+    "note": "Tightening pauses to 0.45s and removing hesitation sounds alone gets this from 4:05.5 to about 2:00.2 (49% of source) without dropping a single sentence. Every second below 2:00.2 has to come out of content."
+  },
+  "visual_survey": {
+    "performed": true,
+    "image": "/Users/jhonatan/Repos/Video editor/work/corte-contexto/.video_agent/condense_survey/proxy/visual_survey.jpg",
+    "frame_count": 3,
+    "frame_budget": 3,
+    "frame_budget_basis": "auto from 0 shot cut(s)",
+    "sampled_timestamps": [
+      2.0,
+      81.83,
+      163.67
+    ],
+    "shot_cut_count": 0,
+    "shot_cuts": [],
+    "scene_threshold": 0.3,
+    "frames_per_minute": 0.73,
+    "motion_baseline": 5.75,
+    "motion": "moderate_motion",
+    "note": "Moderate frame-to-frame motion. Cuts will be noticeable but not glaring; decide per cut from the QC jump ratio and its frame row."
+  },
+  "visual_check_timestamps": [],
+  "topic_runs": [
+    {
+      "keyword": "instituição",
+      "unit_ids": [
+        "u006",
+        "u008",
+        "u017"
+      ],
+      "span": [
+        "u006",
+        "u017"
+      ],
+      "hit_count": 3,
+      "total_occurrences": 5,
+      "concentration": 0.6,
+      "span_seconds": 35.09
+    },
+    {
+      "keyword": "você",
+      "unit_ids": [
+        "u028",
+        "u031",
+        "u035",
+        "u039",
+        "u040",
+        "u041"
+      ],
+      "span": [
+        "u028",
+        "u041"
+      ],
+      "hit_count": 6,
+      "total_occurrences": 8,
+      "concentration": 0.75,
+      "span_seconds": 29.15
+    },
+    {
+      "keyword": "quer",
+      "unit_ids": [
+        "u019",
+        "u020",
+        "u023",
+        "u025",
+        "u026",
+        "u027"
+      ],
+      "span": [
+        "u019",
+        "u027"
+      ],
+      "hit_count": 6,
+      "total_occurrences": 6,
+      "concentration": 1.0,
+      "span_seconds": 20.75
+    },
+    {
+      "keyword": "sentir",
+      "unit_ids": [
+        "u020",
+        "u023",
+        "u025",
+        "u026"
+      ],
+      "span": [
+        "u020",
+        "u026"
+      ],
+      "hit_count": 4,
+      "total_occurrences": 4,
+      "concentration": 1.0,
+      "span_seconds": 16.24
+    },
+    {
+      "keyword": "escala",
+      "unit_ids": [
+        "u032",
+        "u034",
+        "u036",
+        "u038"
+      ],
+      "span": [
+        "u032",
+        "u038"
+      ],
+      "hit_count": 4,
+      "total_occurrences": 4,
+      "concentration": 1.0,
+      "span_seconds": 12.38
+    },
+    {
+      "keyword": "entre",
+      "unit_ids": [
+        "u012",
+        "u013",
+        "u014"
+      ],
+      "span": [
+        "u012",
+        "u014"
+      ],
+      "hit_count": 3,
+      "total_occurrences": 3,
+      "concentration": 1.0,
+      "span_seconds": 9.58
+    },
+    {
+      "keyword": "outras",
+      "unit_ids": [
+        "u012",
+        "u013",
+        "u014"
+      ],
+      "span": [
+        "u012",
+        "u014"
+      ],
+      "hit_count": 3,
+      "total_occurrences": 3,
+      "concentration": 1.0,
+      "span_seconds": 9.58
+    },
+    {
+      "keyword": "aluno",
+      "unit_ids": [
+        "u008",
+        "u009",
+        "u010"
+      ],
+      "span": [
+        "u008",
+        "u010"
+      ],
+      "hit_count": 3,
+      "total_occurrences": 3,
+      "concentration": 1.0,
+      "span_seconds": 8.59
+    }
+  ],
+  "trim_candidates": [
+    {
+      "id": "u021",
+      "seconds": 4.461,
+      "text": "E quem",
+      "reasons": [
+        "almost no content for its length",
+        "very slow (1.1 chars/s) — dead air inside the sentence"
+      ]
+    },
+    {
+      "id": "u016",
+      "seconds": 2.588,
+      "text": "E cada um desse está em um nível completamente diferente",
+      "reasons": [
+        "restates u015 (similarity 0.783)"
+      ]
+    },
+    {
+      "id": "u042",
+      "seconds": 3.006,
+      "text": "Ih, foi!",
+      "reasons": [
+        "almost no content for its length",
+        "very slow (1.7 chars/s) — dead air inside the sentence"
+      ]
+    },
+    {
+      "id": "u027",
+      "seconds": 1.261,
+      "text": "E quem contrata quer resultado.",
+      "reasons": [
+        "restates u026 (similarity 0.881)"
+      ]
+    },
+    {
+      "id": "u034",
+      "seconds": 1.081,
+      "text": "Isso não escala",
+      "reasons": [
+        "restates u032 (similarity 1.0)"
+      ]
+    },
+    {
+      "id": "u036",
+      "seconds": 0.648,
+      "text": "Isso não escala.",
+      "reasons": [
+        "restates u032 (similarity 1.0)"
+      ]
+    },
+    {
+      "id": "u003",
+      "seconds": 0.12,
+      "text": "Entende?",
+      "reasons": [
+        "100% of it is filler/hesitation"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "id": "u001",
+      "index": 0,
+      "start": 8.491,
+      "end": 11.815,
+      "duration": 3.324,
+      "speaker": null,
+      "text": "Eu esqueci o começo, perdão.",
+      "chars": 22,
+      "cps": 6.62,
+      "lead_gap": 8.491,
+      "trail_gap": 5.559,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 5,
+      "words": [
+        {
+          "text": "Eu",
+          "start": 8.491,
+          "end": 8.751
+        },
+        {
+          "text": "esqueci",
+          "start": 10.471,
+          "end": 10.892
+        },
+        {
+          "text": "o",
+          "start": 10.912,
+          "end": 10.932
+        },
+        {
+          "text": "começo,",
+          "start": 10.992,
+          "end": 11.412
+        },
+        {
+          "text": "perdão.",
+          "start": 11.452,
+          "end": 11.815
+        }
+      ]
+    },
+    {
+      "id": "u002",
+      "index": 1,
+      "start": 17.374,
+      "end": 21.576,
+      "duration": 4.202,
+      "speaker": null,
+      "text": "Agora vai, calma aí, calma aí, calma aí, tá vindo aqui, tá vindo aqui, tá ligando, tá dum boot.",
+      "chars": 69,
+      "cps": 16.42,
+      "lead_gap": 5.559,
+      "trail_gap": 0.02,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "tá",
+            "char_start": 41,
+            "char_end": 43,
+            "start": 19.275,
+            "end": 19.375,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "tá",
+            "char_start": 56,
+            "char_end": 58,
+            "start": 19.955,
+            "end": 20.036,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "tá",
+            "char_start": 71,
+            "char_end": 73,
+            "start": 20.496,
+            "end": 20.576,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "tá",
+            "char_start": 83,
+            "char_end": 85,
+            "start": 20.996,
+            "end": 21.076,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.341,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 19,
+      "words": [
+        {
+          "text": "Agora",
+          "start": 17.374,
+          "end": 17.675
+        },
+        {
+          "text": "vai,",
+          "start": 17.695,
+          "end": 17.815
+        },
+        {
+          "text": "calma",
+          "start": 17.855,
+          "end": 18.075
+        },
+        {
+          "text": "aí,",
+          "start": 18.095,
+          "end": 18.215
+        },
+        {
+          "text": "calma",
+          "start": 18.395,
+          "end": 18.595
+        },
+        {
+          "text": "aí,",
+          "start": 18.615,
+          "end": 18.695
+        },
+        {
+          "text": "calma",
+          "start": 18.755,
+          "end": 19.015
+        },
+        {
+          "text": "aí,",
+          "start": 19.055,
+          "end": 19.235
+        },
+        {
+          "text": "tá",
+          "start": 19.275,
+          "end": 19.375
+        },
+        {
+          "text": "vindo",
+          "start": 19.435,
+          "end": 19.615
+        },
+        {
+          "text": "aqui,",
+          "start": 19.635,
+          "end": 19.815
+        },
+        {
+          "text": "tá",
+          "start": 19.955,
+          "end": 20.036
+        },
+        {
+          "text": "vindo",
+          "start": 20.076,
+          "end": 20.256
+        },
+        {
+          "text": "aqui,",
+          "start": 20.276,
+          "end": 20.396
+        },
+        {
+          "text": "tá",
+          "start": 20.496,
+          "end": 20.576
+        },
+        {
+          "text": "ligando,",
+          "start": 20.616,
+          "end": 20.936
+        },
+        {
+          "text": "tá",
+          "start": 20.996,
+          "end": 21.076
+        },
+        {
+          "text": "dum",
+          "start": 21.096,
+          "end": 21.256
+        },
+        {
+          "text": "boot.",
+          "start": 21.336,
+          "end": 21.576
+        }
+      ]
+    },
+    {
+      "id": "u003",
+      "index": 2,
+      "start": 21.596,
+      "end": 21.716,
+      "duration": 0.12,
+      "speaker": null,
+      "text": "Entende?",
+      "chars": 7,
+      "cps": 58.33,
+      "lead_gap": 0.02,
+      "trail_gap": 1.841,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "Entende",
+            "char_start": 0,
+            "char_end": 7,
+            "start": 21.596,
+            "end": 21.716,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.12,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 1,
+      "words": [
+        {
+          "text": "Entende?",
+          "start": 21.596,
+          "end": 21.716
+        }
+      ]
+    },
+    {
+      "id": "u004",
+      "index": 3,
+      "start": 23.557,
+      "end": 24.237,
+      "duration": 0.68,
+      "speaker": null,
+      "text": "Agora vai.",
+      "chars": 8,
+      "cps": 11.76,
+      "lead_gap": 1.841,
+      "trail_gap": 1.181,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 2,
+      "words": [
+        {
+          "text": "Agora",
+          "start": 23.557,
+          "end": 24.097
+        },
+        {
+          "text": "vai.",
+          "start": 24.117,
+          "end": 24.237
+        }
+      ]
+    },
+    {
+      "id": "u005",
+      "index": 4,
+      "start": 25.418,
+      "end": 27.991,
+      "duration": 2.573,
+      "speaker": null,
+      "text": "Dicas pra você parar de ser chatão nas redes sociais.",
+      "chars": 43,
+      "cps": 16.71,
+      "lead_gap": 1.181,
+      "trail_gap": 4.29,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 10,
+      "words": [
+        {
+          "text": "Dicas",
+          "start": 25.418,
+          "end": 25.658
+        },
+        {
+          "text": "pra",
+          "start": 25.678,
+          "end": 25.818
+        },
+        {
+          "text": "você",
+          "start": 25.838,
+          "end": 26.018
+        },
+        {
+          "text": "parar",
+          "start": 26.078,
+          "end": 26.258
+        },
+        {
+          "text": "de",
+          "start": 26.278,
+          "end": 26.338
+        },
+        {
+          "text": "ser",
+          "start": 26.398,
+          "end": 26.458
+        },
+        {
+          "text": "chatão",
+          "start": 26.558,
+          "end": 26.999
+        },
+        {
+          "text": "nas",
+          "start": 27.039,
+          "end": 27.179
+        },
+        {
+          "text": "redes",
+          "start": 27.199,
+          "end": 27.319
+        },
+        {
+          "text": "sociais.",
+          "start": 27.339,
+          "end": 27.991
+        }
+      ]
+    },
+    {
+      "id": "u006",
+      "index": 5,
+      "start": 32.281,
+      "end": 34.807,
+      "duration": 2.526,
+      "speaker": null,
+      "text": "Assim, é pra instituição de ensino, mas serve pra todo mundo.",
+      "chars": 48,
+      "cps": 19.0,
+      "lead_gap": 4.29,
+      "trail_gap": 5.545,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 11,
+      "words": [
+        {
+          "text": "Assim,",
+          "start": 32.281,
+          "end": 32.581
+        },
+        {
+          "text": "é",
+          "start": 32.761,
+          "end": 32.841
+        },
+        {
+          "text": "pra",
+          "start": 32.861,
+          "end": 32.961
+        },
+        {
+          "text": "instituição",
+          "start": 33.001,
+          "end": 33.381
+        },
+        {
+          "text": "de",
+          "start": 33.401,
+          "end": 33.481
+        },
+        {
+          "text": "ensino,",
+          "start": 33.521,
+          "end": 33.822
+        },
+        {
+          "text": "mas",
+          "start": 33.842,
+          "end": 33.982
+        },
+        {
+          "text": "serve",
+          "start": 34.022,
+          "end": 34.202
+        },
+        {
+          "text": "pra",
+          "start": 34.222,
+          "end": 34.362
+        },
+        {
+          "text": "todo",
+          "start": 34.382,
+          "end": 34.582
+        },
+        {
+          "text": "mundo.",
+          "start": 34.642,
+          "end": 34.807
+        }
+      ]
+    },
+    {
+      "id": "u007",
+      "index": 6,
+      "start": 40.352,
+      "end": 44.473,
+      "duration": 4.121,
+      "speaker": null,
+      "text": "Primeira coisa que você tem que entender, você não tem um único público.",
+      "chars": 58,
+      "cps": 14.07,
+      "lead_gap": 5.545,
+      "trail_gap": 5.081,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 13,
+      "words": [
+        {
+          "text": "Primeira",
+          "start": 40.352,
+          "end": 40.772
+        },
+        {
+          "text": "coisa",
+          "start": 40.852,
+          "end": 41.172
+        },
+        {
+          "text": "que",
+          "start": 41.192,
+          "end": 41.272
+        },
+        {
+          "text": "você",
+          "start": 41.312,
+          "end": 41.472
+        },
+        {
+          "text": "tem",
+          "start": 41.532,
+          "end": 41.652
+        },
+        {
+          "text": "que",
+          "start": 41.672,
+          "end": 41.732
+        },
+        {
+          "text": "entender,",
+          "start": 41.752,
+          "end": 42.132
+        },
+        {
+          "text": "você",
+          "start": 42.192,
+          "end": 42.432
+        },
+        {
+          "text": "não",
+          "start": 42.472,
+          "end": 42.612
+        },
+        {
+          "text": "tem",
+          "start": 42.772,
+          "end": 42.993
+        },
+        {
+          "text": "um",
+          "start": 43.053,
+          "end": 43.273
+        },
+        {
+          "text": "único",
+          "start": 43.413,
+          "end": 43.733
+        },
+        {
+          "text": "público.",
+          "start": 43.853,
+          "end": 44.473
+        }
+      ]
+    },
+    {
+      "id": "u008",
+      "index": 7,
+      "start": 49.554,
+      "end": 51.994,
+      "duration": 2.44,
+      "speaker": null,
+      "text": "Uma instituição de ensino, por exemplo, tem aluno,",
+      "chars": 40,
+      "cps": 16.39,
+      "lead_gap": 5.081,
+      "trail_gap": 1.16,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 8,
+      "words": [
+        {
+          "text": "Uma",
+          "start": 49.554,
+          "end": 49.634
+        },
+        {
+          "text": "instituição",
+          "start": 49.654,
+          "end": 50.054
+        },
+        {
+          "text": "de",
+          "start": 50.094,
+          "end": 50.154
+        },
+        {
+          "text": "ensino,",
+          "start": 50.174,
+          "end": 50.454
+        },
+        {
+          "text": "por",
+          "start": 50.474,
+          "end": 50.614
+        },
+        {
+          "text": "exemplo,",
+          "start": 50.634,
+          "end": 51.014
+        },
+        {
+          "text": "tem",
+          "start": 51.094,
+          "end": 51.254
+        },
+        {
+          "text": "aluno,",
+          "start": 51.314,
+          "end": 51.994
+        }
+      ]
+    },
+    {
+      "id": "u009",
+      "index": 8,
+      "start": 53.154,
+      "end": 55.695,
+      "duration": 2.541,
+      "speaker": null,
+      "text": "futuro aluno, ex-aluno,",
+      "chars": 18,
+      "cps": 7.08,
+      "lead_gap": 1.16,
+      "trail_gap": 1.02,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "futuro",
+          "start": 53.154,
+          "end": 53.327
+        },
+        {
+          "text": "aluno,",
+          "start": 53.835,
+          "end": 54.375
+        },
+        {
+          "text": "ex-aluno,",
+          "start": 54.735,
+          "end": 55.695
+        }
+      ]
+    },
+    {
+      "id": "u010",
+      "index": 9,
+      "start": 56.715,
+      "end": 60.322,
+      "duration": 3.607,
+      "speaker": null,
+      "text": "ex-aluno, pais, responsáveis,",
+      "chars": 23,
+      "cps": 6.38,
+      "lead_gap": 1.02,
+      "trail_gap": 0.694,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "ex-aluno,",
+          "start": 56.715,
+          "end": 57.595
+        },
+        {
+          "text": "pais,",
+          "start": 57.975,
+          "end": 58.656
+        },
+        {
+          "text": "responsáveis,",
+          "start": 58.916,
+          "end": 60.322
+        }
+      ]
+    },
+    {
+      "id": "u011",
+      "index": 10,
+      "start": 61.016,
+      "end": 62.2,
+      "duration": 1.184,
+      "speaker": null,
+      "text": "stakeholders,",
+      "chars": 12,
+      "cps": 10.14,
+      "lead_gap": 0.694,
+      "trail_gap": 1.436,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 1,
+      "words": [
+        {
+          "text": "stakeholders,",
+          "start": 61.016,
+          "end": 62.2
+        }
+      ]
+    },
+    {
+      "id": "u012",
+      "index": 11,
+      "start": 63.636,
+      "end": 66.383,
+      "duration": 2.747,
+      "speaker": null,
+      "text": "empresas, entre outras.",
+      "chars": 19,
+      "cps": 6.92,
+      "lead_gap": 1.436,
+      "trail_gap": 3.34,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "empresas,",
+          "start": 63.636,
+          "end": 64.757
+        },
+        {
+          "text": "entre",
+          "start": 65.297,
+          "end": 65.617
+        },
+        {
+          "text": "outras.",
+          "start": 65.717,
+          "end": 66.383
+        }
+      ]
+    },
+    {
+      "id": "u013",
+      "index": 12,
+      "start": 69.723,
+      "end": 71.86,
+      "duration": 2.137,
+      "speaker": null,
+      "text": "entre outras empresas,",
+      "chars": 19,
+      "cps": 8.89,
+      "lead_gap": 3.34,
+      "trail_gap": 1.905,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "entre",
+          "start": 69.723,
+          "end": 69.963
+        },
+        {
+          "text": "outras",
+          "start": 70.043,
+          "end": 70.303
+        },
+        {
+          "text": "empresas,",
+          "start": 70.724,
+          "end": 71.86
+        }
+      ]
+    },
+    {
+      "id": "u014",
+      "index": 13,
+      "start": 73.765,
+      "end": 78.459,
+      "duration": 4.694,
+      "speaker": null,
+      "text": "a própria imprensa, entre outras coisas, entre outros públicos.",
+      "chars": 52,
+      "cps": 11.08,
+      "lead_gap": 1.905,
+      "trail_gap": 3.449,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 9,
+      "words": [
+        {
+          "text": "a",
+          "start": 73.765,
+          "end": 73.805
+        },
+        {
+          "text": "própria",
+          "start": 73.945,
+          "end": 74.305
+        },
+        {
+          "text": "imprensa,",
+          "start": 74.325,
+          "end": 75.126
+        },
+        {
+          "text": "entre",
+          "start": 75.386,
+          "end": 75.666
+        },
+        {
+          "text": "outras",
+          "start": 75.746,
+          "end": 76.046
+        },
+        {
+          "text": "coisas,",
+          "start": 76.126,
+          "end": 76.733
+        },
+        {
+          "text": "entre",
+          "start": 77.206,
+          "end": 77.527
+        },
+        {
+          "text": "outros",
+          "start": 77.647,
+          "end": 77.967
+        },
+        {
+          "text": "públicos.",
+          "start": 78.087,
+          "end": 78.459
+        }
+      ]
+    },
+    {
+      "id": "u015",
+      "index": 14,
+      "start": 81.908,
+      "end": 87.236,
+      "duration": 5.328,
+      "speaker": null,
+      "text": "E cada um desse está em um jornal e cada um desse está em um nível completamente diferente.",
+      "chars": 73,
+      "cps": 13.7,
+      "lead_gap": 3.449,
+      "trail_gap": 0.175,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": "E",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 18,
+      "words": [
+        {
+          "text": "E",
+          "start": 81.908,
+          "end": 81.928
+        },
+        {
+          "text": "cada",
+          "start": 82.009,
+          "end": 82.289
+        },
+        {
+          "text": "um",
+          "start": 82.369,
+          "end": 82.489
+        },
+        {
+          "text": "desse",
+          "start": 82.589,
+          "end": 82.929
+        },
+        {
+          "text": "está",
+          "start": 82.969,
+          "end": 83.149
+        },
+        {
+          "text": "em",
+          "start": 83.249,
+          "end": 83.409
+        },
+        {
+          "text": "um",
+          "start": 83.529,
+          "end": 83.569
+        },
+        {
+          "text": "jornal",
+          "start": 83.609,
+          "end": 84.037
+        },
+        {
+          "text": "e",
+          "start": 84.289,
+          "end": 84.35
+        },
+        {
+          "text": "cada",
+          "start": 84.41,
+          "end": 84.61
+        },
+        {
+          "text": "um",
+          "start": 84.67,
+          "end": 84.77
+        },
+        {
+          "text": "desse",
+          "start": 84.87,
+          "end": 85.09
+        },
+        {
+          "text": "está",
+          "start": 85.11,
+          "end": 85.23
+        },
+        {
+          "text": "em",
+          "start": 85.25,
+          "end": 85.29
+        },
+        {
+          "text": "um",
+          "start": 85.31,
+          "end": 85.35
+        },
+        {
+          "text": "nível",
+          "start": 85.39,
+          "end": 85.59
+        },
+        {
+          "text": "completamente",
+          "start": 85.71,
+          "end": 86.611
+        },
+        {
+          "text": "diferente.",
+          "start": 86.791,
+          "end": 87.236
+        }
+      ]
+    },
+    {
+      "id": "u016",
+      "index": 15,
+      "start": 87.411,
+      "end": 89.999,
+      "duration": 2.588,
+      "speaker": null,
+      "text": "E cada um desse está em um nível completamente diferente",
+      "chars": 47,
+      "cps": 18.16,
+      "lead_gap": 0.175,
+      "trail_gap": 1.294,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": "E",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 10,
+      "words": [
+        {
+          "text": "E",
+          "start": 87.411,
+          "end": 87.431
+        },
+        {
+          "text": "cada",
+          "start": 87.711,
+          "end": 87.911
+        },
+        {
+          "text": "um",
+          "start": 87.991,
+          "end": 88.051
+        },
+        {
+          "text": "desse",
+          "start": 88.131,
+          "end": 88.351
+        },
+        {
+          "text": "está",
+          "start": 88.371,
+          "end": 88.471
+        },
+        {
+          "text": "em",
+          "start": 88.491,
+          "end": 88.531
+        },
+        {
+          "text": "um",
+          "start": 88.551,
+          "end": 88.591
+        },
+        {
+          "text": "nível",
+          "start": 88.631,
+          "end": 88.851
+        },
+        {
+          "text": "completamente",
+          "start": 88.932,
+          "end": 89.612
+        },
+        {
+          "text": "diferente",
+          "start": 89.632,
+          "end": 89.999
+        }
+      ],
+      "near_duplicate_of": "u015",
+      "similarity": 0.783
+    },
+    {
+      "id": "u017",
+      "index": 16,
+      "start": 91.293,
+      "end": 92.473,
+      "duration": 1.18,
+      "speaker": null,
+      "text": "de comunicação com sua instituição.",
+      "chars": 30,
+      "cps": 25.42,
+      "lead_gap": 1.294,
+      "trail_gap": 11.761,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 5,
+      "words": [
+        {
+          "text": "de",
+          "start": 91.293,
+          "end": 91.373
+        },
+        {
+          "text": "comunicação",
+          "start": 91.393,
+          "end": 91.913
+        },
+        {
+          "text": "com",
+          "start": 91.933,
+          "end": 92.013
+        },
+        {
+          "text": "sua",
+          "start": 92.033,
+          "end": 92.093
+        },
+        {
+          "text": "instituição.",
+          "start": 92.113,
+          "end": 92.473
+        }
+      ]
+    },
+    {
+      "id": "u018",
+      "index": 17,
+      "start": 104.234,
+      "end": 107.061,
+      "duration": 2.827,
+      "speaker": null,
+      "text": "Então vamos pensar em um jogo rápido aqui.",
+      "chars": 34,
+      "cps": 12.03,
+      "lead_gap": 11.761,
+      "trail_gap": 6.581,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": "Então",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "Então",
+            "char_start": 0,
+            "char_end": 5,
+            "start": 104.234,
+            "end": 104.374,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.14,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 8,
+      "words": [
+        {
+          "text": "Então",
+          "start": 104.234,
+          "end": 104.374
+        },
+        {
+          "text": "vamos",
+          "start": 104.414,
+          "end": 104.594
+        },
+        {
+          "text": "pensar",
+          "start": 104.634,
+          "end": 104.995
+        },
+        {
+          "text": "em",
+          "start": 105.355,
+          "end": 105.855
+        },
+        {
+          "text": "um",
+          "start": 105.895,
+          "end": 105.976
+        },
+        {
+          "text": "jogo",
+          "start": 106.036,
+          "end": 106.256
+        },
+        {
+          "text": "rápido",
+          "start": 106.376,
+          "end": 106.756
+        },
+        {
+          "text": "aqui.",
+          "start": 106.796,
+          "end": 107.061
+        }
+      ]
+    },
+    {
+      "id": "u019",
+      "index": 18,
+      "start": 113.642,
+      "end": 116.891,
+      "duration": 3.249,
+      "speaker": null,
+      "text": "Quem está escolhendo o curso quer ter uma visão de futuro.",
+      "chars": 47,
+      "cps": 14.47,
+      "lead_gap": 6.581,
+      "trail_gap": 3.197,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 11,
+      "words": [
+        {
+          "text": "Quem",
+          "start": 113.642,
+          "end": 113.762
+        },
+        {
+          "text": "está",
+          "start": 113.782,
+          "end": 113.963
+        },
+        {
+          "text": "escolhendo",
+          "start": 114.003,
+          "end": 114.463
+        },
+        {
+          "text": "o",
+          "start": 114.503,
+          "end": 114.523
+        },
+        {
+          "text": "curso",
+          "start": 114.663,
+          "end": 115.144
+        },
+        {
+          "text": "quer",
+          "start": 115.164,
+          "end": 115.584
+        },
+        {
+          "text": "ter",
+          "start": 115.644,
+          "end": 115.724
+        },
+        {
+          "text": "uma",
+          "start": 115.764,
+          "end": 115.864
+        },
+        {
+          "text": "visão",
+          "start": 115.924,
+          "end": 116.265
+        },
+        {
+          "text": "de",
+          "start": 116.305,
+          "end": 116.385
+        },
+        {
+          "text": "futuro.",
+          "start": 116.465,
+          "end": 116.891
+        }
+      ]
+    },
+    {
+      "id": "u020",
+      "index": 19,
+      "start": 120.088,
+      "end": 124.01,
+      "duration": 3.922,
+      "speaker": null,
+      "text": "Quem estuda na instituição quer sentir pertecente.",
+      "chars": 43,
+      "cps": 10.96,
+      "lead_gap": 3.197,
+      "trail_gap": 6.582,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 7,
+      "words": [
+        {
+          "text": "Quem",
+          "start": 120.088,
+          "end": 120.248
+        },
+        {
+          "text": "estuda",
+          "start": 120.288,
+          "end": 120.869
+        },
+        {
+          "text": "na",
+          "start": 120.909,
+          "end": 121.009
+        },
+        {
+          "text": "instituição",
+          "start": 121.049,
+          "end": 121.669
+        },
+        {
+          "text": "quer",
+          "start": 121.689,
+          "end": 121.809
+        },
+        {
+          "text": "sentir",
+          "start": 122.79,
+          "end": 122.928
+        },
+        {
+          "text": "pertecente.",
+          "start": 123.851,
+          "end": 124.01
+        }
+      ]
+    },
+    {
+      "id": "u021",
+      "index": 20,
+      "start": 130.592,
+      "end": 135.053,
+      "duration": 4.461,
+      "speaker": null,
+      "text": "E quem",
+      "chars": 5,
+      "cps": 1.12,
+      "lead_gap": 6.582,
+      "trail_gap": 3.861,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": "E",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 2,
+      "words": [
+        {
+          "text": "E",
+          "start": 130.592,
+          "end": 131.252
+        },
+        {
+          "text": "quem",
+          "start": 131.312,
+          "end": 135.053
+        }
+      ]
+    },
+    {
+      "id": "u022",
+      "index": 21,
+      "start": 138.914,
+      "end": 140.194,
+      "duration": 1.28,
+      "speaker": null,
+      "text": "já está na instituição",
+      "chars": 19,
+      "cps": 14.84,
+      "lead_gap": 3.861,
+      "trail_gap": 0.58,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 4,
+      "words": [
+        {
+          "text": "já",
+          "start": 138.914,
+          "end": 139.014
+        },
+        {
+          "text": "está",
+          "start": 139.054,
+          "end": 139.474
+        },
+        {
+          "text": "na",
+          "start": 139.514,
+          "end": 139.574
+        },
+        {
+          "text": "instituição",
+          "start": 139.594,
+          "end": 140.194
+        }
+      ]
+    },
+    {
+      "id": "u023",
+      "index": 22,
+      "start": 140.774,
+      "end": 142.493,
+      "duration": 1.719,
+      "speaker": null,
+      "text": "quer sentir pertencente dela.",
+      "chars": 25,
+      "cps": 14.54,
+      "lead_gap": 0.58,
+      "trail_gap": 2.522,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 4,
+      "words": [
+        {
+          "text": "quer",
+          "start": 140.774,
+          "end": 140.914
+        },
+        {
+          "text": "sentir",
+          "start": 141.014,
+          "end": 141.294
+        },
+        {
+          "text": "pertencente",
+          "start": 141.374,
+          "end": 142.094
+        },
+        {
+          "text": "dela.",
+          "start": 142.154,
+          "end": 142.493
+        }
+      ]
+    },
+    {
+      "id": "u024",
+      "index": 23,
+      "start": 145.015,
+      "end": 145.855,
+      "duration": 0.84,
+      "speaker": null,
+      "text": "Quem paga",
+      "chars": 8,
+      "cps": 9.52,
+      "lead_gap": 2.522,
+      "trail_gap": 0.58,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 2,
+      "words": [
+        {
+          "text": "Quem",
+          "start": 145.015,
+          "end": 145.175
+        },
+        {
+          "text": "paga",
+          "start": 145.375,
+          "end": 145.855
+        }
+      ]
+    },
+    {
+      "id": "u025",
+      "index": 24,
+      "start": 146.435,
+      "end": 147.715,
+      "duration": 1.28,
+      "speaker": null,
+      "text": "quer sentir seguro.",
+      "chars": 16,
+      "cps": 12.5,
+      "lead_gap": 0.58,
+      "trail_gap": 2.361,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "quer",
+          "start": 146.435,
+          "end": 146.715
+        },
+        {
+          "text": "sentir",
+          "start": 146.755,
+          "end": 147.056
+        },
+        {
+          "text": "seguro.",
+          "start": 147.136,
+          "end": 147.715
+        }
+      ]
+    },
+    {
+      "id": "u026",
+      "index": 25,
+      "start": 150.076,
+      "end": 152.819,
+      "duration": 2.743,
+      "speaker": null,
+      "text": "E quem contrata quer sentir o resultado.",
+      "chars": 33,
+      "cps": 12.03,
+      "lead_gap": 2.361,
+      "trail_gap": 2.278,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": "E",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 7,
+      "words": [
+        {
+          "text": "E",
+          "start": 150.076,
+          "end": 150.096
+        },
+        {
+          "text": "quem",
+          "start": 150.116,
+          "end": 150.256
+        },
+        {
+          "text": "contrata",
+          "start": 150.316,
+          "end": 151.076
+        },
+        {
+          "text": "quer",
+          "start": 151.516,
+          "end": 151.637
+        },
+        {
+          "text": "sentir",
+          "start": 151.697,
+          "end": 151.997
+        },
+        {
+          "text": "o",
+          "start": 152.037,
+          "end": 152.077
+        },
+        {
+          "text": "resultado.",
+          "start": 152.097,
+          "end": 152.819
+        }
+      ]
+    },
+    {
+      "id": "u027",
+      "index": 26,
+      "start": 155.097,
+      "end": 156.358,
+      "duration": 1.261,
+      "speaker": null,
+      "text": "E quem contrata quer resultado.",
+      "chars": 26,
+      "cps": 20.62,
+      "lead_gap": 2.278,
+      "trail_gap": 7.195,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": "E",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 5,
+      "words": [
+        {
+          "text": "E",
+          "start": 155.097,
+          "end": 155.117
+        },
+        {
+          "text": "quem",
+          "start": 155.137,
+          "end": 155.237
+        },
+        {
+          "text": "contrata",
+          "start": 155.277,
+          "end": 155.677
+        },
+        {
+          "text": "quer",
+          "start": 155.757,
+          "end": 155.837
+        },
+        {
+          "text": "resultado.",
+          "start": 155.877,
+          "end": 156.358
+        }
+      ],
+      "near_duplicate_of": "u026",
+      "similarity": 0.881
+    },
+    {
+      "id": "u028",
+      "index": 27,
+      "start": 163.553,
+      "end": 166.238,
+      "duration": 2.685,
+      "speaker": null,
+      "text": "Aí você tendo isso em mente, você vai lá e fala",
+      "chars": 36,
+      "cps": 13.41,
+      "lead_gap": 7.195,
+      "trail_gap": 1.258,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [
+        "isso"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 11,
+      "words": [
+        {
+          "text": "Aí",
+          "start": 163.553,
+          "end": 163.733
+        },
+        {
+          "text": "você",
+          "start": 163.793,
+          "end": 163.993
+        },
+        {
+          "text": "tendo",
+          "start": 164.113,
+          "end": 164.334
+        },
+        {
+          "text": "isso",
+          "start": 164.414,
+          "end": 164.614
+        },
+        {
+          "text": "em",
+          "start": 164.654,
+          "end": 164.694
+        },
+        {
+          "text": "mente,",
+          "start": 164.774,
+          "end": 165.034
+        },
+        {
+          "text": "você",
+          "start": 165.094,
+          "end": 165.234
+        },
+        {
+          "text": "vai",
+          "start": 165.254,
+          "end": 165.374
+        },
+        {
+          "text": "lá",
+          "start": 165.454,
+          "end": 165.614
+        },
+        {
+          "text": "e",
+          "start": 165.634,
+          "end": 165.654
+        },
+        {
+          "text": "fala",
+          "start": 165.814,
+          "end": 166.238
+        }
+      ]
+    },
+    {
+      "id": "u029",
+      "index": 28,
+      "start": 167.496,
+      "end": 168.856,
+      "duration": 1.36,
+      "speaker": null,
+      "text": "com a mesma linguagem,",
+      "chars": 18,
+      "cps": 13.24,
+      "lead_gap": 1.258,
+      "trail_gap": 1.581,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [
+        "a mesma"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 4,
+      "words": [
+        {
+          "text": "com",
+          "start": 167.496,
+          "end": 167.636
+        },
+        {
+          "text": "a",
+          "start": 167.656,
+          "end": 167.696
+        },
+        {
+          "text": "mesma",
+          "start": 167.816,
+          "end": 168.176
+        },
+        {
+          "text": "linguagem,",
+          "start": 168.216,
+          "end": 168.856
+        }
+      ]
+    },
+    {
+      "id": "u030",
+      "index": 29,
+      "start": 170.437,
+      "end": 173.542,
+      "duration": 3.105,
+      "speaker": null,
+      "text": "no mesmo formato, usando a mesma promessa.",
+      "chars": 34,
+      "cps": 10.95,
+      "lead_gap": 1.581,
+      "trail_gap": 6.962,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [
+        "a mesma"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 7,
+      "words": [
+        {
+          "text": "no",
+          "start": 170.437,
+          "end": 170.598
+        },
+        {
+          "text": "mesmo",
+          "start": 170.718,
+          "end": 171.138
+        },
+        {
+          "text": "formato,",
+          "start": 171.218,
+          "end": 171.834
+        },
+        {
+          "text": "usando",
+          "start": 171.998,
+          "end": 172.299
+        },
+        {
+          "text": "a",
+          "start": 172.319,
+          "end": 172.339
+        },
+        {
+          "text": "mesma",
+          "start": 172.479,
+          "end": 172.819
+        },
+        {
+          "text": "promessa.",
+          "start": 172.919,
+          "end": 173.542
+        }
+      ]
+    },
+    {
+      "id": "u031",
+      "index": 30,
+      "start": 180.504,
+      "end": 182.665,
+      "duration": 2.161,
+      "speaker": null,
+      "text": "É tipo você tá usando terno numa praia, né?",
+      "chars": 33,
+      "cps": 15.27,
+      "lead_gap": 6.962,
+      "trail_gap": 7.425,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "tipo",
+            "char_start": 2,
+            "char_end": 6,
+            "start": 180.564,
+            "end": 180.684,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "tá",
+            "char_start": 12,
+            "char_end": 14,
+            "start": 181.044,
+            "end": 181.164,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "né",
+            "char_start": 40,
+            "char_end": 42,
+            "start": 182.545,
+            "end": 182.665,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.36,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 9,
+      "words": [
+        {
+          "text": "É",
+          "start": 180.504,
+          "end": 180.524
+        },
+        {
+          "text": "tipo",
+          "start": 180.564,
+          "end": 180.684
+        },
+        {
+          "text": "você",
+          "start": 180.744,
+          "end": 180.964
+        },
+        {
+          "text": "tá",
+          "start": 181.044,
+          "end": 181.164
+        },
+        {
+          "text": "usando",
+          "start": 181.204,
+          "end": 181.465
+        },
+        {
+          "text": "terno",
+          "start": 181.625,
+          "end": 181.865
+        },
+        {
+          "text": "numa",
+          "start": 181.905,
+          "end": 182.125
+        },
+        {
+          "text": "praia,",
+          "start": 182.225,
+          "end": 182.525
+        },
+        {
+          "text": "né?",
+          "start": 182.545,
+          "end": 182.665
+        }
+      ]
+    },
+    {
+      "id": "u032",
+      "index": 31,
+      "start": 190.09,
+      "end": 191.411,
+      "duration": 1.321,
+      "speaker": null,
+      "text": "Isso não escala",
+      "chars": 13,
+      "cps": 9.84,
+      "lead_gap": 7.425,
+      "trail_gap": 0.64,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [
+        "isso"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "Isso",
+          "start": 190.09,
+          "end": 190.31
+        },
+        {
+          "text": "não",
+          "start": 190.45,
+          "end": 190.59
+        },
+        {
+          "text": "escala",
+          "start": 190.65,
+          "end": 191.411
+        }
+      ]
+    },
+    {
+      "id": "u033",
+      "index": 32,
+      "start": 192.051,
+      "end": 192.832,
+      "duration": 0.781,
+      "speaker": null,
+      "text": "e não te dá",
+      "chars": 8,
+      "cps": 10.24,
+      "lead_gap": 0.64,
+      "trail_gap": 1.639,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": "e",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 4,
+      "words": [
+        {
+          "text": "e",
+          "start": 192.051,
+          "end": 192.131
+        },
+        {
+          "text": "não",
+          "start": 192.251,
+          "end": 192.452
+        },
+        {
+          "text": "te",
+          "start": 192.552,
+          "end": 192.652
+        },
+        {
+          "text": "dá",
+          "start": 192.752,
+          "end": 192.832
+        }
+      ]
+    },
+    {
+      "id": "u034",
+      "index": 33,
+      "start": 194.471,
+      "end": 195.552,
+      "duration": 1.081,
+      "speaker": null,
+      "text": "Isso não escala",
+      "chars": 13,
+      "cps": 12.03,
+      "lead_gap": 1.639,
+      "trail_gap": 0.561,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": null,
+      "anaphora": [
+        "isso"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "Isso",
+          "start": 194.471,
+          "end": 194.691
+        },
+        {
+          "text": "não",
+          "start": 194.751,
+          "end": 194.871
+        },
+        {
+          "text": "escala",
+          "start": 194.931,
+          "end": 195.552
+        }
+      ],
+      "near_duplicate_of": "u032",
+      "similarity": 1.0
+    },
+    {
+      "id": "u035",
+      "index": 34,
+      "start": 196.113,
+      "end": 196.953,
+      "duration": 0.84,
+      "speaker": null,
+      "text": "e você fica.",
+      "chars": 9,
+      "cps": 10.71,
+      "lead_gap": 0.561,
+      "trail_gap": 0.501,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": "e",
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "e",
+          "start": 196.113,
+          "end": 196.213
+        },
+        {
+          "text": "você",
+          "start": 196.253,
+          "end": 196.533
+        },
+        {
+          "text": "fica...",
+          "start": 196.653,
+          "end": 196.953
+        }
+      ]
+    },
+    {
+      "id": "u036",
+      "index": 35,
+      "start": 197.454,
+      "end": 198.102,
+      "duration": 0.648,
+      "speaker": null,
+      "text": "Isso não escala.",
+      "chars": 13,
+      "cps": 20.06,
+      "lead_gap": 0.501,
+      "trail_gap": 1.554,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [
+        "isso"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 3,
+      "words": [
+        {
+          "text": "Isso",
+          "start": 197.454,
+          "end": 197.674
+        },
+        {
+          "text": "não",
+          "start": 197.734,
+          "end": 197.854
+        },
+        {
+          "text": "escala...",
+          "start": 197.914,
+          "end": 198.102
+        }
+      ],
+      "near_duplicate_of": "u032",
+      "similarity": 1.0
+    },
+    {
+      "id": "u037",
+      "index": 36,
+      "start": 199.656,
+      "end": 202.056,
+      "duration": 2.4,
+      "speaker": null,
+      "text": "Nossa, hoje o US está puxando muito, né?",
+      "chars": 30,
+      "cps": 12.5,
+      "lead_gap": 1.554,
+      "trail_gap": 12.254,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "né",
+            "char_start": 37,
+            "char_end": 39,
+            "start": 201.858,
+            "end": 202.056,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.198,
+      "pause_before": false,
+      "pause_after": true,
+      "word_count": 8,
+      "words": [
+        {
+          "text": "Nossa,",
+          "start": 199.656,
+          "end": 199.976
+        },
+        {
+          "text": "hoje",
+          "start": 199.996,
+          "end": 200.176
+        },
+        {
+          "text": "o",
+          "start": 200.196,
+          "end": 200.256
+        },
+        {
+          "text": "US",
+          "start": 200.337,
+          "end": 200.497
+        },
+        {
+          "text": "está",
+          "start": 200.517,
+          "end": 200.697
+        },
+        {
+          "text": "puxando",
+          "start": 200.837,
+          "end": 201.398
+        },
+        {
+          "text": "muito,",
+          "start": 201.498,
+          "end": 201.798
+        },
+        {
+          "text": "né?",
+          "start": 201.858,
+          "end": 202.056
+        }
+      ]
+    },
+    {
+      "id": "u038",
+      "index": 37,
+      "start": 214.31,
+      "end": 219.615,
+      "duration": 5.305,
+      "speaker": null,
+      "text": "Dessa forma, não escala a comunicação e dilui muito o seu poder de conversão.",
+      "chars": 62,
+      "cps": 11.69,
+      "lead_gap": 12.254,
+      "trail_gap": 8.825,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 14,
+      "words": [
+        {
+          "text": "Dessa",
+          "start": 214.31,
+          "end": 214.55
+        },
+        {
+          "text": "forma,",
+          "start": 214.67,
+          "end": 215.07
+        },
+        {
+          "text": "não",
+          "start": 215.131,
+          "end": 215.271
+        },
+        {
+          "text": "escala",
+          "start": 215.331,
+          "end": 215.871
+        },
+        {
+          "text": "a",
+          "start": 215.891,
+          "end": 215.911
+        },
+        {
+          "text": "comunicação",
+          "start": 215.951,
+          "end": 216.912
+        },
+        {
+          "text": "e",
+          "start": 217.212,
+          "end": 217.273
+        },
+        {
+          "text": "dilui",
+          "start": 217.333,
+          "end": 217.793
+        },
+        {
+          "text": "muito",
+          "start": 217.893,
+          "end": 218.334
+        },
+        {
+          "text": "o",
+          "start": 218.394,
+          "end": 218.454
+        },
+        {
+          "text": "seu",
+          "start": 218.514,
+          "end": 218.654
+        },
+        {
+          "text": "poder",
+          "start": 218.714,
+          "end": 219.014
+        },
+        {
+          "text": "de",
+          "start": 219.034,
+          "end": 219.114
+        },
+        {
+          "text": "conversão.",
+          "start": 219.154,
+          "end": 219.615
+        }
+      ]
+    },
+    {
+      "id": "u039",
+      "index": 38,
+      "start": 228.44,
+      "end": 233.011,
+      "duration": 4.571,
+      "speaker": null,
+      "text": "Então, se você não separa seu público, se você não faz estratégias diferentes pra ele,",
+      "chars": 69,
+      "cps": 15.1,
+      "lead_gap": 8.825,
+      "trail_gap": 1.772,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": false,
+      "opens_with_connective": "Então",
+      "anaphora": [
+        "ele"
+      ],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "Então",
+            "char_start": 0,
+            "char_end": 5,
+            "start": 228.44,
+            "end": 228.74,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.3,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 15,
+      "words": [
+        {
+          "text": "Então,",
+          "start": 228.44,
+          "end": 228.74
+        },
+        {
+          "text": "se",
+          "start": 228.8,
+          "end": 228.86
+        },
+        {
+          "text": "você",
+          "start": 228.9,
+          "end": 229.12
+        },
+        {
+          "text": "não",
+          "start": 229.22,
+          "end": 229.36
+        },
+        {
+          "text": "separa",
+          "start": 229.44,
+          "end": 229.941
+        },
+        {
+          "text": "seu",
+          "start": 230.001,
+          "end": 230.141
+        },
+        {
+          "text": "público,",
+          "start": 230.241,
+          "end": 230.641
+        },
+        {
+          "text": "se",
+          "start": 230.661,
+          "end": 230.701
+        },
+        {
+          "text": "você",
+          "start": 230.741,
+          "end": 230.821
+        },
+        {
+          "text": "não",
+          "start": 230.841,
+          "end": 230.961
+        },
+        {
+          "text": "faz",
+          "start": 231.041,
+          "end": 231.261
+        },
+        {
+          "text": "estratégias",
+          "start": 231.301,
+          "end": 231.842
+        },
+        {
+          "text": "diferentes",
+          "start": 231.882,
+          "end": 232.362
+        },
+        {
+          "text": "pra",
+          "start": 232.402,
+          "end": 232.582
+        },
+        {
+          "text": "ele,",
+          "start": 232.702,
+          "end": 233.011
+        }
+      ]
+    },
+    {
+      "id": "u040",
+      "index": 39,
+      "start": 234.783,
+      "end": 236.56,
+      "duration": 1.777,
+      "speaker": null,
+      "text": "você não tá otimizando o tempo, tá?",
+      "chars": 27,
+      "cps": 15.19,
+      "lead_gap": 1.772,
+      "trail_gap": 2.805,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": true,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "tá",
+            "char_start": 9,
+            "char_end": 11,
+            "start": 235.143,
+            "end": 235.263,
+            "standalone_hint": true
+          },
+          {
+            "phrase": "tá",
+            "char_start": 32,
+            "char_end": 34,
+            "start": 236.304,
+            "end": 236.56,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.376,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 7,
+      "words": [
+        {
+          "text": "você",
+          "start": 234.783,
+          "end": 234.963
+        },
+        {
+          "text": "não",
+          "start": 234.983,
+          "end": 235.083
+        },
+        {
+          "text": "tá",
+          "start": 235.143,
+          "end": 235.263
+        },
+        {
+          "text": "otimizando",
+          "start": 235.283,
+          "end": 235.764
+        },
+        {
+          "text": "o",
+          "start": 235.784,
+          "end": 235.804
+        },
+        {
+          "text": "tempo,",
+          "start": 235.904,
+          "end": 236.204
+        },
+        {
+          "text": "tá?",
+          "start": 236.304,
+          "end": 236.56
+        }
+      ]
+    },
+    {
+      "id": "u041",
+      "index": 40,
+      "start": 239.365,
+      "end": 240.479,
+      "duration": 1.114,
+      "speaker": null,
+      "text": "Você só tá publicando.",
+      "chars": 18,
+      "cps": 16.16,
+      "lead_gap": 2.805,
+      "trail_gap": 1.567,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [
+          {
+            "phrase": "tá",
+            "char_start": 8,
+            "char_end": 10,
+            "start": 239.765,
+            "end": 239.865,
+            "standalone_hint": true
+          }
+        ],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0.1,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 4,
+      "words": [
+        {
+          "text": "Você",
+          "start": 239.365,
+          "end": 239.545
+        },
+        {
+          "text": "só",
+          "start": 239.605,
+          "end": 239.705
+        },
+        {
+          "text": "tá",
+          "start": 239.765,
+          "end": 239.865
+        },
+        {
+          "text": "publicando.",
+          "start": 239.925,
+          "end": 240.479
+        }
+      ]
+    },
+    {
+      "id": "u042",
+      "index": 41,
+      "start": 242.046,
+      "end": 245.052,
+      "duration": 3.006,
+      "speaker": null,
+      "text": "Ih, foi!",
+      "chars": 5,
+      "cps": 1.66,
+      "lead_gap": 1.567,
+      "trail_gap": 0.45,
+      "timing_source": "word_timestamps",
+      "has_terminal_punct": true,
+      "opens_with_connective": null,
+      "anaphora": [],
+      "enum_first": [],
+      "enum_later": [],
+      "is_question": false,
+      "visual_reference": [],
+      "disfluency": {
+        "hard": [],
+        "soft": [],
+        "stutter": []
+      },
+      "removable_disfluency_seconds": 0,
+      "soft_filler_seconds": 0,
+      "pause_before": true,
+      "pause_after": true,
+      "word_count": 2,
+      "words": [
+        {
+          "text": "Ih,",
+          "start": 242.046,
+          "end": 244.047
+        },
+        {
+          "text": "foi!",
+          "start": 244.168,
+          "end": 245.052
+        }
+      ]
+    }
+  ],
+  "elapsed_seconds": 1.923
+}
