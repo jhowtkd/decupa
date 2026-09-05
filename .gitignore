@@ -2,6 +2,9 @@ node_modules/
 dist/
 tests/fixtures/generated/
 services/speech/.venv/
+services/vision/.venv/
+services/vision/.models/
+__pycache__/
 .DS_Store
 *.pcm
 work/
