@@ -24,8 +24,15 @@ export function timecode(seconds: number, fps: number): string {
  * projeto próprio; deixá-los em aberto faria o EDL virar um segundo projeto no
  * meio do primeiro.
  */
-export function buildEdl(opts: { clips: EdlClip[]; fps: number; title: string }): string {
+export function buildEdl(opts: {
+  clips: EdlClip[];
+  fps: number;
+  title: string;
+  /** Nome do arquivo de origem, para o relink na NLE. Default: o título. */
+  sourceName?: string;
+}): string {
   const { clips, fps, title } = opts;
+  const sourceName = opts.sourceName ?? title;
   if (clips.length === 0) throw new Error("nenhum clipe para exportar");
   if (!Number.isInteger(fps)) {
     throw new Error(
@@ -46,6 +53,12 @@ export function buildEdl(opts: { clips: EdlClip[]; fps: number; title: string })
       `${timecode(clip.start, fps)} ${timecode(clip.end, fps)} ` +
       `${timecode(recordIn, fps)} ${timecode(recordOut, fps)}`,
     );
+    // `AX` no campo de reel significa "sem reel atribuído", e o campo tem só 8
+    // caracteres — não cabe nome de arquivo. `* FROM CLIP NAME:` é como o
+    // CMX3600 carrega a origem, e é o que a NLE lê para relinkar. Sem esta
+    // linha o EDL abre, mas apontar cada corte para o arquivo é trabalho
+    // manual.
+    lines.push(`* FROM CLIP NAME: ${sourceName}`);
     recordFrames += durationFrames;
   });
 

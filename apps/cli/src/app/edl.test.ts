@@ -78,6 +78,27 @@ describe("buildEdl", () => {
     expect(() => buildEdl({ clips, fps: 29.97, title: "c" })).toThrow(/29\.97|inteiro/);
   });
 
+  it("nomeia o arquivo de origem em cada evento", () => {
+    // `AX` no campo de reel significa "sem reel atribuído": o EDL não diz de
+    // que arquivo os cortes vieram, e o relink na NLE vira apontar na mão.
+    // `* FROM CLIP NAME:` é como o formato carrega isso — o campo de reel tem
+    // 8 caracteres e não cabe nome de arquivo.
+    const edl = buildEdl({ clips, fps: 30, title: "c", sourceName: "proxy.mp4" });
+    expect(edl.match(/^\* FROM CLIP NAME: proxy\.mp4$/gm)).toHaveLength(2);
+  });
+
+  it("põe o nome logo depois do evento a que pertence", () => {
+    const linhas = buildEdl({ clips, fps: 30, title: "c", sourceName: "a.mp4" })
+      .split("\n").filter((l) => /^(\d{3}|\* FROM)/.test(l));
+    expect(linhas.map((l) => l.slice(0, 6)))
+      .toEqual(["001  A", "* FROM", "002  A", "* FROM"]);
+  });
+
+  it("cai no título quando não recebe nome de origem", () => {
+    expect(buildEdl({ clips, fps: 30, title: "aula.mp4" }))
+      .toContain("* FROM CLIP NAME: aula.mp4");
+  });
+
   it("recusa lista de clipes vazia", () => {
     expect(() => buildEdl({ clips: [], fps: 30, title: "c" })).toThrow(/nenhum clipe/);
   });
