@@ -3,6 +3,7 @@ export type { DensityCandidate, DensityRequest, StructureRequest, TriageModel } 
 export type { IndexUnit, SpeechIndex, TopicRun, TrimCandidate } from "./speech-index.ts";
 export type { CacheKeyParts } from "./cache.ts";
 export type { ReportInput } from "./report.ts";
+export type { VisualFlagCode, VisualSample, VisualUnitFlags } from "./visual.ts";
 
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
@@ -28,3 +29,13 @@ export {
 export { hasDirectorCue } from "./cues.ts";
 export { retakeClaims } from "./retakes.ts";
 export { mechanicalClaims, mechanicalKeepList } from "./mechanical.ts";
+export {
+  HAND_ON_FACE_AMBIGUOUS,
+  HAND_ON_FACE_BAD,
+  LOOKS_AWAY_AMBIGUOUS,
+  LOOKS_AWAY_BAD,
+  NO_FACE_AMBIGUOUS,
+  NO_FACE_BAD,
+  flagsFor,
+  parseVisualIndex,
+} from "./visual.ts";
