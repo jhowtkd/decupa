@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -22,11 +22,11 @@ const realJob = {
 };
 
 describe("runIngest", () => {
-  it("transcreve, indexa e reporta cada estágio na ordem", async () => {
+  it("transcreve, indexa, tenta o visual e reporta cada estágio na ordem", async () => {
     const exec = new FakeExecutor();
     const stages: string[] = [];
     await runIngest(job, exec, (s) => stages.push(s));
-    expect(stages).toEqual(["transcribing", "indexing"]);
+    expect(stages).toEqual(["transcribing", "indexing", "visual"]);
   });
 
   it("passa CLAUDE_PROJECT_DIR para o motor em toda chamada", async () => {
@@ -43,14 +43,52 @@ describe("runIngest", () => {
     await expect(runIngest(job, exec, () => {})).rejects.toThrow(/transcript inválido/);
   });
 
-  it("reusa transcript.json e só roda o índice", async () => {
+  it("reusa transcript.json e só roda o índice e o visual", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-"));
     await writeFile(join(dir, "transcript.json"), "{}", "utf8");
     const exec = new FakeExecutor();
     await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {});
-    expect(exec.calls).toHaveLength(1);
     expect(exec.calls[0]!.args).toContain("index");
-    expect(exec.calls[0]!.args).not.toContain("condense-prep");
+    expect(exec.calls.some((c) => c.args.includes("condense-prep"))).toBe(false);
+    expect(exec.calls.some((c) => c.args.includes("visual_index.py"))).toBe(true);
+  });
+
+  it("tenta o sidecar de visão com cwd em services/vision", async () => {
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const vis = exec.calls.find((c) => c.args.includes("visual_index.py"));
+    expect(vis).toBeDefined();
+    expect(vis!.command).toBe("uv");
+    expect(vis!.cwd).toBe(join("services", "vision"));
+    expect(vis!.args).toContain("--fps");
+    expect(vis!.args).toContain("4");
+    const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale=540:960"));
+    expect(proxy).toBeDefined();
+  });
+
+  it("grava visual_index.json quando o sidecar devolve JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-visual-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const payload = JSON.stringify({ video: "x", fps: 4, units: [] });
+    const exec = new FakeExecutor({ stdout: payload });
+    const result = await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {});
+    expect(result.warning).toBeUndefined();
+    expect(await readFile(join(dir, "out", "visual_index.json"), "utf8")).toBe(payload);
+  });
+
+  it("não falha o job se o sidecar de visão recusar", async () => {
+    const exec: Executor = {
+      async run(call: ExecCall) {
+        if (call.args.includes("visual_index.py") || call.args.includes("fps=4,scale=540:960")) {
+          return { code: 1, stdout: "", stderr: "MediaPipe não está instalado" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const stages: string[] = [];
+    const result = await runIngest(job, exec, (s) => stages.push(s));
+    expect(stages).toEqual(["transcribing", "indexing", "visual"]);
+    expect(result.warning).toMatch(/visão/);
   });
 });
 

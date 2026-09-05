@@ -203,7 +203,8 @@ async function poll() {
   const j = await api("");
   document.getElementById("stage").textContent = {
     queued: "na fila…", transcribing: "transcrevendo (leva alguns minutos)…",
-    indexing: "medindo…", planning: "planejando…", cancelled: "cancelado",
+    indexing: "medindo…", visual: "índice visual (opcional)…",
+    planning: "planejando…", cancelled: "cancelado",
   }[j.stage] ?? j.stage;
   if (j.stage === "error") { document.getElementById("stage").textContent = "erro: " + j.error; return; }
   if (j.stage === "ready" && j.review) {

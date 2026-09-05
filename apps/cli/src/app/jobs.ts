@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Review } from "./review.ts";
 
 export type Stage =
-  | "queued" | "transcribing" | "indexing" | "planning"
+  | "queued" | "transcribing" | "indexing" | "visual" | "planning"
   | "ready" | "error" | "cancelled";
 
 const TERMINAL: ReadonlySet<Stage> = new Set(["error", "cancelled"]);
@@ -13,6 +13,7 @@ export interface Job {
   workDir: string;
   stage: Stage;
   error?: string;
+  warning?: string;
   keepList?: string;
   review?: Review;
 }
@@ -55,6 +56,10 @@ export class JobStore {
 
   setKeepList(id: string, keepList: string): void {
     this.mutate(id, { keepList });
+  }
+
+  setWarning(id: string, warning: string): void {
+    this.mutate(id, { warning });
   }
 
   fail(id: string, error: string): void {

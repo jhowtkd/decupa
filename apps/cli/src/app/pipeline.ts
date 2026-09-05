@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface ExecResult {
@@ -12,6 +12,7 @@ export interface ExecCall {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  cwd?: string;
 }
 
 export interface Executor {
@@ -35,6 +36,7 @@ export class SpawnExecutor implements Executor {
       // inteiro (pnpm → WhisperX), não só no processo direto.
       const child = spawn(call.command, call.args, {
         env: { ...process.env, ...call.env },
+        cwd: call.cwd,
         detached: true,
       });
       this.running.add(child);
@@ -126,12 +128,18 @@ async function must(exec: Executor, call: ExecCall, what: string): Promise<ExecR
 export const transcriptPath = (job: PipelineJob) => join(job.workDir, "transcript.json");
 export const planPath = (job: PipelineJob) => join(job.workDir, "out", "condense_plan.json");
 export const indexPath = (job: PipelineJob) => join(job.workDir, "out", "speech_index.json");
+export const visualIndexPath = (job: PipelineJob) => join(job.workDir, "out", "visual_index.json");
+export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-proxy.mp4");
+
+const VISION_CWD = join("services", "vision");
+const VISION_SCRIPT = join(VISION_CWD, "visual_index.py");
+const VISUAL_SKIP = "sidecar de visão não instalado, segue sem visual";
 
 export async function runIngest(
   job: PipelineJob,
   exec: Executor,
-  onStage: (stage: "transcribing" | "indexing") => void,
-): Promise<void> {
+  onStage: (stage: "transcribing" | "indexing" | "visual") => void,
+): Promise<{ warning?: string }> {
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
@@ -149,6 +157,58 @@ export async function runIngest(
     args: ["scripts/condense.py", "index", job.videoPath, transcriptPath(job)],
     env: envFor(job),
   }, "a medição do índice");
+
+  onStage("visual");
+  const warning = await runVisualIndex(job, exec);
+  return warning ? { warning } : {};
+}
+
+/**
+ * Proxy 4 fps + sidecar MediaPipe. Falha não aborta o job: visual é opcional,
+ * o keep-list mecânico segue sem as flags.
+ */
+async function runVisualIndex(job: PipelineJob, exec: Executor): Promise<string | undefined> {
+  const hasScript = await access(VISION_SCRIPT).then(() => true, () => false);
+  if (!hasScript) return VISUAL_SKIP;
+
+  const proxy = visualProxyPath(job);
+  const hasProxy = await access(proxy).then(() => true, () => false);
+  if (!hasProxy) {
+    const made = await exec.run({
+      command: "ffmpeg",
+      args: [
+        "-i", job.videoPath,
+        "-vf", "fps=4,scale=540:960",
+        "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
+        "-an", "-y", proxy,
+      ],
+      env: envFor(job),
+    });
+    if (made.code !== 0) return VISUAL_SKIP;
+  }
+
+  const result = await exec.run({
+    command: "uv",
+    args: [
+      "run", "python", "visual_index.py",
+      "--video", proxy,
+      "--index", indexPath(job),
+      "--fps", "4",
+    ],
+    env: envFor(job),
+    cwd: VISION_CWD,
+  });
+  if (result.code !== 0) return VISUAL_SKIP;
+
+  const stdout = result.stdout.trim();
+  if (!stdout) return undefined;
+  try {
+    await mkdir(join(job.workDir, "out"), { recursive: true });
+    await writeFile(visualIndexPath(job), stdout, "utf8");
+  } catch {
+    return VISUAL_SKIP;
+  }
+  return undefined;
 }
 
 export async function runPlan(job: PipelineJob, keepList: string, exec: Executor): Promise<void> {
@@ -222,6 +282,7 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
   }
 
   // Sidecar de fala = `uv run python transcribe.py` em services/speech — não é daemon.
+  // Visão é opcional: o ingest avisa e segue sem visual_index.
   const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"] });
   const speechScript = join("services", "speech", "transcribe.py");
   const hasSpeech = await access(speechScript).then(() => true, () => false);

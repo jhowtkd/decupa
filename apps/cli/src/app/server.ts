@@ -139,7 +139,8 @@ export async function startApp(opts: {
   async function ingest(): Promise<void> {
     try {
       await preflight(pipelineJob, exec);
-      await runIngest(pipelineJob, exec, (stage) => store.setStage(job.id, stage));
+      const ingestResult = await runIngest(pipelineJob, exec, (stage) => store.setStage(job.id, stage));
+      if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
       const index = await readJson(indexPath(pipelineJob)) as { units: { id: string }[] };
       const all = `${index.units[0]!.id}-${index.units[index.units.length - 1]!.id}`;
@@ -176,7 +177,7 @@ export async function startApp(opts: {
 
         if (parts.length === 2 && req.method === "GET") {
           sendJson(res, {
-            stage: current.stage, error: current.error,
+            stage: current.stage, error: current.error, warning: current.warning,
             keepList: current.keepList, review: current.review,
           });
           return;

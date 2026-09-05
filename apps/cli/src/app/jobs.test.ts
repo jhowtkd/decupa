@@ -27,6 +27,16 @@ describe("JobStore", () => {
     const { id } = store.create({ videoPath: "/v.mp4", workDir: "/w" });
     store.setStage(id, "transcribing");
     expect(store.get(id)!.stage).toBe("transcribing");
+    store.setStage(id, "visual");
+    expect(store.get(id)!.stage).toBe("visual");
+  });
+
+  it("guarda aviso sem mudar o estágio", () => {
+    const store = new JobStore();
+    const { id } = store.create({ videoPath: "/v.mp4", workDir: "/w" });
+    store.setWarning(id, "sidecar de visão não instalado, segue sem visual");
+    expect(store.get(id)!.warning).toMatch(/visão/);
+    expect(store.get(id)!.stage).toBe("queued");
   });
 
   it("guarda o review e vai para `ready`", () => {
