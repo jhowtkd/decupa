@@ -10,6 +10,7 @@ import {
   DEFAULT_MODEL,
   GeminiTriageModel,
   keepListFrom,
+  mechanicalClaims,
   parseSpeechIndex,
   PROMPT_VERSION,
   readCache,
@@ -68,6 +69,10 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, pass, budgetSeconds });
 
+  // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
+  const mechanicalVerdicts = verifyClaims(mechanicalClaims(index), index);
+  const dropped = acceptedDropIds(mechanicalVerdicts);
+
   // Passe 1 — estrutura
   const structureKey = keyOf("structure");
   let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
@@ -75,8 +80,9 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     claims = await model.structure({ unitsBlock, videoPath: opts.videoPath });
     await writeCache(cacheDir, structureKey, claims);
   }
-  const verdicts = verifyClaims(claims, index);
-  const dropped = acceptedDropIds(verdicts);
+  const modelVerdicts = verifyClaims(claims, index);
+  for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
+  const verdicts = [...mechanicalVerdicts, ...modelVerdicts];
 
   // Passe 2 — densidade, só com alvo
   let density: ReportInput["density"] = null;

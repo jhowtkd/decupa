@@ -1,6 +1,6 @@
-export type { DropReason, StructureClaim, Verdict } from "./claims.ts";
+export type { ClaimSource, DropReason, StructureClaim, Verdict } from "./claims.ts";
 export type { DensityCandidate, DensityRequest, StructureRequest, TriageModel } from "./model.ts";
-export type { IndexUnit, SpeechIndex, TopicRun } from "./speech-index.ts";
+export type { IndexUnit, SpeechIndex, TopicRun, TrimCandidate } from "./speech-index.ts";
 export type { CacheKeyParts } from "./cache.ts";
 export type { ReportInput } from "./report.ts";
 
@@ -14,4 +14,17 @@ export { buildUnitsBlock, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./promp
 export { renderReport } from "./report.ts";
 export { cacheKey, readCache, writeCache } from "./cache.ts";
 export { parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
-export { RESTATEMENT_THRESHOLD, similarity } from "./similarity.ts";
+export {
+  MOTOR_DUPLICATE_THRESHOLD,
+  RESTATEMENT_THRESHOLD,
+  SHORT_JACCARD_THRESHOLD,
+  SHORT_UNIT_TOKEN_LIMIT,
+  characterSimilarity,
+  headOverlap,
+  isRestatement,
+  shortUnitSimilarity,
+  similarity,
+} from "./similarity.ts";
+export { hasDirectorCue } from "./cues.ts";
+export { retakeClaims } from "./retakes.ts";
+export { mechanicalClaims, mechanicalKeepList } from "./mechanical.ts";
