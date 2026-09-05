@@ -154,6 +154,7 @@ describe("verifyClaims — índice sem unidades", () => {
     const emptyIndex = {
       units: [],
       topicRuns: [],
+      trimCandidates: [],
       losslessFloorSeconds: 0,
       sourceDurationSeconds: 0,
     };

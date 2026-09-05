@@ -15,6 +15,14 @@ export interface IndexUnit {
   text: string;
   hasTerminalPunct: boolean;
   isQuestion: boolean;
+  /** Unidade anterior que o motor marcou como quase-duplicata, ou null. */
+  nearDuplicateOf: string | null;
+  /** Score SequenceMatcher do motor (0–1), ou null se o campo não veio. */
+  similarity: number | null;
+  wordCount: number;
+  cps: number;
+  leadGap: number;
+  disfluency: { hard: unknown[]; soft: unknown[]; stutter: unknown[] };
 }
 
 export interface TopicRun {
@@ -22,9 +30,17 @@ export interface TopicRun {
   unitIds: string[];
 }
 
+export interface TrimCandidate {
+  id: string;
+  seconds: number;
+  text: string;
+  reasons: string[];
+}
+
 export interface SpeechIndex {
   units: IndexUnit[];
   topicRuns: TopicRun[];
+  trimCandidates: TrimCandidate[];
   losslessFloorSeconds: number;
   sourceDurationSeconds: number;
 }
@@ -45,6 +61,14 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
       text: String(u.text ?? ""),
       hasTerminalPunct: Boolean(u.has_terminal_punct),
       isQuestion: Boolean(u.is_question),
+      nearDuplicateOf: u.near_duplicate_of == null || u.near_duplicate_of === ""
+        ? null
+        : String(u.near_duplicate_of),
+      similarity: u.similarity == null || u.similarity === "" ? null : Number(u.similarity),
+      wordCount: Number(u.word_count ?? 0),
+      cps: Number(u.cps ?? 0),
+      leadGap: Number(u.lead_gap ?? 0),
+      disfluency: parseDisfluency(u.disfluency),
     }))
     .sort((a, b) => a.index - b.index);
 
@@ -54,12 +78,30 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
     unitIds: (r.unit_ids as string[] | undefined ?? []).map(String),
   }));
 
+  const rawTrim = Array.isArray(root.trim_candidates) ? root.trim_candidates : [];
+  const trimCandidates: TrimCandidate[] = rawTrim.map((t: Record<string, unknown>) => ({
+    id: String(t.id),
+    seconds: Number(t.seconds ?? 0),
+    text: String(t.text ?? ""),
+    reasons: Array.isArray(t.reasons) ? t.reasons.map(String) : [],
+  }));
+
   const budget = (root.budget ?? {}) as Record<string, unknown>;
   return {
     units,
     topicRuns,
+    trimCandidates,
     losslessFloorSeconds: Number(budget.lossless_floor_seconds ?? 0),
     sourceDurationSeconds: Number(root.source_duration ?? 0),
+  };
+}
+
+function parseDisfluency(raw: unknown): IndexUnit["disfluency"] {
+  const d = (raw ?? {}) as Record<string, unknown>;
+  return {
+    hard: Array.isArray(d.hard) ? d.hard : [],
+    soft: Array.isArray(d.soft) ? d.soft : [],
+    stutter: Array.isArray(d.stutter) ? d.stutter : [],
   };
 }
 
