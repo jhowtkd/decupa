@@ -8,36 +8,43 @@ import { acceptedDropIds, verifyClaims, type StructureClaim } from "./claims.ts"
 import { hasDirectorCue } from "./cues.ts";
 import { keepListFrom } from "./keeplist.ts";
 import { retakeClaims } from "./retakes.ts";
-import { topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
+import { looksLikeDeadAir, topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
 
 export function mechanicalClaims(index: SpeechIndex): StructureClaim[] {
-  const claims: StructureClaim[] = [...retakeClaims(index)];
-  const claimed = new Set<string>();
-  for (const c of claims) for (const id of c.unit_ids) claimed.add(id);
+  const claims: StructureClaim[] = [];
+  const occupied = new Set<string>();
 
-  const preroll = leadingPreroll(index, claimed);
-  if (preroll) {
-    claims.push(preroll);
-    for (const id of preroll.unit_ids) claimed.add(id);
-  }
+  appendVerified(claims, occupied, retakeClaims(index), index);
 
-  const postroll = trailingPostroll(index, claimed);
-  if (postroll) {
-    claims.push(postroll);
-    for (const id of postroll.unit_ids) claimed.add(id);
-  }
+  const preroll = leadingPreroll(index, occupied);
+  if (preroll) appendVerified(claims, occupied, [preroll], index);
 
-  for (const dead of deadAirClaims(index, claimed)) {
-    claims.push(dead);
-    for (const id of dead.unit_ids) claimed.add(id);
-  }
+  const postroll = trailingPostroll(index, occupied);
+  if (postroll) appendVerified(claims, occupied, [postroll], index);
 
-  for (const cue of midCueClaims(index, claimed)) {
-    claims.push(cue);
-    for (const id of cue.unit_ids) claimed.add(id);
-  }
+  appendVerified(claims, occupied, deadAirClaims(index, occupied), index);
+  appendVerified(claims, occupied, midCueClaims(index, occupied), index);
 
   return claims;
+}
+
+/**
+ * Só ocupa unidade de alegação aceita. Rejeitada (retake que não confere, pré-rolo
+ * com buraco) deixa o id livre para ar morto / cue na etapa seguinte.
+ */
+function appendVerified(
+  claims: StructureClaim[],
+  occupied: Set<string>,
+  batch: StructureClaim[],
+  index: SpeechIndex,
+): void {
+  if (batch.length === 0) return;
+  for (const v of verifyClaims(batch, index)) {
+    claims.push(v.claim);
+    if (v.accepted) {
+      for (const id of v.claim.unit_ids) occupied.add(id);
+    }
+  }
 }
 
 export function mechanicalKeepList(index: SpeechIndex): string {
@@ -128,16 +135,5 @@ function isCueOrFiller(unit: IndexUnit, index: SpeechIndex): boolean {
   return trim.reasons.some((r) => {
     const t = r.toLowerCase();
     return t.includes("filler") || t.includes("hesitation");
-  });
-}
-
-function looksLikeDeadAir(reasons: string[]): boolean {
-  return reasons.some((r) => {
-    const t = r.toLowerCase();
-    return t.includes("dead air")
-      || t.includes("almost no content")
-      || t.includes("no content")
-      || t.includes("chars/s")
-      || t.includes("very slow");
   });
 }

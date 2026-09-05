@@ -13,7 +13,7 @@ export { FakeTriageModel } from "./model.ts";
 export { buildUnitsBlock, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 export { renderReport } from "./report.ts";
 export { cacheKey, readCache, writeCache } from "./cache.ts";
-export { parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
+export { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
 export {
   MOTOR_DUPLICATE_THRESHOLD,
   RESTATEMENT_THRESHOLD,

@@ -105,6 +105,14 @@ function parseDisfluency(raw: unknown): IndexUnit["disfluency"] {
   };
 }
 
+/**
+ * Ar morto no `trim_candidates`: só "very slow", "almost no content" ou
+ * "dead air". Não casa `chars/s` genérico nem "restates u015 (similarity…)".
+ */
+export function looksLikeDeadAir(reasons: string[]): boolean {
+  return reasons.some((r) => /very slow|almost no content|dead air/i.test(r));
+}
+
 export function unitByIdOrThrow(index: SpeechIndex, id: string): IndexUnit {
   const found = index.units.find((u) => u.id === id);
   if (!found) throw new Error(`unidade ${id} não existe no índice`);

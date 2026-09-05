@@ -6,7 +6,7 @@ import {
   isRestatement,
   similarity,
 } from "./similarity.ts";
-import { topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
+import { looksLikeDeadAir, topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
 
 /** Categoria fechada. O modelo escolhe uma; o código confere a escolha. */
 export type DropReason =
@@ -157,7 +157,11 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
       if (ctx.claimed.has(target.id)) {
         return "`restated_by` também está sendo dropada, então nada resta dizendo a frase";
       }
-      // Pode ser anterior: o take de depois perde quando tem ar morto (u020 vs u021–u023).
+      // Mecânico pode ficar com o take anterior (u020 vs u021–u023, ar morto depois).
+      // Modelo e visual precisam do restated_by posterior, como restart_block.
+      if (target.index <= hi && claim.source !== "mechanical") {
+        return "`restated_by` precisa ser posterior ao bloco";
+      }
       const droppedText = units.map((u) => u.text).join(" ");
       const motorSim = motorSimilarityBetween(units, target);
       if (!isRestatement(droppedText, target.text, motorSim)
@@ -211,17 +215,6 @@ function pairMotorScore(a: IndexUnit, b: IndexUnit): number | null {
   if (a.nearDuplicateOf === b.id && a.similarity != null) return a.similarity;
   if (b.nearDuplicateOf === a.id && b.similarity != null) return b.similarity;
   return null;
-}
-
-function looksLikeDeadAir(reasons: string[]): boolean {
-  return reasons.some((r) => {
-    const t = r.toLowerCase();
-    return t.includes("dead air")
-      || t.includes("almost no content")
-      || t.includes("no content")
-      || t.includes("chars/s")
-      || t.includes("very slow");
-  });
 }
 
 export function acceptedDropIds(verdicts: Verdict[]): Set<string> {

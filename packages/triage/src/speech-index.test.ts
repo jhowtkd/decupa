@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
+import { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
 
 const raw = {
   source_duration: 245.5,
@@ -88,6 +88,24 @@ describe("parseSpeechIndex", () => {
     expect(u003.leadGap).toBe(0);
     expect(u003.disfluency).toEqual({ hard: [], soft: [], stutter: [] });
     expect(parseSpeechIndex({ ...raw, trim_candidates: undefined }).trimCandidates).toEqual([]);
+  });
+});
+
+describe("looksLikeDeadAir", () => {
+  it("é false em restates (similarity), mesmo com número no texto", () => {
+    expect(looksLikeDeadAir(["restates u015 (similarity 0.783)"])).toBe(false);
+  });
+
+  it("é true em very slow / dead air, mesmo com chars/s no meio", () => {
+    expect(looksLikeDeadAir(["very slow (1.1 chars/s) — dead air inside the sentence"])).toBe(true);
+  });
+
+  it("é true em almost no content", () => {
+    expect(looksLikeDeadAir(["almost no content for its length"])).toBe(true);
+  });
+
+  it("não trata chars/s sozinho como ar morto", () => {
+    expect(looksLikeDeadAir(["cps 12.0 chars/s"])).toBe(false);
   });
 });
 

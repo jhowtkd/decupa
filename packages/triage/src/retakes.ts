@@ -15,7 +15,7 @@ import {
   characterSimilarity,
   isRestatement,
 } from "./similarity.ts";
-import type { IndexUnit, SpeechIndex } from "./speech-index.ts";
+import { looksLikeDeadAir, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
 
 /** Contíguo ou a até 2 unidades de distância → diferença de index no máximo 3. */
 const MAX_INDEX_GAP = 3;
@@ -207,17 +207,6 @@ function deadAirIds(index: SpeechIndex): Set<string> {
     if (looksLikeDeadAir(t.reasons)) ids.add(t.id);
   }
   return ids;
-}
-
-function looksLikeDeadAir(reasons: string[]): boolean {
-  return reasons.some((r) => {
-    const t = r.toLowerCase();
-    return t.includes("dead air")
-      || t.includes("almost no content")
-      || t.includes("no content")
-      || t.includes("chars/s")
-      || t.includes("very slow");
-  });
 }
 
 /**

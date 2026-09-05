@@ -250,6 +250,15 @@ describe("verifyClaims — retake", () => {
     expect(v!.accepted).toBe(true);
   });
 
+  it("rejeita restated_by anterior quando a fonte é o modelo", () => {
+    const [v] = verifyClaims(
+      [claim({ unit_ids: ["u021", "u022", "u023"], reason: "retake", restated_by: "u020", source: "model" })],
+      ritmoish,
+    );
+    expect(v!.accepted).toBe(false);
+    expect(v!.accepted === false && v!.failed).toMatch(/posterior/);
+  });
+
   it("rejeita quando falta restated_by", () => {
     const [v] = verifyClaims(
       [claim({ unit_ids: ["u026"], reason: "retake" })],
