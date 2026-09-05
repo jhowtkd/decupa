@@ -1,7 +1,7 @@
 /**
  * Passe 0 da triagem: retakes, ar morto e fala com o operador.
  *
- * Puro sobre o speech_index. Sem visual_index, sem LLM.
+ * Puro sobre o speech_index. visual_index entra só se o mapa for passado. Sem LLM.
  */
 
 import { acceptedDropIds, verifyClaims, type StructureClaim } from "./claims.ts";
@@ -9,12 +9,16 @@ import { hasDirectorCue } from "./cues.ts";
 import { keepListFrom } from "./keeplist.ts";
 import { retakeClaims } from "./retakes.ts";
 import { looksLikeDeadAir, topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
+import type { VisualUnitFlags } from "./visual.ts";
 
-export function mechanicalClaims(index: SpeechIndex): StructureClaim[] {
+export function mechanicalClaims(
+  index: SpeechIndex,
+  visual?: Map<string, VisualUnitFlags>,
+): StructureClaim[] {
   const claims: StructureClaim[] = [];
   const occupied = new Set<string>();
 
-  appendVerified(claims, occupied, retakeClaims(index), index);
+  appendVerified(claims, occupied, retakeClaims(index, visual), index);
 
   const preroll = leadingPreroll(index, occupied);
   if (preroll) appendVerified(claims, occupied, [preroll], index);
@@ -47,8 +51,11 @@ function appendVerified(
   }
 }
 
-export function mechanicalKeepList(index: SpeechIndex): string {
-  const verdicts = verifyClaims(mechanicalClaims(index), index);
+export function mechanicalKeepList(
+  index: SpeechIndex,
+  visual?: Map<string, VisualUnitFlags>,
+): string {
+  const verdicts = verifyClaims(mechanicalClaims(index, visual), index);
   return keepListFrom(index, acceptedDropIds(verdicts));
 }
 

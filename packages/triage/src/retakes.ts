@@ -5,8 +5,9 @@
  * seguinte (frase partida) é retomada por SequenceMatcher. headOverlap sozinho
  * não dropa — u009/u010 o ouro mantém os dois.
  *
- * Penalidade pesada: ar morto em trim_candidates. Empate (ou quase) → o take
- * de depois ganha. Se o take de depois tem ar morto, fica o anterior (u020).
+ * Penalidade pesada: ar morto em trim_candidates. Visual ruim (looksAway /
+ * handOnFace / noFace) só conta se o mapa for passado. Empate (ou quase) → o
+ * take de depois ganha. Se o take de depois tem ar morto, fica o anterior (u020).
  */
 
 import type { StructureClaim } from "./claims.ts";
@@ -16,10 +17,12 @@ import {
   isRestatement,
 } from "./similarity.ts";
 import { looksLikeDeadAir, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
+import type { VisualUnitFlags } from "./visual.ts";
 
 /** Contíguo ou a até 2 unidades de distância → diferença de index no máximo 3. */
 const MAX_INDEX_GAP = 3;
 const DEAD_AIR_PENALTY = 100;
+const VISUAL_PENALTY = 20;
 const SHORT_DURATION_PENALTY = 10;
 const NO_PUNCT_PENALTY = 1;
 /** Abaixo disto a diferença de score é empate e o take de depois ganha. */
@@ -27,7 +30,10 @@ const TIE_MARGIN = 5;
 const SHORT_DURATION = 0.6;
 const MAX_FOLLOWING_BLOCK = 4;
 
-export function retakeClaims(index: SpeechIndex): StructureClaim[] {
+export function retakeClaims(
+  index: SpeechIndex,
+  visual?: Map<string, VisualUnitFlags>,
+): StructureClaim[] {
   const units = index.units;
   if (units.length < 2) return [];
 
@@ -102,7 +108,7 @@ export function retakeClaims(index: SpeechIndex): StructureClaim[] {
       continue;
     }
 
-    const winner = chooseTake(takes, index);
+    const winner = chooseTake(takes, index, visual);
     const dropped = takes.filter((t) => t !== winner).flat();
     if (dropped.length === 0) continue;
     const kept = winner[winner.length - 1]!;
@@ -182,19 +188,33 @@ function splitTakes(span: IndexUnit[], coreIds: Set<string>): IndexUnit[][] {
   return takes;
 }
 
-function takeScore(take: IndexUnit[], deadAir: Set<string>): number {
+function visuallyBad(flags: VisualUnitFlags | undefined): boolean {
+  if (!flags) return false;
+  return flags.looksAway || flags.handOnFace || flags.noFace;
+}
+
+function takeScore(
+  take: IndexUnit[],
+  deadAir: Set<string>,
+  visual?: Map<string, VisualUnitFlags>,
+): number {
   let score = 0;
   if (take.some((u) => deadAir.has(u.id))) score -= DEAD_AIR_PENALTY;
   if (take.some((u) => u.duration < SHORT_DURATION)) score -= SHORT_DURATION_PENALTY;
   if (!take.some((u) => u.hasTerminalPunct)) score -= NO_PUNCT_PENALTY;
+  if (visual && take.some((u) => visuallyBad(visual.get(u.id)))) score -= VISUAL_PENALTY;
   return score;
 }
 
-function chooseTake(takes: IndexUnit[][], index: SpeechIndex): IndexUnit[] {
+function chooseTake(
+  takes: IndexUnit[][],
+  index: SpeechIndex,
+  visual?: Map<string, VisualUnitFlags>,
+): IndexUnit[] {
   const deadAir = deadAirIds(index);
   let best = takes[0]!;
   for (const take of takes.slice(1)) {
-    const delta = takeScore(take, deadAir) - takeScore(best, deadAir);
+    const delta = takeScore(take, deadAir, visual) - takeScore(best, deadAir, visual);
     // Take de depois ganha no empate e quando a diferença é só pontuação/duração leve.
     if (delta >= -TIE_MARGIN) best = take;
   }

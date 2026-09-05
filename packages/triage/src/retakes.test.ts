@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { retakeClaims } from "./retakes.ts";
 import { parseSpeechIndex } from "./speech-index.ts";
+import type { VisualUnitFlags } from "./visual.ts";
 
 const fixture = parseSpeechIndex(JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "ritmo.speech_index.json"), "utf8"),
@@ -61,5 +62,39 @@ describe("retakeClaims — ritmo", () => {
     expect(c!.restated_by).toBe("u038");
     expect(c!.unit_ids).toEqual(["u032", "u033", "u034", "u035", "u036", "u037"]);
     expect(dropping("u038")).toBeUndefined();
+  });
+});
+
+describe("retakeClaims — penalidade visual opcional", () => {
+  const index = parseSpeechIndex({
+    source_duration: 10,
+    budget: { lossless_floor_seconds: 8 },
+    topic_runs: [],
+    units: [
+      { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Agora vai.", has_terminal_punct: true, word_count: 2 },
+      { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "Agora vai.", has_terminal_punct: true, word_count: 2 },
+    ],
+  });
+
+  const badVisual = (id: string): VisualUnitFlags => ({
+    id,
+    looksAway: true,
+    handOnFace: false,
+    noFace: false,
+    ambiguous: false,
+    samples: [],
+  });
+
+  it("sem visual, o take de depois ganha", () => {
+    const c = retakeClaims(index)[0]!;
+    expect(c.unit_ids).toEqual(["u001"]);
+    expect(c.restated_by).toBe("u002");
+  });
+
+  it("com looksAway no take de depois, fica o anterior", () => {
+    const visual = new Map<string, VisualUnitFlags>([["u002", badVisual("u002")]]);
+    const c = retakeClaims(index, visual)[0]!;
+    expect(c.unit_ids).toEqual(["u002"]);
+    expect(c.restated_by).toBe("u001");
   });
 });
