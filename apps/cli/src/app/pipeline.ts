@@ -74,6 +74,10 @@ export class SpawnExecutor implements Executor {
         settle({ code: 1, stdout: "", stderr: err.message });
       });
       child.on("close", (code) => {
+        const remainingOut = outRest.trim();
+        if (remainingOut) call.onLine?.(remainingOut);
+        const remainingErr = errRest.trim();
+        if (remainingErr) call.onLine?.(remainingErr);
         settle({ code: code ?? 1, stdout, stderr });
       });
     });

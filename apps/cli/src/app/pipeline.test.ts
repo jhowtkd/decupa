@@ -246,6 +246,17 @@ describe("SpawnExecutor", () => {
     expect(lines).toContain("linha1");
     expect(lines).toContain("linha2");
   });
+
+  it("descarrega resto sem quebra de linha ao fechar o processo", async () => {
+    const exec = new SpawnExecutor();
+    const lines: string[] = [];
+    await exec.run({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('último pedaço');"],
+      onLine: (l) => lines.push(l),
+    });
+    expect(lines).toContain("último pedaço");
+  });
 });
 
 describe("preflight", () => {

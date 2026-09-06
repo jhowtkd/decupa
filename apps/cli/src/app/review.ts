@@ -17,6 +17,9 @@ export interface ReviewUnit {
   id: string;
   text: string;
   kept: boolean;
+  /** segundos de fonte; a página usa para ouvir o trecho sem virar timeline */
+  start: number;
+  end: number;
   flags: ReviewUnitFlag[];
 }
 
@@ -35,6 +38,9 @@ export interface ReviewJoin {
   outgoingTail: string;
   /** as primeiras depois */
   incomingHead: string;
+  /** instantes de fonte da junção; o player toca ~0,7s de cada lado */
+  sourceOut: number;
+  sourceIn: number;
   flags: ReviewFlag[];
 }
 
@@ -191,6 +197,8 @@ export function buildReview(
         id,
         text: String(u.text ?? ""),
         kept: kept.has(id),
+        start: Number(u.start ?? 0),
+        end: Number(u.end ?? 0),
         flags: mergeFlags(visualFlagsFor(id, visual), extraFlags?.[id]),
       };
     });
@@ -210,6 +218,8 @@ export function buildReview(
       removedSeconds: Number(j.removed_seconds ?? 0),
       outgoingTail: String(j.outgoing_tail ?? ""),
       incomingHead: String(j.incoming_head ?? ""),
+      sourceOut: Number(j.source_out ?? 0),
+      sourceIn: Number(j.source_in ?? 0),
       flags,
     };
   });

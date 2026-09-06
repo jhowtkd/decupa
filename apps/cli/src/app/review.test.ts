@@ -39,7 +39,26 @@ describe("buildReview", () => {
   it("inclui as dropadas — é o que permite restaurar sem re-planejar", () => {
     expect(buildReview(plan, index).units[0]).toEqual({
       id: "u001", text: "Eu esqueci o começo.", kept: false, flags: [],
+      start: 0, end: 0,
     });
+  });
+
+  it("copia start/end da unidade e sourceIn/sourceOut da junção", () => {
+    const timed = {
+      ...index,
+      units: [
+        { id: "u001", index: 0, text: "Eu esqueci o começo.", start: 1.2, end: 3.4 },
+        { id: "u002", index: 1, text: "Dicas pra você.", start: 10, end: 14 },
+        { id: "u003", index: 2, text: "Primeira coisa.", start: 18, end: 22 },
+      ],
+    };
+    const timedPlan = {
+      ...plan,
+      joins: [{ ...plan.joins[0], source_out: 14.0, source_in: 18.0 }],
+    };
+    const review = buildReview(timedPlan, timed);
+    expect(review.units[1]).toMatchObject({ id: "u002", start: 10, end: 14 });
+    expect(review.joins[0]).toMatchObject({ sourceOut: 14, sourceIn: 18 });
   });
 
   it("leva o texto dos dois lados da junção", () => {
