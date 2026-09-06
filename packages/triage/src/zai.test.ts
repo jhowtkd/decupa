@@ -1,5 +1,15 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice } from "./zai.ts";
+import {
+  isRetryable,
+  parseDensityCandidates,
+  parseInspectVerdict,
+  parseStructureClaims,
+  readChoice,
+  ZaiTriageModel,
+} from "./zai.ts";
 
 /** Forma de resposta do Chat Completions da Z.ai. */
 const body = (message: Record<string, unknown>, finish = "stop") => ({
@@ -122,3 +132,58 @@ describe("parseDensityCandidates", () => {
     expect(parseDensityCandidates("{}")).toEqual([]);
   });
 });
+
+/** O adaptador lê o vídeo do disco antes de postar; um arquivo de 3 bytes basta. */
+async function videoFalso(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+  const path = join(dir, "proxy.mp4");
+  await writeFile(path, "abc");
+  return path;
+}
+
+describe("isRetryable", () => {
+  it("repete em 429 e em 5xx", () => {
+    expect(isRetryable(new Error("HTTP 429 da Z.ai: rate limit"))).toBe(true);
+    expect(isRetryable(new Error("HTTP 503 da Z.ai: upstream"))).toBe(true);
+  });
+
+  it("repete em timeout e em falha de rede", () => {
+    expect(isRetryable(new Error("tempo esgotado depois de 120s esperando a Z.ai"))).toBe(true);
+    expect(isRetryable(new Error("fetch failed"))).toBe(true);
+  });
+
+  it("não repete o que repetir não conserta", () => {
+    // 400 é corpo malformado e 1113 é endpoint errado: tentar de novo só gasta
+    // o dobro do tempo para chegar na mesma mensagem.
+    expect(isRetryable(new Error("HTTP 400 da Z.ai: bad request"))).toBe(false);
+    expect(isRetryable(new Error("a Z.ai recusou a chamada (1113): Insufficient balance"))).toBe(false);
+  });
+});
+
+describe("ZaiTriageModel — rede", () => {
+  it("tenta de novo depois de um 503 e devolve a segunda resposta", async () => {
+    let chamadas = 0;
+    const fetchImpl = (async () => {
+      chamadas += 1;
+      if (chamadas === 1) return new Response("{}", { status: 503 });
+      return new Response(JSON.stringify(body({ content: '{"claims":[]}' })), { status: 200 });
+    }) as unknown as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl });
+    await expect(model.structure({ unitsBlock: "u001 oi", videoPath: await videoFalso() }))
+      .resolves.toEqual([]);
+    expect(chamadas).toBe(2);
+  });
+
+  it("estoura dizendo que o tempo esgotou, em vez de esperar para sempre", async () => {
+    // Sem teto, uma conexão pendurada trava a triagem inteira — e no CLI não
+    // existe o cancel que o app tem.
+    const fetchImpl = ((_url: string, init: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason));
+      })) as unknown as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, timeoutMs: 20, retries: 0 });
+    await expect(model.structure({ unitsBlock: "u001 oi", videoPath: await videoFalso() }))
+      .rejects.toThrow(/tempo esgotado/);
+  });
+});
+

@@ -28,6 +28,19 @@ export const ZAI_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4/chat/comple
 const DEFAULT_MAX_TOKENS = 16000;
 
 /**
+ * A rede é a única parte deste adaptador que não é determinística. Sem teto, a
+ * triagem espera para sempre por uma conexão pendurada; 120 s é folgado para um
+ * modelo que pensa antes de responder e curto o suficiente para virar erro
+ * enquanto a pessoa ainda está na frente da tela.
+ */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** Um retry: 429 e 5xx passam, corpo malformado e endpoint errado não. */
+export function isRetryable(error: Error): boolean {
+  return /HTTP (429|5\d\d)|tempo esgotado|fetch failed|network/i.test(error.message);
+}
+
+/**
  * `json_object` garante que a saída é JSON; não garante o formato. Sem
  * `json_schema` para impor o enum, o formato vai descrito no prompt — e o
  * enum é conferido depois, em `verifyClaims`, onde alegação com categoria
@@ -146,6 +159,8 @@ export class ZaiTriageModel implements TriageModel {
   private readonly maxTokens: number;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly retries: number;
   private videoDataUrl: string | null = null;
 
   constructor(opts: {
@@ -154,6 +169,8 @@ export class ZaiTriageModel implements TriageModel {
     baseUrl?: string;
     maxTokens?: number;
     fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    retries?: number;
   } = {}) {
     const apiKey = opts.apiKey ?? process.env.ZAI_API_KEY;
     if (!apiKey) {
@@ -167,6 +184,8 @@ export class ZaiTriageModel implements TriageModel {
     this.baseUrl = opts.baseUrl ?? process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE;
     this.maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.retries = opts.retries ?? 1;
   }
 
   /** Lê o vídeo do disco uma vez e reusa entre os dois passes. */
@@ -181,7 +200,10 @@ export class ZaiTriageModel implements TriageModel {
     const dataUrl = await this.video(videoPath);
     const payloadMb = (dataUrl.length * 3) / 4 / 1024 / 1024;
     try {
-      return await this.post(dataUrl, instructions, text);
+      return await this.send([
+        { type: "video_url", video_url: { url: dataUrl } },
+        { type: "text", text: `${instructions}\n\n---\n\n${text}` },
+      ]);
     } catch (err) {
       // Corpo grande demais chega como erro genérico do lado deles — medido em
       // 2026-09-04: 14,9 MB de base64 devolveu "1234 internal network
@@ -195,23 +217,29 @@ export class ZaiTriageModel implements TriageModel {
     }
   }
 
-  private async post(dataUrl: string, instructions: string, text: string): Promise<string> {
-    const res = await this.fetchImpl(this.baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "video_url", video_url: { url: dataUrl } },
-            { type: "text", text: `${instructions}\n\n---\n\n${text}` },
-          ],
-        }],
-        response_format: { type: "json_object" },
-        max_tokens: this.maxTokens,
-      }),
-    });
+  /** Um POST, com teto de tempo. Sem retry: quem repete é `send`. */
+  private async once(content: unknown[]): Promise<string> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(this.baseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: "user", content }],
+          response_format: { type: "json_object" },
+          max_tokens: this.maxTokens,
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (err) {
+      if ((err as Error)?.name === "TimeoutError") {
+        throw new Error(
+          `tempo esgotado depois de ${(this.timeoutMs / 1000).toFixed(0)}s esperando a Z.ai`,
+        );
+      }
+      throw err;
+    }
 
     const raw = await res.text();
     let parsed: unknown;
@@ -225,6 +253,19 @@ export class ZaiTriageModel implements TriageModel {
       throw new Error(`HTTP ${res.status} da Z.ai: ${raw.slice(0, 200)}`);
     }
     return readChoice(parsed);
+  }
+
+  private async send(content: unknown[]): Promise<string> {
+    let last: Error | null = null;
+    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+      try {
+        return await this.once(content);
+      } catch (err) {
+        last = err instanceof Error ? err : new Error(String(err));
+        if (!isRetryable(last)) throw last;
+      }
+    }
+    throw last!;
   }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {
@@ -252,47 +293,10 @@ export class ZaiTriageModel implements TriageModel {
         image_url: { url: `data:image/jpeg;base64,${bytes.toString("base64")}` },
       });
     }
-    const text = await this.postImages(
-      images,
-      `${INSPECT_INSTRUCTIONS}\n\n${INSPECT_SHAPE}`,
-      `unidade: ${req.unitId}`,
-    );
+    const text = await this.send([
+      ...images,
+      { type: "text", text: `${INSPECT_INSTRUCTIONS}\n\n${INSPECT_SHAPE}\n\n---\n\nunidade: ${req.unitId}` },
+    ]);
     return parseInspectVerdict(text, req.unitId);
-  }
-
-  /** Só os JPEGs da unidade — nunca o vídeo inteiro. */
-  private async postImages(
-    images: { type: "image_url"; image_url: { url: string } }[],
-    instructions: string,
-    text: string,
-  ): Promise<string> {
-    const res = await this.fetchImpl(this.baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{
-          role: "user",
-          content: [
-            ...images,
-            { type: "text", text: `${instructions}\n\n---\n\n${text}` },
-          ],
-        }],
-        response_format: { type: "json_object" },
-        max_tokens: this.maxTokens,
-      }),
-    });
-
-    const raw = await res.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`HTTP ${res.status} da Z.ai, corpo não-JSON: ${raw.slice(0, 200)}`);
-    }
-    if (!res.ok && !(parsed as any)?.error) {
-      throw new Error(`HTTP ${res.status} da Z.ai: ${raw.slice(0, 200)}`);
-    }
-    return readChoice(parsed);
   }
 }
