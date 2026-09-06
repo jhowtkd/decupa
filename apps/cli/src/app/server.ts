@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { serveMedia } from "../http/media.ts";
 import { originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { JobStore } from "./jobs.ts";
@@ -172,7 +173,12 @@ export async function startApp(opts: {
   async function ingest(): Promise<void> {
     try {
       await preflight(pipelineJob, exec);
-      const ingestResult = await runIngest(pipelineJob, exec, (stage) => store.setStage(job.id, stage));
+      const ingestResult = await runIngest(
+        pipelineJob,
+        exec,
+        (stage) => store.setStage(job.id, stage),
+        (line) => store.setProgress(job.id, line),
+      );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
       const index = await readJson(indexPath(pipelineJob)) as { units: { id: string }[] };
@@ -210,6 +216,21 @@ export async function startApp(opts: {
         return;
       }
 
+      if (url.pathname === "/media") {
+        try {
+          await serveMedia(req, res, input);
+        } catch (error: unknown) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") {
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+            res.end("mídia não encontrada");
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
+
       if (parts[0] === "jobs" && parts[1]) {
         const current = store.get(parts[1]);
         if (!current) { sendJson(res, { error: "job não existe" }, 404); return; }
@@ -217,6 +238,7 @@ export async function startApp(opts: {
         if (parts.length === 2 && req.method === "GET") {
           sendJson(res, {
             stage: current.stage, error: current.error, warning: current.warning,
+            progress: current.progress,
             keepList: current.keepList, review: current.review,
           });
           return;

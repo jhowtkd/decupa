@@ -128,6 +128,14 @@ describe("runIngest", () => {
     expect(stages).toEqual(["transcribing", "indexing", "visual"]);
     expect(result.warning).toMatch(/visão/);
   });
+
+  it("repassa as linhas do motor para quem quiser mostrar progresso", async () => {
+    const exec = new FakeExecutor();
+    exec.lines = ["Detectando idioma…", "97%|=====> | 58/60"];
+    const linhas: string[] = [];
+    await runIngest(job, exec, () => {}, (line) => linhas.push(line));
+    expect(linhas).toContain("97%|=====> | 58/60");
+  });
 });
 
 describe("runPlan", () => {
@@ -225,6 +233,18 @@ describe("SpawnExecutor", () => {
     const exec = new SpawnExecutor();
     const result = await exec.run({ command: "definitely-not-a-binary-xyz", args: [] });
     expect(result.code).not.toBe(0);
+  });
+
+  it("emite linhas de stdout/stderr para onLine", async () => {
+    const exec = new SpawnExecutor();
+    const lines: string[] = [];
+    await exec.run({
+      command: process.execPath,
+      args: ["-e", "console.log('linha1'); console.error('linha2');"],
+      onLine: (l) => lines.push(l),
+    });
+    expect(lines).toContain("linha1");
+    expect(lines).toContain("linha2");
   });
 });
 

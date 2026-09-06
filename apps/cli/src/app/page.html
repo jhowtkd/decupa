@@ -5,7 +5,7 @@
 <title>decupa · limpar fala</title>
 <style>
   :root {
-    --bg: #12171a; --panel: #1a2125; --line: #2a3439;
+    --bg: #12171a; --panel: #1a2125; --line: #2a3439; --line-strong: #3c484e;
     --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230;
     --ok: #63be97; --warn: #e0765c;
   }
@@ -13,36 +13,53 @@
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.75 ui-serif, Georgia, serif;
+    min-height: 100dvh;
   }
   header {
-    position: sticky; top: 0; display: flex; align-items: center; gap: 18px;
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 18px;
     padding: 12px 18px; border-bottom: 1px solid var(--line);
     background: var(--panel); font-family: ui-sans-serif, system-ui, sans-serif;
     font-size: 13px;
   }
-  main { max-width: 44rem; margin: 0 auto; padding: 32px 20px 120px; }
+  header .hint { color: var(--muted); font-size: 12px; }
+  header[data-mode="process"] .hint { display: none; }
+  main { max-width: 44rem; margin: 0 auto; padding: 32px 20px 160px; }
   button {
     font: inherit; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px;
-    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 12px; cursor: pointer;
+    font-weight: 600; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line-strong); border-radius: 5px; padding: 6px 12px;
+    cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
-  /* A unidade inteira é o alvo de clique. Um ✕ dentro do fluxo, mesmo com
-     opacity:0, continua ocupando espaço: medido em 14,4 px por unidade, 446 px
-     ao todo num corte de 31 trechos — buracos visíveis num texto cuja única
-     função é ser lido corrido. */
-  .u { cursor: pointer; border-radius: 3px; transition: background 90ms; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1c2226; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Ouvir é absoluto: no fluxo, até opacity:0 abre buracos na prosa. */
+  .u { position: relative; cursor: pointer; border-radius: 3px; transition: background 90ms; }
   .u:hover { background: #e0765c26; box-shadow: 0 0 0 2px #e0765c26; }
-  /* Dropada: colapsa para um marcador com as primeiras palavras, e o texto
-     em volta se fecha. O título traz o texto inteiro. */
+  .u .play, .gone .play {
+    position: absolute; right: 100%; top: 0.2em; margin-right: 4px;
+    opacity: 0; pointer-events: none;
+    font: 600 11px/1 ui-sans-serif, system-ui, sans-serif;
+    padding: 2px 6px; white-space: nowrap;
+  }
+  .u:hover .play, .gone:hover .play, .u .play:focus-visible, .gone .play:focus-visible {
+    opacity: 1; pointer-events: auto;
+  }
+  /* Dropada: colapsa; o título traz o texto inteiro. */
   .gone {
+    position: relative;
+    display: inline-block; vertical-align: bottom;
+    margin: 0 2px; cursor: pointer;
+  }
+  .gone .gone-text {
     display: inline-block; max-width: 12rem; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+    text-overflow: ellipsis; white-space: nowrap;
     font-family: ui-sans-serif, sans-serif; font-size: 11px;
     color: var(--muted); background: #ffffff0d; border: 1px dashed var(--line);
-    border-radius: 4px; padding: 0 6px; margin: 0 2px; cursor: pointer;
+    border-radius: 4px; padding: 0 6px;
   }
-  .gone:hover { color: var(--ink); border-color: var(--accent); }
+  .gone:hover .gone-text { color: var(--ink); border-color: var(--accent); }
   .flag-badge {
     display: inline-block; width: 0.42em; height: 0.42em; margin: 0 0.1em 0.35em;
     border-radius: 50%; background: var(--warn); vertical-align: super; opacity: 0.75;
@@ -50,19 +67,59 @@
   .join { display: block; margin: 14px 0; font-family: ui-sans-serif, sans-serif; font-size: 12px; }
   .join .flag { color: var(--warn); display: block; padding-left: 10px; border-left: 2px solid var(--warn); }
   .join .hint { color: var(--muted); }
-  #stage { color: var(--muted); font-family: ui-sans-serif, sans-serif; }
-  #aviso { color: var(--warn); font-family: ui-sans-serif, sans-serif; font-size: 12px; }
+  .join .play { margin-top: 6px; font-weight: 600; }
+  #stage { color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  #aviso { color: var(--warn); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; }
+  .steps {
+    list-style: none; margin: 0; padding: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 15px;
+  }
+  .steps li { padding: 8px 0; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .steps li.done { color: var(--ok); }
+  .steps li.current { color: var(--ink); font-weight: 600; }
+  .steps li.current::before { content: "→ "; color: var(--accent); }
+  .process-hint, .status-body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    color: var(--muted); font-size: 14px; max-width: 40rem;
+  }
+  .status-title { font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 600; }
+  #player { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+  #triage {
+    position: sticky; bottom: 0; z-index: 2;
+    background: var(--panel); border-top: 1px solid var(--line);
+    padding: 16px 20px 20px; font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px; line-height: 1.5; max-height: 42vh; overflow: auto;
+  }
+  #triage[hidden] { display: none; }
+  #triage h2 { margin: 0 0 10px; font-size: 15px; }
+  #triage .lbl { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin: 12px 0 4px; }
+  #triage ul { margin: 0; padding: 0 0 0 1.1rem; }
+  #triage li { margin: 4px 0; }
+  #triage .actions { display: flex; gap: 8px; margin-top: 14px; }
+  kbd {
+    font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: var(--ink);
+    background: #232c31; border: 1px solid var(--line-strong); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 6px;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: var(--ok); color: #10201a; font-weight: 600;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px;
+    padding: 10px 20px; border-radius: 6px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; z-index: 5;
+  }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--warn); color: #2a1410; }
 </style>
 </head>
 <body>
-<header>
+<header data-mode="process">
   <strong>decupa</strong>
-  <span style="color:var(--muted);font-size:12px">clique num trecho para tirá-lo · clique no marcador para trazer de volta</span>
-  <span id="stage">carregando…</span>
+  <span class="hint">clique num trecho para tirá-lo · clique no marcador para trazer de volta</span>
+  <span id="stage"></span>
   <span id="aviso"></span>
   <span style="flex:1"></span>
-  <!-- Nascem desabilitados: sem review, keepList() estouraria em review.units
-       de null, e a pessoa clicaria durante os minutos de transcrição. -->
+  <!-- Sem review, keepList() estoura; nascem desabilitados. -->
   <button id="cancelar">cancelar</button>
   <button id="triar" disabled>sugerir cortes</button>
   <button id="edl" disabled>exportar EDL</button>
@@ -70,24 +127,152 @@
   <button id="txt" disabled>transcrição</button>
 </header>
 <main id="prosa"></main>
+<aside id="triage" hidden>
+  <h2>prévia da triagem</h2>
+  <p class="lbl">vai cair (retake limpo)</p>
+  <ul id="triage-drop"></ul>
+  <p class="lbl">olhe isto (sem substituto)</p>
+  <ul id="triage-look"></ul>
+  <div class="actions">
+    <button type="button" class="primary" id="triage-apply">aplicar</button>
+    <button type="button" id="triage-dismiss">descartar</button>
+  </div>
+</aside>
+<video id="player" preload="auto" playsinline></video>
+<div id="toast"></div>
 <script type="module">
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
-let review = null, kept = new Map(), timer = null;
+let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
 
 const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then((r) => r.json());
+const el = (id) => document.getElementById(id);
+const JOIN_PAD = 0.7;
+const STEPS = [["queued","na fila"],["transcribing","transcrevendo"],["indexing","medindo"],["visual","índice visual"],["planning","planejando"]];
 
-// keepListFrom e expandKeepList vêm de /keeplist.js, servido pelo servidor a
-// partir do módulo testado em keeplist.ts. Não reimplementar aqui: é o único
-// parser na borda com o motor, e uma faixa errada corta no lugar errado sem
-// erro nenhum.
+// keepList vem do módulo testado; não reimplementar — faixa errada corta sem erro.
 import { expandKeepList, keepListFrom } from "/keeplist.js";
 
 const keepList = () =>
   keepListFrom(review.units.filter((u) => kept.get(u.id)).map((u) => u.id));
 
+function toast(message, isError) {
+  const node = el("toast");
+  node.textContent = message;
+  node.className = isError ? "show err" : "show";
+  setTimeout(() => { node.className = isError ? "err" : ""; }, 2200);
+}
+
+function setMode(mode) {
+  document.querySelector("header").dataset.mode = mode;
+}
+
+function canPlay(start, end) {
+  return Number.isFinite(start) && Number.isFinite(end) && end > start;
+}
+
+function playBtn(label, onPlay) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "play";
+  btn.textContent = label;
+  btn.onclick = (ev) => { ev.stopPropagation(); onPlay(); };
+  return btn;
+}
+
+function playRanges(ranges) {
+  const gen = ++playGen;
+  const player = el("player");
+  player.pause();
+  if (!player.src) player.src = "/media";
+  return (async () => {
+    for (const [start, end] of ranges) {
+      if (gen !== playGen) return;
+      await new Promise((resolve) => {
+        const done = () => {
+          player.removeEventListener("timeupdate", onTime);
+          player.removeEventListener("ended", done);
+          resolve();
+        };
+        const onTime = () => {
+          if (gen !== playGen || player.currentTime >= end - 0.04) {
+            player.pause();
+            done();
+          }
+        };
+        player.addEventListener("timeupdate", onTime);
+        player.addEventListener("ended", done);
+        const startPlay = () => {
+          player.currentTime = Math.max(0, start);
+          player.play().catch(() => done());
+        };
+        if (player.readyState >= 1) startPlay();
+        else player.addEventListener("loadedmetadata", startPlay, { once: true });
+      });
+    }
+  })();
+}
+
+function playUnit(u) {
+  if (!canPlay(u.start, u.end)) return;
+  playRanges([[u.start, u.end]]);
+}
+
+function playJoin(join) {
+  const out = Number(join.sourceOut);
+  const inn = Number(join.sourceIn);
+  if (!Number.isFinite(out) || !Number.isFinite(inn)) return;
+  playRanges([
+    [Math.max(0, out - JOIN_PAD), out],
+    [inn, inn + JOIN_PAD],
+  ]);
+}
+
+function renderProcessing(stage, progress) {
+  setMode("process");
+  el("stage").textContent = "";
+  const idx = STEPS.findIndex((s) => s[0] === stage);
+  const ol = document.createElement("ol");
+  ol.className = "steps";
+  for (let i = 0; i < STEPS.length; i++) {
+    const li = document.createElement("li");
+    li.textContent = STEPS[i][1];
+    li.className = i < idx ? "done" : i === idx ? "current" : "pending";
+    ol.append(li);
+  }
+  const hint = document.createElement("p");
+  hint.className = "process-hint";
+  hint.textContent = stage === "transcribing"
+    ? "a transcrição leva alguns minutos"
+    : "aguardando o motor…";
+  const nodes = [ol, hint];
+  if (progress) {
+    // A última linha do processo, verbatim. Não é barra de progresso: é prova
+    // de que ainda está andando, que é a pergunta que a pessoa tem.
+    const live = document.createElement("p");
+    live.className = "process-hint";
+    live.style.fontFamily = "ui-monospace, Menlo, monospace";
+    live.textContent = progress;
+    nodes.push(live);
+  }
+  el("prosa").replaceChildren(...nodes);
+}
+
+function renderMessage(title, body) {
+  setMode("process");
+  el("stage").textContent = "";
+  const h = document.createElement("p");
+  h.className = "status-title";
+  h.textContent = title;
+  const p = document.createElement("p");
+  p.className = "status-body";
+  p.textContent = body;
+  el("prosa").replaceChildren(h, p);
+}
+
 function render() {
+  setMode("review");
   const joinsBy = new Map(review.joins.map((j) => [j.afterUnitId, j]));
-  const main = document.getElementById("prosa");
+  const main = el("prosa");
   main.replaceChildren();
   for (const u of review.units) {
     if (kept.get(u.id)) {
@@ -104,9 +289,8 @@ function render() {
       span.title = reasons.length
         ? reasons.join(" · ")
         : "clique para tirar este trecho";
+      if (canPlay(u.start, u.end)) span.append(playBtn("ouvir", () => playUnit(u)));
       span.onclick = () => {
-        // Um clique que terminou uma seleção é alguém lendo, não editando —
-        // e a tela existe para ser lida.
         if (String(document.getSelection() ?? "").length > 0) return;
         kept.set(u.id, false);
         render();
@@ -118,61 +302,35 @@ function render() {
     } else {
       const mark = document.createElement("span");
       mark.className = "gone";
-      mark.textContent = u.text;      // o CSS trunca; o título mostra inteiro
+      const label = document.createElement("span");
+      label.className = "gone-text";
+      label.textContent = u.text;      // o CSS trunca; o título mostra inteiro
+      mark.append(label);
       const goneReasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
       mark.title = goneReasons.length
         ? `restaurar: ${u.text}\n${goneReasons.join(" · ")}`
         : `restaurar: ${u.text}`;
+      if (canPlay(u.start, u.end)) mark.append(playBtn("ouvir", () => playUnit(u)));
       mark.onclick = () => { kept.set(u.id, true); render(); schedule(); };
       main.append(mark);
     }
   }
-  document.getElementById("stage").textContent =
+  el("stage").textContent =
     `${review.units.filter((u) => kept.get(u.id)).length}/${review.units.length} trechos · ` +
     `${review.outputSeconds.toFixed(0)}s de ${review.sourceSeconds.toFixed(0)}s`;
 }
 
-// O motor emite os avisos em inglês. Este é o único texto da tela que carrega
-// julgamento editorial — é ele que diz que um corte lê errado — e deixá-lo na
-// língua do motor num app em português é falhar exatamente onde importa.
-// Conjunto fechado de oito códigos; qualquer outro cai no texto original.
+// Avisos do motor vêm em inglês; traduzir aqui é o julgamento editorial da tela.
 const AVISOS = {
-  mid_thought_out: {
-    msg: "o trecho anterior não fecha a frase, então o corte lê como pensamento interrompido",
-    dica: "estenda até a unidade que termina a frase, ou corte antes dela",
-  },
-  answer_without_question: {
-    msg: "a pergunta que este trecho respondia saiu no corte",
-    dica: "traga a pergunta de volta, ou comece num trecho que reafirme o assunto",
-  },
-  no_silence_at_cut: {
-    msg: "não há pausa neste ponto — o corte cai dentro da fala",
-    dica: "ouça esta junção antes de exportar",
-  },
-  mid_word_cut: {
-    msg: "o corte cai no meio de uma palavra",
-    dica: "isto é audível: ajuste o trecho",
-  },
-  broken_reference_in: {
-    msg: "o trecho seguinte se refere a algo que foi cortado",
-    dica: "traga de volta o que ele cita, ou corte o trecho seguinte junto",
-  },
-  orphan_connective_in: {
-    msg: "o trecho seguinte abre com conectivo apontando para algo que saiu",
-    dica: "traga o antecedente de volta, ou comece o corte depois do conectivo",
-  },
-  enumeration_gap: {
-    msg: "a enumeração perdeu um item no meio",
-    dica: "traga o item de volta, ou tire a enumeração inteira",
-  },
-  tight_filler_excision: {
-    msg: "a remoção de cacoete ficou colada demais na fala",
-    dica: "ouça esta junção antes de exportar",
-  },
-  visual_in_point: {
-    msg: "a junção entra com um problema visual (mão no rosto, olhar baixo ou sem rosto)",
-    dica: "mova o in-point +0,4s no EDL",
-  },
+  mid_thought_out: ["o trecho anterior não fecha a frase, então o corte lê como pensamento interrompido", "estenda até a unidade que termina a frase, ou corte antes dela"],
+  answer_without_question: ["a pergunta que este trecho respondia saiu no corte", "traga a pergunta de volta, ou comece num trecho que reafirme o assunto"],
+  no_silence_at_cut: ["não há pausa neste ponto — o corte cai dentro da fala", "ouça esta junção antes de exportar"],
+  mid_word_cut: ["o corte cai no meio de uma palavra", "isto é audível: ajuste o trecho"],
+  broken_reference_in: ["o trecho seguinte se refere a algo que foi cortado", "traga de volta o que ele cita, ou corte o trecho seguinte junto"],
+  orphan_connective_in: ["o trecho seguinte abre com conectivo apontando para algo que saiu", "traga o antecedente de volta, ou comece o corte depois do conectivo"],
+  enumeration_gap: ["a enumeração perdeu um item no meio", "traga o item de volta, ou tire a enumeração inteira"],
+  tight_filler_excision: ["a remoção de cacoete ficou colada demais na fala", "ouça esta junção antes de exportar"],
+  visual_in_point: ["a junção entra com um problema visual (mão no rosto, olhar baixo ou sem rosto)", "mova o in-point +0,4s no EDL"],
 };
 
 function joinNode(join) {
@@ -180,31 +338,29 @@ function joinNode(join) {
   box.className = "join";
   for (const f of join.flags) {
     const pt = AVISOS[f.code];
-    const el = document.createElement("span");
-    el.className = "flag";
-    el.textContent = `⚠ ${pt ? pt.msg : f.message}`;
-    // O texto do motor fica no title: se a tradução resumir demais, o
-    // original continua a um hover de distância.
-    el.title = f.message;
+    const node = document.createElement("span");
+    node.className = "flag";
+    node.textContent = `⚠ ${pt ? pt[0] : f.message}`;
+    node.title = f.message;
     const hint = document.createElement("span");
     hint.className = "hint";
-    hint.textContent = ` → ${pt ? pt.dica : f.hint}`;
-    el.append(hint);
-    box.append(el);
+    hint.textContent = ` → ${pt ? pt[1] : f.hint}`;
+    node.append(hint);
+    box.append(node);
+  }
+  if (Number.isFinite(join.sourceOut) && Number.isFinite(join.sourceIn)) {
+    box.append(playBtn("ouvir junção", () => playJoin(join)));
   }
   return box;
 }
 
-// Clique não re-planeja: 250ms depois do último, o servidor recalcula as
-// junções. Sem isso, um aviso de mid_thought_out apontaria para uma junção
-// que não existe mais.
+// Clique não re-planeja: 250ms depois, o servidor recalcula as junções.
 function schedule() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
     const list = keepList();
     if (!list) {
-      document.getElementById("stage").textContent =
-        "pelo menos um trecho precisa permanecer";
+      toast("pelo menos um trecho precisa permanecer", true);
       return;
     }
     const res = await fetch(`/jobs/${jobId}/keep`, {
@@ -213,76 +369,135 @@ function schedule() {
     });
     const r = await res.json();
     if (!res.ok || r.error) {
-      document.getElementById("stage").textContent =
-        r.error ?? `erro ${res.status}`;
+      toast(r.error ?? `erro ${res.status}`, true);
       return;
     }
     if (r.review) { review = r.review; render(); }
   }, 250);
 }
 
-async function poll() {
-  const j = await api("");
-  document.getElementById("aviso").textContent = j.warning ?? "";
-  document.getElementById("stage").textContent = {
-    queued: "na fila…", transcribing: "transcrevendo (leva alguns minutos)…",
-    indexing: "medindo…", visual: "índice visual (opcional)…",
-    planning: "planejando…", cancelled: "cancelado",
-  }[j.stage] ?? j.stage;
-  if (j.stage === "error") { document.getElementById("stage").textContent = "erro: " + j.error; return; }
-  if (j.stage === "ready" && j.review) {
-    review = j.review;
-    kept = new Map(review.units.map((u) => [u.id, u.kept]));
-    for (const id of ["triar", "edl", "mp4", "txt"]) {
-      document.getElementById(id).disabled = false;
-    }
-    document.getElementById("cancelar").disabled = true;
-    render();
-    return;
-  }
-  if (j.stage !== "cancelled") setTimeout(poll, 1000);
+function readyFrom(j) {
+  review = j.review;
+  kept = new Map(review.units.map((u) => [u.id, u.kept]));
+  for (const id of ["triar", "edl", "mp4", "txt"]) el(id).disabled = false;
+  el("cancelar").disabled = true;
+  render();
 }
 
-document.getElementById("cancelar").onclick = async () => {
+async function poll() {
+  const j = await api("");
+  el("aviso").textContent = j.warning ?? "";
+  if (j.stage === "error") {
+    renderMessage("não deu para processar", j.error ?? "erro desconhecido");
+    el("cancelar").disabled = true;
+    return;
+  }
+  if (j.stage === "cancelled") {
+    renderMessage("cancelado", "o processamento parou. feche a aba ou rode de novo pela linha de comando.");
+    return;
+  }
+  if (j.stage === "ready" && j.review) {
+    readyFrom(j);
+    return;
+  }
+  renderProcessing(j.stage, j.progress);
+  setTimeout(poll, 1000);
+}
+
+el("cancelar").onclick = async () => {
   await api("/cancel", { method: "POST" });
-  document.getElementById("stage").textContent = "cancelado";
+  renderMessage("cancelado", "o processamento parou. feche a aba ou rode de novo pela linha de comando.");
 };
 
-document.getElementById("triar").onclick = async () => {
-  const r = await api("/triage", { method: "POST" });
-  if (r.error) { alert(r.error); return; }
-  // Prévia, não aplicação muda: mostra o que cairia antes de mexer na tela.
-  const proposto = new Set(expandKeepList(r.keepList));
-  const cairiam = review.units.filter((u) => kept.get(u.id) && !proposto.has(u.id));
-  // Com o motivo que o modelo deu, não só o texto do trecho: a justificativa é
-  // o que permite discordar. E ela confabula quando não entende a unidade, o
-  // que só dá para perceber lendo.
-  const dropLines = (r.drop ?? []).map((d) =>
-    "· " + d.unit_ids.join(", ") + " — " + d.reason + " — " + d.note
-  );
-  const lookLines = (r.reviewFlags ?? []).map((f) =>
-    "· " + f.unitId + " — " + f.message
-  );
-  const preview = (r.drop || r.reviewFlags)
-    ? `vai cair (retake limpo):\n${dropLines.join("\n") || "· nenhum"}\n\n` +
-      `olhe isto (sem substituto):\n${lookLines.join("\n") || "· nenhum"}`
-    : `A sugestão tira ${cairiam.length} trecho(s):\n\n` +
-      cairiam.map((u) => "· " + u.text.slice(0, 60)).join("\n") +
-      (r.motivos?.length ? "\n\nMotivos:\n" + r.motivos.join("\n") : "");
-  const ok = confirm(preview + "\n\nAplicar?");
-  if (!ok) return;
+function fillList(node, lines) {
+  node.replaceChildren();
+  if (lines.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "nenhum";
+    node.append(li);
+    return;
+  }
+  for (const line of lines) {
+    const li = document.createElement("li");
+    li.textContent = line;
+    node.append(li);
+  }
+}
+
+el("triar").onclick = async () => {
+  const btn = el("triar");
+  btn.disabled = true;
+  btn.textContent = "triando…";
+  try {
+    const r = await api("/triage", { method: "POST" });
+    if (r.error) {
+      toast(r.error, true);
+      if (/chave|API_KEY|não está setada/i.test(r.error)) {
+        btn.hidden = true;
+        btn.title = r.error;
+      }
+      return;
+    }
+    // Prévia, não aplicação muda.
+    pendingKeep = r.keepList;
+    const proposto = new Set(expandKeepList(r.keepList));
+    const cairiam = review.units.filter((u) => kept.get(u.id) && !proposto.has(u.id));
+    const dropLines = (r.drop ?? []).map((d) =>
+      d.unit_ids.join(", ") + " — " + d.reason + " — " + d.note
+    );
+    const lookLines = (r.reviewFlags ?? []).map((f) =>
+      f.unitId + " — " + f.message
+    );
+    const drop = (r.drop || r.reviewFlags)
+      ? dropLines
+      : cairiam.map((u) => u.text.slice(0, 80));
+    const look = (r.drop || r.reviewFlags)
+      ? lookLines
+      : (r.motivos ?? []);
+    fillList(el("triage-drop"), drop);
+    fillList(el("triage-look"), look);
+    el("triage").hidden = false;
+  } finally {
+    if (!btn.hidden) {
+      btn.disabled = false;
+      btn.textContent = "sugerir cortes";
+    }
+  }
+};
+
+el("triage-apply").onclick = () => {
+  if (pendingKeep == null) return;
+  const proposto = new Set(expandKeepList(pendingKeep));
   for (const u of review.units) kept.set(u.id, proposto.has(u.id));
-  render(); schedule();
+  el("triage").hidden = true;
+  pendingKeep = null;
+  render();
+  schedule();
+};
+
+el("triage-dismiss").onclick = () => {
+  el("triage").hidden = true;
+  pendingKeep = null;
 };
 
 for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["txt", "transcript"]]) {
-  document.getElementById(id).onclick = async () => {
-    const r = await api("/export", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind, keepList: keepList() }),
-    });
-    if (r.error) { alert(r.error); return; }
-    location.href = r.downloadUrl;
+  el(id).onclick = async () => {
+    const btn = el(id);
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "exportando…";
+    try {
+      const r = await api("/export", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind, keepList: keepList() }),
+      });
+      if (r.error) { toast(r.error, true); return; }
+      toast("download a caminho");
+      location.href = r.downloadUrl;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
   };
 }
 

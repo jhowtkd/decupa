@@ -14,6 +14,9 @@ export interface ExecCall {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /** Chamada a cada linha de stdout/stderr, enquanto o processo roda. É o
+   *  único sinal de vida que WhisperX e ffmpeg dão de uma etapa de minutos. */
+  onLine?: (line: string) => void;
 }
 
 export interface Executor {
@@ -50,8 +53,21 @@ export class SpawnExecutor implements Executor {
         this.running.delete(child);
         resolvePromise(result);
       };
-      child.stdout?.on("data", (d) => { stdout += String(d); });
-      child.stderr?.on("data", (d) => { stderr += String(d); });
+      // Buffer por stream: uma linha pode chegar partida em dois chunks, e
+      // metade de uma barra de progresso na tela é pior que nenhuma.
+      let outRest = "";
+      let errRest = "";
+      const feed = (chunk: string, rest: string): string => {
+        const parts = (rest + chunk).split(/\r?\n|\r/);
+        const tail = parts.pop() ?? "";
+        for (const line of parts) {
+          const clean = line.trim();
+          if (clean) call.onLine?.(clean);
+        }
+        return tail;
+      };
+      child.stdout?.on("data", (d) => { stdout += String(d); outRest = feed(String(d), outRest); });
+      child.stderr?.on("data", (d) => { stderr += String(d); errRest = feed(String(d), errRest); });
       // ENOENT e afins viram code !== 0: o preflight mapeia para a mensagem
       // de PATH, em vez de rejeitar a Promise e cair como erro genérico.
       child.on("error", (err) => {
@@ -77,6 +93,8 @@ export class SpawnExecutor implements Executor {
 /** Roteiriza a saída para testar o pipeline sem rodar WhisperX. */
 export class FakeExecutor implements Executor {
   readonly calls: ExecCall[] = [];
+  /** Linhas roteirizadas, emitidas em `onLine` antes de a chamada terminar. */
+  lines: string[] = [];
   /** Maior número de chamadas simultâneas observado. É o que prova que a fila
    *  do replan segura — um plano de verdade leva ~174 ms, e dois em paralelo
    *  sobrescreveriam o mesmo condense_plan.json. */
@@ -100,6 +118,7 @@ export class FakeExecutor implements Executor {
 
   async run(call: ExecCall): Promise<ExecResult> {
     this.calls.push(call);
+    for (const line of this.lines) call.onLine?.(line);
     this.inFlight += 1;
     this.maxConcurrent = Math.max(this.maxConcurrent, this.inFlight);
     try {
@@ -149,6 +168,7 @@ export async function runIngest(
   job: PipelineJob,
   exec: Executor,
   onStage: (stage: "transcribing" | "indexing" | "visual") => void,
+  onLine?: (line: string) => void,
 ): Promise<{ warning?: string }> {
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
@@ -159,6 +179,7 @@ export async function runIngest(
       args: ["decupa", "condense-prep", "--input", job.videoPath, "--out", transcriptPath(job)],
       env: envFor(job),
       cwd: REPO_ROOT,
+      onLine,
     }, "a transcrição");
   }
 
@@ -167,10 +188,11 @@ export async function runIngest(
     command: "python3",
     args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
     env: envFor(job),
+    onLine,
   }, "a medição do índice");
 
   onStage("visual");
-  const warning = await runVisualIndex(job, exec);
+  const warning = await runVisualIndex(job, exec, onLine);
   return warning ? { warning } : {};
 }
 
@@ -178,7 +200,11 @@ export async function runIngest(
  * Proxy 4 fps + sidecar MediaPipe. Falha não aborta o job: visual é opcional,
  * o keep-list mecânico segue sem as flags.
  */
-async function runVisualIndex(job: PipelineJob, exec: Executor): Promise<string | undefined> {
+async function runVisualIndex(
+  job: PipelineJob,
+  exec: Executor,
+  onLine?: (line: string) => void,
+): Promise<string | undefined> {
   const hasScript = await access(VISION_SCRIPT).then(() => true, () => false);
   if (!hasScript) return VISUAL_SKIP;
 
@@ -194,6 +220,7 @@ async function runVisualIndex(job: PipelineJob, exec: Executor): Promise<string 
         "-an", "-y", proxy,
       ],
       env: envFor(job),
+      onLine,
     });
     if (made.code !== 0) return VISUAL_SKIP;
   }
@@ -208,6 +235,7 @@ async function runVisualIndex(job: PipelineJob, exec: Executor): Promise<string 
     ],
     env: envFor(job),
     cwd: VISION_CWD,
+    onLine,
   });
   if (result.code !== 0) return VISUAL_SKIP;
 

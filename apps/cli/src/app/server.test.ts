@@ -247,8 +247,29 @@ describe("startApp", () => {
     const html = await (await fetch(base)).text();
     expect(html).toContain('id="aviso"');
     expect(html).toContain("j.warning");
+    expect(html).toContain("j.progress");
     expect(html).toContain("vai cair (retake limpo)");
     expect(html).toContain("olhe isto (sem substituto)");
+    expect(html).toContain("a transcrição leva alguns minutos");
+    expect(html).toContain("ouvir junção");
+    expect(html).not.toContain("confirm(");
+    expect(html).not.toContain("alert(");
+  });
+
+  it("serve /media com Accept-Ranges no arquivo de entrada", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
+    const input = join(dir, "v.mp4");
+    await writeFile(input, Buffer.from("abcdefghijklmnopqrstuvwxyz"));
+    const app = await startApp({ input, port: 0, autoStart: false });
+    stop = app.close;
+    const base = `http://127.0.0.1:${app.port}`;
+    const full = await fetch(`${base}/media`);
+    expect(full.status).toBe(200);
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect((await full.arrayBuffer()).byteLength).toBe(26);
+    const ranged = await fetch(`${base}/media`, { headers: { Range: "bytes=0-3" } });
+    expect(ranged.status).toBe(206);
+    expect(await ranged.text()).toBe("abcd");
   });
 
   it("keep anexa visual_in_point quando visual_index.json existe", async () => {

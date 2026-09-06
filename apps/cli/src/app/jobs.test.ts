@@ -87,4 +87,23 @@ describe("JobStore", () => {
   it("ignora operação em id inexistente sem estourar", () => {
     expect(() => new JobStore().setStage("nada", "indexing")).not.toThrow();
   });
+
+  it("mudar de estágio limpa o progresso do estágio anterior", () => {
+    // A última linha do WhisperX não descreve o que o índice está fazendo. Deixar
+    // ali é pior que não mostrar nada: parece informação atual.
+    const store = new JobStore();
+    const job = store.create({ videoPath: "/v.mp4", workDir: "/w" });
+    store.setProgress(job.id, "97%|=====> | 58/60");
+    expect(store.get(job.id)!.progress).toBe("97%|=====> | 58/60");
+    store.setStage(job.id, "indexing");
+    expect(store.get(job.id)!.progress).toBeUndefined();
+  });
+
+  it("trunca o progresso em 120 caracteres para não quebrar a tela", () => {
+    const store = new JobStore();
+    const job = store.create({ videoPath: "/v.mp4", workDir: "/w" });
+    store.setProgress(job.id, "a".repeat(200));
+    expect(store.get(job.id)!.progress).toBe("a".repeat(120));
+  });
 });
+

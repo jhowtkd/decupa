@@ -14,6 +14,7 @@ export interface Job {
   stage: Stage;
   error?: string;
   warning?: string;
+  progress?: string;
   keepList?: string;
   review?: Review;
 }
@@ -47,7 +48,13 @@ export class JobStore {
   }
 
   setStage(id: string, stage: Stage): void {
-    this.mutate(id, { stage });
+    // Progresso pertence ao estágio que o produziu: carregá-lo adiante mostra
+    // a linha de uma etapa que já acabou como se fosse a atual.
+    this.mutate(id, { stage, progress: undefined });
+  }
+
+  setProgress(id: string, progress: string): void {
+    this.mutate(id, { progress: progress.slice(0, 120) });
   }
 
   setReview(id: string, review: Review, keepList: string): void {
