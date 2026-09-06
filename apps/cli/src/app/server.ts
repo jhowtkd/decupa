@@ -11,6 +11,7 @@ import {
   runTriage, SpawnExecutor, visualIndexPath, type Executor, type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
+import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -142,6 +143,12 @@ export async function startApp(opts: {
           await maybeInspectFlags(workDir),
         );
         store.setReview(job.id, review, keepList);
+        // Falhar aqui não pode derrubar o corte que já está na tela: o review
+        // é o produto, a sessão em disco é conveniência. Mas também não some
+        // em silêncio — vai pelo mesmo canal de aviso que o ingest usa.
+        await writeKeepList(workDir, keepList).catch(() => {
+          store.setWarning(job.id, "não consegui gravar keep.txt; esta sessão não será retomada");
+        });
       } catch (error) {
         // GET /jobs/:id é o poll da página. Sem review ainda (primeiro plano
         // do ingest), fail é o certo. Com review, error é irreversível e o
@@ -168,8 +175,8 @@ export async function startApp(opts: {
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
       const index = await readJson(indexPath(pipelineJob)) as { units: { id: string }[] };
-      const all = `${index.units[0]!.id}-${index.units[index.units.length - 1]!.id}`;
-      await replan(all);
+      const saved = await readKeepList(workDir);
+      await replan(initialKeepList(saved, index.units.map((u) => u.id)));
     } catch (error) {
       // `fail` não sobrescreve `cancelled`: matar o processo faz a etapa
       // falhar, e esse erro não é notícia para quem pediu para parar.

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -302,5 +302,15 @@ describe("startApp", () => {
     stop = null;
     const result = await hung;
     expect(result.code).not.toBe(0);
+  });
+
+  it("grava keep.txt a cada replan, para a sessão sobreviver ao reinício", async () => {
+    const { base, app, dir } = await bootComPlano();
+    await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u002-u003" }),
+    });
+    expect((await readFile(join(dir, "keep.txt"), "utf8")).trim()).toBe("u002-u003");
   });
 });
