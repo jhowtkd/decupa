@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
-import { detectSilence } from "@decupa/acoustics";
-import { transcribe } from "@decupa/transcript";
-import { writeCondenseTranscript } from "./condense/prepare.ts";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
 import { runMarkWeb } from "./mark-web/server.ts";
@@ -28,7 +25,7 @@ const USAGE = `decupa — bancada de medição
   decupa report --out <relatorio.html> <medida1.json> [medida2.json ...]
       Junta relatórios de measure numa página só.
 
-  decupa condense-prep --input <video|wav> --out <transcript.json> [--model small] [--no-trim]
+  decupa condense-prep --input <video|wav> --out <transcript.json> [--model small] [--language pt] [--no-trim]
       Transcreve com o WhisperX do Decupa e grava no formato que o motor de
       condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
       alinhador esticou sobre o silêncio — use --no-trim para desligar.
@@ -163,6 +160,7 @@ async function main(argv: string[]): Promise<number> {
         input: { type: "string" },
         out: { type: "string" },
         model: { type: "string" },
+        language: { type: "string" },
         "no-trim": { type: "boolean" },
       },
     });
@@ -170,33 +168,18 @@ async function main(argv: string[]): Promise<number> {
       console.error("condense-prep precisa de --input e --out");
       return 1;
     }
-    const transcript = await transcribe({ input: values.input, model: values.model });
-
-    // O alinhador estica a última palavra de um segmento sobre o silêncio que
-    // vem depois. Sem consertar isso, o motor de corte fica cego para essas
-    // pausas e elas sobrevivem inteiras dentro do clipe.
-    let silences;
-    if (!values["no-trim"]) {
-      silences = await detectSilence({
-        input: values.input,
-        thresholdDb: -35,
-        minDurationMs: 150,
-      });
-    }
-
-    const before = transcript.tokens.reduce((n, t) => n + (t.endMs - t.startMs), 0);
-    const converted = await writeCondenseTranscript(transcript, values.out, { silences });
-    const after = converted.segments.reduce(
-      (n, s) => n + s.words.reduce((m, w) => m + (w.end - w.start) * 1000, 0),
-      0,
-    );
-    const words = converted.segments.reduce((n, s) => n + s.words.length, 0);
-    console.log(
-      `${converted.segments.length} segmentos, ${words} palavras -> ${values.out}`,
-    );
-    if (silences) {
+    const { runCondensePrep } = await import("./condense/run.ts");
+    const result = await runCondensePrep({
+      input: values.input,
+      out: values.out,
+      model: values.model,
+      language: values.language,
+      trim: !values["no-trim"],
+    });
+    console.log(`${result.segments} segmentos, ${result.words} palavras -> ${values.out}`);
+    if (result.trimmedSeconds > 0) {
       console.log(
-        `fim de palavra aparado: ${((before - after) / 1000).toFixed(1)}s de silêncio devolvidos como pausa`,
+        `fim de palavra aparado: ${result.trimmedSeconds.toFixed(1)}s de silêncio devolvidos como pausa`,
       );
     }
     return 0;
