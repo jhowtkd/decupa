@@ -1,0 +1,225 @@
+diff --git a/mcp/ve_tools/condense_lang.py b/mcp/ve_tools/condense_lang.py
+index 3244484..755c609 100644
+--- a/mcp/ve_tools/condense_lang.py
++++ b/mcp/ve_tools/condense_lang.py
+@@ -32,7 +32,7 @@ from typing import Any, Iterable
+ 
+ # --- character classes ----------------------------------------------------
+ 
+-_TERMINAL_PUNCT = "。．！？!?…"
++_TERMINAL_PUNCT = "。．！？!?…."
+ _CLAUSE_PUNCT = "，,、；;：:"
+ _ALL_PUNCT = _TERMINAL_PUNCT + _CLAUSE_PUNCT + "\"'“”‘’()（）《》[]【】—-~"
+ 
+@@ -66,12 +66,27 @@ def display_weight(ch: str) -> float:
+     return 0.38
+ 
+ 
++_PT_MARKERS = frozenset("ãõçáàâéêíóôú")
++
++
+ def guess_language(text: str) -> str:
+     sample = text[:4000]
+     if not sample:
+         return "und"
+     cjk = sum(1 for ch in sample if is_cjk(ch))
+-    return "zh" if cjk >= max(4, len(sample) * 0.15) else "en"
++    if cjk >= max(4, len(sample) * 0.15):
++        return "zh"
++    # ã/õ (nasal vowels) and ç are close to exclusive to Portuguese among the
++    # languages this kit is likely to see; the fuller marker set catches the
++    # rest without needing a real language-ID model. English text carries
++    # essentially none of these even when it borrows an accented loanword
++    # ("cafe", "naive", "fiancee" are usually typed bare), so a low ratio is
++    # a safe trigger and the floor of 3 keeps a short accented aside from
++    # flipping a one-line unit.
++    pt_hits = sum(1 for ch in sample.lower() if ch in _PT_MARKERS)
++    if pt_hits >= max(3, len(sample) * 0.01):
++        return "pt"
++    return "en"
+ 
+ 
+ # --- disfluency lexicons --------------------------------------------------
+@@ -94,6 +109,24 @@ FILLERS_SOFT_EN = [
+     "you know", "i mean", "sort of", "kind of", "you see", "right",
+     "basically", "actually", "literally", "like", "well", "so yeah", "anyway",
+ ]
++# Pure hesitation particles only — no reading under which these carry meaning.
++# Deliberately excludes "é"/"éh": bare "é" is the 3rd-person present of "ser"
++# ("isso é importante"), and treating it as hard filler would delete real verbs
++# from ordinary sentences. That collision risk is exactly why this tier stays
++# short for Portuguese even where it is long for English: PT filled pauses are
++# far more often homophonic with real words than English "um/uh/erm" are.
++FILLERS_HARD_PT = ["ahn", "han", "hã", "hum", "humm", "hmm", "uhn"]
++# Everything context-dependent lives here, and it is most of what a PT-BR
++# speaker actually says instead of "um": "tipo" is a filler in "tipo, cortou
++# essa parte" and a noun in "o tipo de arquivo"; "né" is a filler tag in one
++# reading and a real question ("did I get that right?") in another. The model
++# reads the unit and decides — this list only says "look here".
++FILLERS_SOFT_PT = [
++    "tipo assim", "sabe como é", "você sabe", "quer dizer", "na verdade",
++    "meio que", "mais ou menos", "sei lá", "e tal", "veja bem", "entendeu",
++    "tipo", "sabe", "digamos", "basicamente", "literalmente", "enfim",
++    "olha", "veja", "entende", "certo", "né", "bom", "ah", "então", "tá",
++]
+ 
+ # Openers that point backwards. A unit starting with one of these was a reply to
+ # whatever came before it; promote it to the start of a clip and it sounds like
+@@ -109,6 +142,12 @@ CONNECTIVE_OPENERS_EN = [
+     "besides", "anyway", "actually", "for example", "in other words", "well",
+     "yes", "yeah", "right", "exactly", "of course", "which",
+ ]
++CONNECTIVE_OPENERS_PT = [
++    "então", "mas", "e", "porque", "porém", "contudo", "no entanto",
++    "além disso", "por isso", "portanto", "aliás", "ou seja", "por exemplo",
++    "enfim", "resumindo", "em resumo", "sim", "isso mesmo", "claro",
++    "com certeza",
++]
+ 
+ # Words whose referent lives in an earlier sentence. If that sentence was cut,
+ # the reference dangles.
+@@ -122,14 +161,26 @@ ANAPHORA_EN = [
+     "such", "the same", "as i said", "as mentioned", "earlier", "just now",
+     "the latter", "the former",
+ ]
++ANAPHORA_PT = [
++    "isso", "isto", "aquilo", "esse", "essa", "esses", "essas", "este",
++    "esta", "estes", "estas", "aquele", "aquela", "aqueles", "aquelas",
++    "ele", "ela", "eles", "elas", "o mesmo", "a mesma", "como eu disse",
++    "como mencionei", "anteriormente",
++]
+ 
+ ENUM_FIRST_ZH = ["第一", "首先", "一是", "一方面", "开始", "最开始"]
+ ENUM_LATER_ZH = ["第二", "第三", "第四", "其次", "然后是", "二是", "三是", "另一方面", "最后", "再一个", "再者"]
+ ENUM_FIRST_EN = ["first", "firstly", "to begin", "one thing", "for one"]
+ ENUM_LATER_EN = ["second", "secondly", "third", "thirdly", "next", "finally", "lastly", "another"]
++ENUM_FIRST_PT = ["primeiro", "primeiramente", "em primeiro lugar", "de início", "para começar"]
++ENUM_LATER_PT = [
++    "segundo", "em segundo lugar", "terceiro", "depois", "em seguida",
++    "por fim", "por último", "outro ponto",
++]
+ 
+ QUESTION_MARKERS_ZH = ["吗", "呢", "什么", "怎么", "为什么", "哪", "多少", "是不是", "有没有", "能不能"]
+ QUESTION_MARKERS_EN = ["what", "why", "how", "when", "where", "who", "which", "do you", "did you", "can you", "would you"]
++QUESTION_MARKERS_PT = ["o que", "por que", "por quê", "como", "quando", "onde", "quem", "qual", "quais", "quanto", "quantos"]
+ 
+ # Phrases that point at something on screen. These are the trace a visual moment
+ # leaves in the transcript, and they are the reason this pipeline does not need a
+@@ -154,10 +205,22 @@ VISUAL_REFERENCE_EN = [
+     "this position", "this movement", "this exercise", "notice how", "see how",
+     "point to", "pointing at", "up here", "down here",
+ ]
++VISUAL_REFERENCE_PT = [
++    "olha aqui", "olha isso", "olha só", "veja aqui", "repara nisso",
++    "presta atenção", "dá uma olhada", "desse jeito", "desse jeito aqui",
++    "na tela", "nessa imagem", "nesse gráfico", "como mostra aqui",
++    "vou mostrar", "vou te mostrar", "deixa eu mostrar", "mostrando aqui",
++    "aqui em cima", "aqui embaixo", "desse lado", "à direita", "à esquerda",
++    "aponta para",
++]
+ 
+ 
+-def _lex(language: str, zh: list[str], en: list[str]) -> list[str]:
+-    return zh if language == "zh" else en
++def _lex(language: str, zh: list[str], en: list[str], pt: list[str] | None = None) -> list[str]:
++    if language == "zh":
++        return zh
++    if language == "pt" and pt is not None:
++        return pt
++    return en
+ 
+ 
+ # --- character/time alignment --------------------------------------------
+@@ -524,8 +587,8 @@ def find_disfluencies(unit: dict[str, Any], language: str) -> dict[str, list[dic
+     """
+     text = unit["text"]
+     times = unit["char_times"]
+-    hard = _match_spans(text, times, _lex(language, FILLERS_HARD_ZH, FILLERS_HARD_EN), language, standalone=False)
+-    soft = _match_spans(text, times, _lex(language, FILLERS_SOFT_ZH, FILLERS_SOFT_EN), language, standalone=True)
++    hard = _match_spans(text, times, _lex(language, FILLERS_HARD_ZH, FILLERS_HARD_EN, FILLERS_HARD_PT), language, standalone=False)
++    soft = _match_spans(text, times, _lex(language, FILLERS_SOFT_ZH, FILLERS_SOFT_EN, FILLERS_SOFT_PT), language, standalone=True)
+     stutter = _find_stutters(text, times, language)
+     return {"hard": hard, "soft": soft, "stutter": stutter}
+ 
+@@ -631,12 +694,12 @@ def unit_features(unit: dict[str, Any], language: str) -> dict[str, Any]:
+     return {
+         "chars": len(stripped),
+         "has_terminal_punct": bool(text.rstrip() and text.rstrip()[-1] in _TERMINAL_PUNCT),
+-        "opens_with_connective": _opening_match(text, _lex(language, CONNECTIVE_OPENERS_ZH, CONNECTIVE_OPENERS_EN), language),
+-        "anaphora": _contains_any(text, _lex(language, ANAPHORA_ZH, ANAPHORA_EN), language),
+-        "enum_first": _contains_any(text, _lex(language, ENUM_FIRST_ZH, ENUM_FIRST_EN), language),
+-        "enum_later": _contains_any(text, _lex(language, ENUM_LATER_ZH, ENUM_LATER_EN), language),
++        "opens_with_connective": _opening_match(text, _lex(language, CONNECTIVE_OPENERS_ZH, CONNECTIVE_OPENERS_EN, CONNECTIVE_OPENERS_PT), language),
++        "anaphora": _contains_any(text, _lex(language, ANAPHORA_ZH, ANAPHORA_EN, ANAPHORA_PT), language),
++        "enum_first": _contains_any(text, _lex(language, ENUM_FIRST_ZH, ENUM_FIRST_EN, ENUM_FIRST_PT), language),
++        "enum_later": _contains_any(text, _lex(language, ENUM_LATER_ZH, ENUM_LATER_EN, ENUM_LATER_PT), language),
+         "is_question": _is_question(text, language),
+-        "visual_reference": _contains_any(text, _lex(language, VISUAL_REFERENCE_ZH, VISUAL_REFERENCE_EN), language),
++        "visual_reference": _contains_any(text, _lex(language, VISUAL_REFERENCE_ZH, VISUAL_REFERENCE_EN, VISUAL_REFERENCE_PT), language),
+     }
+ 
+ 
+@@ -704,6 +767,23 @@ def _is_question(text: str, language: str) -> bool:
+                 return True
+         return False
+     lowered = body.lower()
++    if language == "pt":
++        # PT marks a question by word order and "?", not by do-support, so
++        # there is no PT equivalent of "do you"/"did you" to lean on — the
++        # opener list is the wh-words themselves. Same short-utterance guard
++        # as English, for the same reason: "Como você chegou aqui foi uma
++        # surpresa" opens with "como" but is not a question.
++        if len(lowered) <= 120:
++            # "você pode"/"vocês podem" were tried here and pulled back out: a
++            # modal+pronoun opener is just as likely to start a plain statement
++            # ("Você pode exportar o seu negócio.") as a question, unlike a
++            # wh-word or "será que", which barely have a non-question reading.
++            for opener in ("o que", "que", "por que", "por quê", "como", "quando",
++                            "onde", "quem", "qual", "quais", "quanto", "quantos",
++                            "será que"):
++                if lowered.startswith(opener):
++                    return True
++        return False
+     if len(lowered) <= 120:
+         for opener in ("what", "why", "how", "when", "where", "who", "which", "do you", "did you",
+                        "can you", "could you", "would you", "are you", "is it", "does it"):
+@@ -771,6 +851,15 @@ _STOP_EN = frozenset([
+     "some", "thing", "things", "kind", "sort", "want", "make", "from", "into", "more", "then",
+     "actually", "basically", "literally", "something", "anything", "everything", "little",
+ ])
++_STOP_PT = frozenset([
++    "que", "para", "com", "uma", "umas", "uns", "isso", "esse", "essa", "este", "esta",
++    "muito", "muita", "muitos", "muitas", "mais", "menos", "aqui", "ali", "então",
++    "porque", "porém", "assim", "tudo", "nada", "algum", "alguma", "alguns", "algumas",
++    "sobre", "onde", "quando", "como", "quem", "qual", "quais", "também", "ainda",
++    "sempre", "nunca", "coisa", "coisas", "gente", "pessoal", "vocês", "nosso", "nossa",
++    "nossos", "nossas", "seu", "sua", "seus", "suas", "pode", "podem", "vamos", "está",
++    "estão", "ser", "estar", "fazer", "dizer", "achar", "acho", "vai", "isto", "aquilo",
++])
+ 
+ # Function words already have their own flags; letting them through as "topics"
+ # would rank a stretch by how often the speaker said 反正, which is a disfluency
+@@ -781,6 +870,9 @@ _TOPIC_EXCLUDE_ZH = frozenset(
+ _TOPIC_EXCLUDE_EN = frozenset(
+     w.lower() for w in (FILLERS_HARD_EN + FILLERS_SOFT_EN + CONNECTIVE_OPENERS_EN + ANAPHORA_EN)
+ )
++_TOPIC_EXCLUDE_PT = frozenset(
++    w.lower() for w in (FILLERS_HARD_PT + FILLERS_SOFT_PT + CONNECTIVE_OPENERS_PT + ANAPHORA_PT)
++)
+ 
+ 
+ def _content_tokens(text: str, language: str) -> set[str]:
+@@ -798,6 +890,13 @@ def _content_tokens(text: str, language: str) -> set[str]:
+             t for t in tokens
+             if t not in _STOP_ZH and t not in _TOPIC_EXCLUDE_ZH and all(is_cjk(ch) for ch in t)
+         }
++    if language == "pt":
++        # Latin-1 Supplement accented range added on top of the EN pattern:
++        # bare [a-z] would truncate "informação" at the cedilla and lose
++        # "ção" entirely, undercounting the exact words a PT topic-run search
++        # cares most about.
++        words = re.findall(r"[a-zà-öø-ÿ']{4,}", text.lower())
++        return {w for w in words if w not in _STOP_PT and w not in _TOPIC_EXCLUDE_PT}
+     words = re.findall(r"[a-z']{4,}", text.lower())
+     return {w for w in words if w not in _STOP_EN and w not in _TOPIC_EXCLUDE_EN}
+ 

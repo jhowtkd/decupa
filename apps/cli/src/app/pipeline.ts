@@ -294,7 +294,19 @@ export async function enginePatchError(engine: string): Promise<string | null> {
     return (
       `o motor em ${engine} está sem o patch de pontuação PT-BR: falta o ponto ASCII ` +
       "em `_TERMINAL_PUNCT` (mcp/ve_tools/condense_lang.py). Sem ele o índice marca " +
-      "frase inacabada demais e o corte degrada em silêncio."
+      "frase inacabada demais e o corte degrada em silêncio. Rode " +
+      "`bash scripts/setup-engine.sh` para reinstalar o motor."
+    );
+  }
+
+  // Segunda metade do patch: sem os léxicos, o motor roda o caminho inglês
+  // mesmo com a pontuação certa, e a diferença não aparece em nenhum erro —
+  // só num corte pior.
+  if (!src.includes("FILLERS_SOFT_PT")) {
+    return (
+      `o motor em ${engine} está sem o léxico PT-BR: falta \`FILLERS_SOFT_PT\` em ` +
+      "`mcp/ve_tools/condense_lang.py`. Rode `bash scripts/setup-engine.sh` para " +
+      "reinstalar o motor no commit pinado com o patch aplicado."
     );
   }
   return null;

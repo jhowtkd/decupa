@@ -30,14 +30,20 @@ const okExec: Executor = {
 };
 
 /** Motor mínimo: só o que o preflight abre, com o léxico que o teste pede. */
-async function writeFakeEngine(terminalPunct: string): Promise<string> {
+async function writeFakeEngine(
+  terminalPunct: string,
+  opts: { lexicon?: boolean } = {},
+): Promise<string> {
   const engine = await mkdtemp(join(tmpdir(), "motor-"));
   const tools = join(engine, "mcp", "ve_tools");
   await mkdir(tools, { recursive: true });
   await writeFile(join(tools, "condense.py"), "# motor de mentira\n", "utf8");
+  const lexicon = opts.lexicon === false
+    ? ""
+    : 'FILLERS_SOFT_PT = ["tipo", "né", "tá"]\n';
   await writeFile(
     join(tools, "condense_lang.py"),
-    `_TERMINAL_PUNCT = "${terminalPunct}"\n_CLAUSE_PUNCT = "，,、；;：:"\n`,
+    `_TERMINAL_PUNCT = "${terminalPunct}"\n_CLAUSE_PUNCT = "，,、；;：:"\n${lexicon}`,
     "utf8",
   );
   return engine;
@@ -242,5 +248,14 @@ describe("enginePatchError", () => {
     await mkdir(join(engine, "mcp", "ve_tools"), { recursive: true });
     await writeFile(join(engine, "mcp", "ve_tools", "condense_lang.py"), "# vazio\n", "utf8");
     expect(await enginePatchError(engine)).toMatch(/não achei `_TERMINAL_PUNCT`/);
+  });
+
+  it("recusa motor com o ponto mas sem o léxico PT-BR", async () => {
+    // O patch são 110 linhas, não uma. Conferir só `_TERMINAL_PUNCT` deixa
+    // passar um clone onde alguém restaurou a pontuação e perdeu o resto: o
+    // motor volta a decidir por léxico inglês, "né"/"tipo"/"tá" deixam de ser
+    // soft filler, e o passe mecânico fica sem o sinal que ele consome.
+    const engine = await writeFakeEngine("。．！？!?….", { lexicon: false });
+    expect(await enginePatchError(engine)).toMatch(/léxico PT-BR/);
   });
 });
