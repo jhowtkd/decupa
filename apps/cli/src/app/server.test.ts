@@ -313,4 +313,19 @@ describe("startApp", () => {
     });
     expect((await readFile(join(dir, "keep.txt"), "utf8")).trim()).toBe("u002-u003");
   });
+
+  it("recusa POST de outra origem, e aceita o da própria página", async () => {
+    const { base, app } = await boot();
+    const alheio = await fetch(`${base}/jobs/${app.jobId}/cancel`, {
+      method: "POST",
+      headers: { origin: "https://exemplo.invalido" },
+    });
+    expect(alheio.status).toBe(403);
+
+    const proprio = await fetch(`${base}/jobs/${app.jobId}/cancel`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${app.port}` },
+    });
+    expect(proprio.status).toBe(200);
+  });
 });

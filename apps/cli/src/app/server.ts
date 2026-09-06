@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { JobStore } from "./jobs.ts";
 import {
@@ -184,11 +185,17 @@ export async function startApp(opts: {
     }
   }
 
+  let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
 
     const handle = async (): Promise<void> => {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+        sendJson(res, { error: "origem não permitida" }, 403);
+        return;
+      }
+
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(page.replace("window.__JOB__", JSON.stringify(job.id)));
@@ -339,6 +346,7 @@ export async function startApp(opts: {
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
+  boundPort = port;
 
   if (opts.autoStart !== false) void ingest();
 
