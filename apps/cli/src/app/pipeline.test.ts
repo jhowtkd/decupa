@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   enginePatchError,
@@ -87,11 +87,20 @@ describe("runIngest", () => {
     const vis = exec.calls.find((c) => c.args.includes("visual_index.py"));
     expect(vis).toBeDefined();
     expect(vis!.command).toBe("uv");
-    expect(vis!.cwd).toBe(join("services", "vision"));
+    expect(isAbsolute(vis!.cwd!)).toBe(true);
+    expect(vis!.cwd!.endsWith(join("services", "vision"))).toBe(true);
     expect(vis!.args).toContain("--fps");
     expect(vis!.args).toContain("4");
     const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale=540:960"));
     expect(proxy).toBeDefined();
+  });
+
+  it("roda o pnpm na raiz do repo, não no cwd de quem chamou", async () => {
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const prep = exec.calls.find((c) => c.args.includes("condense-prep"))!;
+    expect(prep.cwd).toBeDefined();
+    expect(isAbsolute(prep.cwd!)).toBe(true);
   });
 
   it("grava visual_index.json quando o sidecar devolve JSON", async () => {
@@ -142,6 +151,17 @@ describe("runPlan", () => {
     const exec = new FakeExecutor();
     await expect(runPlan(job, "   ", exec)).rejects.toThrow(/keep/);
     expect(exec.calls).toHaveLength(0);
+  });
+
+  it("chama o motor por caminho absoluto, não relativo ao cwd", async () => {
+    // O SKILL manda rodar de dentro de work/<trabalho> com CLAUDE_PROJECT_DIR
+    // apontando pra lá. Caminho relativo transforma isso num ENOENT de Python
+    // que não descreve o que a pessoa fez de errado.
+    const exec = new FakeExecutor();
+    await runPlan(job, "u001-u003", exec);
+    const script = exec.calls.at(-1)!.args[0]!;
+    expect(isAbsolute(script)).toBe(true);
+    expect(script.endsWith(join("scripts", "condense.py"))).toBe(true);
   });
 });
 

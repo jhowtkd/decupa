@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface ExecResult {
   code: number;
@@ -131,8 +132,17 @@ export const indexPath = (job: PipelineJob) => join(job.workDir, "out", "speech_
 export const visualIndexPath = (job: PipelineJob) => join(job.workDir, "out", "visual_index.json");
 export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-proxy.mp4");
 
-const VISION_CWD = join("services", "vision");
+/**
+ * apps/cli/src/app -> raiz do repo. O motor, o wrapper e os sidecars são
+ * invocados por caminho absoluto porque o cwd do processo não é nosso: o SKILL
+ * manda rodar de dentro de work/<trabalho>, e o motor grava onde
+ * CLAUDE_PROJECT_DIR aponta. Mesmo padrão de packages/transcript.
+ */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const CONDENSE = join(REPO_ROOT, "scripts", "condense.py");
+const VISION_CWD = join(REPO_ROOT, "services", "vision");
 const VISION_SCRIPT = join(VISION_CWD, "visual_index.py");
+const SPEECH_SCRIPT = join(REPO_ROOT, "services", "speech", "transcribe.py");
 const VISUAL_SKIP = "sidecar de visão não instalado, segue sem visual";
 
 export async function runIngest(
@@ -148,13 +158,14 @@ export async function runIngest(
       command: "pnpm",
       args: ["decupa", "condense-prep", "--input", job.videoPath, "--out", transcriptPath(job)],
       env: envFor(job),
+      cwd: REPO_ROOT,
     }, "a transcrição");
   }
 
   onStage("indexing");
   await must(exec, {
     command: "python3",
-    args: ["scripts/condense.py", "index", job.videoPath, transcriptPath(job)],
+    args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
     env: envFor(job),
   }, "a medição do índice");
 
@@ -219,7 +230,7 @@ export async function runPlan(job: PipelineJob, keepList: string, exec: Executor
   await must(exec, {
     command: "python3",
     args: [
-      "scripts/condense.py", "plan", job.videoPath,
+      CONDENSE, "plan", job.videoPath,
       "--keep", ...ranges,
       "--drop-fillers", "hard",
     ],
@@ -260,6 +271,7 @@ export async function runTriage(job: PipelineJob, exec: Executor, provider: stri
       "--out", join(job.workDir, "out"), "--provider", provider,
     ],
     env: envFor(job),
+    cwd: REPO_ROOT,
   }, "a triagem");
 
   const match = /keep-list:\s*(.+)/.exec(result.stdout);
@@ -329,8 +341,7 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
   // Sidecar de fala = `uv run python transcribe.py` em services/speech — não é daemon.
   // Visão é opcional: o ingest avisa e segue sem visual_index.
   const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"] });
-  const speechScript = join("services", "speech", "transcribe.py");
-  const hasSpeech = await access(speechScript).then(() => true, () => false);
+  const hasSpeech = await access(SPEECH_SCRIPT).then(() => true, () => false);
   if (uvCode !== 0 || !hasSpeech) {
     throw new Error(
       "o sidecar de fala está fora do ar — precisa do `uv` no PATH e de " +
@@ -382,7 +393,7 @@ export async function probeFps(job: PipelineJob, exec: Executor): Promise<number
 export async function runRender(job: PipelineJob, outPath: string, exec: Executor): Promise<string> {
   await must(exec, {
     command: "python3",
-    args: ["scripts/condense.py", "render", job.videoPath, outPath],
+    args: [CONDENSE, "render", job.videoPath, outPath],
     env: envFor(job),
   }, "o render");
   return outPath;
