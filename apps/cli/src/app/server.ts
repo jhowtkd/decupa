@@ -107,7 +107,7 @@ export async function startApp(opts: {
 }): Promise<AppHandle> {
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
-  const provider = opts.provider ?? "gemini";
+  const provider = opts.provider;
   const page = await readFile(join(HERE, "page.html"), "utf8");
 
   const workDir = opts.workDir

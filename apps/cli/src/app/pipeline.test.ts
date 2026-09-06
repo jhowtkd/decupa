@@ -10,6 +10,7 @@ import {
   probeFps,
   runIngest,
   runPlan,
+  runTriage,
   SpawnExecutor,
   type ExecCall,
   type Executor,
@@ -181,6 +182,25 @@ describe("makeTriageProxy", () => {
     const exec = new FakeExecutor();
     await makeTriageProxy(job, exec, { exists: async () => true });
     expect(exec.calls).toHaveLength(0);
+  });
+});
+
+describe("runTriage", () => {
+  it("omite --provider quando ninguém escolheu, para o CLI resolver pela chave", async () => {
+    // O app tem que subir sem chave nenhuma: triagem é acelerador, não
+    // pré-requisito. Fixar "gemini" aqui obrigaria quem usa Z.ai a passar a
+    // flag toda vez.
+    const exec = new FakeExecutor({ stdout: "keep-list: u001-u003\n" });
+    await runTriage(job, exec, undefined);
+    const call = exec.calls.find((c) => c.args.includes("triage"))!;
+    expect(call.args).not.toContain("--provider");
+  });
+
+  it("passa --provider quando a pessoa escolheu", async () => {
+    const exec = new FakeExecutor({ stdout: "keep-list: u001-u003\n" });
+    await runTriage(job, exec, "zai");
+    const call = exec.calls.find((c) => c.args.includes("triage"))!;
+    expect(call.args.slice(call.args.indexOf("--provider"))).toEqual(["--provider", "zai"]);
   });
 });
 

@@ -261,19 +261,23 @@ export async function makeTriageProxy(
   return out;
 }
 
-export async function runTriage(job: PipelineJob, exec: Executor, provider: string): Promise<string> {
+export async function runTriage(job: PipelineJob, exec: Executor, provider?: string): Promise<string> {
   const proxy = await makeTriageProxy(job, exec);
   const result = await must(exec, {
     command: "pnpm",
     args: [
       "decupa", "triage",
       "--index", indexPath(job), "--video", proxy,
-      "--out", join(job.workDir, "out"), "--provider", provider,
+      "--out", join(job.workDir, "out"),
+      // Sem escolha explícita, quem resolve é o CLI, pela chave que existe.
+      ...(provider ? ["--provider", provider] : []),
     ],
     env: envFor(job),
     cwd: REPO_ROOT,
   }, "a triagem");
 
+  // Daqui para baixo nada muda: o parse do `keep-list:` na saída continua
+  // igual, e é ele que devolve a string para a prévia da tela.
   const match = /keep-list:\s*(.+)/.exec(result.stdout);
   if (!match) throw new Error(`a triagem não devolveu keep-list: ${result.stdout.slice(0, 300)}`);
   return match[1]!.trim();

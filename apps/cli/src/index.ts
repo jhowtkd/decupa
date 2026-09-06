@@ -233,9 +233,12 @@ async function main(argv: string[]): Promise<number> {
       console.error("triage precisa de --index, --video e --out");
       return 1;
     }
-    const provider = values.provider ?? "gemini";
-    if (provider !== "gemini" && provider !== "zai") {
-      console.error(`--provider aceita "gemini" ou "zai", não "${provider}"`);
+    const { resolveProvider } = await import("@decupa/triage");
+    let provider;
+    try {
+      provider = resolveProvider(values.provider);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
       return 1;
     }
     const { runTriage } = await import("./triage.ts");
