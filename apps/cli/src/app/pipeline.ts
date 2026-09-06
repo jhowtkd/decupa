@@ -349,7 +349,7 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
     );
   }
 
-  const engine = process.env.VE_PLUGIN_ROOT ?? "work/video-agent-kit-plugin";
+  const engine = process.env.VE_PLUGIN_ROOT ?? join(REPO_ROOT, "work", "video-agent-kit-plugin");
   const hasEngine = await access(join(engine, "mcp", "ve_tools", "condense.py"))
     .then(() => true, () => false);
   if (!hasEngine) {
