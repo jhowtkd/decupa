@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # macOS não é preferência: `tests/fixtures/global-setup.ts` gera o fixture
+    # de fala com `say`, que só existe aqui. O motor de condense não é clonado
+    # no CI — os testes de preflight usam motor falso em tmpdir, e o gold do
+    # motor (tests/engine-gold.test.ts) se pula sozinho quando ele falta.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: instalar ffmpeg
+        run: brew install ffmpeg
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
