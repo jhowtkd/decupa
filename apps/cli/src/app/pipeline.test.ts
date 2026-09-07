@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_ENGINE,
   enginePatchError,
   FakeExecutor,
   makeTriageProxy,
@@ -299,15 +300,9 @@ describe("preflight", () => {
     }
   });
 
-  it("procura o motor por caminho absoluto na raiz do repo quando VE_PLUGIN_ROOT não está definido", async () => {
-    const previous = process.env.VE_PLUGIN_ROOT;
-    delete process.env.VE_PLUGIN_ROOT;
-    try {
-      await expect(preflight(realJob, okExec)).resolves.toBeUndefined();
-    } finally {
-      if (previous === undefined) delete process.env.VE_PLUGIN_ROOT;
-      else process.env.VE_PLUGIN_ROOT = previous;
-    }
+  it("o default do motor é absoluto e ancorado na raiz do repo", () => {
+    expect(isAbsolute(DEFAULT_ENGINE)).toBe(true);
+    expect(DEFAULT_ENGINE.endsWith(join("work", "video-agent-kit-plugin"))).toBe(true);
   });
 });
 

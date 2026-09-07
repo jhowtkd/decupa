@@ -162,6 +162,7 @@ export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-p
  * CLAUDE_PROJECT_DIR aponta. Mesmo padrão de packages/transcript.
  */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+export const DEFAULT_ENGINE = join(REPO_ROOT, "work", "video-agent-kit-plugin");
 const CONDENSE = join(REPO_ROOT, "scripts", "condense.py");
 const VISION_CWD = join(REPO_ROOT, "services", "vision");
 const VISION_SCRIPT = join(VISION_CWD, "visual_index.py");
@@ -385,7 +386,7 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
     );
   }
 
-  const engine = process.env.VE_PLUGIN_ROOT ?? join(REPO_ROOT, "work", "video-agent-kit-plugin");
+  const engine = process.env.VE_PLUGIN_ROOT ?? DEFAULT_ENGINE;
   const hasEngine = await access(join(engine, "mcp", "ve_tools", "condense.py"))
     .then(() => true, () => false);
   if (!hasEngine) {
