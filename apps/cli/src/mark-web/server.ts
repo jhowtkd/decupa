@@ -1,46 +1,16 @@
-import { createReadStream } from "node:fs";
-import { readFile, stat, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
+import { serveMedia } from "../http/media.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
+export { parseRange } from "../http/media.ts";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUCKETS_PER_SECOND = 200;
-
-export interface RangeSpec {
-  start: number;
-  end: number;
-}
-
-/**
- * Interpreta `Range: bytes=start-end`. Devolve null quando o cabeçalho está
- * ausente ou malformado — nesse caso o corpo inteiro é servido.
- * O `<video>` do navegador depende disso para buscar sem baixar tudo.
- */
-export function parseRange(header: string | undefined, size: number): RangeSpec | null {
-  if (!header) return null;
-  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!match) return null;
-
-  const [, rawStart, rawEnd] = match;
-  if (rawStart === "" && rawEnd === "") return null;
-
-  // "bytes=-500" = os últimos 500 bytes.
-  if (rawStart === "") {
-    const length = Number(rawEnd);
-    if (length <= 0) return null;
-    return { start: Math.max(0, size - length), end: size - 1 };
-  }
-
-  const start = Number(rawStart);
-  if (start >= size) return null;
-  const end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
-  if (end < start) return null;
-  return { start, end };
-}
 
 function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   const payload = JSON.stringify(body);
@@ -50,33 +20,6 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
     "cache-control": "no-store",
   });
   res.end(payload);
-}
-
-async function serveMedia(
-  req: IncomingMessage,
-  res: ServerResponse,
-  path: string,
-): Promise<void> {
-  const { size } = await stat(path);
-  const range = parseRange(req.headers.range, size);
-
-  if (!range) {
-    res.writeHead(200, {
-      "content-type": "video/mp4",
-      "content-length": size,
-      "accept-ranges": "bytes",
-    });
-    createReadStream(path).pipe(res);
-    return;
-  }
-
-  res.writeHead(206, {
-    "content-type": "video/mp4",
-    "content-range": `bytes ${range.start}-${range.end}/${size}`,
-    "content-length": range.end - range.start + 1,
-    "accept-ranges": "bytes",
-  });
-  createReadStream(path, { start: range.start, end: range.end }).pipe(res);
 }
 
 export interface MarkWebResult {

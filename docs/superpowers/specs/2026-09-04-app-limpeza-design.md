@@ -212,13 +212,15 @@ O formato do `review`:
 
 ```ts
 interface Review {
-  units: { id: string; text: string; kept: boolean }[];
+  units: { id: string; text: string; kept: boolean; start: number; end: number }[];
   joins: {
     afterUnitId: string;          // plan.joins[].outgoing_unit
     incomingUnitId: string;
     removedSeconds: number;
     outgoingTail: string;         // as últimas palavras antes do corte
     incomingHead: string;         // as primeiras depois
+    sourceOut: number;            // plan.joins[].source_out — player da junção
+    sourceIn: number;
     flags: { code: string; severity: string; message: string; hint: string }[];
   }[];
   outputSeconds: number;
@@ -256,22 +258,18 @@ Nenhuma etapa falha em silêncio devolvendo resultado vazio. Foi o modo de falha
 que a triagem já expôs: resposta vazia lida como "nada a cortar" é
 indistinguível de análise que rodou e não achou problema.
 
-## O que o v1 não valida: som
+## Som na revisão
 
-A tela valida **texto**. Ler a prosa pega frase truncada, pré-rolo, bloco de
-gagueira e referência órfã — que é a maior parte do que dá errado. Não pega
-respiração cortada no meio, salto de ruído de sala entre dois trechos, nem
-mudança de altura de voz numa junção.
+A tela continua validando **texto** em primeiro lugar. Ler a prosa pega frase
+truncada, pré-rolo, bloco de gagueira e referência órfã. Respiração cortada,
+salto de ruído de sala e mudança de altura de voz numa junção só aparecem
+ouvindo.
 
-Isso é limitação declarada, não esquecimento. O teste da skill é "soa como
-gente falando", e sem player nem QC o app faz metade dele. As duas metades
-restantes têm endereço: quem exporta MP4 roda `condense.py qc` e olha as
-imagens de junção; quem exporta EDL ouve no Premiere ou no Resolve, onde vai
-ajustar de qualquer forma.
-
-Um player que toca só a junção é o candidato óbvio a v2, e é pequeno. Fica
-fora do v1 porque a decisão de produto foi tela de leitura, e acrescentar áudio
-antes de saber se a leitura basta seria construir sem sinal.
+Por isso a página serve o arquivo de entrada em `GET /media` e oferece um
+player pontual: ouvir o trecho no hover, e ouvir a junção (~0,7 s antes do
+`source_out` e ~0,7 s depois do `source_in`). O vídeo não ganha coluna. Quem
+exporta MP4 ainda pode rodar `condense.py qc`; quem exporta EDL ainda ouve no
+Premiere ou no Resolve, onde vai ajustar de qualquer forma.
 
 ## Fora do escopo do v1
 

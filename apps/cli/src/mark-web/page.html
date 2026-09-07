@@ -26,13 +26,30 @@
     font: inherit; font-weight: 600; padding: 7px 16px; border-radius: 5px;
     border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); cursor: pointer;
   }
+  button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #1c2226; }
   button:disabled { opacity: .45; cursor: default; }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  main { flex: 1; display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 16px 18px; min-height: 0; }
+  main {
+    flex: 1; display: grid; grid-template-columns: auto 1fr minmax(9rem, 12rem);
+    gap: 16px; padding: 16px 18px; min-height: 0;
+  }
   video { max-height: 44vh; border-radius: 6px; background: #000; display: block; }
   .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  body.is-loading canvas { opacity: .35; pointer-events: none; }
+  #loading { color: var(--muted); font-size: .78rem; }
+  body:not(.is-loading) #loading { display: none; }
+  #marks-wrap { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  #marks-wrap .lbl { color: var(--muted); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+  #marks {
+    list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0;
+    font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace; font-size: .78rem;
+  }
+  #marks li { padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+  #marks li:hover { background: #ffffff0d; }
+  #marks li.current { color: var(--accent); }
+  #marks .empty { color: var(--muted); cursor: default; }
   .readout {
     display: flex; align-items: baseline; gap: 20px;
     font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
@@ -66,20 +83,21 @@
   #toast.err { background: var(--warn); color: #2a1410; }
 </style>
 </head>
-<body>
+<body class="is-loading">
 
 <header>
   <span class="name" id="name">…</span>
   <span class="count"><b id="count">0</b> marcas</span>
   <span class="spacer"></span>
-  <button id="mark">Marcar aqui</button>
-  <button id="undo">Desfazer</button>
-  <button id="save" class="primary">Salvar</button>
+  <button id="mark" disabled>Marcar aqui</button>
+  <button id="undo" disabled>Desfazer</button>
+  <button id="save" class="primary" disabled>Salvar</button>
 </header>
 
 <main>
   <video id="video" preload="auto" playsinline></video>
   <div class="right">
+    <div id="loading">carregando vídeo e forma de onda…</div>
     <div class="readout">
       <div>
         <div class="lbl">cursor</div>
@@ -97,6 +115,10 @@
       use o ouvido para confirmar.
     </div>
     <canvas id="overview"></canvas>
+  </div>
+  <div id="marks-wrap">
+    <div class="lbl">marcas</div>
+    <ul id="marks"></ul>
   </div>
 </main>
 
@@ -253,12 +275,45 @@ function drawOverview() {
   ctx.stroke();
 }
 
+function fmtMark(ms) {
+  const total = Math.max(0, Math.round(ms));
+  const s = Math.floor(total / 1000);
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  const frac = total % 1000;
+  return `${m}:${String(rem).padStart(2, "0")}.${String(frac).padStart(3, "0")}`;
+}
+
+function renderMarks() {
+  const list = el("marks");
+  list.replaceChildren();
+  if (marks.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "nenhuma ainda";
+    list.append(empty);
+    return;
+  }
+  let nearest = 0;
+  for (let i = 1; i < marks.length; i++) {
+    if (Math.abs(marks[i] - cursorMs) < Math.abs(marks[nearest] - cursorMs)) nearest = i;
+  }
+  marks.forEach((ms, i) => {
+    const li = document.createElement("li");
+    li.textContent = fmtMark(ms);
+    if (i === nearest) li.className = "current";
+    li.addEventListener("click", () => setCursor(ms));
+    list.append(li);
+  });
+}
+
 function render() {
   el("cursor").textContent = `${Math.round(cursorMs)} ms`;
   el("count").textContent = String(marks.length);
   el("loopState").textContent = looping ? "tocando em loop" : "loop parado";
   el("loopState").className = looping ? "loop" : "loop off";
   el("undo").disabled = marks.length === 0;
+  renderMarks();
   drawZoom();
   drawOverview();
 }
@@ -299,6 +354,10 @@ function removeNearest() {
 }
 
 async function save() {
+  if (marks.length === 0) {
+    toast("marque pelo menos uma fronteira antes de salvar", true);
+    return;
+  }
   el("save").disabled = true;
   try {
     const res = await fetch("/truth", {
@@ -353,12 +412,12 @@ window.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
 
   switch (e.key) {
-    case " ": e.preventDefault(); toggleLoop(); break;
+    case " ": if (!el("mark").disabled) { e.preventDefault(); toggleLoop(); } break;
     case "ArrowLeft": e.preventDefault(); setCursor(cursorMs - (e.shiftKey ? 50 : 10)); break;
     case "ArrowRight": e.preventDefault(); setCursor(cursorMs + (e.shiftKey ? 50 : 10)); break;
     case "[": e.preventDefault(); setCursor(cursorMs - 1000); break;
     case "]": e.preventDefault(); setCursor(cursorMs + 1000); break;
-    case "Enter": e.preventDefault(); addMark(); break;
+    case "Enter": if (!el("mark").disabled) { e.preventDefault(); addMark(); } break;
     case "Backspace": case "Delete": e.preventDefault(); removeNearest(); break;
   }
 });
@@ -383,7 +442,13 @@ window.addEventListener("beforeunload", (e) => {
   el("name").textContent = meta.name;
   el("total").textContent = `${(durationMs / 1000).toFixed(1)} s`;
   video.src = "/media";
-  video.addEventListener("loadeddata", render, { once: true });
+  await new Promise((resolve) => {
+    video.addEventListener("loadeddata", resolve, { once: true });
+    video.addEventListener("error", resolve, { once: true });
+  });
+  document.body.classList.remove("is-loading");
+  el("mark").disabled = false;
+  el("save").disabled = false;
   render();
   tick();
 })();
