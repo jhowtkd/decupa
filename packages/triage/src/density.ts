@@ -1,5 +1,5 @@
 import type { DensityCandidate } from "./model.ts";
-import type { SpeechIndex } from "./speech-index.ts";
+import { unitsById, type SpeechIndex } from "./speech-index.ts";
 
 export const DENSITY_INSTRUCTIONS = `A fala abaixo já teve o que não é conteúdo removido. Agora ela precisa encurtar, e o corte vai custar conteúdo de verdade.
 
@@ -34,11 +34,13 @@ export function applyDensityBudget(
   const applied: DensityCandidate[] = [];
   const skipped: { candidate: DensityCandidate; why: string }[] = [];
   let spent = 0;
+  // Map pago uma vez: o passe varre candidatos × unidades, find por id seria O(n²)
+  const byId = unitsById(index);
 
   const survivors = index.units.filter((u) => !opts.alreadyDropped.has(u.id)).length;
 
   for (const candidate of [...candidates].sort((a, b) => a.rank - b.rank)) {
-    const units = candidate.unit_ids.map((id) => index.units.find((u) => u.id === id));
+    const units = candidate.unit_ids.map((id) => byId.get(id));
     const missing = candidate.unit_ids.filter((_, i) => units[i] === undefined);
     if (missing.length > 0) {
       skipped.push({ candidate, why: `unidade inexistente no índice: ${missing.join(", ")}` });

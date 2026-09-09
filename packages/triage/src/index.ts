@@ -21,7 +21,7 @@ export { applyInspect, flagsWithoutSubstitute, normalizeInspectVerdict } from ".
 export { buildUnitsBlock, INSPECT_INSTRUCTIONS, PROMPT_VERSION, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 export { renderReport } from "./report.ts";
 export { cacheKey, readCache, writeCache } from "./cache.ts";
-export { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
+export { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow, unitsById } from "./speech-index.ts";
 export {
   MOTOR_DUPLICATE_THRESHOLD,
   RESTATEMENT_THRESHOLD,

@@ -18,6 +18,7 @@ import {
   readCache,
   renderReport,
   resolveProvider,
+  unitsById,
   verifyClaims,
   writeCache,
   ZAI_DEFAULT_MODEL,
@@ -153,6 +154,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const modelName = opts.modelName ?? ZAI_DEFAULT_MODEL;
   const model = opts.model ?? new ZaiTriageModel({ model: modelName, maxTokens: opts.maxTokens });
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
+  const byId = unitsById(index);
   const unitsBlock = buildUnitsBlock(index);
   const visual = await loadVisual(opts);
   const visualMap = visual ? new Map(visual.map((u) => [u.id, u] as const)) : undefined;
@@ -190,7 +192,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
 
     for (const u of visual) {
       if (!u.ambiguous || dropped.has(u.id)) continue;
-      const unit = index.units.find((x) => x.id === u.id);
+      const unit = byId.get(u.id);
       if (!unit) continue;
       const frames = await extract(unit);
       if (frames.length === 0) {

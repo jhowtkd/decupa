@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow } from "./speech-index.ts";
+import { looksLikeDeadAir, parseSpeechIndex, topicSpan, unitByIdOrThrow, unitsById } from "./speech-index.ts";
 
 const raw = {
   source_duration: 245.5,
@@ -127,5 +127,15 @@ describe("unitByIdOrThrow", () => {
 
   it("estoura com o id no texto do erro quando o modelo inventa um", () => {
     expect(() => unitByIdOrThrow(parseSpeechIndex(raw), "u999")).toThrow(/u999/);
+  });
+});
+
+describe("unitsById", () => {
+  it("unitsById devolve todas as unidades keyed por id", () => {
+    const index = parseSpeechIndex(raw);
+    const byId = unitsById(index);
+    expect(byId.size).toBe(index.units.length);
+    // u003 é a primeira unidade do fixture (após a ordenação por `index`)
+    expect(byId.get("u003")).toBe(index.units[0]);
   });
 });

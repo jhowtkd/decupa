@@ -6,7 +6,7 @@ import {
   isRestatement,
   similarity,
 } from "./similarity.ts";
-import { looksLikeDeadAir, topicSpan, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
+import { looksLikeDeadAir, topicSpan, unitsById, type IndexUnit, type SpeechIndex } from "./speech-index.ts";
 
 /** Categoria fechada. O modelo escolhe uma; o código confere a escolha. */
 export type DropReason =
@@ -74,7 +74,7 @@ export function verifyClaims(
 
   return claims.map((claim) => {
     const failed = checkClaim(claim, {
-      index, claimed, span, inTopicRun, firstIndex, lastIndex,
+      index, byId: unitsById(index), claimed, span, inTopicRun, firstIndex, lastIndex,
     });
     return failed === null
       ? { claim, accepted: true as const }
@@ -84,6 +84,7 @@ export function verifyClaims(
 
 interface Context {
   index: SpeechIndex;
+  byId: Map<string, IndexUnit>;
   claimed: Set<string>;
   span: { first: number; last: number } | null;
   inTopicRun: Set<string>;
@@ -97,7 +98,7 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
 
   const units: IndexUnit[] = [];
   for (const id of claim.unit_ids) {
-    const unit = ctx.index.units.find((u) => u.id === id);
+    const unit = ctx.byId.get(id);
     if (!unit) return `unidade ${id} não existe no índice`;
     units.push(unit);
   }
@@ -137,7 +138,7 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
     }
     case "restart_block": {
       if (!claim.restated_by) return "restart_block sem `restated_by`";
-      const target = ctx.index.units.find((u) => u.id === claim.restated_by);
+      const target = ctx.byId.get(claim.restated_by);
       if (!target) return `unidade ${claim.restated_by} não existe no índice`;
       if (target.index <= hi) return "`restated_by` precisa ser posterior ao bloco";
       if (ctx.claimed.has(target.id)) {
@@ -156,7 +157,7 @@ function checkClaim(claim: StructureClaim, ctx: Context): string | null {
     }
     case "retake": {
       if (!claim.restated_by) return "retake sem `restated_by`";
-      const target = ctx.index.units.find((u) => u.id === claim.restated_by);
+      const target = ctx.byId.get(claim.restated_by);
       if (!target) return `unidade ${claim.restated_by} não existe no índice`;
       if (units.some((u) => u.id === target.id)) {
         return "`restated_by` não pode estar no conjunto dropado";

@@ -120,15 +120,24 @@ export function unitByIdOrThrow(index: SpeechIndex, id: string): IndexUnit {
 }
 
 /**
+ * Busca por id dentro de loop é O(n²) no índice inteiro — o passe mecânico
+ * varre alegações × unidades. Um Map pago uma vez se liquida no primeiro loop.
+ */
+export function unitsById(index: SpeechIndex): Map<string, IndexUnit> {
+  return new Map(index.units.map((u) => [u.id, u] as const));
+}
+
+/**
  * Menor e maior `index` citados por qualquer topic_run — a extensão do corpo
  * do vídeo segundo a agregação por keyword que o motor já faz. Fora dessa
  * faixa é onde pré-rolo e pós-rolo podem estar.
  */
 export function topicSpan(index: SpeechIndex): { first: number; last: number } | null {
+  const byId = unitsById(index);
   const indices: number[] = [];
   for (const run of index.topicRuns) {
     for (const id of run.unitIds) {
-      const unit = index.units.find((u) => u.id === id);
+      const unit = byId.get(id);
       if (unit) indices.push(unit.index);
     }
   }
