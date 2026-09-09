@@ -30,11 +30,13 @@ const USAGE = `decupa — bancada de medição
       condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
       alinhador esticou sobre o silêncio — use --no-trim para desligar.
 
-  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider zai] [--model <id>]
+  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider zai] [--model <id>] [--max-tokens 16000]
       Decide o que é conteúdo do vídeo e o que não é, e devolve o keep-list
       pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
       contra o índice antes de virar corte. --target liga o passe de
-      densidade; sem ele, só estrutura.
+      densidade; sem ele, só estrutura. O thinking do GLM consome orçamento
+      antes da resposta: quando ele come tudo, o orçamento dobra sozinho até
+      64k; --max-tokens sobe o ponto de partida.
 
   decupa limpar --input <vídeo> [--port 7788] [--provider zai]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
@@ -210,6 +212,7 @@ async function main(argv: string[]): Promise<number> {
         target: { type: "string" },
         model: { type: "string" },
         provider: { type: "string" },
+        "max-tokens": { type: "string" },
       },
     });
     if (!values.index || !values.video || !values.out) {
@@ -232,6 +235,7 @@ async function main(argv: string[]): Promise<number> {
       targetSeconds: values.target ? Number(values.target) : undefined,
       modelName: values.model,
       provider,
+      maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
     });
     const rejected = result.verdicts.filter((v) => !v.accepted).length;
     console.log(`keep-list: ${result.keepList}`);

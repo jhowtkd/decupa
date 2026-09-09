@@ -28,6 +28,12 @@ export const ZAI_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4/chat/comple
 const DEFAULT_MAX_TOKENS = 16000;
 
 /**
+ * Teto do auto-escalonamento. Dobrar além disto não compra nada: o corpo
+ * inteiro (vídeo em base64 + prompt) já é o gargalo real da chamada.
+ */
+const MAX_TOKENS_CEILING = 64_000;
+
+/**
  * A rede é a única parte deste adaptador que não é determinística. Sem teto, a
  * triagem espera para sempre por uma conexão pendurada; 120 s é folgado para um
  * modelo que pensa antes de responder e curto o suficiente para virar erro
@@ -38,6 +44,11 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 /** Um retry: 429 e 5xx passam, corpo malformado e endpoint errado não. */
 export function isRetryable(error: Error): boolean {
   return /HTTP (429|5\d\d)|tempo esgotado|fetch failed|network/i.test(error.message);
+}
+
+/** O thinking comeu o orçamento e não sobrou resposta. */
+export function isBudgetExhausted(error: Error): boolean {
+  return /gastou o orçamento inteiro|Suba max_tokens/.test(error.message);
 }
 
 /**
@@ -156,7 +167,9 @@ export function parseDensityCandidates(text: string): DensityCandidate[] {
 export class ZaiTriageModel implements TriageModel {
   private readonly model: string;
   private readonly baseUrl: string;
-  private readonly maxTokens: number;
+  // Mutável de propósito: o auto-escalonamento de `send` dobra este valor
+  // quando o thinking consome o orçamento antes de sobrar resposta.
+  private maxTokens: number;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -256,16 +269,22 @@ export class ZaiTriageModel implements TriageModel {
   }
 
   private async send(content: unknown[]): Promise<string> {
-    let last: Error | null = null;
-    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+    let retriesLeft = this.retries;
+    for (;;) {
       try {
         return await this.once(content);
       } catch (err) {
-        last = err instanceof Error ? err : new Error(String(err));
-        if (!isRetryable(last)) throw last;
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Orçamento estourado não é azar de rede, é remédio conhecido:
+        // dobra e tenta de novo na hora, sem gastar o retry.
+        if (isBudgetExhausted(error) && this.maxTokens < MAX_TOKENS_CEILING) {
+          this.maxTokens = Math.min(this.maxTokens * 2, MAX_TOKENS_CEILING);
+          continue;
+        }
+        if (!isRetryable(error) || retriesLeft <= 0) throw error;
+        retriesLeft -= 1;
       }
     }
-    throw last!;
   }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {

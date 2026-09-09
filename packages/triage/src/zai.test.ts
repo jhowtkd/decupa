@@ -160,6 +160,68 @@ describe("isRetryable", () => {
   });
 });
 
+describe("auto-escalonar max_tokens", () => {
+  it("dobra o orçamento e repete quando o thinking comeu tudo", async () => {
+    // A resposta de verdade do modo de falha: HTTP 200, content vazio,
+    // finish_reason "length". A segunda chamada tem de sair com max_tokens
+    // dobrado e content de verdade.
+    const bodies: Array<Record<string, any>> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(String(init.body));
+      bodies.push(sent);
+      if (bodies.length === 1) {
+        return new Response(JSON.stringify(body({ content: "", reasoning_content: "x".repeat(3000) }, "length")));
+      }
+      return new Response(JSON.stringify(body({ content: '{"claims":[]}' })));
+    }) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl });
+
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+    const video = join(dir, "v.mp4");
+    await writeFile(video, "x");
+    const claims = await model.structure({ unitsBlock: "u001 texto", videoPath: video });
+
+    expect(claims).toEqual([]);
+    expect(bodies[1]!.max_tokens).toBe(32_000);
+  });
+
+  it("capa o orçamento no teto em vez de dobrar além dele", async () => {
+    // Dobrar 50k daria 100k, acima do teto: a segunda chamada sai com 64k
+    // exatos. E como 64k já é o teto, um segundo estouro sobe como erro em vez
+    // de virar terceira chamada — dobrar para sempre seria loop de chamadas pagas.
+    const bodies: Array<Record<string, any>> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify(body({ content: "", reasoning_content: "x".repeat(3000) }, "length")));
+    }) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, maxTokens: 50_000, retries: 0 });
+
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+    const video = join(dir, "v.mp4");
+    await writeFile(video, "x");
+    await expect(model.structure({ unitsBlock: "u001 texto", videoPath: video }))
+      .rejects.toThrow(/max_tokens/);
+
+    expect(bodies[0]!.max_tokens).toBe(50_000);
+    expect(bodies[1]!.max_tokens).toBe(64_000);
+    expect(bodies).toHaveLength(2);
+  });
+
+  it("não dobra para sempre: no teto, o erro de orçamento sobe", async () => {
+    // Sem o stop no teto, um vídeo que o modelo não consegue responder viraria
+    // loop infinito de chamadas pagas.
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify(body({ content: "", reasoning_content: "x".repeat(3000) }, "length")))) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, maxTokens: 64_000, retries: 0 });
+
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+    const video = join(dir, "v.mp4");
+    await writeFile(video, "x");
+    await expect(model.structure({ unitsBlock: "u001 texto", videoPath: video }))
+      .rejects.toThrow(/max_tokens/);
+  });
+});
+
 describe("ZaiTriageModel — rede", () => {
   it("tenta de novo depois de um 503 e devolve a segunda resposta", async () => {
     let chamadas = 0;
