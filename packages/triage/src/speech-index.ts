@@ -45,6 +45,19 @@ export interface SpeechIndex {
   sourceDurationSeconds: number;
 }
 
+/**
+ * `Number()` cru transforma "abc" em NaN, e NaN atravessa índice e
+ * verificação até virar tempo de corte — não erro. Falhar alto é restrição
+ * do repo, não cortesia.
+ */
+function num(value: unknown, field: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new Error(`speech_index.json: campo ${field} veio "${String(value)}" e não é número`);
+  }
+  return n;
+}
+
 export function parseSpeechIndex(raw: unknown): SpeechIndex {
   const root = raw as Record<string, unknown>;
   const rawUnits = root?.units;
@@ -54,20 +67,20 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
   const units: IndexUnit[] = rawUnits
     .map((u: Record<string, unknown>) => ({
       id: String(u.id),
-      index: Number(u.index),
-      start: Number(u.start),
-      end: Number(u.end),
-      duration: Number(u.duration),
+      index: num(u.index, "index"),
+      start: num(u.start, "start"),
+      end: num(u.end, "end"),
+      duration: num(u.duration, "duration"),
       text: String(u.text ?? ""),
       hasTerminalPunct: Boolean(u.has_terminal_punct),
       isQuestion: Boolean(u.is_question),
       nearDuplicateOf: u.near_duplicate_of == null || u.near_duplicate_of === ""
         ? null
         : String(u.near_duplicate_of),
-      similarity: u.similarity == null || u.similarity === "" ? null : Number(u.similarity),
-      wordCount: Number(u.word_count ?? 0),
-      cps: Number(u.cps ?? 0),
-      leadGap: Number(u.lead_gap ?? 0),
+      similarity: u.similarity == null || u.similarity === "" ? null : num(u.similarity, "similarity"),
+      wordCount: num(u.word_count ?? 0, "word_count"),
+      cps: num(u.cps ?? 0, "cps"),
+      leadGap: num(u.lead_gap ?? 0, "lead_gap"),
       disfluency: parseDisfluency(u.disfluency),
     }))
     .sort((a, b) => a.index - b.index);

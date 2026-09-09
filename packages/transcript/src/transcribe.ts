@@ -22,6 +22,27 @@ interface SidecarOutput {
 }
 
 /**
+ * A ponte com o sidecar é o único ponto onde stdout vira dado. Guardar aqui
+ * é guardar uma vez para todos os chamadores.
+ */
+export function parseSidecarOutput(stdout: string): SidecarOutput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`a saída do sidecar de fala não é JSON: ${stdout.slice(0, 200)}`);
+  }
+  const out = parsed as Partial<SidecarOutput>;
+  if (typeof out.language !== "string" || !Array.isArray(out.words)) {
+    throw new Error(
+      "a saída do sidecar de fala não tem `language`/`words` — o stdout foi " +
+        "poluído ou o services/speech/transcribe.py mudou de contrato",
+    );
+  }
+  return out as SidecarOutput;
+}
+
+/**
  * Extrai o áudio para um WAV temporário e roda o sidecar Python.
  * O WAV temporário é sempre removido, inclusive em erro.
  */
@@ -45,7 +66,7 @@ export async function transcribe(opts: {
       "--model", model,
     ], { cwd: SPEECH_DIR, maxBuffer: 256 * 1024 * 1024 });
 
-    const parsed = JSON.parse(stdout) as SidecarOutput;
+    const parsed = parseSidecarOutput(stdout);
     return { language: parsed.language, tokens: toTokens(parsed.words) };
   } finally {
     await rm(dir, { recursive: true, force: true });

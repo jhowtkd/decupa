@@ -57,6 +57,12 @@ describe("parseSpeechIndex", () => {
     expect(() => parseSpeechIndex({ topic_runs: [] })).toThrow(/units/);
   });
 
+  it("recusa start que não é número, nomeando o campo", () => {
+    const clone = JSON.parse(JSON.stringify(raw)); // clone do fixture: JSON.parse/JSON.stringify
+    clone.units[0].start = "abc";
+    expect(() => parseSpeechIndex(clone)).toThrow(/start.*abc/);
+  });
+
   it("lê near_duplicate_of, similaridade, contagem, cps, lead_gap e disfluency", () => {
     const u009 = parseSpeechIndex(raw).units.find((u) => u.id === "u009")!;
     expect(u009.nearDuplicateOf).toBe("u006");
