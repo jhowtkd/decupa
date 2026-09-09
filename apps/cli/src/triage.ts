@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
   acceptedDropIds,
   applyDensityBudget,
@@ -149,10 +149,59 @@ export async function extractUnitFrames(
   return out;
 }
 
+/** Base64 acima disso já devolveu erro genérico na Z.ai (medido: 14,9 MB
+ *  falhou com "1234 internal network failure", 2,2 MB passou). O app sempre
+ *  manda o proxy leve; o perigo é o `decupa triage` standalone com o
+ *  vídeo original. */
+const MAX_DIRECT_VIDEO_MB = 8;
+
+export async function ensureLightVideo(
+  videoPath: string,
+  outDir: string,
+  deps: {
+    fileSize?: (p: string) => Promise<number>;
+    transcode?: (src: string, dst: string) => Promise<void>;
+  } = {},
+): Promise<string> {
+  // O app entrega o proxy com este nome exato; re-transcodificar o proxy
+  // seria gastar minuto para piorar o arquivo.
+  if (basename(videoPath) === "triage-proxy.mp4") return videoPath;
+
+  const fileSize = deps.fileSize ?? (async (p: string) => (await stat(p)).size);
+  if ((await fileSize(videoPath)) / 1024 / 1024 <= MAX_DIRECT_VIDEO_MB) return videoPath;
+
+  const proxy = join(outDir, "triage-proxy.mp4");
+  const exists = await access(proxy).then(() => true, () => false);
+  if (!exists) {
+    const transcode = deps.transcode ?? defaultTranscode;
+    await mkdir(outDir, { recursive: true });
+    await transcode(videoPath, proxy);
+  }
+  return proxy;
+}
+
+async function defaultTranscode(src: string, dst: string): Promise<void> {
+  // Os mesmos parâmetros de pipeline.makeTriageProxy: o vídeo entra pro
+  // modelo dar contexto visual, não detalhe.
+  const code = await new Promise<number>((resolve) => {
+    const child = spawn("ffmpeg", [
+      "-i", src,
+      "-vf", "fps=1,scale=270:480",
+      "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
+      "-c:a", "aac", "-b:a", "24k", "-ac", "1",
+      "-y", dst,
+    ]);
+    child.on("close", (c) => resolve(c ?? 1));
+    child.on("error", () => resolve(1));
+  });
+  if (code !== 0) throw new Error(`não consegui gerar o proxy leve em ${dst} (ffmpeg código ${code})`);
+}
+
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const provider = resolveProvider(opts.provider);
   const modelName = opts.modelName ?? ZAI_DEFAULT_MODEL;
   const model = opts.model ?? new ZaiTriageModel({ model: modelName, maxTokens: opts.maxTokens });
+  const videoPath = await ensureLightVideo(opts.videoPath, opts.outDir);
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
   const byId = unitsById(index);
   const unitsBlock = buildUnitsBlock(index);
@@ -161,7 +210,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
 
   const cacheDir = join(opts.outDir, "triage_cache");
   await mkdir(cacheDir, { recursive: true });
-  const shas = { videoSha: await sha256(opts.videoPath), indexSha: await sha256(opts.indexPath) };
+  const shas = { videoSha: await sha256(videoPath), indexSha: await sha256(opts.indexPath) };
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, pass, budgetSeconds });
 
@@ -173,7 +222,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const structureKey = keyOf("structure");
   let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
   if (claims === null) {
-    claims = await model.structure({ unitsBlock, videoPath: opts.videoPath });
+    claims = await model.structure({ unitsBlock, videoPath });
     await writeCache(cacheDir, structureKey, claims);
   }
   const modelVerdicts = verifyClaims(claims, index, dropped);
@@ -186,7 +235,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const inspectKept = new Set<string>();
   if (visual && visual.length > 0) {
     const framesDir = join(opts.outDir, "inspect_frames");
-    const inspectVideo = await resolveInspectVideoPath(opts.videoPath, opts.outDir);
+    const inspectVideo = await resolveInspectVideoPath(videoPath, opts.outDir);
     const extract = opts.extractFrames ?? ((unit: { id: string; start: number; end: number }) =>
       extractUnitFrames(inspectVideo, unit, framesDir));
 
@@ -245,7 +294,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     const densityKey = keyOf("density", budgetSeconds);
     let candidates = await readCache<DensityCandidate[]>(cacheDir, densityKey);
     if (candidates === null) {
-      candidates = await model.density({ unitsBlock, videoPath: opts.videoPath, budgetSeconds });
+      candidates = await model.density({ unitsBlock, videoPath, budgetSeconds });
       await writeCache(cacheDir, densityKey, candidates);
     }
     const applied = applyDensityBudget(candidates, index, { budgetSeconds, alreadyDropped: dropped });

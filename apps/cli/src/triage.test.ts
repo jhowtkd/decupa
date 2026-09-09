@@ -1,10 +1,11 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveInspectVideoPath, runTriage } from "./triage.ts";
+import { ensureLightVideo, resolveInspectVideoPath, runTriage } from "./triage.ts";
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "triage-cli-"));
@@ -285,6 +286,50 @@ describe("runTriage — inspect", () => {
     });
     expect(out.keepList).toBe(gold);
     expect(out.reviewFlags.some((f) => f.unitId === "u020")).toBe(true);
+  });
+});
+
+describe("ensureLightVideo", () => {
+  const mk = (mb: number, name = "original.mp4") => {
+    const dir = mkdtempSync(join(tmpdir(), "decupa-triage-"));
+    const path = join(dir, name);
+    writeFileSync(path, Buffer.alloc(Math.round(mb * 1024 * 1024)));
+    return path;
+  };
+
+  it("devolve o arquivo quando já é leve", async () => {
+    const small = mk(2);
+    const transcode = vi.fn();
+    expect(await ensureLightVideo(small, join(dirname(small), "out"), { transcode })).toBe(small);
+    expect(transcode).not.toHaveBeenCalled();
+  });
+
+  it("transcodifica o pesado com os parâmetros do proxy do app", async () => {
+    const big = mk(20);
+    const outDir = join(dirname(big), "out");
+    const seen: Array<{ src: string; dst: string }> = [];
+    const proxyPath = await ensureLightVideo(big, outDir, {
+      transcode: async (src, dst) => { seen.push({ src, dst }); writeFileSync(dst, "x"); },
+    });
+    expect(proxyPath.endsWith("triage-proxy.mp4")).toBe(true);
+    expect(seen[0]!.src).toBe(big);
+  });
+
+  it("não regera proxy que já existe no outDir", async () => {
+    const big = mk(20);
+    const outDir = join(dirname(big), "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "triage-proxy.mp4"), "x");
+    const transcode = vi.fn();
+    expect(await ensureLightVideo(big, outDir, { transcode })).toContain("triage-proxy.mp4");
+    expect(transcode).not.toHaveBeenCalled();
+  });
+
+  it("proxy do app passa direto, mesmo pesado", async () => {
+    const proxy = mk(20, "triage-proxy.mp4");
+    const transcode = vi.fn();
+    expect(await ensureLightVideo(proxy, join(dirname(proxy), "out"), { transcode })).toBe(proxy);
+    expect(transcode).not.toHaveBeenCalled();
   });
 });
 
