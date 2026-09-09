@@ -14,6 +14,7 @@ import {
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
+import { editorialStats } from "./stats.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -282,13 +283,20 @@ export async function startApp(opts: {
           // parsear o markdown — o relatório muda de forma, a prévia não.
           let drop: unknown[] | undefined;
           let reviewFlags: unknown[] | undefined;
+          let stats: ReturnType<typeof editorialStats> | undefined;
           try {
             const json = await readJson(join(workDir, "out", "triage.json")) as {
-              drop?: unknown[];
+              drop?: { unit_ids: string[]; reason: string }[];
               reviewFlags?: unknown[];
             };
             drop = json.drop;
             reviewFlags = json.reviewFlags;
+            // Telemetria editorial: drop × índice dá os segundos e o motivo
+            // dominante. Falha aqui não tira a prévia — stats fica indefinido.
+            const index = await readJson(indexPath(pipelineJob)) as {
+              units?: { id: string; start: number; end: number }[];
+            };
+            stats = editorialStats(index.units ?? [], json.drop ?? []);
           } catch {
             // triage.json é novo; fallback no markdown.
           }
@@ -297,6 +305,7 @@ export async function startApp(opts: {
             motivos: motivosFromReport(report),
             drop,
             reviewFlags,
+            stats,
             report,
           });
           return;

@@ -253,6 +253,51 @@ describe("startApp", () => {
     expect(body.reviewFlags[0]!.unitId).toBe("u003");
   });
 
+  it("triage devolve telemetria editorial somando drop × índice", async () => {
+    // O fixture de bootComPlano não tem tempos; a telemetria soma end − start,
+    // então o índice aqui usa o contrato real (start/end por unidade, ver
+    // packages/triage/src/speech-index.ts).
+    const { base, app, dir } = await bootComPlano(new FakeExecutor(), async () => ({
+      keepList: "u002",
+    }));
+    await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({
+      units: [
+        { id: "u001", index: 0, text: "t0", start: 0, end: 10 },
+        { id: "u002", index: 1, text: "t1", start: 10, end: 25 },
+        { id: "u003", index: 2, text: "t2", start: 25, end: 30 },
+      ],
+    }), "utf8");
+    await writeFile(join(dir, "out", "triage.json"), JSON.stringify({
+      keepList: "u002",
+      drop: [{ unit_ids: ["u001", "u003"], reason: "retake", note: "refeito", source: "llm", restated_by: null }],
+      reviewFlags: [],
+    }), "utf8");
+    const res = await fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      stats?: {
+        sourceSeconds: number;
+        removedSeconds: number;
+        outputSeconds: number;
+        unitsTotal: number;
+        unitsRemoved: number;
+        byReason: { reason: string; units: number; seconds: number }[];
+        summary: string;
+      };
+    };
+    expect(body.stats).toBeDefined();
+    expect(body.stats!.sourceSeconds).toBe(30);
+    expect(body.stats!.removedSeconds).toBe(15);
+    expect(body.stats!.outputSeconds).toBe(15);
+    expect(body.stats!.unitsTotal).toBe(3);
+    expect(body.stats!.unitsRemoved).toBe(2);
+    expect(body.stats!.byReason[0]).toMatchObject({ reason: "retake", units: 2, seconds: 15 });
+    // O summary é o que a página pinta em #triage-stats — provar o texto
+    // inteiro é o que garante que mmss e a ordenação chegaram juntos.
+    expect(body.stats!.summary)
+      .toBe("corta 0m15s de 0m30s · 2/3 unidades · mais: retake (0m15s)");
+  });
+
   it("a página mostra aviso do job e separa vai cair de olhe isto", async () => {
     const { base } = await boot();
     const html = await (await fetch(base)).text();

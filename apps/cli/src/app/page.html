@@ -129,6 +129,7 @@
 <main id="prosa"></main>
 <aside id="triage" hidden>
   <h2>prévia da triagem</h2>
+  <p id="triage-stats" class="lbl"></p>
   <p class="lbl">vai cair (retake limpo)</p>
   <ul id="triage-drop"></ul>
   <p class="lbl">olhe isto (sem substituto)</p>
@@ -456,6 +457,8 @@ el("triar").onclick = async () => {
       : (r.motivos ?? []);
     fillList(el("triage-drop"), drop);
     fillList(el("triage-look"), look);
+    // Uma linha de contexto, não dashboard: quem decide lê e segue.
+    el("triage-stats").textContent = r.stats ? r.stats.summary : "";
     el("triage").hidden = false;
   } finally {
     if (!btn.hidden) {
