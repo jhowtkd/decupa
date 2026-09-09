@@ -9,9 +9,7 @@ import {
   applyInspect,
   buildUnitsBlock,
   cacheKey,
-  DEFAULT_MODEL,
   flagsWithoutSubstitute,
-  GeminiTriageModel,
   keepListFrom,
   mechanicalClaims,
   parseSpeechIndex,
@@ -19,6 +17,7 @@ import {
   PROMPT_VERSION,
   readCache,
   renderReport,
+  resolveProvider,
   verifyClaims,
   writeCache,
   ZAI_DEFAULT_MODEL,
@@ -41,8 +40,8 @@ export interface TriageOptions {
   /** Injetável para teste; em produção vem de `provider`. */
   model?: TriageModel;
   modelName?: string;
-  /** Qual motor responde. Default: gemini. */
-  provider?: "gemini" | "zai";
+  /** Qual motor responde. Resolvido pela chave quando ausente. */
+  provider?: string;
   /** Injetável: testes não dependem de ffmpeg. */
   extractFrames?: (unit: { id: string; start: number; end: number }) => Promise<string[]>;
   visual?: VisualUnitFlags[];
@@ -145,11 +144,9 @@ export async function extractUnitFrames(
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
-  const provider = opts.provider ?? "gemini";
-  const modelName = opts.modelName ?? (provider === "zai" ? ZAI_DEFAULT_MODEL : DEFAULT_MODEL);
-  const model = opts.model ?? (provider === "zai"
-    ? new ZaiTriageModel({ model: modelName })
-    : new GeminiTriageModel(modelName));
+  const provider = resolveProvider(opts.provider);
+  const modelName = opts.modelName ?? ZAI_DEFAULT_MODEL;
+  const model = opts.model ?? new ZaiTriageModel({ model: modelName });
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
   const unitsBlock = buildUnitsBlock(index);
   const visual = await loadVisual(opts);

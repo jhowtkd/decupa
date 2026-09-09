@@ -13,7 +13,6 @@ export type { Provider } from "./provider.ts";
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { resolveProvider } from "./provider.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
-export { DEFAULT_MODEL, GeminiTriageModel, stampModelClaims } from "./gemini.ts";
 export { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiTriageModel } from "./zai.ts";
 export { keepListFrom } from "./keeplist.ts";
 export { FakeTriageModel } from "./model.ts";

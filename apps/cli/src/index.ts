@@ -30,13 +30,13 @@ const USAGE = `decupa — bancada de medição
       condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
       alinhador esticou sobre o silêncio — use --no-trim para desligar.
 
-  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider gemini|zai] [--model <id>]
+  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider zai] [--model <id>]
       Decide o que é conteúdo do vídeo e o que não é, e devolve o keep-list
       pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
       contra o índice antes de virar corte. --target liga o passe de
       densidade; sem ele, só estrutura.
 
-  decupa limpar --input <vídeo> [--port 7788] [--provider gemini|zai]
+  decupa limpar --input <vídeo> [--port 7788] [--provider zai]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
       que não quer, exporta MP4, EDL ou transcrição.
 `;

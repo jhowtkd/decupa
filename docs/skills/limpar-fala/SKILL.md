@@ -92,8 +92,8 @@ assiste".
 pnpm decupa triage --index <pasta>/out/speech_index.json --video <pasta>/triage-proxy.mp4 --out <pasta>/out --provider zai
 ```
 
-`--provider` aceita `gemini` (precisa de `GEMINI_API_KEY`) ou `zai` (precisa
-de `ZAI_API_KEY`). Devolve um keep-list proposto e `out/triage.md` com o que
+`--provider` aceita `zai` (precisa de `ZAI_API_KEY`); o caminho Gemini foi
+retirado. Devolve um keep-list proposto e `out/triage.md` com o que
 foi dropado, por quê, e **quais alegações do modelo foram rejeitadas por não
 conferirem com o índice**. Leia as rejeitadas: elas dizem onde o modelo estava
 errado, o que é o melhor sinal que existe de que ele pode estar errado em
