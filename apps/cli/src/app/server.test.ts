@@ -17,7 +17,17 @@ async function boot() {
 
 /** Sobe com índice e plano já no disco, para exercitar o caminho de sucesso
  *  sem rodar WhisperX nem o motor. */
-async function bootComPlano(exec: FakeExecutor = new FakeExecutor()) {
+async function bootComPlano(
+  exec: FakeExecutor = new FakeExecutor(),
+  // A triagem agora é biblioteca: sem injeção ela exigiria provider e chave
+  // de verdade, então quem testa a borda injeta o resultado dela.
+  triageFn?: (opts: {
+    indexPath: string;
+    videoPath: string;
+    outDir: string;
+    provider?: string;
+  }) => Promise<{ keepList: string }>,
+) {
   const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
   await mkdir(join(dir, "out"), { recursive: true });
   const units = ["u001", "u002", "u003"].map((id, i) => ({ id, index: i, text: `t${i}` }));
@@ -29,6 +39,7 @@ async function bootComPlano(exec: FakeExecutor = new FakeExecutor()) {
   }), "utf8");
   const app = await startApp({
     input: join(dir, "v.mp4"), port: 0, autoStart: false, executor: exec, workDir: dir,
+    triageFn,
   });
   stop = app.close;
   return { app, exec, base: `http://127.0.0.1:${app.port}`, dir };
@@ -193,8 +204,8 @@ describe("startApp", () => {
   });
 
   it("motivos da triagem vêm do Aplicado, não do Rejeitado", async () => {
-    const { base, app, dir } = await bootComPlano(new FakeExecutor({
-      stdout: "keep-list: u002-u003\n",
+    const { base, app, dir } = await bootComPlano(new FakeExecutor(), async () => ({
+      keepList: "u002-u003",
     }));
     await writeFile(join(dir, "out", "triage.md"), [
       "# Triagem",
@@ -225,8 +236,8 @@ describe("startApp", () => {
   });
 
   it("prefere drop e reviewFlags do triage.json ao parse do markdown", async () => {
-    const { base, app, dir } = await bootComPlano(new FakeExecutor({
-      stdout: "keep-list: u002-u003\n",
+    const { base, app, dir } = await bootComPlano(new FakeExecutor(), async () => ({
+      keepList: "u002-u003",
     }));
     await writeFile(join(dir, "out", "triage.json"), JSON.stringify({
       keepList: "u002-u003",

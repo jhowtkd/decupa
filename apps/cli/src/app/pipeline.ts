@@ -3,6 +3,10 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Import direto da biblioteca de triagem: mesmo repo, sem subprocesso — o
+// contrato é a assinatura TypeScript, não uma regex sobre stdout.
+import { runTriage as runTriageLibrary } from "../triage.ts";
+
 export interface ExecResult {
   code: number;
   stdout: string;
@@ -294,26 +298,30 @@ export async function makeTriageProxy(
   return out;
 }
 
-export async function runTriage(job: PipelineJob, exec: Executor, provider?: string): Promise<string> {
+export async function runTriage(
+  job: PipelineJob,
+  exec: Executor,
+  provider?: string,
+  triageFn: (opts: {
+    indexPath: string;
+    videoPath: string;
+    outDir: string;
+    provider?: string;
+  }) => Promise<{ keepList: string }> = runTriageLibrary,
+): Promise<string> {
+  // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
+  // de gerar não pode ficar escondido dentro da biblioteca que o teste
+  // injeta. A biblioteca decide o resto — inclusive se o vídeo precisa de
+  // proxy próprio (ensureLightVideo, que passa o nosso direto).
   const proxy = await makeTriageProxy(job, exec);
-  const result = await must(exec, {
-    command: "pnpm",
-    args: [
-      "decupa", "triage",
-      "--index", indexPath(job), "--video", proxy,
-      "--out", join(job.workDir, "out"),
-      // Sem escolha explícita, quem resolve é o CLI, pela chave que existe.
-      ...(provider ? ["--provider", provider] : []),
-    ],
-    env: envFor(job),
-    cwd: REPO_ROOT,
-  }, "a triagem");
-
-  // Daqui para baixo nada muda: o parse do `keep-list:` na saída continua
-  // igual, e é ele que devolve a string para a prévia da tela.
-  const match = /keep-list:\s*(.+)/.exec(result.stdout);
-  if (!match) throw new Error(`a triagem não devolveu keep-list: ${result.stdout.slice(0, 300)}`);
-  return match[1]!.trim();
+  const result = await triageFn({
+    indexPath: indexPath(job),
+    videoPath: proxy,
+    outDir: join(job.workDir, "out"),
+    // Sem escolha explícita, quem resolve é a biblioteca, pela chave.
+    ...(provider ? { provider } : {}),
+  });
+  return result.keepList;
 }
 
 const TERMINAL_PUNCT_RE = /_TERMINAL_PUNCT\s*=\s*"([^"]*)"/;

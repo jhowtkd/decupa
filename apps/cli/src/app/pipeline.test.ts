@@ -195,21 +195,27 @@ describe("makeTriageProxy", () => {
 });
 
 describe("runTriage", () => {
-  it("omite --provider quando ninguém escolheu, para o CLI resolver pela chave", async () => {
-    // O app tem que subir sem chave nenhuma: triagem é acelerador, não
-    // pré-requisito. Fixar "gemini" aqui obrigaria quem usa Z.ai a passar a
-    // flag toda vez.
-    const exec = new FakeExecutor({ stdout: "keep-list: u001-u003\n" });
-    await runTriage(job, exec, undefined);
-    const call = exec.calls.find((c) => c.args.includes("triage"))!;
-    expect(call.args).not.toContain("--provider");
+  it("chama a biblioteca com o proxy leve e devolve o keep-list tipado", async () => {
+    const seen: unknown[] = [];
+    const keep = await runTriage(job, new FakeExecutor(), undefined, async (opts) => {
+      seen.push(opts);
+      return { keepList: "u001-u003" };
+    });
+    expect(keep).toBe("u001-u003");
+    expect(seen[0]).toMatchObject({
+      videoPath: join(job.workDir, "triage-proxy.mp4"),
+      outDir: join(job.workDir, "out"),
+    });
+    expect(seen[0]).not.toHaveProperty("provider");
   });
 
-  it("passa --provider quando a pessoa escolheu", async () => {
-    const exec = new FakeExecutor({ stdout: "keep-list: u001-u003\n" });
-    await runTriage(job, exec, "zai");
-    const call = exec.calls.find((c) => c.args.includes("triage"))!;
-    expect(call.args.slice(call.args.indexOf("--provider"))).toEqual(["--provider", "zai"]);
+  it("passa o provider escolhido para a biblioteca", async () => {
+    const seen: unknown[] = [];
+    await runTriage(job, new FakeExecutor(), "zai", async (opts) => {
+      seen.push(opts);
+      return { keepList: "u001" };
+    });
+    expect(seen[0]).toMatchObject({ provider: "zai" });
   });
 });
 

@@ -106,6 +106,14 @@ export async function startApp(opts: {
   autoStart?: boolean;
   /** só nos testes; em produção é derivado do caminho do vídeo. */
   workDir?: string;
+  /** Mesma injeção do pipeline.runTriage: os testes do server substituem a
+   *  chamada de biblioteca, que exigiria provider e índice de verdade. */
+  triageFn?: (opts: {
+    indexPath: string;
+    videoPath: string;
+    outDir: string;
+    provider?: string;
+  }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
@@ -266,7 +274,7 @@ export async function startApp(opts: {
         }
 
         if (parts[2] === "triage" && req.method === "POST") {
-          const suggested = await runTriage(pipelineJob, exec, provider);
+          const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
           const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
             .catch(() => "");
           // Preferir campos estruturados (drop / reviewFlags) em vez de
