@@ -208,7 +208,8 @@ export class ZaiTriageModel implements TriageModel {
     this.apiKey = apiKey;
     this.model = opts.model ?? ZAI_DEFAULT_MODEL;
     this.baseUrl = opts.baseUrl ?? process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE;
-    this.maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
+    // `--max-tokens 0` dobraria 0 para sempre, em loop de chamadas pagas sem progresso.
+    this.maxTokens = Math.max(1, opts.maxTokens ?? DEFAULT_MAX_TOKENS);
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retries = opts.retries ?? 1;

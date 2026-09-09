@@ -72,9 +72,11 @@ export function verifyClaims(
   const firstIndex = index.units[0]!.index;
   const lastIndex = index.units[index.units.length - 1]!.index;
 
+  const byId = unitsById(index);
+
   return claims.map((claim) => {
     const failed = checkClaim(claim, {
-      index, byId: unitsById(index), claimed, span, inTopicRun, firstIndex, lastIndex,
+      index, byId, claimed, span, inTopicRun, firstIndex, lastIndex,
     });
     return failed === null
       ? { claim, accepted: true as const }

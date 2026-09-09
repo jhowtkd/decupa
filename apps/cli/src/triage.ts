@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   acceptedDropIds,
@@ -161,6 +161,7 @@ export async function ensureLightVideo(
   deps: {
     fileSize?: (p: string) => Promise<number>;
     transcode?: (src: string, dst: string) => Promise<void>;
+    sourceSha?: (p: string) => Promise<string>;
   } = {},
 ): Promise<string> {
   // O app entrega o proxy com este nome exato; re-transcodificar o proxy
@@ -171,11 +172,32 @@ export async function ensureLightVideo(
   if ((await fileSize(videoPath)) / 1024 / 1024 <= MAX_DIRECT_VIDEO_MB) return videoPath;
 
   const proxy = join(outDir, "triage-proxy.mp4");
-  const exists = await access(proxy).then(() => true, () => false);
-  if (!exists) {
-    const transcode = deps.transcode ?? defaultTranscode;
-    await mkdir(outDir, { recursive: true });
-    await transcode(videoPath, proxy);
+  const sidecar = join(outDir, "triage-proxy.source.sha256");
+  const sourceSha = deps.sourceSha ?? sha256;
+
+  if (await access(proxy).then(() => true, () => false)) {
+    // Reuso só com prova de procedência: o sidecar precisa conter o sha do
+    // vídeo atual. Sem sidecar, ilegível ou de outro vídeo, regenera — um
+    // proxy de A não pode triar B em silêncio.
+    try {
+      if ((await readFile(sidecar, "utf8")).trim() === (await sourceSha(videoPath))) return proxy;
+    } catch {
+      // sidecar ausente ou ilegível → re-transcodifica
+    }
+  }
+
+  const transcode = deps.transcode ?? defaultTranscode;
+  await mkdir(outDir, { recursive: true });
+  // Escrita atômica: um ffmpeg morto no meio não pode deixar proxy parcial
+  // que seria reusado para sempre.
+  const partial = join(outDir, "triage-proxy.partial.mp4");
+  try {
+    await transcode(videoPath, partial);
+    await writeFile(sidecar, `${await sourceSha(videoPath)}\n`, "utf8");
+    await rename(partial, proxy);
+  } catch (err) {
+    await rm(partial, { force: true });
+    throw err;
   }
   return proxy;
 }

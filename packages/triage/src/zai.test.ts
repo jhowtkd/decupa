@@ -220,6 +220,24 @@ describe("auto-escalonar max_tokens", () => {
     await expect(model.structure({ unitsBlock: "u001 texto", videoPath: video }))
       .rejects.toThrow(/max_tokens/);
   });
+
+  it("clampa max_tokens não-positivo para 1: `--max-tokens 0` não pode dobrar 0", async () => {
+    // 0 ou negativo no construtor destravaria auto-escalonamento sem progresso
+    // — dobrar 0 é 0, e cada chamada sai paga com corpo impossível de responder.
+    const bodies: Array<Record<string, any>> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify(body({ content: '{"claims":[]}' })));
+    }) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, maxTokens: 0 });
+
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+    const video = join(dir, "v.mp4");
+    await writeFile(video, "x");
+    await model.structure({ unitsBlock: "u001 texto", videoPath: video });
+
+    expect(bodies[0]!.max_tokens).toBe(1);
+  });
 });
 
 describe("medidor de uso", () => {

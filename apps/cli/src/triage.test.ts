@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -296,6 +297,8 @@ describe("ensureLightVideo", () => {
     writeFileSync(path, Buffer.alloc(Math.round(mb * 1024 * 1024)));
     return path;
   };
+  const sha256File = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
+  const sidecarPath = (outDir: string) => join(outDir, "triage-proxy.source.sha256");
 
   it("devolve o arquivo quando já é leve", async () => {
     const small = mk(2);
@@ -320,9 +323,42 @@ describe("ensureLightVideo", () => {
     const outDir = join(dirname(big), "out");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, "triage-proxy.mp4"), "x");
+    // Sidecar provando que este proxy veio deste vídeo.
+    writeFileSync(sidecarPath(outDir), `${sha256File(big)}\n`);
     const transcode = vi.fn();
     expect(await ensureLightVideo(big, outDir, { transcode })).toContain("triage-proxy.mp4");
     expect(transcode).not.toHaveBeenCalled();
+  });
+
+  it("re-transcodifica quando o proxy existe mas veio de outro vídeo", async () => {
+    const big = mk(20);
+    // Buffer de zeros seria byte-idêntico ao mk acima; conteúdo distinto dá sha distinto.
+    const other = join(dirname(big), "outro.mp4");
+    writeFileSync(other, Buffer.alloc(Math.round(20 * 1024 * 1024), 1));
+    const outDir = join(dirname(big), "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "triage-proxy.mp4"), "proxy do outro vídeo");
+    writeFileSync(sidecarPath(outDir), `${sha256File(other)}\n`);
+    let calls = 0;
+    const proxyPath = await ensureLightVideo(big, outDir, {
+      transcode: async (_src, dst) => { calls += 1; writeFileSync(dst, "proxy novo"); },
+    });
+    expect(calls).toBe(1);
+    expect(readFileSync(proxyPath, "utf8")).toBe("proxy novo");
+    expect(readFileSync(sidecarPath(outDir), "utf8")).toContain(sha256File(big));
+  });
+
+  it("re-transcodifica quando o proxy existe sem sidecar", async () => {
+    const big = mk(20);
+    const outDir = join(dirname(big), "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "triage-proxy.mp4"), "x");
+    let calls = 0;
+    await ensureLightVideo(big, outDir, {
+      transcode: async (_src, dst) => { calls += 1; writeFileSync(dst, "novo"); },
+    });
+    expect(calls).toBe(1);
+    expect(readFileSync(sidecarPath(outDir), "utf8")).toContain(sha256File(big));
   });
 
   it("proxy do app passa direto, mesmo pesado", async () => {
