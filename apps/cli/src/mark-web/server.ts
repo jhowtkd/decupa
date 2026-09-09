@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
+import { originAllowed } from "../http/origin.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -39,6 +40,9 @@ export async function runMarkWeb(opts: {
   outPath: string;
   port?: number;
   cacheDir?: string;
+  /** Avisa em que porta o bind caiu — com `port: 0` só o servidor sabe, e o
+   * retorno só resolve depois de a página salvar. */
+  onListen?: (port: number) => void;
 }): Promise<MarkWebResult> {
   const cacheDir = opts.cacheDir ?? resolve("work/proxy");
   const info = await probe(opts.input);
@@ -60,10 +64,19 @@ export async function runMarkWeb(opts: {
   };
 
   return new Promise<MarkWebResult>((resolvePromise, rejectPromise) => {
+    // `port: 0` pede porta efêmera: o portão de origem precisa da que o bind
+    // escolheu, e o listen abaixo atualiza isso antes de aceitar conexões.
+    let boundPort = opts.port ?? 7777;
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
 
       const handle = async (): Promise<void> => {
+        // Mesmo portão do app limpar: bind em 127.0.0.1 protege da rede, não
+        // do navegador — e aqui o POST sobrescreve o truth-file da medição.
+        if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+          sendJson(res, { error: "origem não permitida" }, 403);
+          return;
+        }
         if (url.pathname === "/") {
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           res.end(page);
@@ -135,7 +148,9 @@ export async function runMarkWeb(opts: {
     server.on("error", rejectPromise);
     server.listen(opts.port ?? 7777, "127.0.0.1", () => {
       const address = server.address();
-      const port = typeof address === "object" && address ? address.port : opts.port;
+      const port = typeof address === "object" && address ? address.port : (opts.port ?? 7777);
+      boundPort = port;
+      opts.onListen?.(port);
       console.log(`marcador aberto em http://127.0.0.1:${port}`);
       console.log("marque as fronteiras e clique em Salvar — o terminal fecha sozinho");
     });

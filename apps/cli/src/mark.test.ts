@@ -1,4 +1,8 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { FIXTURES } from "../../../tests/fixtures/global-setup.ts";
 import {
   ACCEPT_ADVANCE_MS,
   JUMP_MS,
@@ -10,6 +14,7 @@ import {
   formatTruthFile,
   type MarkState,
 } from "./mark.ts";
+import { runMarkWeb, type MarkWebResult } from "./mark-web/server.ts";
 
 const state = (over: Partial<MarkState> = {}): MarkState => ({
   cursorMs: 1000,
@@ -156,5 +161,42 @@ describe("formatTruthFile", () => {
       durationMs: 3000,
     });
     expect(file.boundariesMs).toEqual([120, 460]);
+  });
+});
+
+describe("runMarkWeb: origem do POST /truth", () => {
+  it("recusa POST de outra origem com 403", async () => {
+    // Mesma garantia do app limpar: bind em 127.0.0.1 protege da rede, não
+    // do navegador. A diferença é que aqui o POST sobrescreve o truth-file
+    // da medição — dado de bancada, não só estado de tela.
+    const dir = await mkdtemp(join(tmpdir(), "mark-web-"));
+    let saved!: Promise<MarkWebResult>;
+    const up = new Promise<number>((resolvePort) => {
+      saved = runMarkWeb({
+        input: join(FIXTURES, "tone-gap.wav"),
+        outPath: join(dir, "truth.json"),
+        cacheDir: join(dir, "proxy"),
+        port: 0,
+        onListen: resolvePort,
+      });
+    });
+    const port = await up;
+
+    const stranger = await fetch(`http://127.0.0.1:${port}/truth`, {
+      method: "POST",
+      headers: { origin: "http://evil.example", "content-type": "application/json" },
+      body: JSON.stringify({ boundariesMs: [100] }),
+    });
+    expect(stranger.status).toBe(403);
+
+    // O servidor só encerra depois que um POST legítimo salva: com a origem
+    // certa a sessão fecha como na prática, e o runMarkWeb resolve.
+    const fromPage = await fetch(`http://127.0.0.1:${port}/truth`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${port}`, "content-type": "application/json" },
+      body: JSON.stringify({ boundariesMs: [100] }),
+    });
+    expect(fromPage.status).toBe(200);
+    await expect(saved).resolves.toMatchObject({ outPath: join(dir, "truth.json") });
   });
 });
