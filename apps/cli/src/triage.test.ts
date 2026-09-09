@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInspectVideoPath, runTriage } from "./triage.ts";
 
 async function fixture() {
@@ -25,6 +25,16 @@ async function fixture() {
   await writeFile(videoPath, "não é vídeo de verdade; o modelo é falso neste teste", "utf8");
   return { dir, indexPath, videoPath };
 }
+
+// O runTriage resolve o provedor pela chave quando ninguém escolhe — sem o
+// stub, a suíte dependeria de ZAI_API_KEY existir no shell que roda os testes.
+beforeEach(() => {
+  vi.stubEnv("ZAI_API_KEY", "test");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("runTriage", () => {
   it("aplica alegação que confere e devolve o keep-list", async () => {
