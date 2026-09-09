@@ -80,6 +80,15 @@ const INSPECT_SHAPE = `Responda com um objeto JSON desta forma exata:
 
 "decision" só pode ser "drop", "keep" ou "unsure". Nunca devolva tempo.`;
 
+/** Consumo acumulado desta instância entre os passes. */
+export interface ZaiUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  /** Caracteres de raciocínio — o thinking não desliga e é consumido antes da resposta. */
+  reasoningChars: number;
+}
+
 /** Extrai o texto da resposta, ou estoura dizendo por que não deu. */
 export function readChoice(raw: unknown): string {
   const body = raw as Record<string, any>;
@@ -175,6 +184,10 @@ export class ZaiTriageModel implements TriageModel {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private videoDataUrl: string | null = null;
+  // Mutável de propósito: acumula o que cada `once` custou, para o relatório e
+  // para o triage.json — Coding Plan é cota, e sem os números "acabou no meio
+  // do lote" é mistério.
+  private readonly usageTotals: ZaiUsage = { calls: 0, promptTokens: 0, completionTokens: 0, reasoningChars: 0 };
 
   constructor(opts: {
     model?: string;
@@ -265,6 +278,17 @@ export class ZaiTriageModel implements TriageModel {
     if (!res.ok && !(parsed as any)?.error) {
       throw new Error(`HTTP ${res.status} da Z.ai: ${raw.slice(0, 200)}`);
     }
+    // Contabiliza o que a chamada custou, sem mudar o que devolve. Só conta
+    // `calls` quando a resposta trouxe usage com prompt_tokens finito: um 503
+    // sem corpo de usage não consumiu tokens do modelo.
+    const usage = (parsed as Record<string, any>)?.usage;
+    if (usage && Number.isFinite(usage.prompt_tokens)) {
+      this.usageTotals.calls += 1;
+      this.usageTotals.promptTokens += Number(usage.prompt_tokens);
+      this.usageTotals.completionTokens += Number(usage.completion_tokens ?? 0);
+    }
+    const reasoning = (parsed as Record<string, any>)?.choices?.[0]?.message?.reasoning_content;
+    this.usageTotals.reasoningChars += String(reasoning ?? "").length;
     return readChoice(parsed);
   }
 
@@ -285,6 +309,11 @@ export class ZaiTriageModel implements TriageModel {
         retriesLeft -= 1;
       }
     }
+  }
+
+  /** Cópia dos totais até agora — para o relatório e o triage.json. */
+  usage(): ZaiUsage {
+    return { ...this.usageTotals };
   }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {

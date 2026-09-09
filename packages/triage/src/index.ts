@@ -7,6 +7,7 @@ export type { IndexUnit, SpeechIndex, TopicRun, TrimCandidate } from "./speech-i
 export type { CacheKeyParts } from "./cache.ts";
 export type { InspectFlag, InspectOutcome } from "./inspect.ts";
 export type { ReportInput } from "./report.ts";
+export type { ZaiUsage } from "./zai.ts";
 export type { VisualFlagCode, VisualSample, VisualUnitFlags } from "./visual.ts";
 export type { Provider } from "./provider.ts";
 

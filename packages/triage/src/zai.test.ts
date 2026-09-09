@@ -222,6 +222,26 @@ describe("auto-escalonar max_tokens", () => {
   });
 });
 
+describe("medidor de uso", () => {
+  it("acumula usage e raciocínio entre chamadas", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({
+      ...body({ content: '{"claims":[]}', reasoning_content: "think" }),
+      usage: { prompt_tokens: 1000, completion_tokens: 40 },
+    }))) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl });
+
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-"));
+    const video = join(dir, "v.mp4");
+    await writeFile(video, "x");
+    await model.structure({ unitsBlock: "u001 texto", videoPath: video });
+    await model.density({ unitsBlock: "u001 texto", videoPath: video, budgetSeconds: 10 });
+
+    expect(model.usage()).toEqual({
+      calls: 2, promptTokens: 2000, completionTokens: 80, reasoningChars: 10,
+    });
+  });
+});
+
 describe("ZaiTriageModel — rede", () => {
   it("tenta de novo depois de um 503 e devolve a segunda resposta", async () => {
     let chamadas = 0;

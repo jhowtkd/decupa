@@ -30,6 +30,7 @@ import {
   type TriageModel,
   type Verdict,
   type VisualUnitFlags,
+  type ZaiUsage,
 } from "@decupa/triage";
 
 export interface TriageOptions {
@@ -54,6 +55,7 @@ export interface TriageJson {
   keepList: string;
   drop: { unit_ids: string[]; reason: string; note: string; source: string; restated_by: string | null }[];
   reviewFlags: InspectFlag[];
+  usage?: ZaiUsage;
 }
 
 export interface TriageResult {
@@ -250,6 +252,10 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   }
 
   const keepList = keepListFrom(index, dropped);
+  // Só o adaptador da Z.ai sabe o que gastou; um modelo injetado de teste não.
+  // `usage()` devolve cópia, então capturar aqui congela o total de todos os
+  // passes que já rodaram (estrutura, inspect, densidade).
+  const usage = model instanceof ZaiTriageModel ? model.usage() : undefined;
   const drop = verdicts
     .filter((v) => v.accepted)
     .map((v) => ({
@@ -259,11 +265,13 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       source: v.claim.source,
       restated_by: v.claim.restated_by,
     }));
-  const payload: TriageJson = { keepList, drop, reviewFlags };
+  // `usage: undefined` some do JSON.stringify — triage.json só traz a chave
+  // quando houve chamada de verdade.
+  const payload: TriageJson = { keepList, drop, reviewFlags, usage };
   await mkdir(opts.outDir, { recursive: true });
   const reportPath = join(opts.outDir, "triage.md");
   await writeFile(reportPath, renderReport({
-    keepList, model: modelName, verdicts, density, reviewFlags, inspect: inspectVerdicts,
+    keepList, model: modelName, verdicts, density, reviewFlags, inspect: inspectVerdicts, usage,
   }), "utf8");
   await writeFile(join(opts.outDir, "triage.json"), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 

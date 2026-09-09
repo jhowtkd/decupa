@@ -13,6 +13,7 @@ export interface ReportInput {
   } | null;
   reviewFlags?: InspectFlag[];
   inspect?: InspectVerdict[];
+  usage?: { calls: number; promptTokens: number; completionTokens: number; reasoningChars: number };
 }
 
 function formatApplied(v: Verdict): string {
@@ -55,6 +56,13 @@ function sourceSection(
 
 export function renderReport(input: ReportInput): string {
   const lines: string[] = ["# Triagem", "", `- modelo: ${input.model}`, `- keep-list: \`${input.keepList}\``, ""];
+
+  if (input.usage) {
+    lines.push(
+      `- uso da API: ${input.usage.calls} chamadas · ${input.usage.promptTokens} tokens de prompt · ` +
+      `${input.usage.completionTokens} de resposta · ${input.usage.reasoningChars} chars de raciocínio`,
+    );
+  }
 
   if (input.verdicts.length === 0) {
     lines.push("O modelo não reivindicou nada. Tudo foi mantido.", "");

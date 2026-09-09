@@ -106,6 +106,18 @@ describe("renderReport", () => {
     expect(out).toContain("sem take substituto");
   });
 
+  it("traz o consumo da API no cabeçalho quando os números existem", () => {
+    const md = renderReport({
+      keepList: "u001-u002",
+      model: "glm-5.3-flash",
+      verdicts: [],
+      density: null,
+      usage: { calls: 3, promptTokens: 9000, completionTokens: 220, reasoningChars: 4200 },
+    });
+    expect(md).toContain("uso da API: 3 chamadas");
+    expect(md).toContain("9000 tokens de prompt");
+  });
+
   it("renderiza candidatos do passe de densidade quando presentes", () => {
     const out = renderReport({
       ...base,
