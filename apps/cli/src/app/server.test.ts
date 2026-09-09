@@ -346,6 +346,61 @@ describe("startApp", () => {
     expect((await readFile(join(dir, "keep.txt"), "utf8")).trim()).toBe("u002-u003");
   });
 
+  it("export srt achata o transcript do motor e remapeia na timeline de saída", async () => {
+    const { base, app, dir } = await bootComPlano();
+    await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+      source_duration: 30, output_duration: 3,
+      clips: [{ unit_ids: ["u002"], start: 10, end: 12 }, { unit_ids: ["u003"], start: 13, end: 14 }],
+      joins: [],
+    }), "utf8");
+    // Formato REAL do motor (ver condense/prepare.ts): segments[].words[] com
+    // text/start/end em segundos — não o tokens[] em ms do tipo interno
+    // Transcript. Entradas sem texto ou com tempo não-numérico têm de ser
+    // filtradas aqui, no caminho vivo, e não virar cue quebrada.
+    await writeFile(join(dir, "transcript.json"), JSON.stringify({
+      segments: [
+        {
+          start: 10.0, end: 10.6, text: "o corte é",
+          words: [
+            { text: "o", start: 10.0, end: 10.1 },
+            { text: "corte", start: 10.1, end: 10.4 },
+            { text: "é", start: 10.5, end: 10.6 },
+          ],
+        },
+        {
+          start: 13.0, end: 13.6, text: "a prosa",
+          words: [
+            { text: "a", start: 13.0, end: 13.1 },
+            { start: 13.2, end: 13.3 },
+            { text: "lixo", start: "13.2", end: 13.3 },
+            { text: "prosa", start: 13.1, end: 13.6 },
+          ],
+        },
+      ],
+    }), "utf8");
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "srt" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { downloadUrl: string };
+    const srt = await readFile(join(dir, "corte.srt"), "utf8");
+    // Clipe 1 (10–12s da fonte) ocupa 0–2s da saída: as palavras dele começam
+    // em zero, não em 10 segundos.
+    expect(srt).toContain("00:00:00,000 --> 00:00:00,600");
+    expect(srt).toContain("o corte é");
+    // O vão de 12–13s foi cortado: "a prosa" cai em 2s da saída, não em 13s.
+    expect(srt).toContain("00:00:02,000 --> 00:00:02,600");
+    expect(srt).toContain("a prosa");
+    // As palavras sem texto ou com tempo não-numérico não vazaram para a cue.
+    expect(srt).not.toContain("lixo");
+    // O mapa de download serve exatamente o arquivo que o export gravou.
+    const dl = await fetch(`${base}${body.downloadUrl}`);
+    expect(dl.status).toBe(200);
+    expect(await dl.text()).toBe(srt);
+  });
+
   it("recusa POST de outra origem, e aceita o da própria página", async () => {
     const { base, app } = await boot();
     const alheio = await fetch(`${base}/jobs/${app.jobId}/cancel`, {

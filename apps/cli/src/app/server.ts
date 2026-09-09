@@ -9,10 +9,11 @@ import { originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender,
-  runTriage, SpawnExecutor, visualIndexPath, type Executor, type PipelineJob,
+  indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
+  SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
+import { buildSrt, type SrtWord } from "./srt.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -326,6 +327,32 @@ export async function startApp(opts: {
             sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/mp4` });
             return;
           }
+          if (kind === "srt") {
+            // Legendas do corte: palavras do WhisperX (cache do workDir, sem
+            // etapa nova de minutos) + clipes do plano, remarcadas na saída.
+            // O transcript em disco é o formato do motor — segments[].words[]
+            // com tempo em SEGUNDOS (ver condense/prepare.ts) — não o
+            // `tokens[]` em ms do tipo interno Transcript.
+            const transcript = await readJson(transcriptPath(pipelineJob)) as {
+              segments?: { words?: { text?: unknown; start?: unknown; end?: unknown }[] }[];
+            };
+            // Palavra sem texto ou com tempo inválido entra fora; converter
+            // tudo para ms arredondado é o que o builder consome.
+            const words = (transcript.segments ?? [])
+              .flatMap((s) => s.words ?? [])
+              .flatMap((w): SrtWord[] => {
+                if (
+                  typeof w.text !== "string"
+                  || typeof w.start !== "number" || !Number.isFinite(w.start)
+                  || typeof w.end !== "number" || !Number.isFinite(w.end)
+                ) return [];
+                return [{ text: w.text, startMs: Math.round(w.start * 1_000), endMs: Math.round(w.end * 1_000) }];
+              });
+            const out = join(workDir, "corte.srt");
+            await writeFile(out, buildSrt({ clips: plan.clips, words }), "utf8");
+            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/srt` });
+            return;
+          }
           if (kind === "transcript") {
             sendJson(res, {
               path: join(workDir, "out", "condensed_transcript.json"),
@@ -341,6 +368,7 @@ export async function startApp(opts: {
           const files: Record<string, string> = {
             edl: join(workDir, "corte.edl"),
             mp4: join(workDir, "corte.mp4"),
+            srt: join(workDir, "corte.srt"),
             transcript: join(workDir, "out", "condensed_transcript.json"),
           };
           const path = files[parts[3]];
