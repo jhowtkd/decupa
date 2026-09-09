@@ -42,7 +42,7 @@ const USAGE = `decupa — bancada de medição
 
   decupa limpar --input <vídeo> [--port 7788] [--provider zai]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
-      que não quer, exporta MP4, EDL ou transcrição.
+      que não quer, exporta MP4, EDL, legendas ou transcrição.
 `;
 
 async function main(argv: string[]): Promise<number> {

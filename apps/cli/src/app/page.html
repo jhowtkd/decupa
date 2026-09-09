@@ -124,6 +124,7 @@
   <button id="triar" disabled>sugerir cortes</button>
   <button id="edl" disabled>exportar EDL</button>
   <button id="mp4" disabled>exportar MP4</button>
+  <button id="srt" disabled>legendas</button>
   <button id="txt" disabled>transcrição</button>
 </header>
 <main id="prosa"></main>
@@ -380,7 +381,7 @@ function schedule() {
 function readyFrom(j) {
   review = j.review;
   kept = new Map(review.units.map((u) => [u.id, u.kept]));
-  for (const id of ["triar", "edl", "mp4", "txt"]) el(id).disabled = false;
+  for (const id of ["triar", "edl", "mp4", "srt", "txt"]) el(id).disabled = false;
   el("cancelar").disabled = true;
   render();
 }
@@ -483,7 +484,7 @@ el("triage-dismiss").onclick = () => {
   pendingKeep = null;
 };
 
-for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["txt", "transcript"]]) {
+for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["srt", "srt"], ["txt", "transcript"]]) {
   el(id).onclick = async () => {
     const btn = el(id);
     const label = btn.textContent;

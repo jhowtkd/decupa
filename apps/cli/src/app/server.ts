@@ -296,9 +296,16 @@ export async function startApp(opts: {
             const index = await readJson(indexPath(pipelineJob)) as {
               units?: { id: string; start: number; end: number }[];
             };
-            stats = editorialStats(index.units ?? [], json.drop ?? []);
+            // Índice cru pode trazer unidade sem tempo numérico; sem o filtro,
+            // ela vira "corta NaNmNaNs" no resumo da prévia.
+            const units = (index.units ?? []).filter((u) =>
+              typeof u.start === "number" && typeof u.end === "number"
+              && Number.isFinite(u.start) && Number.isFinite(u.end)
+            );
+            stats = editorialStats(units, json.drop ?? []);
           } catch {
-            // triage.json é novo; fallback no markdown.
+            // triage.json é novo; fallback no markdown — e a leitura do índice
+            // ou do próprio stats falhando também cai aqui, sem stats.
           }
           sendJson(res, {
             keepList: suggested,

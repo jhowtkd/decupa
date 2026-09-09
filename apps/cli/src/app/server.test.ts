@@ -58,6 +58,10 @@ describe("startApp", () => {
     expect(html).toContain(JSON.stringify(app.jobId));
     expect(html).not.toContain("window.__JOB__");
     expect(html).toContain("decupa · limpar fala");
+    // O botão de legendas precisa existir na página: o server aceita
+    // kind:"srt" no export, mas sem markup a rota é inalcançável pela UI.
+    expect(html).toContain('id="srt"');
+    expect(html).toContain("legendas");
   });
 
   it("serve o keeplist.js testado, não uma cópia", async () => {
@@ -256,7 +260,8 @@ describe("startApp", () => {
   it("triage devolve telemetria editorial somando drop × índice", async () => {
     // O fixture de bootComPlano não tem tempos; a telemetria soma end − start,
     // então o índice aqui usa o contrato real (start/end por unidade, ver
-    // packages/triage/src/speech-index.ts).
+    // packages/triage/src/speech-index.ts). u004 vem com tempo em string —
+    // unidade lixo que tem de ficar fora da conta, senão o summary vira NaN.
     const { base, app, dir } = await bootComPlano(new FakeExecutor(), async () => ({
       keepList: "u002",
     }));
@@ -265,6 +270,7 @@ describe("startApp", () => {
         { id: "u001", index: 0, text: "t0", start: 0, end: 10 },
         { id: "u002", index: 1, text: "t1", start: 10, end: 25 },
         { id: "u003", index: 2, text: "t2", start: 25, end: 30 },
+        { id: "u004", index: 3, text: "t3", start: "0", end: "5" },
       ],
     }), "utf8");
     await writeFile(join(dir, "out", "triage.json"), JSON.stringify({

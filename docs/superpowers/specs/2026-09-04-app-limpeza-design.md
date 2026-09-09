@@ -135,7 +135,7 @@ de um plano que não corresponde ao que está na tela.
 | `GET /jobs/:id` | `{stage, error?, review?}` — a página faz polling |
 | `POST /jobs/:id/keep` | `{keepList}` → re-planeja, devolve o `review` novo |
 | `POST /jobs/:id/triage` | roda a triagem, devolve keep-list sugerido + motivos, para prévia |
-| `POST /jobs/:id/export` | `{kind: "mp4"\|"edl"\|"transcript"}` → `{downloadUrl, path}` |
+| `POST /jobs/:id/export` | `{kind: "mp4"\|"edl"\|"srt"\|"transcript"}` → `{downloadUrl, path}` |
 | `GET /jobs/:id/download/:kind` | serve o arquivo exportado |
 | `POST /jobs/:id/cancel` | mata o processo em andamento |
 

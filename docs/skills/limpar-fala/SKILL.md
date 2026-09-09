@@ -19,6 +19,9 @@ quê. Este documento assume zero contexto além do que está escrito aqui.
   palavra.
 - `ffmpeg`/`ffprobe` no PATH.
 
+Antes de começar, `pnpm decupa doctor` confere tudo isso de uma vez e diz o
+que falta.
+
 Os comandos do procedimento (`pnpm decupa`, `python3 scripts/condense.py`)
 partem da **raiz deste repo**. O motor grava `out/` e `.video_agent/` no cwd,
 ou em `CLAUDE_PROJECT_DIR` se estiver setado. Para isolar um trabalho numa
