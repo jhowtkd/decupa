@@ -170,7 +170,8 @@ export const DEFAULT_ENGINE = join(REPO_ROOT, "work", "video-agent-kit-plugin");
 const CONDENSE = join(REPO_ROOT, "scripts", "condense.py");
 const VISION_CWD = join(REPO_ROOT, "services", "vision");
 const VISION_SCRIPT = join(VISION_CWD, "visual_index.py");
-const SPEECH_SCRIPT = join(REPO_ROOT, "services", "speech", "transcribe.py");
+// Exportada para o `decupa doctor` conferir o sidecar sem duplicar o caminho.
+export const SPEECH_SCRIPT = join(REPO_ROOT, "services", "speech", "transcribe.py");
 const VISUAL_SKIP = "sidecar de visão não instalado, segue sem visual";
 
 export async function runIngest(

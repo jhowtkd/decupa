@@ -9,6 +9,8 @@ import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
 
 const USAGE = `decupa — bancada de medição
 
+  decupa doctor — checa o ambiente (binários, sidecars, motor, patch, chave) e diz o que consertar
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -45,6 +47,13 @@ const USAGE = `decupa — bancada de medição
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+
+  if (command === "doctor") {
+    const { runDoctor, renderDoctor } = await import("./doctor.ts");
+    const lines = await runDoctor();
+    console.log(renderDoctor(lines));
+    return lines.every((l) => l.ok) ? 0 : 1;
+  }
 
   if (command === "gold") {
     const { values } = parseArgs({
