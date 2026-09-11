@@ -4,7 +4,8 @@
 // ratio, arraste faz scrub com throttle e o playhead acende bloco + linha.
 // O waveform (Task 8) compõe os trechos retidos sobre cada bloco de cena
 // num <canvas>; apoio não entra (não tem áudio próprio) e sem peaks a
-// faixa segue só com os blocos.
+// faixa segue só com os blocos. O desfazer mora na faixa de transporte
+// (botão ⎌ discreto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
 
 /**
@@ -42,6 +43,9 @@ export function seekFromRatio(project, ratio) {
 /** Intervalo entre seeks de scrub durante o arraste. */
 export const SCRUB_THROTTLE_MS = 60;
 
+/** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
+let undoKeyBound = false;
+
 function esc(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -55,11 +59,39 @@ function esc(text) {
 export function mountSequencia({ state, api, player }) {
   const root = () => document.getElementById("faixa");
 
+  /** Desfaz a última edição (mesmo POST do antigo botão do contexto). */
+  function undoEdit() {
+    const p = state.get("project");
+    if (!p || p.revision === 0) return;
+    void api.call("/project/undo", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, revision: p.revision - 1 }),
+      label: "Desfazendo…",
+    });
+  }
+
+  /** Faixa de transporte: botão ⎌ discreto ao lado da faixa, sem revisão 0. */
+  function transportRow(p) {
+    const bar = document.createElement("div");
+    bar.className = "seq-transport";
+    bar.style.cssText = "display:flex;gap:8px;align-items:center;";
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.id = "undo";
+    undo.textContent = "⎌ Desfazer";
+    undo.setAttribute("aria-label", "Desfazer edição");
+    undo.title = "Desfazer edição";
+    undo.disabled = !p || p.revision === 0;
+    undo.onclick = undoEdit;
+    bar.appendChild(undo);
+    return bar;
+  }
+
   function render(p) {
     const el = root();
     if (!el) return;
     if (!p) {
-      el.replaceChildren();
+      el.replaceChildren(transportRow(null));
       return;
     }
     const blocks = timelineBlocks(p);
@@ -88,7 +120,7 @@ export function mountSequencia({ state, api, player }) {
         + ' style="width:' + width.toFixed(3) + '%;' + pos + '">' + wave + "</div>";
     }).join("")
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
-    el.replaceChildren(strip);
+    el.replaceChildren(strip, transportRow(p));
     paint(state.get("playhead"));
     void hydrateWaves(p);
   }
@@ -269,6 +301,25 @@ export function mountSequencia({ state, api, player }) {
     };
     el.addEventListener("pointerup", stop);
     el.addEventListener("pointercancel", stop);
+  }
+
+  // Atalho document-level Cmd/Ctrl+Z: ignora foco em campo editável para
+  // não roubar o desfazer nativo do texto.
+  if (!undoKeyBound) {
+    undoKeyBound = true;
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "z" && ev.key !== "Z") return;
+      if (!ev.metaKey && !ev.ctrlKey) return;
+      if (ev.shiftKey || ev.altKey) return;
+      const target = ev.target;
+      if (target instanceof HTMLElement) {
+        if (target.isContentEditable) return;
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      }
+      ev.preventDefault();
+      undoEdit();
+    });
   }
 
   bind();

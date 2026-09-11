@@ -38,8 +38,7 @@ export function mountContexto({ state, api, player }) {
     + '<p class="muted" id="deliveryMeta"></p>'
     + '<p class="muted">Assista à prévia atual antes de aprovar.</p>'
     + '<div class="row"><button type="button" id="refreshPreview">Atualizar prévia</button>'
-    + '<button type="button" id="approveFinal">Aprovar prévia assistida</button>'
-    + '<button type="button" id="undo">Desfazer edição</button></div>';
+    + '<button type="button" id="approveFinal">Aprovar prévia assistida</button></div>';
   root.appendChild(preview);
 
   // Só o estado das correções mora aqui; as ações por palavra (incluindo
@@ -277,17 +276,6 @@ export function mountContexto({ state, api, player }) {
       label: "Aprovando prévia…",
     });
   };
-  // O desfazer mora aqui até a Task 7 montar a faixa de transporte.
-  document.getElementById("undo").onclick = () => {
-    const project = state.get("project");
-    if (project.revision === 0) return;
-    void api.call("/project/undo", {
-      method: "POST",
-      body: JSON.stringify({ baseRevision: project.revision, revision: project.revision - 1 }),
-      label: "Desfazendo…",
-    });
-  };
-
   state.subscribe("project", render);
   state.subscribe("operation", () => render(state.get("project")));
   state.subscribe("watched", () => renderFreshness(state.get("project")));
