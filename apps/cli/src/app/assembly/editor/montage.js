@@ -139,6 +139,32 @@ export function timelineBlocks(project) {
   return blocks;
 }
 
+/**
+ * Trechos retidos na ordem da montagem, para o waveform da faixa: cada
+ * intervalo retido de cada take vira um segmento com a posição na fonte e
+ * na montagem. Apoio não entra (não tem áudio próprio).
+ */
+export function retainedSegments(project) {
+  const segments = [];
+  let cursor = 0;
+  for (const scene of project.scenes) {
+    for (const take of scene.takes) {
+      for (const range of retainedOfTake(take)) {
+        const montageStart = cursor;
+        cursor += range.end - range.start;
+        segments.push({
+          sourceId: take.sourceId,
+          srcStart: range.start,
+          srcEnd: range.end,
+          montageStart,
+          montageEnd: cursor,
+        });
+      }
+    }
+  }
+  return segments;
+}
+
 export function montageDuration(project) {
   const blocks = timelineBlocks(project);
   return blocks.reduce((max, b) => Math.max(max, b.end), 0);

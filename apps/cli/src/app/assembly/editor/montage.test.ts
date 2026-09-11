@@ -7,6 +7,7 @@ import {
   montageDuration,
   montageTimeOfWord,
   retainedOfTake,
+  retainedSegments,
   timelineBlocks,
 } from "./montage.js";
 
@@ -83,6 +84,19 @@ it("montageTimeOfWord soma retidos anteriores", () => {
   // t = 0 (retidos anteriores) + (0.72 - 0.7) = 0.02
   expect(montageTimeOfWord(p, "s1", "t1", w3)).toBeCloseTo(0.02, 5);
   expect(montageTimeOfWord(p, "s9", "t1", w3)).toBeNull();
+});
+
+it("retainedSegments: remoção no meio vira 2 segmentos com montageStart correto", () => {
+  const p = project();
+  p.scenes[0]!.takes[0]!.removed = [{ start: 0.4, end: 0.8 }];
+  expect(retainedSegments(p)).toEqual([
+    { sourceId: "a", srcStart: 0, srcEnd: 0.4, montageStart: 0, montageEnd: 0.4 },
+    { sourceId: "a", srcStart: 0.8, srcEnd: 2, montageStart: 0.4, montageEnd: 1.6 },
+  ]);
+  // Apoio não entra no waveform: só os takes contam.
+  const p2 = project();
+  p2.scenes[0]!.support = [{ visualId: "b", offsetFrames: 0, durationFrames: 25 }];
+  expect(retainedSegments(p2)).toHaveLength(1);
 });
 
 it("timelineBlocks: cena + apoio com tempos de montagem", () => {
