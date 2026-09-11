@@ -1,11 +1,11 @@
-// Bootstrap da casca de 4 regiões (Task 5): importa os módulos, cria
-// state/api, liga o status ao rail e renderiza o centro (os dois documentos
-// do spec). Sem gestos novos — a interação no ponto vem na Task 6.
+// Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
+// state/api/player e monta cada região — o centro (texto.js) renderiza os
+// dois documentos do spec com os gestos de edição no ponto.
 import { createState } from "/editor/state.js";
 import { createApi } from "/editor/api.js";
 import { mountRail } from "/editor/rail.js";
 import { mountContexto } from "/editor/contexto.js";
-import { effectiveWords, takeWords, montageTimeOfWord } from "/editor/montage.js";
+import { mountTexto } from "/editor/texto.js";
 
 const state = createState({ project: null, operation: null, selection: new Set(), playhead: null, watched: { revision: null, ended: false } });
 const ui = { busy: false, label: null, error: null };
@@ -294,154 +294,14 @@ async function importFiles(files) {
   }
 }
 
-/* ---- Centro: os dois documentos do spec (ainda sem gestos novos) ---- */
-
-function esc(text) {
-  return String(text).replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[ch]));
-}
-
-/**
- * Chave da ocorrência editorial selecionada (mesma serialização do contexto;
- * a Task 6 unifica em texto.js): cena/take/palavra (R3).
- */
-function selectionKey(sceneId, takeId, wordId) {
-  return sceneId + "\0" + takeId + "\0" + wordId;
-}
-
-/** Descarta seleções cujas ocorrências saíram do catálogo (ex.: correção alinhada). */
-function pruneSelection(p) {
-  const selection = state.get("selection") || new Set();
-  const known = new Set();
-  for (const scene of p.scenes) {
-    for (const take of scene.takes) {
-      for (const word of takeWords(p, scene, take)) {
-        known.add(selectionKey(scene.id, take.id, word.id));
-      }
-    }
-    // Sem UI de inclusão nesta casca (Task 6): chaves de omitidas ("take
-    // vazio") ainda não são criadas e caem aqui até lá.
-  }
-  let changed = false;
-  for (const key of [...selection]) {
-    if (!known.has(key)) {
-      selection.delete(key);
-      changed = true;
-    }
-  }
-  if (changed) state.set("selection", new Set(selection));
-}
-
-function renderTranscript(p) {
-  const running = p.preparation && p.preparation.status === "running";
-  let html = "";
-  for (const source of p.assembly.sources) {
-    const analysis = p.analyses.find((item) => item.sourceId === source.id);
-    const statusText = analysis ? analysis.status : "na fila";
-    html += '<section class="doc-source"><h2>' + esc(source.name) + " · " + esc(statusText)
-      + (running ? ' <span class="parcial">· parcial</span>' : "") + "</h2>";
-    const words = effectiveWords(p, source.id);
-    if (!words.length) {
-      html += '<p class="muted">transcrição ainda não disponível.</p>';
-    } else {
-      html += '<p class="prose">' + words.map((w) => esc(w.text)).join(" ") + "</p>";
-    }
-    html += "</section>";
-  }
-  return html;
-}
-
-function renderProse(p) {
-  const selection = state.get("selection") || new Set();
-  let html = "";
-  p.scenes.forEach((scene, index) => {
-    html += '<section class="scene"><p class="scene-head">Cena ' + (index + 1)
-      + (scene.objective ? " · " + esc(scene.objective) : "") + "</p>";
-    if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
-    for (const take of scene.takes) {
-      const source = p.assembly.sources.find((item) => item.id === take.sourceId);
-      html += '<div class="take"><div class="src">' + esc(source ? source.name : take.sourceId)
-        + " · " + take.start.toFixed(1) + "s–" + take.end.toFixed(1) + "s</div><p class=\"prose\">";
-      for (const word of takeWords(p, scene, take)) {
-        const key = selectionKey(scene.id, take.id, word.id);
-        html += '<button type="button" class="word'
-          + (word.removed ? " riscado" : "")
-          + (word.protected ? " protected" : "")
-          + (word.corrected ? " corrected" : "") + '"'
-          + ' data-word-id="' + esc(word.id) + '"'
-          + ' data-scene="' + esc(scene.id) + '"'
-          + ' data-take="' + esc(take.id) + '"'
-          + ' aria-pressed="' + (selection.has(key) ? "true" : "false") + '"'
-          + ' aria-label="' + esc(word.text + (word.removed ? " (removida)" : "")) + '"'
-          + ">" + esc(word.display || word.text) + "</button> ";
-      }
-      html += "</p></div>";
-    }
-    if (scene.gaps.length) {
-      html += '<p class="warn">lacunas: ' + esc(scene.gaps.join("; ")) + "</p>";
-    }
-    html += "</section>";
-  });
-  return html;
-}
-
-function renderCenter(p) {
-  const texto = document.getElementById("texto");
-  const dropzone = document.getElementById("dropzone");
-  if (!p) return;
-  // Preservação de foco (V8): a palavra focada volta após o re-render.
-  const focused = document.activeElement?.dataset;
-  const focusedKey = focused && focused.wordId !== undefined
-    ? { scene: focused.scene || "", take: focused.take || "", word: focused.wordId }
-    : null;
-  if (p.assembly.sources.length === 0) {
-    dropzone.hidden = false;
-    texto.hidden = true;
-    texto.replaceChildren();
-    return;
-  }
-  dropzone.hidden = true;
-  texto.hidden = false;
-  const html = p.scenes.length === 0 ? renderTranscript(p) : renderProse(p);
-  texto.innerHTML = html;
-  if (focusedKey) {
-    texto.querySelector(
-      `[data-scene="${CSS.escape(focusedKey.scene)}"][data-take="${CSS.escape(focusedKey.take)}"]`
-      + `[data-word-id="${CSS.escape(focusedKey.word)}"]`,
-    )?.focus();
-  }
-}
-
-function textoClickSetup() {
-  document.getElementById("texto").addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button.word");
-    if (!btn) return;
-    const key = selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.wordId);
-    const selection = new Set(state.get("selection") || []);
-    if (selection.has(key)) selection.delete(key);
-    else selection.add(key);
-    state.set("selection", selection);
-    btn.setAttribute("aria-pressed", selection.has(key) ? "true" : "false");
-    // Selecionar posiciona a reprodução no trecho (V6).
-    const p = project();
-    const scene = p.scenes.find((item) => item.id === btn.dataset.scene);
-    const take = scene?.takes.find((item) => item.id === btn.dataset.take);
-    const word = take && takeWords(p, scene, take).find((item) => item.id === btn.dataset.wordId);
-    if (word) player.seek(montageTimeOfWord(p, scene.id, take.id, word));
-  });
-}
-
 /* ---- Fiação ---- */
 
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
-textoClickSetup();
+mountTexto({ state, api, player });
 
 state.subscribe("project", (p) => {
   if (!p) return;
-  pruneSelection(p);
-  renderCenter(p);
   renderStatus();
   // 202 de prepare/adjust/prepare-resume trazem preparation running e caem
   // aqui: o polling retoma sem fiação extra nos módulos.
