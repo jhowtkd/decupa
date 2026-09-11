@@ -154,35 +154,90 @@ it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", a
   expect(last[last.indexOf("-t") + 1]).toBe("6");
 });
 
+/** Resposta com cobertura total da janela pedida, por texto distinto. */
+function fullWindowClient(counter: { calls: number }, failOn: { n: number }) {
+  return {
+    async send(content: unknown[]) {
+      counter.calls += 1;
+      if (counter.calls === failOn.n) throw new Error("provedor falhou");
+      const text = (content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text;
+      const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(text);
+      const start = match ? Number(match[1]) : 0;
+      const end = match ? Number(match[2]) : 0;
+      const fetchStart = start === 0 ? 0 : start - 1;
+      return JSON.stringify({
+        spans: [{
+          id: `local-${counter.calls}`,
+          start: 0,
+          end: end - fetchStart,
+          text: `janela-${start}`,
+          confidence: "observed",
+          tags: [],
+        }],
+      });
+    },
+  };
+}
+
 it("retomada reaproveita janelas prontas e não reenvia", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir, 45);
   const seen: { args: string[][] } = { args: [] };
-  let calls = 0;
-  let failOn = 2;
-  const client = {
-    async send() {
-      calls += 1;
-      if (calls === failOn) throw new Error("provedor falhou");
-      // Janela 1 sem contexto; demais com 1s (conteúdo em 1 local).
-      const start = calls === 1 ? 0 : 1;
-      return JSON.stringify({
-        spans: [{ id: `local-${calls}`, start, end: start + 1, text: "mesa", confidence: "observed", tags: [] }],
-      });
-    },
-  };
+  const counter = { calls: 0 };
+  const failOn = { n: 2 };
+  const client = fullWindowClient(counter, failOn);
   await expect(describeSource(source, dir, new AbortController().signal, {
     client,
     exec: windowMarkerExec(seen),
   })).rejects.toThrow(/provedor falhou/);
-  expect(calls).toBe(2);
-  failOn = -1;
-  const before = calls;
+  expect(counter.calls).toBe(2);
+  failOn.n = -1;
+  const before = counter.calls;
   const spans = await describeSource(source, dir, new AbortController().signal, {
     client,
     exec: windowMarkerExec(seen),
   });
   // Janela 1 veio do cache: só 2 envios novos (janelas 2 e 3).
-  expect(calls - before).toBe(2);
+  expect(counter.calls - before).toBe(2);
   expect(spans).toHaveLength(3);
+});
+
+it("respostas complementares conservam ambos os trechos", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 3);
+  let mode: "first" | "missing" = "first";
+  let calls = 0;
+  const client = {
+    async send() {
+      calls += 1;
+      // Mesma posição (item 0) nas duas respostas: o ID posicional repete,
+      // mas os intervalos são complementares e ambos precisam sobreviver.
+      const span = mode === "first"
+        ? { start: 0, end: 2, text: "anterior" }
+        : { start: 2, end: 3, text: "faltante" };
+      return JSON.stringify({
+        spans: [{ id: "local-0", ...span, confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const deps = { client, exec: copyProxy };
+  const first = await describeSource(source, dir, new AbortController().signal, deps);
+  expect(first.map((span) => [span.start, span.end])).toEqual([[0, 2]]);
+  mode = "missing";
+  const before = calls;
+  const second = await describeSource(source, dir, new AbortController().signal, deps);
+  // A janela parcial não valeu como concluída: foi pedida de novo.
+  expect(calls - before).toBe(1);
+  expect(second.map((span) => [span.start, span.end, span.text])).toEqual([
+    [0, 2, "anterior"],
+    [2, 3, "faltante"],
+  ]);
+  expect(new Set(second.map((span) => span.id)).size).toBe(second.length);
+  // Terceira execução reutiliza o cache completo sem outra chamada.
+  const cached = await describeSource(source, dir, new AbortController().signal, deps);
+  expect(calls - before).toBe(1);
+  expect(cached.map((span) => [span.start, span.end, span.text])).toEqual([
+    [0, 2, "anterior"],
+    [2, 3, "faltante"],
+  ]);
 });

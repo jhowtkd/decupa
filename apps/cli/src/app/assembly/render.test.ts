@@ -95,6 +95,61 @@ it("recusa fonte substituída antes de renderizar", async () => {
   await expect(renderAssembly(assembly, dir, exec)).rejects.toThrow(/substituída/);
 });
 
+it("render inválido não substitui a prévia válida anterior (V1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
+  const media = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), media);
+  const assembly = await assemblyWithMedia(dir);
+  const good: Executor = {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  const dest = await renderAssembly(assembly, dir, good);
+  const before = await hashFile(dest);
+  const bad: Executor = {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await writeFile(join(work, "reference.mp4"), "bytes-inválidos");
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  await expect(renderAssembly(assembly, dir, bad)).rejects.toThrow(/integridade|streams|duração/);
+  await expect(hashFile(dest)).resolves.toBe(before);
+});
+
+it("concorrentes válido + inválido preservam referência válida (V1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
+  const assembly = await assemblyWithMedia(dir);
+  const good: Executor = {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await new Promise((r) => setTimeout(r, 30));
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  const bad: Executor = {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await writeFile(join(work, "reference.mp4"), "lixo");
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  const results = await Promise.allSettled([
+    renderAssembly(assembly, dir, good),
+    renderAssembly(assembly, dir, bad),
+  ]);
+  expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+  expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+  const dest = join(dir, "rev-1", "reference.mp4");
+  const { probe } = await import("@decupa/media");
+  const info = await probe(dest);
+  expect(info.durationMs).toBeGreaterThan(0);
+});
+
 it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () => {
   for (const fps of [{ num: 25, den: 1 }, { num: 30000, den: 1001 }]) {
     const assembly = fixtureAssembly();

@@ -8,7 +8,7 @@
 <body>
 <header>
   <strong>decupa</strong>
-  <span class="hint" id="status">carregando…</span>
+  <span class="hint" id="status" role="status" aria-live="polite">carregando…</span>
   <label class="muted"><input type="checkbox" id="modelOptIn"> modelo pago (Z.ai)</label>
   <label class="muted"><input type="checkbox" id="visualOptIn"> visual pago (Z.ai)</label>
   <button type="button" class="primary" id="prepare">Preparar montagem</button>
@@ -46,7 +46,7 @@
 
   <section id="preparation" aria-label="Preparação" hidden>
     <h1>Preparação</h1>
-    <p class="muted" id="prepSummary"></p>
+    <p class="muted" id="prepSummary" aria-live="polite"></p>
     <table class="prep-table" aria-label="Estado por arquivo e etapa">
       <thead><tr><th>Arquivo</th><th>Mídia</th><th>Áudio</th><th>Visual</th></tr></thead>
       <tbody id="prepRows"></tbody>
@@ -63,6 +63,7 @@
     <div class="review-grid">
       <div class="viewer">
         <video id="previewPlayer" controls preload="metadata"></video>
+        <p class="muted" id="previewNote" hidden aria-live="polite"></p>
         <p class="muted" id="deliveryMeta"></p>
         <p class="muted">Assista à prévia atual antes de aprovar.</p>
         <div class="row">
@@ -82,6 +83,7 @@
           <input type="text" id="correctText" placeholder="Correção do trecho" aria-label="Texto corrigido">
           <button type="button" id="actCorrect">Corrigir texto</button>
         </div>
+        <div id="corrections" aria-label="Estado das correções de texto"></div>
         <div id="sceneCards"></div>
         <h2>Sequência</h2>
         <ul class="seq" id="sequence"></ul>

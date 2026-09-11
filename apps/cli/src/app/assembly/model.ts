@@ -103,6 +103,41 @@ async function windowClip(
   return clip;
 }
 
+/**
+ * Janela concluída: cada segundo de [start, end) tem alguma evidência
+ * (inclusive `unavailable` explícito). Cache parcial nunca vale como
+ * janela concluída — a retomada solicita a janela de novo e conserva
+ * o que já estava válido.
+ */
+const INTERVAL_EPS = 1e-9;
+
+/**
+ * O trecho novo substitui o anterior quando o redescreve por inteiro
+ * (mesmo intervalo ou superconjunto). Posição na resposta nunca decide
+ * substituição — só o intervalo efetivamente descrito.
+ */
+function coversInterval(fresh: VisualSpan, prev: VisualSpan): boolean {
+  return fresh.start <= prev.start + INTERVAL_EPS && prev.end <= fresh.end + INTERVAL_EPS;
+}
+
+function uniqueSpanId(base: string, taken: Set<string>): string {
+  if (!taken.has(base)) return base;
+  let n = 1;
+  while (taken.has(`${base}~${n}`)) n += 1;
+  return `${base}~${n}`;
+}
+
+function windowCovered(spans: VisualSpan[], window: VisualWindow): boolean {
+  const clipped = spans
+    .map((span) => ({ start: Math.max(span.start, window.start), end: Math.min(span.end, window.end) }))
+    .filter((range) => range.start < range.end);
+  for (let start = window.start; start < window.end; start += 1) {
+    const end = Math.min(start + 1, window.end);
+    if (!clipped.some((range) => range.start < end && start < range.end)) return false;
+  }
+  return true;
+}
+
 function parseLocalSpans(text: string, source: Source, window: VisualWindow): VisualSpan[] {
   const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const payload = JSON.parse(unfenced) as { spans?: unknown };
@@ -148,12 +183,15 @@ export async function describeSource(
   for (const window of visualWindows(source.durationSeconds)) {
     if (signal.aborted) throw new Error("descrição visual cancelada");
     const file = cacheFile(cacheDir, window);
+    let previous: VisualSpan[] = [];
     try {
       const cached = parseWindowCache(JSON.parse(await readFile(file, "utf8")), source, window);
-      if (cached) {
+      if (cached && windowCovered(cached, window)) {
         collected.push(...cached);
         continue;
       }
+      // Janela incompleta: solicita de novo e conserva o válido abaixo.
+      previous = cached ?? [];
     } catch {
       // cache miss ou inválido: processa a janela
     }
@@ -172,19 +210,31 @@ export async function describeSource(
             + `descreva o intervalo da fonte [${window.start}, ${window.end}).`,
         },
       ], signal);
-      const spans = parseLocalSpans(text, source, window);
+      const fresh = parseLocalSpans(text, source, window);
+      // Une sem perda: o novo substitui só o anterior que ele redescreve
+      // por inteiro; intervalos complementares são conservados. Ids
+      // posicionais podem repetir entre respostas — colisão com intervalo
+      // distinto ganha sufixo único em vez de apagar o trecho antigo.
+      const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
+      const taken = new Set(kept.map((span) => span.id));
+      const placed = fresh.map((span) => {
+        const id = uniqueSpanId(span.id, taken);
+        taken.add(id);
+        return id === span.id ? span : { ...span, id };
+      });
+      const merged = mergeAdjacent([...kept, ...placed]);
       const envelope: VisualWindowCache = {
         version: VISUAL_CACHE_VERSION,
         sha256: source.sha256,
         promptVersion: VISUAL_PROMPT_VERSION,
         model: ZAI_DEFAULT_MODEL,
         window,
-        spans,
+        spans: merged,
       };
       const tmp = `${file}.${process.pid}.tmp`;
       await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
       await rename(tmp, file);
-      collected.push(...spans);
+      collected.push(...merged);
     } catch (err) {
       // Cancelamento propaga como erro: lista parcial não é sucesso.
       throw err instanceof Error ? err : new Error(String(err));

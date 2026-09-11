@@ -125,10 +125,17 @@ it("percorre briefing → proposta local → exportação offline", async () => 
     body: JSON.stringify({ baseRevision: applied.project.revision }),
   })).status).toBe(200);
 
+  const previewed = await (await fetch(`${base}/project`)).json() as {
+    project: { revision: number; previewRevision: number | null };
+  };
+
   expect((await fetch(`${base}/project/approve-final`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ baseRevision: applied.project.revision }),
+    body: JSON.stringify({
+      baseRevision: previewed.project.revision,
+      watchedRevision: previewed.project.previewRevision,
+    }),
   })).status).toBe(200);
 
   const exported = await fetch(`${base}/project/export`, {

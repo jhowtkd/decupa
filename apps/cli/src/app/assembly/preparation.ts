@@ -298,6 +298,13 @@ export async function runPreparation(
             });
             checkAlive();
             const coverage = visualCoverage(spans, source.durationSeconds);
+            // Lacuna mantém a etapa incompleta (não pronta): a barreira
+            // impede proposta/render e Retomar completa só o faltante.
+            const gap = coverage.missing.length > 0
+              ? `cobertura visual incompleta: sem evidência em ${
+                coverage.missing.map((range) => `${range.start}s–${range.end}s`).join(", ")
+              }`
+              : undefined;
             await save((p) => {
               const previous = p.analyses.find((analysis) => analysis.sourceId === source.id);
               const merged = mergeAnalyses(p.analyses, [{
@@ -315,7 +322,10 @@ export async function runPreparation(
                 ...p,
                 analyses: merged,
                 preparation: p.preparation
-                  ? patchSource(p.preparation, source.id, { visual: "ready" })
+                  ? patchSource(p.preparation, source.id, {
+                    visual: gap ? "pending" : "ready",
+                    error: gap,
+                  })
                   : p.preparation,
               };
             });
@@ -326,6 +336,33 @@ export async function runPreparation(
               error: err instanceof Error ? err.message : String(err),
             });
           }
+        }
+
+        // Barreira anterior à proposta: fonte incluída com etapa necessária
+        // pendente/com erro impede a montagem parcial. Vale para todas as
+        // modalidades aplicáveis — mídia, áudio e, em fonte com vídeo,
+        // visual com cobertura completa — além da análise. Lacuna de
+        // cobertura mantém a etapa incompleta e impede proposta/render;
+        // Retomar solicita só o faltante. O progresso segue persistido;
+        // prosseguir sem a fonte exige excluí-la explicitamente do conjunto.
+        const blocked = targets.filter((source) => {
+          const state = current.preparation?.sources[source.id];
+          if (!state) return true;
+          if (state.media !== "ready" || state.audio !== "ready") return true;
+          if (source.hasVideo && deps.describeClient) {
+            if (state.visual !== "ready") return true;
+            const coverage = current.analyses.find((item) => item.sourceId === source.id)?.visualCoverage;
+            if (!coverage || coverage.missing.length > 0) return true;
+          }
+          const analysis = current.analyses.find((item) => item.sourceId === source.id);
+          if (!analysis || analysis.status === "error") return true;
+          return false;
+        });
+        if (blocked.length > 0) {
+          return await markTerminal(
+            "interrupted",
+            `análise necessária pendente nas fontes: ${blocked.map((s) => s.id).join(", ")}; retome ou exclua a fonte para prosseguir`,
+          );
         }
 
         const speechTotal = current.analyses

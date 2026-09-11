@@ -583,7 +583,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           await unlink(stored).catch(() => {});
           throw err;
         }
-        const source = project.assembly.sources.find((item) => item.path === stored);
+        // sourceFromFile canonicaliza com realpath; a grafia de `stored`
+        // pode divergir (ex.: /var vs /private/var no macOS). Compara pelo
+        // caminho canônico para nunca devolver 200 sem source (V8).
+        const canonical = await realpath(stored).catch(() => stored);
+        const source = project.assembly.sources.find((item) => item.path === canonical);
         sendJson(res, { project, source });
         return true;
       }
@@ -939,7 +943,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const baseRevision = requireRevision(body);
         const { gen } = begin("rendering");
         const project = await mutate(baseRevision, async (project) => {
-          const reference = await renderAssembly(project.assembly, dir, deps.exec);
+          let reference: string;
+          try {
+            reference = await renderAssembly(project.assembly, dir, deps.exec);
+          } catch (err) {
+            // Sem isso a operação ficava presa em "rendering" e travava
+            // a atualização automática mesmo após o erro (R2).
+            if (stillCurrent(gen)) {
+              operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+            }
+            throw err;
+          }
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };
           const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");

@@ -645,3 +645,215 @@ núcleos de implementação para orientar as tarefas, não código já implement
 Nenhum teste do novo fluxo, render ou chamada de IA foi executado durante o
 planejamento. Gate de compatibilidade permanece na tarefa 4; gate de qualidade
 visual na tarefa 6. A execução só inicia após aceite dos contratos propostos.
+
+## Encaminhamento ao Cursor Projects — 2026-09-11
+
+- Project criado e visto na navegação: **Decupa — montagem multiarquivo para DaVinci**.
+- Link: https://cursor.com/agents/bc-251f8c0d-f339-4e63-88f7-ae8b5ff2589d
+- Conta exibida: Jhonatan. Workspace escolhido: decupa, correspondente a
+  `https://github.com/jhowtkd/decupa.git`.
+- Base local: `main`, commit `8b0799b`; spec em `1468f62`. Os dois commits
+  constam à frente da referência local `origin/main`; nenhum push foi feito.
+- Working tree estava limpo antes deste registro. Esta seção é a única
+  alteração local feita para registrar o encaminhamento.
+- Modelo/preset preservado: seletor exibe High. Não inferir um modelo específico.
+- A ação Create Project iniciou ambiente Cloud automaticamente. O botão Stop
+  generation foi acionado antes de enviar instruções; o ambiente terminou com
+  status Environment ready. Não houve mensagem de implementação enviada nem
+  evidência de execução das tarefas. Consumo da inicialização não foi informado.
+- Não foi encontrada seleção de execução local nos controles de Project
+  inspecionados. Não substituir Project por sessão CLI alegando equivalência.
+- Autorização recebida em 2026-09-11: enviar spec/plano ao coordenador e executar
+  no Cloud usando a cota existente, sem excedentes. Os contratos deste plano
+  estão incluídos no encaminhamento autorizado. Nenhuma autorização de push,
+  nova assinatura, recorrência, produção ou análise paga de mídia foi concedida.
+- Os dois documentos integrais foram anexados pela opção Files e aparecem na
+  mensagem enviada. Briefing e confirmação de execução foram enviados ao
+  coordenador; a UI passou a Working / Planning next moves.
+- Próximo passo: confirmar leitura e início da entrega A, acompanhar o mesmo
+  coordenador e revisar suas evidências. Envio não equivale a implementação.
+- Leitura integral confirmada nos logs: spec L1–192 e plano L1–711. Coordenador
+  confirmou base Cloud `35042e7`, branch `codex/montagem-multiarquivo` e commit
+  dos documentos `b131513`. FFmpeg/Node/pnpm/Python disponíveis; motor e DaVinci
+  ausentes. Worker same_vm não habilitado; houve despacho Couldn't start, e o
+  coordenador informou continuação no próprio VM com um autor por vez.
+
+### Briefing preparado para o coordenador
+
+Objetivo: implementar o fluxo Decupa de vários arquivos de fala e apoio,
+orientado por roteiro ou briefing, com aprovação das cenas e da prévia, até
+entregar timeline editável para DaVinci e vídeo de referência da mesma revisão.
+
+Alvo: jhowtkd/decupa. Contexto local em `/Users/jhonatan/Repos/Video editor`,
+base main em 8b0799b. Spec aprovada:
+`docs/superpowers/specs/2026-09-11-montagem-multiarquivo-design.md`.
+Plano de dez tarefas:
+`docs/superpowers/plans/2026-09-11-montagem-multiarquivo.md`.
+Esses documentos serão fornecidos integralmente se não estiverem na base cloud;
+não fingir tê-los lido só porque os paths constam aqui.
+
+Cursor investiga, implementa, testa e corrige; Codex revisa marcos e fechamento.
+Reutilize o núcleo editorial e o compositor multipista existente. Comece pelas
+tarefas 1–4 (montagem e intercâmbio), depois 5–6 (análise) e 7–10 (fluxo completo).
+Leia os chamadores e confirme os contratos antes de editar. Um autor por vez;
+revisores devolvem achados ao autor. Use branch codex/montagem-multiarquivo,
+preserve trabalho existente e não faça merge nem push sem autorização.
+
+Critérios: origem rastreável, ausência de falas inventadas, lacunas visíveis,
+retomada por arquivo, escolhas aprovadas preservadas, referência e timeline
+equivalentes. Execute os testes pertinentes do plano e pnpm typecheck. O
+DaVinci 21.0.4 e o clone local do motor estão no Mac e não devem ser presumidos
+na máquina cloud. Declare dependências ausentes; não instale nem substitua
+ferramentas silenciosamente. Importação real e aceite editorial continuam sendo
+marcos obrigatórios, sem confundir testes de JSON com integração validada.
+
+Restrições: nenhum acesso a produção, publicação, merge/deploy, recorrência,
+nova assinatura ou excedente pago. Chamadas de análise de mídia à Z.ai exigem
+lote e custo autorizados separadamente; desenvolver e testar offline primeiro.
+Não enviar mídia de cliente nem credenciais. Não adicionar dependências ou
+outro formato/motor como fallback automático. Pare em limite de consumo ou
+decisão necessária, completando o restante independente autorizado.
+
+Retorne marcos concluídos/restantes, diff e commits, comandos/resultados de
+testes, evidências de QA e bloqueios. Mantenha este contexto conciso e atual.
+
+### Revisão local da entrega A — 2026-09-11
+
+- Patch Cloud `6322032214a74d898701c2fa98add7fa7a314e8e` copiado para
+  `/private/tmp/decupa-entrega-a.patch`; SHA256 local
+  `5bd210597ad8d330a0903621da4d8af266b80b33950fa87ade383ce336d525a4`.
+  Manifesto Cloud confirma 11 arquivos/937 inserções; não contém checksum.
+- `git apply --check` passou. Aplicado somente no clone isolado
+  `/private/tmp/decupa-assembly-review-20260911`, branch `codex/assembly-review`.
+  Dependências existentes restauradas com `pnpm install --frozen-lockfile`.
+- Prova REAL com `VE_PLUGIN_ROOT` no motor local d9fe300: exit 2.
+  Relatório: `work/assembly-proof/run-mM71Hc/report.json` no clone isolado.
+  Validador do motor exige `project` não vazio, `assets[]` não vazio e
+  `reason` nos três clipes. Adaptador não fornece esses campos.
+  Wrapper imprime só result.text e oculta os diagnósticos em result.data.
+- Achados enviados e reconhecidos pelo mesmo coordenador. Também solicitada
+  prova fracionária renderizada, dimensões reais, timecode não zero, caminhos
+  absolutos e proteção de render concorrente por revisão. Entrega A recusada.
+- DaVinci 21.0.4: projeto isolado `New Project 2Decupa prova 2026-09-11`.
+  Importação do OTIO realizada pela UI; mídias online, V1/V2/A1 visíveis e 2s.
+  Com Automatically set project settings, resultado manteve 24fps/1920x1080,
+  diferente de 25fps/320x240 da montagem. Gate A continua aberto.
+  API externa `scriptapp("Resolve")` retornou None; nenhuma configuração global
+  alterada. Não há MP4 correspondente para comparação, pois render falhou.
+- Próximo passo: receber patch cumulativo corrigido e logs do Cursor, repetir
+  render real, provar frames/canvas no DaVinci e revisar entregas B/C.
+  Nenhum push, merge, publicação ou chamada de análise paga realizado no Mac.
+- Roundtrip exportado pela UI para `/private/tmp/decupa-davinci-roundtrip.otio`:
+  global_start_time 86400@24, V1/A1 48@24 e V2 gap 24@24 + clipe 24@24.
+  Confirma conversão de frames na importação automática da primeira entrega.
+  API externa também retornou None fora do sandbox (consulta somente leitura).
+
+### Patch cumulativo disponível; transferência bloqueada
+
+- Último HEAD informado: `0d05535`; patch Cloud em
+  `/opt/cursor/artifacts/entrega_cumulativa_implementation.bin.patch`, SHA256
+  `6e781cf8d5babf6d13f756368fc18d6dcb7ead1b8708d1be689507cc4a9b44ff`.
+- Log aberto na UI e conferido visualmente: 12 arquivos de teste, 69 testes
+  aprovados, typecheck sem erros; data 2026-09-11T09:30:38Z, HEAD 0d05535.
+  Não equivale a render real nem teste no DaVinci.
+- Coordenador relata correções: project/assets/reason no contrato do motor;
+  muted:true nos clipes de vídeo; wrapper rejeita data.status=fail;
+  OTIO global_start_time no fps correto e instruções de importação explícitas.
+  Essas correções ainda não foram revisadas localmente.
+- A transferência da revisão cumulativa falhou: TextEdit apresentou
+  ScreenCaptureKit -3811 e timeouts de colagem; reset da sessão de UI e
+  reabertura do arquivo não resolveram. Alternativa pelo navegador foi
+  recusada pela política de URL; não houve tentativa de contornar a recusa.
+- `/private/tmp/decupa-cumulative-review.patch` foi criado vazio, não é patch
+  válido. O patch inicial e os relatórios permanecem intactos.
+- Solicitado ao usuário salvar o patch cumulativo no Mac e informar o caminho.
+  Solicitada ao coordenador reconciliação das dez tarefas e conclusão do
+  trabalho offline independente de B/C, antes de parar por gates reais.
+- Último estado vivo do coordenador: reconheceu reconciliação pendente e
+  informou continuação de UI, revisão de propostas, exportação e regressão da
+  limpeza; UI mostra Working / Planning next moves. Não há evidência de
+  conclusão das dez tarefas. Retomar este mesmo Project após transferência.
+
+### Patch 7056a25 recebido e revisão local
+
+- Usuário salvou `/Users/jhonatan/Downloads/entrega_cumulativa_implementation.bin.patch`.
+  SHA256 conferido: `390780ad250f154a6979030cd93af61f952945175a180af772d0484894013757`.
+  Aplicado limpo no clone `/private/tmp/decupa-assembly-review-20260911`,
+  após reverter somente o patch anterior aplicado por esta revisão.
+- Motor existente preservado. Prova real exit 0: `run-ifXoN5`, 320x240,
+  25fps, 50 frames, vídeo/áudio 2s; frame24 vermelho, frame25 azul.
+- Prova `run-frac-AqJnLC`, 30000/1001: 50 frames, áudio/vídeo 1.668333s;
+  BUG: apoio entra no frame26 em vez do frame25. Devolvido ao autor.
+- DaVinci, novo projeto isolado `New Project 2`: reconheceu automaticamente
+  25fps; canvas ajustado manualmente a 320x240 no import. Roundtrip em
+  `/private/tmp/decupa-davinci-roundtrip-7056a25.otio` confirma V1/A1 50@25,
+  V2 gap25@25 + clip25@25. Não comprova canvas automático nem aceite editorial.
+- Revisão rejeitou conclusão das tarefas9/10: falta player/download, conexão
+  real configurável dos providers, edição e consulta visual completas,
+  persistência incremental de análise e verificação do hash na exportação.
+  Autor reconheceu e está corrigindo no mesmo Project, sem chamadas pagas.
+- Concorrência reproduzida com saveProject: snapshot antigo da mesma revisão
+  apaga aprovação recém-gravada. Encaminhado com risco de duas prévias
+  escreverem no mesmo arquivo. Também enviado: describeClient ignora
+  body.visual=false, podendo chamar provider ao pedir só transcrição.
+- Próximo passo: receber patch consolidado, repetir provas e revisar UI e
+  concorrência. Sem push, deploy ou análise paga; produto ainda não concluído.
+
+### Validação real Feira e correção de proposta
+
+- Patch e4e68443 aplicado em /private/tmp/decupa-review-e4e68443. 63 testes
+  focados e typecheck passaram. Prova NTSC ainda entra azul no frame26.
+- Projeto real /private/tmp/decupa-feira-e4e68443, duas fontes Videos Feira,
+  http://127.0.0.1:7801. Ambas análises prontas; WhisperX teve crash nativo
+  intermitente recursive_mutex. Retomar concluiu e preservou a outra fonte.
+- Usuário autorizou uso contínuo de LLM para seu app. Servidor reiniciado
+  com --allow-paid-model. Revisão automática recusou ativação conjunta visual;
+  apenas texto foi habilitado via alternativa restrita aprovada.
+- Resposta real Z.ai rejeitada pelo app: proposta com revisão desatualizada,
+  projeto revisão3 estável. scenes.ts não define schema Proposal no prompt.
+- Mesmo Cursor Project recebeu correção delimitada: schema explícito,
+  metadados vinculados ao snapshot pelo servidor, manter CAS e validação,
+  testes de metadados omitidos/inventados e stale real, UI de andamento.
+  Solicitado patch incremental sobre 081c4f5 inline para aplicação no Mac.
+
+- Correção de proposta concluída no Mac: transferência do patch Cursor 8f4c1f8
+  falhou na UI (ScreenCaptureKit3812); autoria pontual assumida explicitamente
+  por Codex na cópia /private/tmp/decupa-review-e4e68443. Alterados scenes.ts,
+  scenes.test.ts e page.html: schema explícito, snapshot clonado, UUID/revisão
+  do servidor, proteção de referências e feedback/duplicação na UI. Não é
+  aplicação do patch remoto; reconciliar com Cursor antes de integrar.
+- 67 testes assembly/flow passaram, typecheck e diffcheck limpos. Chamada real
+  Z.ai validada: proposta registrada e visível, cinco cenas, cerca de48s,
+  revisão3 do projeto Feira. Não aplicada nem aprovada editorialmente.
+
+### Redesign e fluxo automático — direção escolhida
+
+- Usuário confirmou preparação automática até proposta e prévia reproduzível,
+  além de correção da transcrição e edição de cortes por palavras.
+- Após comparar três protótipos, escolheu A — Texto + vídeo, pelo chat (“a”).
+- Desenho consolidado para revisão em
+  `docs/superpowers/specs/2026-09-11-fluxo-automatico-edicao-textual-design.md`.
+  Não representa aprovação da implementação nem aplicação no app.
+- Referências reais pesquisadas no catálogo Builder do 21st.dev; nenhum
+  componente instalado, migração de framework ou geração paga de UI realizada.
+- Protótipo ilustrativo preservado em
+  `.superpowers/brainstorm/24976-1789133742/content/layouts-feira-v3.html`.
+- Usuário aprovou o desenho completo (“aprovo”). Plano de implementação
+  detalhado em `docs/superpowers/plans/2026-09-11-fluxo-automatico-edicao-textual.md`:
+  dez tarefas, contratos internos, migração, testes e QA real. Preparado para
+  o mesmo executor Cursor; não foi despachada implementação nesta etapa.
+- Inspeção para o plano confirmou perda de granularidade em analysis.ts
+  (lê speech_index sem preservar transcript.words) e envio do proxy inteiro
+  por janela em model.ts, seguido de deslocamento temporal. Correções
+  incluídas no plano; não aplicadas ao runtime durante o planejamento.
+- Usuário escolheu executar com outro agente. Handoff completo preparado em
+  `docs/superpowers/plans/2026-09-11-decupa-handoff-executor.md`, com dez passos,
+  gates G0–G7, requisitos R-001–R-014 e prompt para review independente.
+- Pacote local `work/handoffs/decupa-execucao-2026-09-11.zip`, SHA256
+  `200d1bf20c36708f299af4b8048500173e1e678064e70484e892d0e29c6ab4a3`.
+  Inclui docs, referência A portátil e patch de40arquivos extraído da cópia
+  atual, baseado em8b0799b. Patch novo SHA256
+  `860a99f7f080f2c3c1a847454f9f903ddcb7ec435878f4b4db1b368cce0d051b`.
+  Apply-check no principal e reverse-check na cópia passaram; SHA256SUMS e
+  integridade ZIP conferidos. Nenhum patch aplicado, teste funcional rerodado
+  ou agente de implementação iniciado para preparar este handoff.

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hashFile, probe } from "@decupa/media";
@@ -147,16 +147,23 @@ export async function renderAssembly(
       `.reference-${process.pid}-${randomBytes(4).toString("hex")}.tmp.mp4`,
     );
     await rename(outPath, tmp);
+    // Valida o arquivo exclusivo do job ANTES de publicar: um render
+    // inválido nunca substitui a referência válida anterior.
+    try {
+      const info = await probe(tmp).catch((err: unknown) => {
+        throw new Error(`prévia sem integridade: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      if (!info.hasVideo && !info.hasAudio) {
+        throw new Error("prévia sem streams de vídeo nem áudio");
+      }
+      if (info.durationMs <= 0) {
+        throw new Error("prévia com duração zerada");
+      }
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
     await rename(tmp, dest);
-    const info = await probe(dest).catch((err: unknown) => {
-      throw new Error(`prévia sem integridade: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    if (!info.hasVideo && !info.hasAudio) {
-      throw new Error("prévia sem streams de vídeo nem áudio");
-    }
-    if (info.durationMs <= 0) {
-      throw new Error("prévia com duração zerada");
-    }
     return dest;
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});

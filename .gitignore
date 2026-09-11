@@ -12,3 +12,4 @@ work/
 # O motor de condense grava aqui no cwd (ou em CLAUDE_PROJECT_DIR):
 # cache de índice, frames e waveforms do QC. Artefato de execução.
 .video_agent/
+.superpowers/

@@ -1,12 +1,27 @@
 import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { hashFile } from "@decupa/media";
 import { exportApproved } from "./export.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import type { Project } from "./types.ts";
+
+let failNextCopy = false;
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    copyFile: (async (...args: Parameters<typeof actual.copyFile>) => {
+      if (failNextCopy) {
+        failNextCopy = false;
+        throw new Error("EACCES simulado na substituta");
+      }
+      return actual.copyFile(...args);
+    }) as typeof actual.copyFile,
+  };
+});
 
 async function projectWithMedia(dir: string, revision = 1): Promise<Project> {
   const speech = join(dir, "fala.mp4");
@@ -140,4 +155,53 @@ it("recusa fonte cujo hash atual diverge do sha256 aprovado", async () => {
   await writeFile(project.assembly.sources[0]!.path, "conteudo-diferente");
   await expect(exportApproved(project, dir))
     .rejects.toThrow(/substitu|reanalise|relink/);
+});
+
+it("export corrompido não é reutilizado como sucesso: republica íntegro (V2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 9);
+  const dest = await exportApproved(project, dir);
+  expect(dest).toBe(join(dir, "exports", "9"));
+  await writeFile(join(dest, "reference.mp4"), "conteúdo-inválido");
+  const again = await exportApproved(project, dir);
+  expect(again).toBe(dest);
+  const { readFile } = await import("node:fs/promises");
+  const delivered = await readFile(join(dest, "reference.mp4"));
+  const watched = await readFile(join(dir, "rev-9", "reference.mp4"));
+  expect(delivered.equals(watched)).toBe(true);
+});
+
+it("falha na substituta preserva a entrega anterior (R4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const { readdir, readFile, stat } = await import("node:fs/promises");
+  const project = await projectWithMedia(dir, 11);
+  const dest = await exportApproved(project, dir);
+  await writeFile(join(dest, "reference.mp4"), "conteúdo-inválido");
+  failNextCopy = true;
+  await expect(exportApproved(project, dir)).rejects.toThrow(/EACCES simulado/);
+  // A entrega anterior segue intacta e sem restos temporários.
+  expect((await stat(join(dest, "timeline.otio"))).size).toBeGreaterThan(0);
+  expect(JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")).revision).toBe(11);
+  expect(await readFile(join(dest, "reference.mp4"), "utf8")).toBe("conteúdo-inválido");
+  expect((await readdir(join(dir, "exports"))).filter((f) => f.startsWith(".tmp-"))).toEqual([]);
+  // A tentativa seguinte recupera a entrega íntegra.
+  await expect(exportApproved(project, dir)).resolves.toBe(dest);
+  const delivered = await readFile(join(dest, "reference.mp4"));
+  const watched = await readFile(join(dir, "rev-11", "reference.mp4"));
+  expect(delivered.equals(watched)).toBe(true);
+});
+
+it("otio ausente ou corrompido republica em vez de reutilizar (V2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const { unlink } = await import("node:fs/promises");
+  const project = await projectWithMedia(dir, 10);
+  const dest = await exportApproved(project, dir);
+  await unlink(join(dest, "timeline.otio"));
+  await expect(exportApproved(project, dir)).resolves.toBe(dest);
+  const { readFile, stat } = await import("node:fs/promises");
+  expect((await stat(join(dest, "timeline.otio"))).size).toBeGreaterThan(0);
+  await writeFile(join(dest, "timeline.otio"), "lixo");
+  await expect(exportApproved(project, dir)).resolves.toBe(dest);
+  const otio = await readFile(join(dest, "timeline.otio"), "utf8");
+  expect(otio).toContain("Timeline");
 });

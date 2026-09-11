@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
@@ -18,6 +18,48 @@ async function sha256(path: string): Promise<string> {
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type ExportManifest = {
+  revision?: unknown;
+  timeline?: unknown;
+  reference?: unknown;
+  sources?: unknown;
+};
+
+async function exportedFileSha(path: string): Promise<string | null> {
+  try {
+    return await sha256(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Confere se o diretório de exportação está íntegro: manifest presente,
+ * hashes dos arquivos reais conferem com o manifest e o MP4 tem
+ * integridade (probe). Não basta a existência do manifest.
+ */
+async function exportedDirValid(dest: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(
+      await readFile(join(dest, "manifest.json"), "utf8"),
+    ) as ExportManifest;
+    if (typeof manifest.timeline !== "string" || typeof manifest.reference !== "string") {
+      return false;
+    }
+    const otioSha = await exportedFileSha(join(dest, "timeline.otio"));
+    if (otioSha !== manifest.timeline) return false;
+    const refSha = await exportedFileSha(join(dest, "reference.mp4"));
+    if (refSha !== manifest.reference) return false;
+    const info = await probe(join(dest, "reference.mp4")).catch(() => null);
+    if (!info || (!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
+      return false;
+    }
     return true;
   } catch {
     return false;
@@ -133,40 +175,66 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     const sourceShas = Object.fromEntries(
       await Promise.all(snapshot.sources.map(async (s) => [s.id, await sha256(s.path)])),
     );
+    let matchesExpected = false;
     try {
-      const existing = JSON.parse(await readFile(manifestPath, "utf8")) as {
-        revision?: unknown; timeline?: unknown; reference?: unknown; sources?: unknown;
-      };
-      if (
+      const existing = JSON.parse(await readFile(manifestPath, "utf8")) as ExportManifest;
+      matchesExpected =
         existing.revision === project.revision
         && existing.timeline === otioSha
         && existing.reference === refSha
-        && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
-      ) {
+        && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
+      if (matchesExpected && (await exportedDirValid(dest))) {
         return dest;
       }
     } catch {
       // Sem manifest válido: publica abaixo.
     }
+    // Prepara e valida toda a substituta ANTES de retirar a entrega
+    // existente: falha de gravação nunca apaga o destino anterior (R4).
     const tmp = join(dir, "exports", `.tmp-${project.revision}-${process.pid}-${Date.now()}`);
-    await mkdir(tmp, { recursive: true });
-    const otioPath = join(tmp, "timeline.otio");
-    await writeFile(otioPath, otioText, "utf8");
-    await copyFile(reference, join(tmp, "reference.mp4"));
-    const manifest = {
-      revision: project.revision,
-      timeline: otioSha,
-      reference: refSha,
-      sources: sourceShas,
-    };
-    await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    try {
+      await mkdir(tmp, { recursive: true });
+      const otioPath = join(tmp, "timeline.otio");
+      await writeFile(otioPath, otioText, "utf8");
+      await copyFile(reference, join(tmp, "reference.mp4"));
+      const manifest = {
+        revision: project.revision,
+        timeline: otioSha,
+        reference: refSha,
+        sources: sourceShas,
+      };
+      await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      if (!(await exportedDirValid(tmp))) {
+        throw new Error("substituta inválida ao gravar a exportação");
+      }
+    } catch (err) {
+      const { rm } = await import("node:fs/promises");
+      await rm(tmp, { recursive: true, force: true });
+      throw err;
+    }
+    // Substituta pronta e validada: só agora retira a entrega anterior.
+    {
+      const { rm } = await import("node:fs/promises");
+      await rm(dest, { recursive: true, force: true });
+    }
     try {
       await rename(tmp, dest);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EEXIST" || code === "ENOTEMPTY" || code === "EISDIR") {
-        if (await access(manifestPath).then(() => true, () => false)) return dest;
-        throw new Error(`export da revisão ${project.revision} já está em andamento`);
+        // Colisão de rename só reutiliza destino verificado e esperado.
+        try {
+          const existing = JSON.parse(await readFile(manifestPath, "utf8")) as ExportManifest;
+          const same =
+            existing.revision === project.revision
+            && existing.timeline === otioSha
+            && existing.reference === refSha
+            && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
+          if (same && (await exportedDirValid(dest))) return dest;
+        } catch {
+          // Manifest ilegível: destino inconsistente abaixo.
+        }
+        throw new Error(`export da revisão ${project.revision} está inconsistente: reexporte`);
       }
       throw err;
     }

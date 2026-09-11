@@ -19,6 +19,7 @@ async function sourceFrom(
   name: string,
   id: string,
   role: "speech" | "support",
+  durationSeconds = 3,
 ): Promise<Source> {
   const path = join(dir, name);
   await cp(CLIP, path);
@@ -30,7 +31,7 @@ async function sourceFrom(
     id,
     path,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    durationSeconds: 3,
+    durationSeconds,
     hasVideo: true,
     hasAudio: true,
     role,
@@ -41,7 +42,14 @@ async function sourceFrom(
   };
 }
 
-type FakeOpts = { failAudioFor?: string; failRender?: boolean; describeShort?: boolean };
+type FakeOpts = {
+  failAudioFor?: string;
+  failRender?: boolean;
+  describeShort?: boolean;
+  failVisual?: boolean;
+  /** Resposta visual por janela (segundos da fonte); {throw} simula falha. */
+  describeImpl?: (start: number, end: number) => { spans: { start: number; end: number; text: string }[] } | { throw: string };
+};
 type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; describe: number };
 
 function makeFakes(opts: FakeOpts = {}): {
@@ -126,8 +134,27 @@ function makeFakes(opts: FakeOpts = {}): {
     exec: { run: exec },
     proposeSend,
     describeClient: {
-      send: async (): Promise<string> => {
+      send: async (content: unknown[]): Promise<string> => {
         calls.describe += 1;
+        if (opts.failVisual) throw new Error("visual provider unavailable");
+        if (opts.describeImpl) {
+          const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
+          const start = match ? Number(match[1]) : 0;
+          const end = match ? Number(match[2]) : 3;
+          const out = opts.describeImpl(start, end);
+          if ("throw" in out) throw new Error(out.throw);
+          const fetchStart = start === 0 ? 0 : start - 1;
+          return JSON.stringify({
+            spans: out.spans.map((span, i) => ({
+              id: `local-${i}`,
+              start: span.start - fetchStart,
+              end: span.end - fetchStart,
+              text: span.text,
+              confidence: "observed",
+              tags: [],
+            })),
+          });
+        }
         const end = opts.describeShort ? 2 : 3;
         return JSON.stringify({
           spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
@@ -153,11 +180,14 @@ function makeFakes(opts: FakeOpts = {}): {
   };
 }
 
-async function seed(dir: string, specs: Array<[string, string, "speech" | "support"]>): Promise<Project> {
+async function seed(
+  dir: string,
+  specs: Array<[string, string, "speech" | "support", number?]>,
+): Promise<Project> {
   await createProject(dir, blankProject("prep-test"));
   let current = await loadProject(dir);
-  for (const [name, id, role] of specs) {
-    const source = await sourceFrom(dir, name, id, role);
+  for (const [name, id, role, durationSeconds] of specs) {
+    const source = await sourceFrom(dir, name, id, role, durationSeconds);
     await saveProject(dir, current.revision, (p) => ({
       ...p,
       assembly: { ...p.assembly, sources: [...p.assembly.sources, source] },
@@ -200,9 +230,9 @@ describe("runPreparation", () => {
     expect(done.corrections).toHaveLength(0);
   });
 
-  it("falha do áudio da segunda fonte preserva a primeira e resolve", async () => {
+  it("falha do áudio da segunda fonte preserva a primeira e para antes da proposta (V5)", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
-    const { deps } = makeFakes({ failAudioFor: "b" });
+    const { deps, calls } = makeFakes({ failAudioFor: "b" });
     const done = await runPreparation(
       dir,
       base.revision,
@@ -213,8 +243,67 @@ describe("runPreparation", () => {
     const analyses = Object.fromEntries(done.analyses.map((a) => [a.sourceId, a.status]));
     expect(analyses).toMatchObject({ fala: "ready" });
     expect(done.analyses.find((a) => a.sourceId === "apoio")?.status).toBe("error");
+    // Barreira anterior à proposta: nada de proposta, cena ou prévia parcial.
+    expect(calls.propose).toBe(0);
+    expect(calls.render).toBe(0);
+    expect(done.scenes).toHaveLength(0);
+    expect(done.previewRevision).toBeNull();
+    expect(done.preparation?.status).toBe("interrupted");
+    expect(done.preparation?.error).toMatch(/apoio/);
+  });
+
+  it("falha visual para antes da proposta e retomada conclui (R1)", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, calls } = makeFakes({ failVisual: true });
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    expect(done.preparation?.sources.fala?.visual).toBe("error");
+    expect(calls.propose).toBe(0);
+    expect(calls.render).toBe(0);
+    expect(done.scenes).toHaveLength(0);
+    expect(done.previewRevision).toBeNull();
+    expect(done.preparation?.status).toBe("interrupted");
+    const retry = makeFakes();
+    const resumed = await runPreparation(
+      dir,
+      done.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    expect(resumed.scenes).toHaveLength(1);
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(resumed.previewRevision).toBe(resumed.revision);
+  });
+
+  it("retomar após falha completa o que falta sem perder a primeira (V5)", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
+    const first = makeFakes({ failAudioFor: "b" });
+    const blocked = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+    expect(blocked.preparation?.status).toBe("interrupted");
+    expect(blocked.scenes).toHaveLength(0);
+    const retry = makeFakes();
+    const done = await runPreparation(
+      dir,
+      blocked.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
     expect(done.scenes).toHaveLength(1);
-    expect(["ready", "attention"]).toContain(done.preparation?.status);
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.previewRevision).toBe(done.revision);
   });
 
   it("duplo início não duplica cenas nem revisões", async () => {
@@ -303,9 +392,9 @@ describe("runPreparation", () => {
     expect(done.revision).toBe(edited.revision);
   });
 
-  it("gaps necessários viram attention com prévia disponível", async () => {
+  it("cobertura parcial impede proposta e retomada completa só o faltante", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
-    const { deps } = makeFakes({ describeShort: true });
+    const { deps, calls } = makeFakes({ describeShort: true });
     const done = await runPreparation(
       dir,
       base.revision,
@@ -313,8 +402,91 @@ describe("runPreparation", () => {
       deps,
       ctrl(),
     );
-    expect(done.preparation?.status).toBe("attention");
-    expect(done.previewRevision).toBe(done.revision);
+    // Gate: resposta parcial produz propose=render=0, sem cena nem prévia.
+    expect(done.preparation?.sources.fala?.visual).toBe("pending");
+    expect(done.preparation?.sources.fala?.error).toMatch(/2s–3s/);
+    expect(calls.propose).toBe(0);
+    expect(calls.render).toBe(0);
+    expect(done.scenes).toHaveLength(0);
+    expect(done.previewRevision).toBeNull();
+    expect(done.preparation?.status).toBe("interrupted");
+    // Retomada com resposta complementar (só 2–3s, mesma posição 0):
+    // conserva 0–2s, fecha a cobertura e permite exatamente uma proposta/prévia.
+    const retry = makeFakes({
+      describeImpl: () => ({ spans: [{ start: 2, end: 3, text: "trecho faltante" }] }),
+    });
+    const resumed = await runPreparation(
+      dir,
+      done.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    // Só a janela incompleta foi solicitada de novo; o válido foi conservado.
+    expect(retry.calls.describe).toBe(1);
+    expect(retry.calls.propose).toBe(1);
+    expect(retry.calls.render).toBe(1);
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(resumed.scenes).toHaveLength(1);
+    expect(resumed.previewRevision).toBe(resumed.revision);
+    const analysis = resumed.analyses.find((item) => item.sourceId === "fala");
+    expect(analysis?.visualCoverage.missing).toEqual([]);
+    expect((analysis?.visual ?? []).map((span) => span.text).sort()).toEqual([
+      "pessoa falando",
+      "trecho faltante",
+    ]);
+    // Terceira execução reutiliza o cache completo sem outra chamada visual.
+    // (A proposta enlatada idêntica é rejeitada para preservar cortes —
+    // comportamento esperado; o gate aqui é só o reuso do cache.)
+    const third = makeFakes();
+    const again = await runPreparation(
+      dir,
+      resumed.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      third.deps,
+      ctrl(),
+    );
+    expect(third.calls.describe).toBe(0);
+    expect(again.preparation?.sources.fala?.visual).toBe("ready");
+  });
+
+  it("retomada não repete janela visual completa", async () => {
+    const base = await seed(dir, [["longa.mp4", "fala", "speech", 21]]);
+    const first = makeFakes({
+      describeImpl: (start) =>
+        start === 0
+          ? { spans: [{ start: 0, end: 20, text: "janela-um" }] }
+          : { spans: [] },
+    });
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+    expect(first.calls.describe).toBe(2);
+    expect(done.preparation?.status).toBe("interrupted");
+    expect(done.scenes).toHaveLength(0);
+    const retry = makeFakes({
+      describeImpl: (start, end) => ({
+        spans: [{ start, end, text: start === 0 ? "janela-um" : "janela-dois" }],
+      }),
+    });
+    const resumed = await runPreparation(
+      dir,
+      done.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    // [0,20) veio do cache: só [20,21) foi solicitada de novo.
+    expect(retry.calls.describe).toBe(1);
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(resumed.previewRevision).toBe(resumed.revision);
+    const visual = resumed.analyses.find((item) => item.sourceId === "fala")?.visual ?? [];
+    expect(visual.some((span) => span.text === "janela-um")).toBe(true);
+    expect(visual.some((span) => span.text === "janela-dois")).toBe(true);
   });
 
   it("opt-in persiste permissões de modelo e visual", async () => {

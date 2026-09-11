@@ -345,7 +345,8 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
       async run(call) {
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         workDirs.push(work);
-        await writeFile(join(work, "reference.mp4"), work);
+        // Mídia válida: o probe recusa bytes arbitrários com 500.
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
         await new Promise((r) => setTimeout(r, 40));
         return { code: 0, stdout: "ok", stderr: "" };
       },
