@@ -97,6 +97,7 @@ function validateSource(value: unknown, index: number, seen: Set<string>): Sourc
     width: optionalPositiveEven(value.width, `fonte ${id}.width`),
     height: optionalPositiveEven(value.height, `fonte ${id}.height`),
     role: role as Source["role"],
+    included: value.included === undefined ? true : booleanField(value.included, `fonte ${id}.included`),
   };
 }
 

@@ -1,7 +1,18 @@
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { access } from "node:fs/promises";
-import type { Analysis, Assembly, Project, Source } from "./types.ts";
+import type {
+  Analysis,
+  Assembly,
+  LegacyProject,
+  Preparation,
+  Project,
+  Source,
+  SpeechTake,
+  TextCorrection,
+  VisualCoverage,
+  Word,
+} from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 
 const queues = new Map<string, Promise<unknown>>();
@@ -60,9 +71,280 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function validateProject(value: unknown): Project {
-  if (!isRecord(value)) throw new Error("projeto precisa ser um objeto");
-  if (value.version !== 1) throw new Error("projeto.version precisa ser 1");
+const SHA256 = /^[0-9a-f]{64}$/;
+const STATUSES = new Set(["pending", "running", "ready", "error"]);
+const CORRECTION_STATUSES = new Set(["pending", "aligned", "error"]);
+const VISUAL_CONFIDENCES = new Set(["observed", "uncertain", "unavailable"]);
+
+function nonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} precisa ser um texto não vazio`);
+  }
+  return value;
+}
+
+function finiteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} precisa ser um número finito`);
+  }
+  return value;
+}
+
+function nonNegativeInt(value: unknown, label: string): number {
+  const n = finiteNumber(value, label);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error(`${label} precisa ser um inteiro não negativo`);
+  }
+  return n;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  return nonEmptyString(value, label);
+}
+
+/** Intervalo semiaberto validado contra a duração da fonte — sem estimar. */
+function sourceRange(
+  value: unknown,
+  label: string,
+  durationSeconds: number,
+): { start: number; end: number } {
+  if (!isRecord(value)) throw new Error(`${label} precisa ser um objeto`);
+  const start = finiteNumber(value.start, `${label}.start`);
+  const end = finiteNumber(value.end, `${label}.end`);
+  if (start < 0 || end <= start || end > durationSeconds) {
+    throw new Error(`${label} com intervalo inválido [${start}, ${end})`);
+  }
+  return { start, end };
+}
+
+function rangeList(value: unknown, label: string): { start: number; end: number }[] {
+  if (!Array.isArray(value)) throw new Error(`${label} precisa ser um array`);
+  return value.map((entry, i) => {
+    if (!isRecord(entry)) throw new Error(`${label}[${i}] precisa ser um objeto`);
+    const start = finiteNumber(entry.start, `${label}[${i}].start`);
+    const end = finiteNumber(entry.end, `${label}[${i}].end`);
+    if (!(start < end)) throw new Error(`${label}[${i}] com intervalo inválido`);
+    return { start, end };
+  });
+}
+
+export function validateWord(value: unknown, sources: Map<string, Source>): Word {
+  if (!isRecord(value)) throw new Error("palavra precisa ser um objeto");
+  const id = nonEmptyString(value.id, "palavra.id");
+  const sourceId = nonEmptyString(value.sourceId, "palavra.sourceId");
+  const source = sources.get(sourceId);
+  if (!source) throw new Error(`palavra ${id} refere fonte ausente: ${sourceId}`);
+  const text = nonEmptyString(value.text, `palavra ${id}.text`);
+  const { start, end } = sourceRange(value, `palavra ${id}`, source.durationSeconds);
+  const confidence = value.confidence ?? null;
+  if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence))) {
+    throw new Error(`palavra ${id} com intervalo de confiança inválido`);
+  }
+  const word: Word = { id, sourceId, text, confidence, start, end };
+  for (const key of ["cutStart", "cutEnd"] as const) {
+    if (value[key] === undefined) continue;
+    const cut = finiteNumber(value[key], `palavra ${id}.${key}`);
+    if (cut < start || cut > end) {
+      throw new Error(`palavra ${id}.${key} fora do intervalo da palavra`);
+    }
+    word[key] = cut;
+  }
+  return word;
+}
+
+export function validateSpeechTake(value: unknown, sources: Map<string, Source>): SpeechTake {
+  if (!isRecord(value)) throw new Error("take precisa ser um objeto");
+  const id = nonEmptyString(value.id, "take.id");
+  const sourceId = nonEmptyString(value.sourceId, "take.sourceId");
+  const source = sources.get(sourceId);
+  if (!source) throw new Error(`take ${id} refere fonte ausente: ${sourceId}`);
+  const { start, end } = sourceRange(value, `take ${id}`, source.durationSeconds);
+  const speechId = value.speechId ?? null;
+  if (speechId !== null && typeof speechId !== "string") {
+    throw new Error(`take ${id} com speechId inválido`);
+  }
+  for (const key of ["removed", "protected"] as const) {
+    const list = value[key];
+    if (!Array.isArray(list)) throw new Error(`take ${id}.${key} precisa ser um array`);
+    for (const [i, entry] of list.entries()) {
+      const range = sourceRange(entry, `take ${id}.${key}[${i}]`, source.durationSeconds);
+      if (range.start < start || range.end > end) {
+        throw new Error(`take ${id}.${key}[${i}] fora do intervalo do take`);
+      }
+    }
+  }
+  return {
+    id,
+    sourceId,
+    speechId,
+    start,
+    end,
+    removed: value.removed as SpeechTake["removed"],
+    protected: value.protected as SpeechTake["protected"],
+  };
+}
+
+export function validateTextCorrection(value: unknown, sources: Map<string, Source>): TextCorrection {
+  if (!isRecord(value)) throw new Error("correção precisa ser um objeto");
+  const id = nonEmptyString(value.id, "correção.id");
+  const sourceId = nonEmptyString(value.sourceId, "correção.sourceId");
+  const source = sources.get(sourceId);
+  if (!source) throw new Error(`correção ${id} refere fonte ausente: ${sourceId}`);
+  const { start, end } = sourceRange(value, `correção ${id}`, source.durationSeconds);
+  const status = nonEmptyString(value.status, `correção ${id}.status`);
+  if (!CORRECTION_STATUSES.has(status)) {
+    throw new Error(`correção ${id} com status inválido: ${status}`);
+  }
+  if (!Array.isArray(value.words)) throw new Error(`correção ${id}.words precisa ser um array`);
+  const words = (value.words as unknown[]).map((word) => validateWord(word, sources));
+  for (const word of words) {
+    if (word.sourceId !== sourceId) {
+      throw new Error(`correção ${id} com palavra de outra fonte: ${word.id}`);
+    }
+  }
+  return {
+    id,
+    sourceId,
+    text: nonEmptyString(value.text, `correção ${id}.text`),
+    status: status as TextCorrection["status"],
+    words,
+    error: optionalString(value.error, `correção ${id}.error`),
+    start,
+    end,
+  };
+}
+
+function validateStageState(value: unknown, label: string): Preparation["sources"][string][
+  "media"
+] {
+  if (typeof value !== "string" || !STATUSES.has(value)) {
+    throw new Error(`${label} com estado inválido`);
+  }
+  return value as Preparation["sources"][string]["media"];
+}
+
+export function validatePreparation(value: unknown): Preparation {
+  if (!isRecord(value)) throw new Error("preparação precisa ser um objeto");
+  const id = nonEmptyString(value.id, "preparação.id");
+  const mode = nonEmptyString(value.mode, "preparação.mode");
+  if (mode !== "prepare" && mode !== "adjust" && mode !== "preview") {
+    throw new Error("preparação.mode inválido");
+  }
+  const status = nonEmptyString(value.status, "preparação.status");
+  if (status !== "running" && status !== "attention" && status !== "interrupted"
+    && status !== "cancelled" && status !== "ready") {
+    throw new Error("preparação.status inválido");
+  }
+  const stage = nonEmptyString(value.stage, "preparação.stage");
+  if (stage !== "media" && stage !== "audio" && stage !== "visual"
+    && stage !== "proposal" && stage !== "preview") {
+    throw new Error("preparação.stage inválido");
+  }
+  if (!isRecord(value.sources)) throw new Error("preparação.sources precisa ser um objeto");
+  const sources: Preparation["sources"] = {};
+  for (const [sourceId, entry] of Object.entries(value.sources)) {
+    if (!isRecord(entry)) throw new Error(`preparação da fonte ${sourceId} inválida`);
+    sources[sourceId] = {
+      media: validateStageState(entry.media, `preparação.${sourceId}.media`),
+      audio: validateStageState(entry.audio, `preparação.${sourceId}.audio`),
+      visual: validateStageState(entry.visual, `preparação.${sourceId}.visual`),
+      error: optionalString(entry.error, `preparação.${sourceId}.error`),
+    };
+  }
+  return {
+    id,
+    revision: nonNegativeInt(value.revision, "preparação.revision"),
+    mode: mode as Preparation["mode"],
+    request: typeof value.request === "string" ? value.request : "",
+    status: status as Preparation["status"],
+    stage: stage as Preparation["stage"],
+    sources,
+    error: optionalString(value.error, "preparação.error"),
+  };
+}
+
+function validateCoverage(value: unknown, label: string): VisualCoverage {
+  if (!isRecord(value)) throw new Error(`${label} precisa ser um objeto`);
+  return {
+    requested: rangeList(value.requested, `${label}.requested`),
+    returned: rangeList(value.returned, `${label}.returned`),
+    missing: rangeList(value.missing, `${label}.missing`),
+  };
+}
+
+function validateAnalysis(value: unknown, sources: Map<string, Source>, seen: Set<string>): Analysis {
+  if (!isRecord(value)) throw new Error("análise precisa ser um objeto");
+  const sourceId = nonEmptyString(value.sourceId, "análise.sourceId");
+  if (!sources.has(sourceId)) {
+    throw new Error(`análise refere fonte ausente: ${sourceId}`);
+  }
+  if (seen.has(sourceId)) throw new Error(`análise duplicada da fonte: ${sourceId}`);
+  seen.add(sourceId);
+  const status = nonEmptyString(value.status, `análise ${sourceId}.status`);
+  if (status !== "ready" && status !== "partial" && status !== "error") {
+    throw new Error(`análise ${sourceId} com status inválido`);
+  }
+  const speech = Array.isArray(value.speech) ? value.speech : [];
+  for (const [i, span] of speech.entries()) {
+    if (!isRecord(span)) throw new Error(`fala ${i} da fonte ${sourceId} inválida`);
+    finiteNumber(span.start, `fala ${i}.start`);
+    finiteNumber(span.end, `fala ${i}.end`);
+    if (!((span.start as number) < (span.end as number))) {
+      throw new Error(`fala ${i} da fonte ${sourceId} com intervalo inválido`);
+    }
+  }
+  const visual = Array.isArray(value.visual) ? value.visual : [];
+  for (const [i, span] of visual.entries()) {
+    if (!isRecord(span)) throw new Error(`visual ${i} da fonte ${sourceId} inválido`);
+    if (!VISUAL_CONFIDENCES.has(span.confidence as string)) {
+      throw new Error(`visual ${i} da fonte ${sourceId} com confiança inválida`);
+    }
+  }
+  if (!Array.isArray(value.words)) throw new Error(`análise ${sourceId}.words precisa ser um array`);
+  const wordIds = new Set<string>();
+  const words = (value.words as unknown[]).map((word) => {
+    const valid = validateWord(word, sources);
+    if (wordIds.has(valid.id)) throw new Error(`id de palavra duplicado: ${valid.id}`);
+    wordIds.add(valid.id);
+    return valid;
+  });
+  const wordsStatus = nonEmptyString(value.wordsStatus, `análise ${sourceId}.wordsStatus`);
+  if (wordsStatus !== "ready" && wordsStatus !== "missing") {
+    throw new Error(`análise ${sourceId} com wordsStatus inválido`);
+  }
+  return {
+    sourceId,
+    key: nonEmptyString(value.key, `análise ${sourceId}.key`),
+    speech: speech as Analysis["speech"],
+    visual: visual as Analysis["visual"],
+    status: status as Analysis["status"],
+    error: optionalString(value.error, `análise ${sourceId}.error`),
+    words,
+    wordsStatus: wordsStatus as Analysis["wordsStatus"],
+    visualCoverage: validateCoverage(value.visualCoverage, `análise ${sourceId}.visualCoverage`),
+  };
+}
+
+function validateSceneShape(value: unknown, index: number): Project["scenes"][number] {
+  if (!isRecord(value)) throw new Error(`cena ${index} precisa ser um objeto`);
+  const speechIds = Array.isArray(value.speechIds) ? value.speechIds.map(String) : [];
+  return {
+    id: nonEmptyString(value.id, `cena ${index}.id`),
+    objective: String(value.objective ?? ""),
+    rationale: String(value.rationale ?? ""),
+    speechIds,
+    support: Array.isArray(value.support) ? value.support as Project["scenes"][number]["support"] : [],
+    gaps: Array.isArray(value.gaps) ? value.gaps.map(String) : [],
+  };
+}
+
+function approvalRevision(value: unknown, label: string): number | null {
+  if (value === null || value === undefined) return null;
+  return nonNegativeInt(value, label);
+}
+
+function validateV2(value: Record<string, unknown>): Project {
   if (typeof value.id !== "string" || value.id.length === 0) {
     throw new Error("projeto.id inválido");
   }
@@ -77,8 +359,36 @@ export function validateProject(value: unknown): Project {
     throw new Error("projeto.input.targetSeconds inválido");
   }
   const assembly = validateAssembly(value.assembly);
+  const sources = new Map(assembly.sources.map((source) => [source.id, source]));
+  const scenes = Array.isArray(value.scenes)
+    ? value.scenes.map((scene, i) => validateSceneShape(scene, i))
+    : [];
+  if (!Array.isArray(value.analyses)) throw new Error("projeto.analyses precisa ser um array");
+  const seenAnalyses = new Set<string>();
+  const analyses = (value.analyses as unknown[]).map((analysis) =>
+    validateAnalysis(analysis, sources, seenAnalyses)
+  );
+  if (!Array.isArray(value.corrections)) throw new Error("projeto.corrections precisa ser um array");
+  const corrections = (value.corrections as unknown[]).map((correction) =>
+    validateTextCorrection(correction, sources)
+  );
+  const preparation = value.preparation ?? null;
+  if (preparation !== null) validatePreparation(preparation);
+  if (!isRecord(value.permissions)) throw new Error("projeto.permissions precisa ser um objeto");
+  if (typeof value.permissions.model !== "boolean" || typeof value.permissions.visual !== "boolean") {
+    throw new Error("projeto.permissions precisa de model/visual booleanos");
+  }
+  const previewArtifact = value.previewArtifact ?? null;
+  if (previewArtifact !== null) {
+    if (!isRecord(previewArtifact)) throw new Error("projeto.previewArtifact precisa ser um objeto");
+    nonNegativeInt(previewArtifact.revision, "previewArtifact.revision");
+    nonEmptyString(previewArtifact.relativePath, "previewArtifact.relativePath");
+    const sha = nonEmptyString(previewArtifact.sha256, "previewArtifact.sha256");
+    if (!SHA256.test(sha)) throw new Error("previewArtifact.sha256 inválido");
+    nonEmptyString(previewArtifact.assemblySha256, "previewArtifact.assemblySha256");
+  }
   return {
-    version: 1,
+    version: 2,
     id: value.id,
     revision: value.revision as number,
     input: {
@@ -87,13 +397,62 @@ export function validateProject(value: unknown): Project {
       targetSeconds: value.input.targetSeconds,
     },
     assembly,
-    scenes: Array.isArray(value.scenes) ? value.scenes as Project["scenes"] : [],
-    analyses: Array.isArray(value.analyses) ? value.analyses as Project["analyses"] : [],
+    scenes,
+    analyses,
     proposal: (value.proposal ?? null) as Project["proposal"],
-    structureApprovedRevision: (value.structureApprovedRevision ?? null) as number | null,
-    previewRevision: (value.previewRevision ?? null) as number | null,
-    finalApprovedRevision: (value.finalApprovedRevision ?? null) as number | null,
+    structureApprovedRevision: approvalRevision(value.structureApprovedRevision, "projeto.structureApprovedRevision"),
+    previewRevision: approvalRevision(value.previewRevision, "projeto.previewRevision"),
+    finalApprovedRevision: approvalRevision(value.finalApprovedRevision, "projeto.finalApprovedRevision"),
+    corrections,
+    preparation: preparation as Project["preparation"],
+    // Mesma referência de entrada quando válida: merge por revisão usa !==
+    // para não deixar snapshot antigo reverter consentimentos atuais.
+    permissions: value.permissions as Project["permissions"],
+    previewArtifact: previewArtifact as Project["previewArtifact"],
   };
+}
+
+/**
+ * Migração v1 → v2: fontes passam a `included: true`, análises antigas ficam
+ * com palavras vazias e `wordsStatus: "missing"` (rederivadas do transcript
+ * válido sem nova ASR), correções vazias, permissões negadas até autorização
+ * explícita e preparação nula. Cenas e montagem antigas seguem intactas para
+ * consulta; a conversão speechIds → takes acontece na tarefa 6, junto da
+ * compilação/validação que consomem takes.
+ */
+function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(value.assembly)) throw new Error("projeto v1 sem assembly");
+  const assembly = value.assembly as Record<string, unknown>;
+  const sources = Array.isArray(assembly.sources) ? assembly.sources : [];
+  const analyses = Array.isArray(value.analyses) ? value.analyses : [];
+  return {
+    ...value,
+    version: 2,
+    assembly: {
+      ...assembly,
+      sources: sources.map((source) => ({ included: true, ...(source as Record<string, unknown>) })),
+    },
+    analyses: (analyses as unknown[]).map((analysis) => {
+      if (!isRecord(analysis)) throw new Error("projeto v1 com análise inválida");
+      return {
+        ...analysis,
+        words: [],
+        wordsStatus: "missing",
+        visualCoverage: { requested: [], returned: [], missing: [] },
+      };
+    }),
+    corrections: [],
+    preparation: null,
+    permissions: { model: false, visual: false },
+    previewArtifact: null,
+  };
+}
+
+export function validateProject(value: unknown): Project {
+  if (!isRecord(value)) throw new Error("projeto precisa ser um objeto");
+  if (value.version === 1) return validateV2(migrateV1(value));
+  if (value.version === 2) return validateV2(value);
+  throw new Error("projeto.version precisa ser 1 ou 2");
 }
 
 async function writeAtomic(dir: string, project: Project): Promise<void> {
@@ -117,7 +476,8 @@ export async function missingMedia(project: Project): Promise<Source[]> {
   return missing;
 }
 
-export async function createProject(dir: string, initial: Project): Promise<void> {
+export async function createProject(dir: string, initial: unknown): Promise<void> {
+  // Aceita v1 e normaliza para v2; arquivo novo não tem o que preservar em backup.
   const project = validateProject(initial);
   await enqueue(dir, async () => {
     await acquireLock(dir);
@@ -158,6 +518,15 @@ function relinkedSources(current: Assembly, base: Assembly, next: Assembly): Sou
   });
 }
 
+export function mergeCorrections(
+  base: TextCorrection[],
+  overlay: TextCorrection[],
+): TextCorrection[] {
+  const map = new Map(base.map((item) => [item.id, item]));
+  for (const item of overlay) map.set(item.id, item);
+  return [...map.values()];
+}
+
 /** Mesma revisão: não deixa snapshot antigo apagar aprovação/análise/relink. */
 export function mergeProjectCommit(current: Project, next: Project, base?: Project): Project {
   if (next.revision < current.revision) {
@@ -166,23 +535,29 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     );
   }
   const analyses = mergeAnalyses(current.analyses, next.analyses);
+  const corrections = mergeCorrections(current.corrections, next.corrections);
   if (next.revision > current.revision) {
-    return { ...next, analyses };
+    return { ...next, analyses, corrections };
   }
   if (!base) {
     return {
       ...current,
       analyses,
+      corrections,
       proposal: next.proposal ?? current.proposal,
       structureApprovedRevision: next.structureApprovedRevision ?? current.structureApprovedRevision,
       previewRevision: next.previewRevision ?? current.previewRevision,
       finalApprovedRevision: next.finalApprovedRevision ?? current.finalApprovedRevision,
+      preparation: next.preparation ?? current.preparation,
+      permissions: next.permissions ?? current.permissions,
+      previewArtifact: next.previewArtifact ?? current.previewArtifact,
     };
   }
   return {
     ...current,
     assembly: { ...current.assembly, sources: relinkedSources(current.assembly, base.assembly, next.assembly) },
     analyses,
+    corrections,
     proposal: next.proposal !== base.proposal ? next.proposal : current.proposal,
     structureApprovedRevision: next.structureApprovedRevision !== base.structureApprovedRevision
       ? next.structureApprovedRevision
@@ -193,19 +568,31 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     finalApprovedRevision: next.finalApprovedRevision !== base.finalApprovedRevision
       ? next.finalApprovedRevision
       : current.finalApprovedRevision,
+    preparation: next.preparation !== base.preparation ? next.preparation : current.preparation,
+    permissions: next.permissions !== base.permissions ? next.permissions : current.permissions,
+    previewArtifact: next.previewArtifact !== base.previewArtifact
+      ? next.previewArtifact
+      : current.previewArtifact,
   };
+}
+
+export function backupPath(dir: string): string {
+  return join(dir, "project.v1.backup.json");
 }
 
 export async function saveProject(
   dir: string,
   expectedRevision: number,
-  nextOrFn: Project | ((current: Project) => Project),
+  nextOrFn: Project | LegacyProject | ((current: Project) => Project),
   base?: Project,
 ): Promise<void> {
   await enqueue(dir, async () => {
     await acquireLock(dir);
     try {
-      const current = await loadProject(dir);
+      // Lê os bytes crus para detectar v1 sem modificar nada na leitura.
+      const rawText = await readFile(projectPath(dir), "utf8");
+      const raw = JSON.parse(rawText) as { version?: unknown };
+      const current = validateProject(raw);
       if (current.revision !== expectedRevision) {
         throw new Error(
           `revisão desatualizada: base ${expectedRevision}, atual ${current.revision}`,
@@ -213,7 +600,17 @@ export async function saveProject(
       }
       const next = typeof nextOrFn === "function"
         ? validateProject(nextOrFn(current))
-        : validateProject(mergeProjectCommit(current, nextOrFn, base));
+        : validateProject(mergeProjectCommit(current, validateProject(nextOrFn), base));
+      if (raw.version === 1) {
+        // Primeira gravação v2: preserva o v1 exato uma única vez.
+        try {
+          const handle = await open(backupPath(dir), "wx");
+          await handle.writeFile(rawText);
+          await handle.close();
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+      }
       await writeAtomic(dir, next);
     } finally {
       await releaseLock(dir);

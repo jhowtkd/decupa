@@ -6,7 +6,7 @@ import type { Project, Proposal } from "./types.ts";
 function project(): Project {
   const assembly = fixtureAssembly();
   return {
-    version: 1,
+    version: 2,
     id: "p1",
     revision: 1,
     input: { kind: "script", text: "abrir com o tema", targetSeconds: 2 },
@@ -21,11 +21,18 @@ function project(): Project {
         confidence: "observed", tags: [],
       }],
       status: "ready",
+      words: [],
+      wordsStatus: "missing",
+      visualCoverage: { requested: [], returned: [], missing: [] },
     }],
     proposal: null,
     structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
+    corrections: [],
+    preparation: null,
+    permissions: { model: false, visual: false },
+    previewArtifact: null,
   };
 }
 

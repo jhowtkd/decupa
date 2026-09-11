@@ -21,7 +21,7 @@ async function projectWithMedia(dir: string, revision = 1): Promise<Project> {
   assembly.sources[0]!.sha256 = await hashFile(speech);
   assembly.sources[1]!.sha256 = await hashFile(support);
   return {
-    version: 1,
+    version: 2,
     id: "p1",
     revision,
     input: { kind: "brief", text: "tema", targetSeconds: 2 },
@@ -32,6 +32,10 @@ async function projectWithMedia(dir: string, revision = 1): Promise<Project> {
     structureApprovedRevision: revision,
     previewRevision: revision,
     finalApprovedRevision: revision,
+    corrections: [],
+    preparation: null,
+    permissions: { model: false, visual: false },
+    previewArtifact: null,
   };
 }
 

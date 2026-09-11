@@ -11,6 +11,8 @@ export type Source = {
   width: number | null;
   height: number | null;
   role: "speech" | "support" | "both";
+  /** false retira a fonte do conjunto sem apagar bytes nem revisão anterior. */
+  included: boolean;
 };
 
 export type Clip = {
@@ -57,6 +59,61 @@ export type Scene = {
   gaps: string[];
 };
 
+/** Intervalo semiaberto em segundos: [start, end). */
+export type SourceRange = { start: number; end: number };
+
+/**
+ * Palavra com identidade estável e vínculo com a fonte. O id é posicional e
+ * determinístico (`${sourceId}:${sha256}:w${índice}`); correções de grafia
+ * nunca mudam id, fonte ou tempos.
+ */
+export type Word = SourceRange & {
+  id: string;
+  sourceId: string;
+  text: string;
+  confidence: number | null;
+  cutStart?: number;
+  cutEnd?: number;
+};
+
+/** Fala selecionada para a montagem; a mídia retida é o take menos `removed`. */
+export type SpeechTake = SourceRange & {
+  id: string;
+  sourceId: string;
+  speechId: string | null;
+  removed: SourceRange[];
+  protected: SourceRange[];
+};
+
+/** Correção de grafia: overlay de texto que não move a seleção de mídia. */
+export type TextCorrection = SourceRange & {
+  id: string;
+  sourceId: string;
+  text: string;
+  status: "pending" | "aligned" | "error";
+  words: Word[];
+  error?: string;
+};
+
+export type StageState = "pending" | "running" | "ready" | "error";
+
+export type Preparation = {
+  id: string;
+  revision: number;
+  mode: "prepare" | "adjust" | "preview";
+  request: string;
+  status: "running" | "attention" | "interrupted" | "cancelled" | "ready";
+  stage: "media" | "audio" | "visual" | "proposal" | "preview";
+  sources: Record<string, { media: StageState; audio: StageState; visual: StageState; error?: string }>;
+  error?: string;
+};
+
+export type VisualCoverage = {
+  requested: SourceRange[];
+  returned: SourceRange[];
+  missing: SourceRange[];
+};
+
 export type Analysis = {
   sourceId: string;
   key: string;
@@ -64,6 +121,11 @@ export type Analysis = {
   visual: VisualSpan[];
   status: "ready" | "partial" | "error";
   error?: string;
+  /** Granularidade da edição; ausente em caches antigos até rederivação. */
+  words: Word[];
+  /** "missing" pede reanálise antes de habilitar cortes por palavra. */
+  wordsStatus: "ready" | "missing";
+  visualCoverage: VisualCoverage;
 };
 
 export type Proposal = {
@@ -74,14 +136,49 @@ export type Proposal = {
   explanation: string;
 };
 
+export type PreviewArtifact = {
+  revision: number;
+  assemblySha256: string;
+  relativePath: string;
+  sha256: string;
+};
+
 export type Project = {
-  version: 1;
+  version: 2;
   id: string;
   revision: number;
   input: { kind: "script" | "brief"; text: string; targetSeconds: number };
   assembly: Assembly;
   scenes: Scene[];
   analyses: Analysis[];
+  proposal: Proposal | null;
+  structureApprovedRevision: number | null;
+  previewRevision: number | null;
+  finalApprovedRevision: number | null;
+  corrections: TextCorrection[];
+  preparation: Preparation | null;
+  permissions: { model: boolean; visual: boolean };
+  previewArtifact: PreviewArtifact | null;
+};
+
+/** Formato do projeto antes da migração — somente leitura e migração. */
+export type LegacyAnalysis = {
+  sourceId: string;
+  key: string;
+  speech: Span[];
+  visual: VisualSpan[];
+  status: "ready" | "partial" | "error";
+  error?: string;
+};
+
+export type LegacyProject = {
+  version: 1;
+  id: string;
+  revision: number;
+  input: { kind: "script" | "brief"; text: string; targetSeconds: number };
+  assembly: Omit<Assembly, "sources"> & { sources: Omit<Source, "included">[] };
+  scenes: Scene[];
+  analyses: LegacyAnalysis[];
   proposal: Proposal | null;
   structureApprovedRevision: number | null;
   previewRevision: number | null;

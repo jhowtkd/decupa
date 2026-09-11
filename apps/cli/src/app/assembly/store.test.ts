@@ -1,12 +1,12 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
-import type { Project } from "./types.ts";
-import { createProject, loadProject, missingMedia, saveProject } from "./store.ts";
+import type { LegacyProject, Project } from "./types.ts";
+import { createProject, loadProject, missingMedia, saveProject, validateProject } from "./store.ts";
 
-function projectAt(revision: number): Project {
+function projectAt(revision: number): LegacyProject {
   const assembly = fixtureAssembly();
   assembly.revision = revision;
   return {
@@ -94,4 +94,113 @@ it("não deixa snapshot antigo na mesma revisão apagar aprovação", async () =
   expect(loaded.structureApprovedRevision).toBe(3);
   expect(loaded.analyses).toHaveLength(1);
   expect(loaded.analyses[0]!.sourceId).toBe("a");
+});
+
+const EMPTY_COVERAGE = { requested: [], returned: [], missing: [] };
+
+function wordFor(sourceId: string, id: string, start = 0.1, end = 0.4) {
+  return { id, sourceId, text: "olá", confidence: null as number | null, start, end };
+}
+
+it("abre projeto v1 e migra para v2 sem modificar o arquivo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  const v1 = projectAt(1);
+  v1.analyses = [{
+    sourceId: "a",
+    key: "k",
+    speech: [{ id: "a:u001", sourceId: "a", start: 0, end: 1, text: "olá" }],
+    visual: [],
+    status: "ready",
+  }];
+  await writeFile(join(dir, "project.json"), `${JSON.stringify(v1)}\n`, "utf8");
+  const loaded = await loadProject(dir);
+  expect(loaded.version).toBe(2);
+  expect(loaded.assembly.sources.every((s) => s.included)).toBe(true);
+  expect(loaded.corrections).toEqual([]);
+  expect(loaded.permissions).toEqual({ model: false, visual: false });
+  expect(loaded.preparation).toBeNull();
+  expect(loaded.previewArtifact).toBeNull();
+  expect(loaded.analyses).toHaveLength(1);
+  expect(loaded.analyses[0]!.words).toEqual([]);
+  expect(loaded.analyses[0]!.wordsStatus).toBe("missing");
+  expect(loaded.analyses[0]!.speech).toHaveLength(1);
+  const raw = JSON.parse(await readFile(join(dir, "project.json"), "utf8"));
+  expect(raw.version).toBe(1);
+  await expect(access(join(dir, "project.v1.backup.json"))).rejects.toThrow();
+});
+
+it("primeira gravação v2 preserva backup exclusivo do v1", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await writeFile(join(dir, "project.json"), `${JSON.stringify(projectAt(1))}\n`, "utf8");
+  const loaded = await loadProject(dir);
+  await saveProject(dir, loaded.revision, { ...loaded, revision: loaded.revision + 1 });
+  const backupPath = join(dir, "project.v1.backup.json");
+  const backup = JSON.parse(await readFile(backupPath, "utf8"));
+  expect(backup.version).toBe(1);
+  const after = await loadProject(dir);
+  expect(after.version).toBe(2);
+  expect(after.revision).toBe(2);
+  const backupBytes = await readFile(backupPath);
+  await saveProject(dir, after.revision, { ...after, revision: after.revision + 1 });
+  expect(await readFile(backupPath)).toEqual(backupBytes);
+  expect((await loadProject(dir)).revision).toBe(3);
+});
+
+it("erro de escrita não corrompe o estado", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  const before = await readFile(join(dir, "project.json"));
+  await expect(saveProject(dir, 1, (current) => ({ ...current, revision: -1 }))).rejects.toThrow(/revision/);
+  expect(await readFile(join(dir, "project.json"))).toEqual(before);
+  expect((await loadProject(dir)).revision).toBe(1);
+});
+
+it("rejeita palavras com ID duplicado, tempo inválido ou fonte ausente", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  const base = await loadProject(dir);
+  const withWords = (words: ReturnType<typeof wordFor>[]) => ({
+    ...structuredClone(base),
+    analyses: [{
+      sourceId: "a", key: "k", speech: [], visual: [], status: "ready" as const,
+      words, wordsStatus: "ready" as const, visualCoverage: EMPTY_COVERAGE,
+    }],
+  });
+  const good = wordFor("a", "a:hash:w000000");
+  expect(() => validateProject(withWords([good]))).not.toThrow();
+  expect(() => validateProject(withWords([good, { ...good }]))).toThrow(/duplicad/);
+  expect(() => validateProject(withWords([{ ...good, start: 1, end: 0 }]))).toThrow(/intervalo/);
+  expect(() => validateProject(withWords([{ ...good, start: -0.1 }]))).toThrow(/intervalo/);
+  expect(() => validateProject(withWords([{ ...good, start: 2.9, end: 3.5 }]))).toThrow(/intervalo/);
+  expect(() => validateProject(withWords([{ ...good, start: NaN }]))).toThrow(/finito/);
+  expect(() => validateProject(withWords([{ ...good, sourceId: "zz" }]))).toThrow(/fonte/);
+});
+
+it("rejeita correção e preparação inválidas", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  const base = await loadProject(dir);
+  const correction = {
+    id: "c1", sourceId: "a", start: 0.1, end: 0.4, text: "Olá",
+    status: "pending" as const, words: [],
+  };
+  expect(() => validateProject({ ...structuredClone(base), corrections: [correction] })).not.toThrow();
+  expect(() => validateProject({
+    ...structuredClone(base),
+    corrections: [{ ...correction, status: "pronta" }],
+  })).toThrow(/correção/);
+  expect(() => validateProject({
+    ...structuredClone(base),
+    corrections: [{ ...correction, sourceId: "zz" }],
+  })).toThrow(/fonte/);
+  const preparation = {
+    id: "prep-1", revision: 2, mode: "prepare" as const, request: "",
+    status: "running" as const, stage: "audio" as const,
+    sources: { a: { media: "ready" as const, audio: "running" as const, visual: "pending" as const } },
+  };
+  expect(() => validateProject({ ...structuredClone(base), preparation })).not.toThrow();
+  expect(() => validateProject({
+    ...structuredClone(base),
+    preparation: { ...preparation, stage: "forno" },
+  })).toThrow(/prepara/);
 });

@@ -23,6 +23,7 @@ export function fixtureAssembly(): Assembly {
         width: 320,
         height: 240,
         role: "speech",
+        included: true,
       },
       {
         id: "b",
@@ -35,6 +36,7 @@ export function fixtureAssembly(): Assembly {
         width: 320,
         height: 240,
         role: "support",
+        included: true,
       },
     ],
     tracks: [

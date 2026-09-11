@@ -8,7 +8,7 @@ import type { Project, Proposal } from "./types.ts";
 function project(): Project {
   const assembly = fixtureAssembly();
   return {
-    version: 1,
+    version: 2,
     id: "p1",
     revision: 2,
     input: { kind: "brief", text: "tema", targetSeconds: 2 },
@@ -19,6 +19,10 @@ function project(): Project {
     structureApprovedRevision: 2,
     previewRevision: 2,
     finalApprovedRevision: null,
+    corrections: [],
+    preparation: null,
+    permissions: { model: false, visual: false },
+    previewArtifact: null,
   };
 }
 

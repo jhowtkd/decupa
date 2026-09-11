@@ -30,6 +30,24 @@ Evidência de navegador/áudio/render/DaVinci: nenhuma nesta etapa (fora do esco
 Achados abertos e rechecks: G0-F01 (P2): 12 testes HTTP não verificáveis neste sandbox; recheck = rodar fora do sandbox: `env -u ZAI_API_KEY -u OPENAI_API_KEY pnpm exec vitest run apps/cli/src/app/assembly/routes.test.ts tests/assembly-flow.test.ts`.
 Próxima ação: tarefa 2 (palavras e migração v1→v2).
 
+## Tarefa 2 — palavras e migração v1→v2
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: R-002, R-003 (parcial: invariantes de palavra e separação texto/mídia; correct/remove/restore são tarefa 3).
+
+Implementado:
+- `analysis.ts`: `wordsFromTranscript(source, raw)` — IDs posicionais `${sourceId}:${sha256}:w${índice}`, confiança preservada (null quando ausente), nenhum tempo estimado; intervalo inválido rejeita. `analyzeSource` lê `transcript.json` do cache após ingest (palavras prontas ou `wordsStatus: "missing"`); fonte sem áudio recebe palavras vazias prontas; cache antigo sem `words` rederiva do transcript válido sem nova ASR e sem reescrever arquivo na leitura. `adaptAnalysis` remapeia IDs/sourceId de palavras.
+- `condense/prepare.ts`: `CondenseWord` com `id?`/`confidence?` opcionais; `toCondenseTranscript` propaga ambos. Leitores por chave (motor/condense.py) ignoram extras.
+- `store.ts`: validação real de palavras, takes (`validateSpeechTake`), correções, preparação, cobertura, análises e projeto; `validateProject` aceita v1 (migra) e v2; migração com `included: true`, palavras vazias + missing, correções [], permissões false, preparação/previewArtifact null, cenas/montagem preservadas; `saveProject` grava backup exclusivo `project.v1.backup.json` antes da primeira gravação v2; leitura nunca escreve; `mergeProjectCommit` estendido (correções por união de id; permissões/preparação/artefato com mesma semântica anti-stale das aprovações).
+- `types.ts`: `Word`, `SpeechTake`, `TextCorrection`, `StageState`, `Preparation`, `VisualCoverage`, `Project` v2, `LegacyProject`/`LegacyAnalysis` só-leitura/migração. `Scene` inalterada (takes persistem na tarefa 6, junto de compile/validate que os consomem).
+- Mecânicos para typecheck: `fixture.ts`/`routes.ts` (`included`, `blankProject` v2), `validate.ts` (`included`, padrão true), literais de `scenes/revisions/export/store.test.ts`.
+
+Ajuste documentado vs plano: a conversão speechIds→takes de cenas persistidas move para a tarefa 6. Evidência: `compileScenes`/`validateProposal` (`scenes.ts`) e propostas do LLM operam sobre `speechIds` hoje; converter takes em store sem trocar o compilador criaria seleção dupla (speechIds + takes) com risco de divergência. O resultado aprovado não muda: migração preserva cenas/montagem para consulta, sem inferir tempos por texto, e a tarefa 6 converte com catálogo + validação.
+
+Testes: `analysis.test.ts` +5, `store.test.ts` +5, `prepare.test.ts` ~2 (1 atualizado). Comando: `vitest run analysis/store/prepare/transcribe` → 35 passed. Suíte ampla (assembly+condense+transcript): 90 passed, 11 failed — todos `routes.test.ts` EPERM de sandbox (mesma causa de G0). `pnpm typecheck` exit 0, `git diff --check` limpo.
+Achados: nenhum P0/P1. G0-F01 segue aberto (recheck HTTP fora do sandbox).
+Próxima ação: tarefa 3 (words.ts, edição, alinhamento, undo).
+
 ## Gates seguintes
 
 (G1–G7 a preencher durante a execução.)

@@ -89,7 +89,7 @@ function emptyTracks(): Project["assembly"]["tracks"] {
 
 export function blankProject(id: string): Project {
   return {
-    version: 1,
+    version: 2,
     id,
     revision: 0,
     input: { kind: "brief", text: "", targetSeconds: 60 },
@@ -109,6 +109,10 @@ export function blankProject(id: string): Project {
     structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
+    corrections: [],
+    preparation: null,
+    permissions: { model: false, visual: false },
+    previewArtifact: null,
   };
 }
 
@@ -140,6 +144,7 @@ async function sourceFromFile(path: string, id: string): Promise<Source> {
     width: info.width,
     height: info.height,
     role: info.hasAudio ? "speech" : "support",
+    included: true,
   };
 }
 

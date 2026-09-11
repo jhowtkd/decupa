@@ -75,7 +75,25 @@ describe("toCondenseTranscript", () => {
     const out = toCondenseTranscript(transcript);
     expect(out.segments[0]!.start).toBeCloseTo(0.1, 6);
     expect(out.segments[0]!.end).toBeCloseTo(0.52, 6);
-    expect(out.segments[0]!.words[0]).toEqual({ text: "Eu", start: 0.1, end: 0.26 });
+    expect(out.segments[0]!.words[0]).toEqual({
+      text: "Eu", start: 0.1, end: 0.26, id: "w_000000", confidence: 0.9,
+    });
+  });
+
+  it("preserva id e confiança dos tokens sem quebrar o formato antigo", () => {
+    const out = toCondenseTranscript(transcript);
+    expect(out.segments[0]!.words.map((w) => [w.id, w.confidence])).toEqual([
+      ["w_000000", 0.9],
+      ["w_000001", 0.8],
+    ]);
+    for (const segment of out.segments) {
+      expect(segment.text).toBe(segment.words.map((w) => w.text).join(" "));
+      for (const word of segment.words) {
+        expect(word.text).toEqual(expect.any(String));
+        expect(word.start).toEqual(expect.any(Number));
+        expect(word.end).toEqual(expect.any(Number));
+      }
+    }
   });
 
   it("preserva a ordem das palavras dentro do segmento mesmo se os tokens vierem fora de ordem", () => {
