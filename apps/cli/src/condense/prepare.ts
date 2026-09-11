@@ -7,6 +7,10 @@ export interface CondenseWord {
   text: string;
   start: number;
   end: number;
+  /** Id do token de origem; opcional para não quebrar transcripts antigos. */
+  id?: string;
+  /** Confiança da ASR quando disponível; leitores antigos ignoram. */
+  confidence?: number;
 }
 
 export interface CondenseSegment {
@@ -53,7 +57,9 @@ export function toCondenseTranscript(
         const endMs = opts.silences
           ? trimTrailingSilence({ silences: opts.silences, startMs: t.startMs, endMs: t.endMs })
           : t.endMs;
-        return { text: t.text, start: t.startMs / 1000, end: endMs / 1000 };
+        // id/confiança viajam junto para a edição por palavra; o motor e o
+        // condense.py leem só text/start/end e ignoram as chaves extras.
+        return { text: t.text, start: t.startMs / 1000, end: endMs / 1000, id: t.id, confidence: t.confidence };
       });
       return {
         start: words[0]!.start,

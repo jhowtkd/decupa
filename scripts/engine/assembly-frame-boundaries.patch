@@ -1,0 +1,43 @@
+diff --git a/mcp/ve_tools/render.py b/mcp/ve_tools/render.py
+index 89cefbb..29d6db7 100644
+--- a/mcp/ve_tools/render.py
++++ b/mcp/ve_tools/render.py
+@@ -377,7 +377,7 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
+             out_label = f"vcomp{video_overlay_idx}"
+             filters.append(
+                 f"[{current_video}][{label}]overlay=0:0:eof_action=pass:shortest=0"
+-                f":enable='{between_expr(clip, video_end_pad(plan))}'[{out_label}]"
++                f":enable='{between_frames_expr(clip, float(plan['fps']), video_end_pad(plan))}'[{out_label}]"
+             )
+             current_video = out_label
+             video_overlay_idx += 1
+@@ -605,6 +605,29 @@ def between_expr(clip: dict, end_pad: float = 0.0) -> str:
+     return f"between(t,{clip['timeline_start']:.6f},{end:.6f})"
+ 
+ 
++def clip_frame_window(clip: dict, fps: float, end_pad: float = 0.0) -> tuple[int, int]:
++    """Janela inclusiva de frames [first, last] do clipe na timeline.
++
++    Fronteiras em frames inteiros a partir da taxa do plano: `between(t,…)`
++    com 6 casas decimais arredonda o fim inclusivo para cima e, em taxas
++    fracionárias (30000/1001), mantém o clipe anterior ligado durante o
++    primeiro frame do clipe seguinte. Inícios fora da grade arredondam para
++    o frame mais próximo (o compositor só emite frames inteiros).
++    """
++    rate = float(fps)
++    if not math.isfinite(rate) or rate <= 0:
++        raise RuntimeError("fps do plano inválido para janela de frames")
++    first = int(math.floor(float(clip["timeline_start"]) * rate + 0.5))
++    last = int(math.floor((float(clip["timeline_end"]) + max(0.0, end_pad)) * rate + 0.5)) - 1
++    first = max(0, first)
++    return (first, max(first, last))
++
++
++def between_frames_expr(clip: dict, fps: float, end_pad: float = 0.0) -> str:
++    first, last = clip_frame_window(clip, fps, end_pad)
++    return f"between(n,{first},{last})"
++
++
+ def video_end_pad(plan: dict) -> float:
+     try:
+         fps = float(plan.get("fps") or 30.0)

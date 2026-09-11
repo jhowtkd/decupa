@@ -14,7 +14,7 @@ export type { Provider } from "./provider.ts";
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { resolveProvider } from "./provider.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
-export { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiTriageModel } from "./zai.ts";
+export { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiClient, ZaiTriageModel } from "./zai.ts";
 export { keepListFrom } from "./keeplist.ts";
 export { FakeTriageModel } from "./model.ts";
 export { applyInspect, flagsWithoutSubstitute, normalizeInspectVerdict } from "./inspect.ts";

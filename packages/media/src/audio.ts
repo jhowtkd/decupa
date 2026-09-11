@@ -10,12 +10,18 @@ export async function extractAudio(opts: {
   input: string;
   output: string;
   sampleRate?: number;
+  /** Recorte opcional em segundos; omitidos extraem o arquivo inteiro. */
+  startSeconds?: number;
+  durationSeconds?: number;
 }): Promise<void> {
   const sampleRate = opts.sampleRate ?? DEFAULT_SAMPLE_RATE;
+  const args = ["-v", "error", "-y"];
+  if (opts.startSeconds !== undefined) args.push("-ss", String(opts.startSeconds));
+  args.push("-i", opts.input);
+  if (opts.durationSeconds !== undefined) args.push("-t", String(opts.durationSeconds));
   try {
     await run("ffmpeg", [
-      "-v", "error", "-y",
-      "-i", opts.input,
+      ...args,
       "-vn",
       "-ar", String(sampleRate),
       "-ac", "1",

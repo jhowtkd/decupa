@@ -3,7 +3,11 @@
 Contrato de saída (stdout, JSON):
   {"language": "pt", "words": [
      {"text": "eu", "startMs": 120, "endMs": 260,
-      "confidence": 0.91, "sentenceIndex": 0}, ...]}
+      "confidence": 0.91, "sentenceIndex": 0}, ...],
+   "unaligned": ["palavra sem tempo", ...]}
+
+Com --text-file, pula a ASR e alinha o texto dado no áudio recortado.
+Palavras sem tempo nunca ganham tempo inventado: vão para `unaligned`.
 """
 
 from __future__ import annotations
@@ -38,23 +42,32 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--compute-type", default="int8")
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--text-file", default=None)
     args = parser.parse_args()
 
     audio = whisperx.load_audio(args.wav)
 
-    asr = whisperx.load_model(
-        args.model,
-        args.device,
-        compute_type=args.compute_type,
-        language=args.language,
-    )
-    transcription = asr.transcribe(audio, batch_size=args.batch_size)
+    if args.text_file:
+        from pathlib import Path
+
+        text = Path(args.text_file).read_text(encoding="utf-8").strip()
+        if not text:
+            raise ValueError("texto vazio para alinhamento")
+        segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text}]
+    else:
+        asr = whisperx.load_model(
+            args.model,
+            args.device,
+            compute_type=args.compute_type,
+            language=args.language,
+        )
+        segments = asr.transcribe(audio, batch_size=args.batch_size)["segments"]
 
     align_model, align_meta = whisperx.load_align_model(
         language_code=args.language, device=args.device
     )
     aligned = whisperx.align(
-        transcription["segments"],
+        segments,
         align_model,
         align_meta,
         audio,
@@ -63,11 +76,16 @@ def main() -> int:
     )
 
     words = []
+    unaligned = []
     for sentence_index, segment in enumerate(aligned["segments"]):
         for word in segment.get("words", []):
             # Palavras sem tempo acontecem quando o alinhador não acha o áudio
-            # correspondente. Descartar é melhor que inventar um tempo.
+            # correspondente. Registrar é melhor que descartar em silêncio ou
+            # inventar um tempo.
             if "start" not in word or "end" not in word:
+                missing = str(word.get("word", "")).strip()
+                if missing:
+                    unaligned.append(missing)
                 continue
             words.append(
                 {
@@ -79,7 +97,11 @@ def main() -> int:
                 }
             )
 
-    json.dump({"language": args.language, "words": words}, sys.stdout, ensure_ascii=False)
+    json.dump(
+        {"language": args.language, "words": words, "unaligned": unaligned},
+        sys.stdout,
+        ensure_ascii=False,
+    )
     return 0
 
 

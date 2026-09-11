@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { MediaInfo } from "./types.ts";
+import type { MediaInfo, Rate } from "./types.ts";
 
 const run = promisify(execFile);
 
@@ -10,6 +10,7 @@ interface FfprobeStream {
   width?: number;
   height?: number;
   r_frame_rate?: string;
+  avg_frame_rate?: string;
   sample_rate?: string;
 }
 
@@ -18,12 +19,19 @@ interface FfprobeOutput {
   streams?: FfprobeStream[];
 }
 
-/** "25/1" -> 25 · "30000/1001" -> 29.97 · "0/0" -> null */
-function parseFrameRate(value: string | undefined): number | null {
+/** Preserva num/den. "0/0" e lixo viram null. */
+export function parseRate(value: string | undefined): Rate | null {
   if (!value) return null;
   const [num, den] = value.split("/").map(Number);
-  if (!num || !den) return null;
-  return Math.round((num / den) * 100) / 100;
+  if (!Number.isInteger(num) || !Number.isInteger(den) || !num || !den) return null;
+  return { num, den };
+}
+
+/** "25/1" -> 25 · "30000/1001" -> 29.97 · "0/0" -> null */
+function parseFrameRate(value: string | undefined): number | null {
+  const rate = parseRate(value);
+  if (!rate) return null;
+  return Math.round((rate.num / rate.den) * 100) / 100;
 }
 
 export async function probe(path: string): Promise<MediaInfo> {
@@ -54,6 +62,8 @@ export async function probe(path: string): Promise<MediaInfo> {
     width: video?.width ?? null,
     height: video?.height ?? null,
     fps: parseFrameRate(video?.r_frame_rate),
+    frameRate: parseRate(video?.r_frame_rate),
+    averageFrameRate: parseRate(video?.avg_frame_rate),
     videoCodec: video?.codec_name ?? null,
     audioCodec: audio?.codec_name ?? null,
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : null,

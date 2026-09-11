@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>decupa · montagem</title>
+<link rel="stylesheet" href="/page.css">
+</head>
+<body>
+<header>
+  <strong>decupa</strong>
+  <span class="hint" id="status" role="status" aria-live="polite">carregando…</span>
+  <label class="muted"><input type="checkbox" id="modelOptIn"> modelo pago (Z.ai)</label>
+  <label class="muted"><input type="checkbox" id="visualOptIn"> visual pago (Z.ai)</label>
+  <button type="button" class="primary" id="prepare">Preparar montagem</button>
+  <button type="button" id="cancelPrep" hidden>Cancelar</button>
+</header>
+<main>
+  <section id="materials" aria-label="Materiais">
+    <h1>Materiais</h1>
+    <p class="muted">Arquivos locais. O original não é enviado a terceiros nesta tela.</p>
+    <div id="dropzone" tabindex="0" role="button" aria-label="Enviar arquivos de mídia">
+      Arraste arquivos para cá ou clique para escolher
+      <input type="file" id="filePicker" accept="video/*,audio/*" multiple hidden>
+    </div>
+    <div class="row">
+      <button type="button" id="select">Escolher arquivos</button>
+      <button type="button" id="batchSupport" disabled>Categorizar seleção como apoio</button>
+      <button type="button" id="batchInclude" disabled>Incluir seleção</button>
+      <button type="button" id="batchExclude" disabled>Excluir seleção</button>
+    </div>
+    <ul id="sources"></ul>
+    <h2>Briefing</h2>
+    <label>Tipo
+      <select id="kind"><option value="brief">briefing</option><option value="script">roteiro</option></select>
+    </label>
+    <label>Texto
+      <textarea id="inputText" rows="4"></textarea>
+    </label>
+    <label>Duração alvo (s)
+      <input id="target" type="number" min="1" value="60">
+    </label>
+    <div class="row">
+      <button type="button" id="saveInput">Guardar briefing</button>
+    </div>
+  </section>
+
+  <section id="preparation" aria-label="Preparação" hidden>
+    <h1>Preparação</h1>
+    <p class="muted" id="prepSummary" aria-live="polite"></p>
+    <table class="prep-table" aria-label="Estado por arquivo e etapa">
+      <thead><tr><th>Arquivo</th><th>Mídia</th><th>Áudio</th><th>Visual</th></tr></thead>
+      <tbody id="prepRows"></tbody>
+    </table>
+    <div id="prepError"></div>
+    <div class="row">
+      <button type="button" id="resume">Retomar</button>
+    </div>
+  </section>
+
+  <section id="review" aria-label="Revisão" hidden>
+    <h1>Revisão</h1>
+    <p class="warn" id="attention" hidden></p>
+    <div class="review-grid">
+      <div class="viewer">
+        <video id="previewPlayer" controls preload="metadata"></video>
+        <p class="muted" id="previewNote" hidden aria-live="polite"></p>
+        <p class="muted" id="deliveryMeta"></p>
+        <p class="muted">Assista à prévia atual antes de aprovar.</p>
+        <div class="row">
+          <button type="button" id="refreshPreview">Atualizar prévia</button>
+          <button type="button" id="approveFinal">Aprovar prévia assistida</button>
+          <button type="button" id="export">Exportar revisão</button>
+          <button type="button" id="undo">Desfazer edição</button>
+        </div>
+        <p id="downloads"></p>
+      </div>
+      <div class="transcript" aria-label="Texto da montagem">
+        <div class="row" aria-label="Ações de palavra">
+          <button type="button" id="actRemove">Remover</button>
+          <button type="button" id="actRestore">Restaurar</button>
+          <button type="button" id="actProtect">Preservar</button>
+          <button type="button" id="actUnprotect">Liberar</button>
+          <input type="text" id="correctText" placeholder="Correção do trecho" aria-label="Texto corrigido">
+          <button type="button" id="actCorrect">Corrigir texto</button>
+        </div>
+        <div id="corrections" aria-label="Estado das correções de texto"></div>
+        <div id="sceneCards"></div>
+        <h2>Sequência</h2>
+        <ul class="seq" id="sequence"></ul>
+        <h2>Ajustar montagem</h2>
+        <label>Pedido
+          <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea>
+        </label>
+        <div class="row">
+          <button type="button" id="adjust">Ajustar com modelo pago</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/page.js" defer></script>
+</body>
+</html>

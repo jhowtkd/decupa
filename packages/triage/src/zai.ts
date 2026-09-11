@@ -7,56 +7,17 @@ import type {
   StructureRequest, TriageModel,
 } from "./model.ts";
 import { INSPECT_INSTRUCTIONS, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
+import { ZaiClient } from "./zai-client.ts";
 
-export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
+export {
+  isRetryable,
+  readChoice,
+  ZAI_DEFAULT_BASE,
+  ZAI_DEFAULT_MODEL,
+  ZaiClient,
+} from "./zai-client.ts";
+export type { ZaiClientOptions, ZaiUsage } from "./zai-client.ts";
 
-/**
- * A Z.ai serve dois endpoints quase idênticos que cobram de formas diferentes:
- * `/api/paas/v4` é pay-as-you-go e precisa de crédito pré-carregado, enquanto
- * `/api/coding/paas/v4` é a assinatura do Coding Plan. Assinante que bate no
- * primeiro recebe `1113 — Insufficient balance`, que parece erro de conta
- * vazia e é erro de endereço.
- */
-export const ZAI_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4/chat/completions";
-
-/**
- * O `thinking` deste modelo não pode ser desligado e consome orçamento antes de
- * qualquer resposta. Medido em 2026-09-04: 3000 caracteres de raciocínio para
- * 19 de resposta, numa pergunta trivial sobre um vídeo de 3 KB. Um teto
- * apertado devolve HTTP 200 com `content` vazio.
- */
-const DEFAULT_MAX_TOKENS = 16000;
-
-/**
- * Teto do auto-escalonamento. Dobrar além disto não compra nada: o corpo
- * inteiro (vídeo em base64 + prompt) já é o gargalo real da chamada.
- */
-const MAX_TOKENS_CEILING = 64_000;
-
-/**
- * A rede é a única parte deste adaptador que não é determinística. Sem teto, a
- * triagem espera para sempre por uma conexão pendurada; 120 s é folgado para um
- * modelo que pensa antes de responder e curto o suficiente para virar erro
- * enquanto a pessoa ainda está na frente da tela.
- */
-const DEFAULT_TIMEOUT_MS = 120_000;
-
-/** Um retry: 429 e 5xx passam, corpo malformado e endpoint errado não. */
-export function isRetryable(error: Error): boolean {
-  return /HTTP (429|5\d\d)|tempo esgotado|fetch failed|network/i.test(error.message);
-}
-
-/** O thinking comeu o orçamento e não sobrou resposta. */
-export function isBudgetExhausted(error: Error): boolean {
-  return /gastou o orçamento inteiro|Suba max_tokens/.test(error.message);
-}
-
-/**
- * `json_object` garante que a saída é JSON; não garante o formato. Sem
- * `json_schema` para impor o enum, o formato vai descrito no prompt — e o
- * enum é conferido depois, em `verifyClaims`, onde alegação com categoria
- * inventada cai como rejeitada e aparece no relatório.
- */
 const STRUCTURE_SHAPE = `Responda com um objeto JSON desta forma exata:
 
 {"claims": [
@@ -80,50 +41,6 @@ const INSPECT_SHAPE = `Responda com um objeto JSON desta forma exata:
 
 "decision" só pode ser "drop", "keep" ou "unsure". Nunca devolva tempo.`;
 
-/** Consumo acumulado desta instância entre os passes. */
-export interface ZaiUsage {
-  calls: number;
-  promptTokens: number;
-  completionTokens: number;
-  /** Caracteres de raciocínio — o thinking não desliga e é consumido antes da resposta. */
-  reasoningChars: number;
-}
-
-/** Extrai o texto da resposta, ou estoura dizendo por que não deu. */
-export function readChoice(raw: unknown): string {
-  const body = raw as Record<string, any>;
-
-  if (body?.error) {
-    const { code, message } = body.error;
-    throw new Error(`a Z.ai recusou a chamada (${code ?? "sem código"}): ${message ?? "sem mensagem"}`);
-  }
-
-  const choice = body?.choices?.[0];
-  if (!choice) {
-    throw new Error(`resposta da Z.ai sem \`choices\`: ${JSON.stringify(raw).slice(0, 200)}`);
-  }
-
-  const content: string = choice.message?.content ?? "";
-  if (content.trim().length > 0) return content;
-
-  // HTTP 200 com content vazio é o modo de falha perigoso: sem esta guarda o
-  // adaptador devolveria zero alegações, a triagem manteria todas as unidades,
-  // e o relatório diria "o modelo não reivindicou nada" — indistinguível de
-  // uma análise que rodou e não achou problema.
-  const reasoningChars = (choice.message?.reasoning_content ?? "").length;
-  if (choice.finish_reason === "length") {
-    throw new Error(
-      `o modelo gastou o orçamento inteiro pensando (${reasoningChars} caracteres de raciocínio) ` +
-      "e não sobrou resposta. Suba max_tokens.",
-    );
-  }
-  throw new Error(
-    `o modelo terminou com \`${choice.finish_reason}\` e devolveu resposta vazia ` +
-    `(${reasoningChars} caracteres de raciocínio).`,
-  );
-}
-
-/** Tira cerca de markdown, se houver, antes de parsear. */
 function parseJsonPayload(text: string): Record<string, unknown> {
   const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   try {
@@ -141,9 +58,6 @@ export function parseStructureClaims(text: string): StructureClaim[] {
     .filter((c: any) => Array.isArray(c?.unit_ids) && c.unit_ids.length > 0)
     .map((c: any) => ({
       unit_ids: c.unit_ids.map(String),
-      // `reason` passa como veio, mesmo fora do enum: filtrar aqui apagaria a
-      // alegação em silêncio. Deixando passar, ela percorre a verificação
-      // normal e aparece como rejeitada, que é onde você quer vê-la.
       reason: c.reason,
       restated_by: c.restated_by ?? null,
       note: String(c.note ?? ""),
@@ -166,56 +80,19 @@ export function parseDensityCandidates(text: string): DensityCandidate[] {
       return {
         unit_ids: c.unit_ids.map(String),
         note: String(c.note ?? ""),
-        // Sem rank utilizável o candidato vai para o fim da fila. Number(NaN)
-        // o colocaria em posição arbitrária no sort.
         rank: Number.isFinite(rank) ? rank : Number.MAX_SAFE_INTEGER,
       };
     });
 }
 
 export class ZaiTriageModel implements TriageModel {
-  private readonly model: string;
-  private readonly baseUrl: string;
-  // Mutável de propósito: o auto-escalonamento de `send` dobra este valor
-  // quando o thinking consome o orçamento antes de sobrar resposta.
-  private maxTokens: number;
-  private readonly apiKey: string;
-  private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
-  private readonly retries: number;
+  private readonly client: ZaiClient;
   private videoDataUrl: string | null = null;
-  // Mutável de propósito: acumula o que cada `once` custou, para o relatório e
-  // para o triage.json — Coding Plan é cota, e sem os números "acabou no meio
-  // do lote" é mistério.
-  private readonly usageTotals: ZaiUsage = { calls: 0, promptTokens: 0, completionTokens: 0, reasoningChars: 0 };
 
-  constructor(opts: {
-    model?: string;
-    apiKey?: string;
-    baseUrl?: string;
-    maxTokens?: number;
-    fetchImpl?: typeof fetch;
-    timeoutMs?: number;
-    retries?: number;
-  } = {}) {
-    const apiKey = opts.apiKey ?? process.env.ZAI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "ZAI_API_KEY não está setada. A triagem precisa dela para ler o vídeo. " +
-        "Sem a chave, monte o keep-list na mão e passe direto pro `condense.py plan`.",
-      );
-    }
-    this.apiKey = apiKey;
-    this.model = opts.model ?? ZAI_DEFAULT_MODEL;
-    this.baseUrl = opts.baseUrl ?? process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE;
-    // `--max-tokens 0` dobraria 0 para sempre, em loop de chamadas pagas sem progresso.
-    this.maxTokens = Math.max(1, opts.maxTokens ?? DEFAULT_MAX_TOKENS);
-    this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.retries = opts.retries ?? 1;
+  constructor(opts: ConstructorParameters<typeof ZaiClient>[0] = {}) {
+    this.client = new ZaiClient(opts);
   }
 
-  /** Lê o vídeo do disco uma vez e reusa entre os dois passes. */
   private async video(path: string): Promise<string> {
     if (this.videoDataUrl) return this.videoDataUrl;
     const bytes = await readFile(path);
@@ -227,15 +104,11 @@ export class ZaiTriageModel implements TriageModel {
     const dataUrl = await this.video(videoPath);
     const payloadMb = (dataUrl.length * 3) / 4 / 1024 / 1024;
     try {
-      return await this.send([
+      return await this.client.send([
         { type: "video_url", video_url: { url: dataUrl } },
         { type: "text", text: `${instructions}\n\n---\n\n${text}` },
       ]);
     } catch (err) {
-      // Corpo grande demais chega como erro genérico do lado deles — medido em
-      // 2026-09-04: 14,9 MB de base64 devolveu "1234 internal network
-      // failure", enquanto 2,2 MB passou. Sem o tamanho junto da mensagem, a
-      // correlação fica invisível e a pessoa investiga a rede.
       const hint = payloadMb > 5
         ? ` (o vídeo virou ${payloadMb.toFixed(1)} MB em base64 — corpo grande já causou erro genérico aqui; ` +
           "gere um proxy mais leve com `-vf fps=1,scale=270:480 -crf 32`)"
@@ -244,77 +117,8 @@ export class ZaiTriageModel implements TriageModel {
     }
   }
 
-  /** Um POST, com teto de tempo. Sem retry: quem repete é `send`. */
-  private async once(content: unknown[]): Promise<string> {
-    let res: Response;
-    try {
-      res = await this.fetchImpl(this.baseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [{ role: "user", content }],
-          response_format: { type: "json_object" },
-          max_tokens: this.maxTokens,
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (err) {
-      if ((err as Error)?.name === "TimeoutError") {
-        throw new Error(
-          `tempo esgotado depois de ${(this.timeoutMs / 1000).toFixed(0)}s esperando a Z.ai`,
-        );
-      }
-      throw err;
-    }
-
-    const raw = await res.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`HTTP ${res.status} da Z.ai, corpo não-JSON: ${raw.slice(0, 200)}`);
-    }
-    // readChoice cobre o corpo de erro; o status entra no texto quando não há.
-    if (!res.ok && !(parsed as any)?.error) {
-      throw new Error(`HTTP ${res.status} da Z.ai: ${raw.slice(0, 200)}`);
-    }
-    // Contabiliza o que a chamada custou, sem mudar o que devolve. Só conta
-    // `calls` quando a resposta trouxe usage com prompt_tokens finito: um 503
-    // sem corpo de usage não consumiu tokens do modelo.
-    const usage = (parsed as Record<string, any>)?.usage;
-    if (usage && Number.isFinite(usage.prompt_tokens)) {
-      this.usageTotals.calls += 1;
-      this.usageTotals.promptTokens += Number(usage.prompt_tokens);
-      this.usageTotals.completionTokens += Number(usage.completion_tokens ?? 0);
-    }
-    const reasoning = (parsed as Record<string, any>)?.choices?.[0]?.message?.reasoning_content;
-    this.usageTotals.reasoningChars += String(reasoning ?? "").length;
-    return readChoice(parsed);
-  }
-
-  private async send(content: unknown[]): Promise<string> {
-    let retriesLeft = this.retries;
-    for (;;) {
-      try {
-        return await this.once(content);
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        // Orçamento estourado não é azar de rede, é remédio conhecido:
-        // dobra e tenta de novo na hora, sem gastar o retry.
-        if (isBudgetExhausted(error) && this.maxTokens < MAX_TOKENS_CEILING) {
-          this.maxTokens = Math.min(this.maxTokens * 2, MAX_TOKENS_CEILING);
-          continue;
-        }
-        if (!isRetryable(error) || retriesLeft <= 0) throw error;
-        retriesLeft -= 1;
-      }
-    }
-  }
-
-  /** Cópia dos totais até agora — para o relatório e o triage.json. */
-  usage(): ZaiUsage {
-    return { ...this.usageTotals };
+  usage() {
+    return this.client.usage();
   }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {
@@ -342,7 +146,7 @@ export class ZaiTriageModel implements TriageModel {
         image_url: { url: `data:image/jpeg;base64,${bytes.toString("base64")}` },
       });
     }
-    const text = await this.send([
+    const text = await this.client.send([
       ...images,
       { type: "text", text: `${INSPECT_INSTRUCTIONS}\n\n${INSPECT_SHAPE}\n\n---\n\nunidade: ${req.unitId}` },
     ]);

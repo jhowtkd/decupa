@@ -12,6 +12,8 @@ describe("probe", () => {
     expect(info.width).toBe(320);
     expect(info.height).toBe(240);
     expect(info.fps).toBe(25);
+    expect(info.frameRate).toEqual({ num: 25, den: 1 });
+    expect(info.averageFrameRate).toEqual({ num: 25, den: 1 });
     expect(info.videoCodec).toBe("h264");
   });
 
@@ -22,6 +24,8 @@ describe("probe", () => {
     expect(info.hasAudio).toBe(true);
     expect(info.sampleRate).toBe(16000);
     expect(info.width).toBeNull();
+    expect(info.frameRate).toBeNull();
+    expect(info.averageFrameRate).toBeNull();
   });
 
   it("dá erro claro quando o arquivo não existe", async () => {
