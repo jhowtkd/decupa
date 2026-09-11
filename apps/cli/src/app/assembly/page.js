@@ -6,6 +6,7 @@ import { createApi } from "/editor/api.js";
 import { mountRail } from "/editor/rail.js";
 import { mountContexto } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
+import { mountSequencia } from "/editor/sequencia.js";
 
 const state = createState({ project: null, operation: null, selection: new Set(), playhead: null, watched: { revision: null, ended: false } });
 const ui = { busy: false, label: null, error: null };
@@ -299,6 +300,18 @@ async function importFiles(files) {
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
 mountTexto({ state, api, player });
+mountSequencia({ state, api, player });
+
+// O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
+// O elemento persiste (só o src troca), então uma fiação basta.
+{
+  const previewEl = player.el();
+  if (previewEl) {
+    previewEl.addEventListener("timeupdate", () => {
+      if (Number.isFinite(previewEl.currentTime)) state.set("playhead", previewEl.currentTime);
+    });
+  }
+}
 
 state.subscribe("project", (p) => {
   if (!p) return;
