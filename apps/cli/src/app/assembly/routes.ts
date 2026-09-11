@@ -17,6 +17,7 @@ import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
+import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
@@ -492,6 +493,23 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           if (err instanceof HttpError) throw err;
           throw mediaError(err);
+        }
+        return true;
+      }
+
+      if (parts[1] === "waveform" && req.method === "GET") {
+        const sourceId = decodeURIComponent(parts[2] ?? "");
+        const project = await loadProject(dir);
+        const source = project.assembly.sources.find((item) => item.id === sourceId);
+        if (!source) throw new HttpError(404, "fonte não cadastrada");
+        // Sem peaks a faixa desenha só os blocos: 204, nunca erro.
+        // Cache corrompido equivale a ausente (best-effort).
+        try {
+          const raw = await readFile(peaksPath(dir, source.sha256), "utf8");
+          sendJson(res, JSON.parse(raw));
+        } catch {
+          res.writeHead(204);
+          res.end();
         }
         return true;
       }
