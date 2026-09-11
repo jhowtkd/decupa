@@ -116,6 +116,25 @@ it("recusa proposta obsoleta e prévia atrasada", () => {
   expect(approveFinal(previewed, p.revision).finalApprovedRevision).toBe(p.revision);
 });
 
+it("proposta fora do escopo é rejeitada e cena intacta é preservada", () => {
+  const before = twoSceneProject();
+  // Mudança só em s2 via takeId (reaproveita cortes); s1 sai como eco só-id.
+  const changedS2 = {
+    id: "s2", objective: "fechar", rationale: "tema",
+    selections: [{ takeId: "t2" }], support: [], gaps: [],
+  };
+  const raw = (scenes: unknown[], changed: string[]) => ({
+    id: "prop-nl", baseRevision: before.revision,
+    changedSceneIds: changed, explanation: "ajuste", scenes,
+  }) as unknown as Proposal;
+  // Omitir s1 sem declará-la em changedSceneIds reescreve fora do escopo.
+  expect(() => applyProposal(before, raw([changedS2], ["s2"])))
+    .toThrow(/proposta reescreve cena s1 fora do escopo/);
+  // Proposta válida que muda só s2 deixa s1 byte-a-byte igual.
+  const next = applyProposal(before, raw([{ id: "s1" }, changedS2], ["s2"]));
+  expect(next.scenes[0]).toEqual(before.scenes[0]);
+});
+
 it("aplicar proposta incrementa revisão e invalida aprovações", () => {
   const p = project();
   const next = applyProposal(p, proposalFor(p));

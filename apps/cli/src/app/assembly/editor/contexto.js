@@ -34,10 +34,11 @@ const WORD_ACTION_LABEL = {
   unprotect: "Liberando trecho…",
 };
 
-function paidFlags() {
+/** Sem checkboxes: o NL ecoa a permissão já concedida no lote (o contrato segue com as flags). */
+function paidFlags(project) {
   return {
-    modelOptIn: document.getElementById("modelOptIn").checked,
-    visualOptIn: document.getElementById("visualOptIn").checked,
+    modelOptIn: project.permissions.model === true,
+    visualOptIn: project.permissions.visual === true,
   };
 }
 
@@ -71,15 +72,14 @@ export function mountContexto({ state, api, player }) {
     + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
   root.appendChild(review);
 
+  // Pedido em linguagem natural (Task 10): o Preparar montagem mora no rail
+  // com confirmação de lote; aqui só o ajuste, com rótulo de custo honesto.
   const briefingActions = document.createElement("section");
-  briefingActions.setAttribute("aria-label", "Preparação e ajuste");
-  briefingActions.innerHTML = "<h1>Preparação e ajuste</h1>"
-    + '<label class="muted"><input type="checkbox" id="modelOptIn"> modelo pago (Z.ai)</label>'
-    + '<label class="muted"><input type="checkbox" id="visualOptIn"> visual pago (Z.ai)</label>'
-    + '<div class="row"><button type="button" class="primary" id="prepare">Preparar montagem</button>'
-    + '<button type="button" id="cancelPrep" hidden>Cancelar</button></div>'
+  briefingActions.setAttribute("aria-label", "Ajuste");
+  briefingActions.innerHTML = "<h1>Ajuste</h1>"
     + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
-    + '<div class="row"><button type="button" id="adjust">Propor mudanças (modelo pago)</button></div>';
+    + '<div class="row"><button type="button" id="adjust">Propor mudanças (modelo pago)</button>'
+    + '<button type="button" id="cancelPrep" hidden>Cancelar</button></div>';
   root.appendChild(briefingActions);
 
   const previewPlayer = document.getElementById("previewPlayer");
@@ -313,11 +313,14 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("cancelPrep").hidden = !(
       preparing || (operation && operation.stage === "preparing")
     );
-    // Preparar/ajustar disparam trabalhos longos no servidor: evita o segundo
-    // clique parecer travado (o servidor cancelaria o anterior).
+    // Ajustar dispara trabalho longo no servidor: evita o segundo clique
+    // parecer travado (o servidor cancelaria o anterior).
     const bg = backgroundBusy(project, operation);
-    setDisabled(document.getElementById("prepare"), bg);
     setDisabled(document.getElementById("adjust"), bg);
+    // Rótulo de custo honesto (Task 10): pago até conceder, autorizado depois.
+    document.getElementById("adjust").textContent = project.permissions.model === true
+      ? "Propor mudanças (já autorizado)"
+      : "Propor mudanças (modelo pago)";
   }
 
   document.getElementById("actRemove").onclick = () => void wordAction("remove");
@@ -326,11 +329,6 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("actUnprotect").onclick = () => void wordAction("unprotect");
   document.getElementById("actCorrect").onclick = () => void correctSelection();
 
-  document.getElementById("prepare").onclick = () => api.call("/project/prepare", {
-    method: "POST",
-    body: JSON.stringify({ baseRevision: state.get("project").revision, request: "", ...paidFlags() }),
-    label: "Iniciando preparação…",
-  });
   document.getElementById("cancelPrep").onclick = () => api.call(
     "/project/cancel",
     { method: "POST", body: "{}", label: "Cancelando…" },
@@ -340,7 +338,7 @@ export function mountContexto({ state, api, player }) {
     body: JSON.stringify({
       baseRevision: state.get("project").revision,
       request: document.getElementById("request").value,
-      ...paidFlags(),
+      ...paidFlags(state.get("project")),
     }),
     label: "Ajustando montagem…",
   });

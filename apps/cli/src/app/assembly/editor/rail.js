@@ -19,10 +19,11 @@ function setDisabled(el, value) {
   el.disabled = !!value;
 }
 
-function paidFlags() {
+/** Sem checkboxes: o consentimento pago é por lote no disparo; aqui só ecoa o já concedido. */
+function paidFlags(project) {
   return {
-    modelOptIn: document.getElementById("modelOptIn")?.checked === true,
-    visualOptIn: document.getElementById("visualOptIn")?.checked === true,
+    modelOptIn: project.permissions.model === true,
+    visualOptIn: project.permissions.visual === true,
   };
 }
 
@@ -69,7 +70,9 @@ export function mountRail({ state, api, player }) {
   preparation.innerHTML = "<h1>Preparação</h1>"
     + '<p class="muted" id="prepSummary" aria-live="polite"></p>'
     + '<div id="prepList"></div><div id="prepError"></div>'
-    + '<div class="row"><button type="button" id="resume">Retomar</button></div>';
+    + '<div class="row"><button type="button" class="primary" id="prepare">Preparar montagem</button>'
+    + '<button type="button" id="resume">Retomar</button></div>'
+    + '<div id="prepareConfirm" hidden></div>';
   root.appendChild(preparation);
 
   const delivery = document.createElement("section");
@@ -243,6 +246,50 @@ export function mountRail({ state, api, player }) {
     }
   }
 
+  /** Consentimento pago por lote (Task 10): confirmação inline, nunca confirm() nativo. */
+  function openPrepareConfirm(project) {
+    const box = document.getElementById("prepareConfirm");
+    box.replaceChildren();
+    box.hidden = false;
+    const count = project.assembly.sources.filter((source) => source.included).length;
+    const note = document.createElement("p");
+    if (project.permissions.visual === true) {
+      // Permissão é monotônica: já concedida, só declara o estado honesto.
+      note.textContent = "já autorizado (persistente) — a preparação usa o modelo visual pago e envia as mídias ao provedor.";
+    } else {
+      note.textContent = "Vai analisar " + count + " arquivo(s) — custo estimado do modelo visual + envio das mídias ao provedor. Continuar?";
+    }
+    const row = document.createElement("div");
+    row.className = "row";
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "primary";
+    go.textContent = "Preparar agora";
+    go.addEventListener("click", () => {
+      box.hidden = true;
+      box.replaceChildren();
+      // O clique no lote é o opt-in: o servidor persiste em permissions.
+      void api.call("/project/prepare", {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: state.get("project").revision, request: "",
+          modelOptIn: true, visualOptIn: true,
+        }),
+        label: "Iniciando preparação…",
+      });
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancelar";
+    cancel.addEventListener("click", () => {
+      box.hidden = true;
+      box.replaceChildren();
+    });
+    row.append(go, cancel);
+    box.append(note, row);
+    go.focus();
+  }
+
   function render(project) {
     if (!project) return;
     document.getElementById("kind").value = project.input.kind;
@@ -250,11 +297,19 @@ export function mountRail({ state, api, player }) {
     document.getElementById("target").value = String(project.input.targetSeconds);
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
     renderSources(project);
-    preparation.hidden = !project.preparation;
+    // A seção fica visível desde o vazio: o botão Preparar montagem é o
+    // ponto de entrada do percurso (Task 10). Só o Retomar depende de percurso.
+    preparation.hidden = false;
     document.getElementById("resume").hidden = !(
       project.preparation && project.preparation.status !== "running"
       && project.preparation.status !== "ready"
     );
+    const preparing = project.preparation && project.preparation.status === "running";
+    setDisabled(document.getElementById("prepare"), preparing);
+    if (preparing) {
+      document.getElementById("prepareConfirm").replaceChildren();
+      document.getElementById("prepareConfirm").hidden = true;
+    }
     renderPreparation(project);
     // Sem cenas, o cartão equivale à revisão oculta da tela antiga.
     const hasScenes = project.scenes.length > 0;
@@ -291,9 +346,14 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Guardando briefing…",
   });
+  document.getElementById("prepare").onclick = () => openPrepareConfirm(state.get("project"));
   document.getElementById("resume").onclick = () => api.call("/project/prepare", {
     method: "POST",
-    body: JSON.stringify({ baseRevision: state.get("project").revision, request: "", ...paidFlags() }),
+    body: JSON.stringify({
+      baseRevision: state.get("project").revision,
+      request: "",
+      ...paidFlags(state.get("project")),
+    }),
     label: "Retomando preparação…",
   });
   document.getElementById("export").onclick = () => api.call("/project/export", {
