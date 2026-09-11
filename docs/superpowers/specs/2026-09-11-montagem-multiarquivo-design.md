@@ -1,7 +1,7 @@
 # Decupa — montagem de vários arquivos para o DaVinci
 
 Data: 2026-09-11
-Estado: desenho aprovado em conversa; documento aguardando revisão do usuário.
+Estado: documento aprovado pelo usuário em 2026-09-11; planejamento autorizado.
 
 ## Objetivo e decisões aprovadas
 
