@@ -2,7 +2,8 @@
 
 Data: 2026-09-11
 Estado: design aprovado em conversa; emendado após revisão externa verificada
-contra o código (2026-09-11). Aguardando revisão final do usuário.
+contra o código (2026-09-11). Revisão final do usuário concluída; tarefas 1–11
+implementadas na `main` local. Aceite visual (Task 12: prova com mídia real) pendente.
 
 ## Objetivo e decisões aprovadas
 
