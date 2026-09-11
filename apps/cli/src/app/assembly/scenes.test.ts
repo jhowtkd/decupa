@@ -139,3 +139,209 @@ it("continua recusando referência inventada na resposta LLM", async () => {
     send: async () => JSON.stringify({ scenes: [{ id: "s1", speechIds: ["fake"] }], changedSceneIds: ["s1"] }),
   })).rejects.toThrow(/referência de fala inexistente/);
 });
+
+function takeScene() {
+  const p = project();
+  p.scenes = [{
+    id: "s1",
+    objective: "abrir",
+    rationale: "tema",
+    speechIds: ["a:u001"],
+    takes: [{
+      id: "s1:a:u001", sourceId: "a", speechId: "a:u001",
+      start: 0, end: 2, removed: [{ start: 0.4, end: 0.8 }], protected: [],
+    }],
+    visualEvidenceIds: [],
+    support: [],
+    gaps: [],
+  }];
+  return p;
+}
+
+function propose(id: string, baseRevision: number, scenes: unknown[], changed: string[]) {
+  return { id, baseRevision, changedSceneIds: changed, explanation: "ajuste", scenes };
+}
+
+it("cena sem takes compila pelo legado com os mesmos frames", () => {
+  const p = project();
+  const legacy = compileScenes(p, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    speechIds: ["a:u001"], takes: [], visualEvidenceIds: [], support: [], gaps: [],
+  }]);
+  const fresh = validateProposal(propose("p2", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ speechId: "a:u001" }], support: [], gaps: [],
+  }], ["s1"]), p);
+  const viaTakes = compileScenes(p, fresh.scenes);
+  const frames = (tracks: { clips: { sourceId: string; startFrame: number; durationFrames: number; sourceStartSeconds: number }[] }[]) =>
+    tracks.map((track) => track.clips.map((clip) =>
+      [clip.sourceId, clip.startFrame, clip.durationFrames, clip.sourceStartSeconds]));
+  // Mesma mídia nos mesmos frames; só os IDs internos mudam (take+fragmento).
+  expect(frames(legacy.tracks)).toEqual(frames(viaTakes.tracks));
+});
+
+it("fonte excluída sai do prompt e é rejeitada na proposta e na aprovação", async () => {
+  const p = project();
+  p.assembly.sources[0]!.included = false;
+  let prompt = "";
+  await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async (content) => {
+      prompt = JSON.stringify(content);
+      return JSON.stringify({
+        id: "x", baseRevision: 1, changedSceneIds: [], explanation: "nada",
+        scenes: [],
+      });
+    },
+  });
+  expect(prompt).not.toContain("a:u001");
+  expect(prompt).toContain("excluídas do escopo");
+  expect(() => validateProposal(propose("y", 1, [{
+    id: "s1", objective: "ab", rationale: "t",
+    selections: [{ speechId: "a:u001" }], support: [], gaps: [],
+  }], ["s1"]), p)).toThrow(/excluída do escopo/);
+});
+
+it("compila takes com exclusões sem recortar frase", () => {
+  const p = takeScene();
+  const compiled = compileScenes(p, p.scenes);
+  const a1 = compiled.tracks.find((t) => t.name === "A1")!.clips;
+  expect(a1.map((c) => [c.startFrame, c.durationFrames, c.sourceStartSeconds])).toEqual([
+    [0, 10, 0], [10, 30, 0.8],
+  ]);
+  const v1 = compiled.tracks.find((t) => t.name === "V1")!.clips;
+  expect(v1).toHaveLength(2);
+});
+
+it("takeId reaproveita cortes; speechId do mesmo take é rejeitado", () => {
+  const p = takeScene();
+  const reused = validateProposal(propose("p2", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ takeId: "s1:a:u001" }], support: [], gaps: [],
+  }], ["s1"]), p);
+  expect(reused.scenes[0]!.takes[0]!.removed).toEqual([{ start: 0.4, end: 0.8 }]);
+  expect(reused.scenes[0]!.speechIds).toEqual(["a:u001"]);
+  expect(() => validateProposal(propose("p3", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ speechId: "a:u001" }], support: [], gaps: [],
+  }], ["s1"]), p)).toThrow(/use takeId/);
+});
+
+it("rejeita takeId, speechId e evidência desconhecidos ou indisponíveis", () => {
+  const p = takeScene();
+  p.analyses[0]!.visual.push(
+    { id: "a:v9", sourceId: "a", start: 0, end: 1, text: "escuro", confidence: "unavailable", tags: [] },
+  );
+  const scene = (extra: object) => ({
+    id: "s2", objective: "nova", rationale: "tema",
+    selections: [{ speechId: "a:u001" }], support: [], gaps: [], ...extra,
+  });
+  expect(() => validateProposal(propose("x", 1, [{
+    id: "s1", objective: "ab", rationale: "t", selections: [{ takeId: "fantasma" }], support: [], gaps: [],
+  }], ["s1"]), project())).toThrow(/take inexistente/);
+  expect(() => validateProposal(propose("x", 1, [{
+    id: "s1", objective: "ab", rationale: "t", selections: [{ speechId: "fantasma" }], support: [], gaps: [],
+  }], ["s1"]), project())).toThrow(/fala inexistente/);
+  expect(() => validateProposal(propose("x", 1, [scene({ visualEvidenceIds: ["v-fantasma"] })], ["s2"]), p))
+    .toThrow(/visual inexistente/);
+  expect(() => validateProposal(propose("x", 1, [scene({ visualEvidenceIds: ["a:v9"] })], ["s2"]), p))
+    .toThrow(/não fundamenta/);
+});
+
+it("cena fora do escopo: eco só-id preserva, divergência rejeita", () => {
+  const p = takeScene();
+  const kept = validateProposal(propose("p2", 1, [{ id: "s1" }], []), p);
+  expect(kept.scenes[0]).toEqual(p.scenes[0]);
+  expect(() => validateProposal(propose("p3", 1, [{
+    id: "s1", objective: "outro", rationale: "tema",
+    selections: [{ takeId: "s1:a:u001" }], support: [], gaps: [],
+  }], []), p)).toThrow(/fora do escopo/);
+});
+
+it("proposta não remove trecho protegido", () => {
+  const p = takeScene();
+  p.analyses[0]!.speech.push({ id: "a:u002", sourceId: "a", start: 0.5, end: 1.2, text: "meio" });
+  p.scenes[0]!.takes[0]!.protected = [{ start: 1.0, end: 1.5 }];
+  // Take novo cobrindo só parte do protegido ([1.2, 1.5) se perde): conflito.
+  expect(() => validateProposal(propose("p2", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ speechId: "a:u002" }],
+    support: [], gaps: [],
+  }], ["s1"]), p)).toThrow(/protegido/);
+  // takeId reaproveita integralmente: preserva.
+  const ok = validateProposal(propose("p3", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ takeId: "s1:a:u001" }], support: [], gaps: [],
+  }], ["s1"]), p);
+  expect(ok.scenes[0]!.takes[0]!.protected).toEqual([{ start: 1.0, end: 1.5 }]);
+});
+
+it("categorias: fala não vira apoio e apoio não vira fala", () => {
+  const p = project();
+  p.analyses[0]!.visual.push(
+    { id: "a:vx", sourceId: "a", start: 0, end: 1, text: "rosto", confidence: "observed", tags: [] },
+  );
+  expect(() => validateProposal(propose("x", 1, [{
+    id: "s1", objective: "ab", rationale: "t",
+    selections: [{ speechId: "a:u001" }],
+    support: [{ visualId: "a:vx", offsetFrames: 0, durationFrames: 25 }],
+    gaps: [],
+  }], ["s1"]), p)).toThrow(/categoria speech/);
+  // Fonte b (support) fornecendo fala: rejeita.
+  p.analyses.push({
+    sourceId: "b", key: "k2",
+    speech: [{ id: "b:u001", sourceId: "b", start: 0, end: 1, text: "fundo" }],
+    visual: [], status: "ready",
+    words: [], wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  expect(() => validateProposal(propose("y", 1, [{
+    id: "s1", objective: "ab", rationale: "t",
+    selections: [{ speechId: "b:u001" }], support: [], gaps: [],
+  }], ["s1"]), p)).toThrow(/categoria support/);
+});
+
+it("apoio além da cena é limitado com nota na explicação", () => {
+  const p = project();
+  p.analyses[0]!.visual.push(
+    { id: "b:v0", sourceId: "b", start: 0, end: 2, text: "apoio", confidence: "observed", tags: [] },
+  );
+  const proposal = validateProposal(propose("p2", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ speechId: "a:u001" }],
+    support: [{ visualId: "b:v0", offsetFrames: 40, durationFrames: 25 }],
+    gaps: [],
+  }], ["s1"]), p);
+  // Cena tem 50 frames (2s a 25fps); apoio a partir de 40 pede 25, cabem 10.
+  expect(proposal.scenes[0]!.rationale).toContain("limitado a 10f");
+  const compiled = compileScenes(p, proposal.scenes);
+  const v2 = compiled.tracks.find((t) => t.name === "V2")!.clips;
+  expect(v2).toHaveLength(1);
+  expect(v2[0]!.startFrame).toBe(40);
+  expect(v2[0]!.durationFrames).toBe(10);
+});
+
+it("proposeScenes envia fala com texto efetivo corrigido", async () => {
+  const p = project();
+  p.analyses[0]!.words = [
+    { id: "w1", sourceId: "a", text: "Niltão", confidence: null, start: 0.1, end: 0.4 },
+    { id: "w2", sourceId: "a", text: "Pinto", confidence: null, start: 0.42, end: 0.7 },
+  ];
+  p.analyses[0]!.wordsStatus = "ready";
+  p.corrections = [{
+    id: "c1", sourceId: "a", start: 0.1, end: 0.4, text: "Nilton",
+    status: "aligned",
+    words: [{ id: "wc1", sourceId: "a", text: "Nilton", confidence: 0.9, start: 0.1, end: 0.4 }],
+  }];
+  let prompt = "";
+  await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async (content) => {
+      prompt = JSON.stringify(content);
+      return JSON.stringify({
+        id: "x", baseRevision: 1, changedSceneIds: ["s1"], explanation: "ok",
+        scenes: [{ id: "s1", objective: "ab", rationale: "t", selections: [{ speechId: "a:u001" }], support: [], gaps: [] }],
+      });
+    },
+  });
+  expect(prompt).toContain("Nilton Pinto");
+  expect(prompt).not.toContain("Niltão");
+});

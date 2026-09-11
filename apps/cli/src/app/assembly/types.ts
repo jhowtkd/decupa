@@ -67,6 +67,8 @@ export type Scene = {
    * compilam pelo legado e pedem reanálise para edição por palavra.
    */
   takes: SpeechTake[];
+  /** Evidência visual que fundamenta a cena (observed/uncertain; nunca unavailable). */
+  visualEvidenceIds: string[];
   support: { visualId: string; offsetFrames: number; durationFrames: number }[];
   gaps: string[];
 };
@@ -195,8 +197,8 @@ export type LegacyAnalysis = {
   error?: string;
 };
 
-/** Cena legada: sem takes (a migração os resolve do catálogo). */
-export type LegacyScene = Omit<Scene, "takes">;
+/** Cena legada: sem takes nem evidência (a migração resolve do catálogo). */
+export type LegacyScene = Omit<Scene, "takes" | "visualEvidenceIds">;
 
 export type LegacyProject = {
   version: 1;

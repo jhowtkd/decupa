@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
@@ -881,13 +881,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const baseRevision = requireRevision(body);
         const { gen } = begin("rendering");
         const project = await mutate(baseRevision, async (project) => {
-          if (project.structureApprovedRevision !== project.revision) {
-            throw new HttpError(409, "prévia exige estrutura aprovada na revisão atual");
-          }
-          await renderAssembly(project.assembly, dir, deps.exec);
+          const reference = await renderAssembly(project.assembly, dir, deps.exec);
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };
-          return recordPreview(project, project.revision);
+          const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
+          return recordPreview(project, {
+            revision: project.revision,
+            assemblySha256,
+            relativePath: relative(dir, reference),
+            sha256: await hashFile(reference),
+          });
         });
         sendJson(res, { project, ...snapshot() });
         return true;
@@ -895,7 +898,18 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "approve-final" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const project = await mutate(baseRevision, (project) => approveFinal(project));
+        const watchedRevision = Number(body.watchedRevision);
+        if (!Number.isSafeInteger(watchedRevision) || watchedRevision < 0) {
+          throw new HttpError(400, "watchedRevision inválido: confirme a revisão assistida");
+        }
+        const project = await mutate(baseRevision, (project) => {
+          try {
+            return approveFinal(project, watchedRevision);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new HttpError(/assistida/.test(message) ? 400 : 409, message);
+          }
+        });
         sendJson(res, { project, ...snapshot() });
         return true;
       }

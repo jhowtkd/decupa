@@ -38,6 +38,7 @@ function proposalFor(p: Project): Proposal {
       rationale: "tema",
       speechIds: [],
       takes: [],
+      visualEvidenceIds: [],
       support: [],
       gaps: [],
     }],
@@ -49,8 +50,19 @@ it("recusa proposta obsoleta e prévia atrasada", () => {
   const proposal = proposalFor(p);
   expect(() => applyProposal(p, { ...proposal, baseRevision: p.revision - 1 }))
     .toThrow(/revisão/);
-  expect(recordPreview(p, p.revision - 1).previewRevision).toBe(p.previewRevision);
-  expect(() => approveFinal({ ...p, previewRevision: null })).toThrow(/prévia/);
+  const artifact = {
+    revision: p.revision,
+    assemblySha256: "a".repeat(64),
+    relativePath: "rev-2/reference.mp4",
+    sha256: "b".repeat(64),
+  };
+  expect(() => recordPreview(p, { ...artifact, revision: p.revision - 1 })).toThrow(/outra revisão/);
+  const previewed = recordPreview(p, artifact);
+  expect(previewed.previewRevision).toBe(p.revision);
+  expect(previewed.previewArtifact).toEqual(artifact);
+  expect(() => approveFinal({ ...previewed, previewArtifact: null }, p.revision)).toThrow(/prévia/);
+  expect(() => approveFinal(previewed, p.revision - 1)).toThrow(/assistida/);
+  expect(approveFinal(previewed, p.revision).finalApprovedRevision).toBe(p.revision);
 });
 
 it("aplicar proposta incrementa revisão e invalida aprovações", () => {
@@ -89,6 +101,7 @@ it("undo restaura cena e correção como revisão nova sem tocar permissões", (
         id: "t1", sourceId: "a", speechId: "a:u001",
         start: 0, end: 2, removed: [], protected: [],
       }],
+      visualEvidenceIds: [],
       support: [], gaps: [],
     }],
     corrections: [],

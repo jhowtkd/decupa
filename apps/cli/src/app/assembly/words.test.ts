@@ -37,6 +37,7 @@ function project(): Project {
         id: "t1", sourceId: "a", speechId: "a:u001",
         start: 0, end: 2, removed: [], protected: [],
       }],
+      visualEvidenceIds: [],
       support: [],
       gaps: [],
     }],

@@ -337,12 +337,21 @@ function validateSceneShape(
   const takes = Array.isArray(value.takes)
     ? (value.takes as unknown[]).map((take) => validateSpeechTake(take, sources))
     : [];
+  const visualEvidenceIds = Array.isArray(value.visualEvidenceIds)
+    ? value.visualEvidenceIds.map((id, i) => {
+      if (typeof id !== "string" || id.length === 0) {
+        throw new Error(`cena ${index} com evidência visual inválida (${i})`);
+      }
+      return id;
+    })
+    : [];
   return {
     id: nonEmptyString(value.id, `cena ${index}.id`),
     objective: String(value.objective ?? ""),
     rationale: String(value.rationale ?? ""),
     speechIds,
     takes,
+    visualEvidenceIds,
     support: Array.isArray(value.support) ? value.support as Project["scenes"][number]["support"] : [],
     gaps: Array.isArray(value.gaps) ? value.gaps.map(String) : [],
   };
@@ -486,7 +495,7 @@ function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
         // Sem catálogo ou com span fora da fonte, preserva speechIds para
         // consulta e pede reanálise; nunca infere tempos por texto.
         if (!span || duration === undefined || span.start < 0 || span.end > duration) {
-          return { ...scene, takes: [] };
+          return { ...scene, takes: [], visualEvidenceIds: [] };
         }
         takes.push({
           id: `${scene.id}:${speechId}`,
@@ -498,7 +507,7 @@ function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
           protected: [],
         });
       }
-      return { ...scene, takes };
+      return { ...scene, takes, visualEvidenceIds: [] };
     }),
     corrections: [],
     preparation: null,

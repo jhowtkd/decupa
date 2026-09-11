@@ -1,4 +1,4 @@
-import type { Assembly, Project, Proposal, Scene } from "./types.ts";
+import type { Assembly, Project, Proposal } from "./types.ts";
 import type { EditorialSnapshot } from "./store.ts";
 import { compileScenes, validateProposal } from "./scenes.ts";
 
@@ -60,24 +60,48 @@ export function approveStructure(p: Project): Project {
   return { ...p, structureApprovedRevision: p.revision };
 }
 
-export function recordPreview(p: Project, revision: number): Project {
-  if (revision !== p.revision) return p;
-  if (p.structureApprovedRevision !== p.revision) {
-    throw new Error("prévia exige estrutura aprovada na revisão atual");
+export function recordPreview(
+  p: Project,
+  artifact: NonNullable<Project["previewArtifact"]>,
+): Project {
+  if (artifact.revision !== p.revision) {
+    throw new Error(`prévia de outra revisão: ${artifact.revision}, atual ${p.revision}`);
   }
-  return { ...p, previewRevision: revision };
+  return { ...p, previewRevision: p.revision, previewArtifact: artifact };
 }
 
-export function approveFinal(p: Project): Project {
-  if (p.structureApprovedRevision !== p.revision) {
-    throw new Error("aprovação final exige estrutura atual");
+/**
+ * Aprovação final humana: exige o MP4 assistido (artefato da revisão atual),
+ * nenhuma lacuna aberta, takes com fonte válida e confirmação de qual
+ * revisão foi assistida. Não depende de aprovação estrutural.
+ */
+export function approveFinal(p: Project, watchedRevision: number): Project {
+  if (!p.previewArtifact || p.previewArtifact.revision !== p.revision) {
+    throw new Error("prévia desatualizada: gere a prévia da revisão atual");
   }
   if (p.previewRevision !== p.revision) {
-    throw new Error("aprovação final exige prévia da revisão atual");
+    throw new Error("prévia desatualizada: gere a prévia da revisão atual");
   }
-  const unresolved = p.scenes.flatMap((scene: Scene) => scene.gaps);
-  if (unresolved.length > 0) {
-    throw new Error(`lacunas não resolvidas: ${unresolved.join("; ")}`);
+  if (watchedRevision !== p.revision) {
+    throw new Error(`confirme a revisão assistida: ${p.revision}`);
+  }
+  for (const scene of p.scenes) {
+    if (scene.gaps.length > 0) {
+      throw new Error(`cena ${scene.id} com lacunas não resolvidas`);
+    }
+  }
+  const sources = new Map(p.assembly.sources.map((source) => [source.id, source]));
+  for (const scene of p.scenes) {
+    for (const take of scene.takes) {
+      const source = sources.get(take.sourceId);
+      if (!source) throw new Error(`take ${take.id} com fonte ausente ${take.sourceId}`);
+      if (!source.included) {
+        throw new Error(`take ${take.id} usa fonte excluída do escopo: ${take.sourceId}`);
+      }
+      if (take.start < 0 || take.end > source.durationSeconds || take.start >= take.end) {
+        throw new Error(`take ${take.id} fora da fonte ${take.sourceId}`);
+      }
+    }
   }
   return { ...p, finalApprovedRevision: p.revision };
 }

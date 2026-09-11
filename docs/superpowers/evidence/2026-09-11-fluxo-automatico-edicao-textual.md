@@ -101,6 +101,21 @@ Testes: `model.test.ts` (6: recorte-diferente-por-janela + soma única + prompt 
 Achados: nenhum P0/P1. Nota para a tarefa 7: chamar `verifySourceIdentity` antes de reutilizar análises (troca no mesmo caminho); cobertura parcial deve impedir "resultado completo".
 Próxima ação: tarefa 6 (scenes.ts: takes, selections, evidência visual).
 
+## Tarefa 6 — compilação e proposta com evidência
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: R-007 + R-003/R-004 (takes editados preservados, proteção).
+
+Implementado:
+- `scenes.ts`: `compileScenes` consome takes (`retainedRanges`, quantização racional única, fragmentos `take#i`, sliver sub-frame pulado) com fallback legado para cenas sem takes (mesmos frames); V2 com clamp de apoio à cena e à fonte (nunca atravessa); `validateProposal` com `selections` (`takeId` reaproveita cortes/proteções, `speechId` cria take novo; adaptador legado de `speechIds`; duplicata de take existente exige `takeId`), `visualEvidenceIds` (catálogo + `unavailable` rejeitado como fundamento), categorias por role nos dois sentidos, escopo (`changedSceneIds`; fora do escopo preserva idêntico, divergência rejeita), proteção (retido novo precisa cobrir o protegido), fontes excluídas rejeitadas; `annotateSupport` (apoio limitado/removido vira nota no rationale, gaps intactos); `proposeScenes` com snapshot anti-mutação, texto efetivo corrigido nas falas, evidência com confiança/cobertura, categorias/inclusão e takes atuais no prompt.
+- `revisions.ts`: `recordPreview` exige artefato da revisão atual; `approveFinal(p, watchedRevision)` exige artefato+prévia atuais, confirmação do assistido, zero gaps e takes com fonte válida+incluída — sem depender de aprovação estrutural.
+- `routes.ts`: preview publica `previewArtifact` (hashes) sem gate estrutural; approve-final passa `watchedRevision` (400 sem confirmação, 409 demais).
+- `types.ts`/`store.ts`: `Scene.visualEvidenceIds` (+ migração com `[]`).
+
+Testes: `scenes.test.ts` +10 (snippet do plano, legado≡takes em frames, takeId/duplicata, refs/evidência, escopo, proteção, categorias, clamp+nota, texto efetivo, excluídas) e `revisions.test.ts` atualizado para artefato/assistido. Comando amplo: 143 passed, 17 failed — todos `routes.test.ts` EPERM (G0-F01). `pnpm typecheck` 0 erros, `diff --check` limpo.
+Achados: nenhum P0/P1. Recheck HTTP fora do sandbox: rotas propose/apply com seleções, preview→artefato→approve com watched, stale real.
+Próxima ação: tarefa 7 (preparação automática persistente).
+
 ## Gates seguintes
 
 (G1–G7 a preencher durante a execução.)
