@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import type { LegacyProject, Project } from "./types.ts";
-import { createProject, loadProject, missingMedia, saveProject, validateProject } from "./store.ts";
+import { createProject, loadProject, missingMedia, readHistorySnapshot, saveProject, validateProject, writeHistorySnapshot } from "./store.ts";
 
 function projectAt(revision: number): LegacyProject {
   const assembly = fixtureAssembly();
@@ -174,6 +174,55 @@ it("rejeita palavras com ID duplicado, tempo inválido ou fonte ausente", async 
   expect(() => validateProject(withWords([{ ...good, start: 2.9, end: 3.5 }]))).toThrow(/intervalo/);
   expect(() => validateProject(withWords([{ ...good, start: NaN }]))).toThrow(/finito/);
   expect(() => validateProject(withWords([{ ...good, sourceId: "zz" }]))).toThrow(/fonte/);
+});
+
+it("migração converte speechIds em takes usando o catálogo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  const v1 = projectAt(1);
+  v1.analyses = [{
+    sourceId: "a",
+    key: "k",
+    speech: [{ id: "a:u001", sourceId: "a", start: 0, end: 1, text: "olá" }],
+    visual: [],
+    status: "ready",
+  }];
+  v1.scenes = [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    speechIds: ["a:u001"], support: [], gaps: [],
+  }];
+  await writeFile(join(dir, "project.json"), `${JSON.stringify(v1)}\n`, "utf8");
+  const loaded = await loadProject(dir);
+  expect(loaded.scenes[0]!.speechIds).toEqual(["a:u001"]);
+  expect(loaded.scenes[0]!.takes).toEqual([{
+    id: "s1:a:u001", sourceId: "a", speechId: "a:u001",
+    start: 0, end: 1, removed: [], protected: [],
+  }]);
+});
+
+it("migração sem catálogo preserva speechIds com takes vazios", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  const v1 = projectAt(1);
+  v1.scenes = [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    speechIds: ["fantasma"], support: [], gaps: [],
+  }];
+  await writeFile(join(dir, "project.json"), `${JSON.stringify(v1)}\n`, "utf8");
+  const loaded = await loadProject(dir);
+  expect(loaded.scenes[0]!.takes).toEqual([]);
+  expect(loaded.scenes[0]!.speechIds).toEqual(["fantasma"]);
+  expect(loaded.analyses).toEqual([]);
+});
+
+it("histórico guarda e lê snapshot editorial; ausente estoura", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  const loaded = await loadProject(dir);
+  await writeHistorySnapshot(dir, loaded);
+  const snap = await readHistorySnapshot(dir, 1);
+  expect(snap.revision).toBe(1);
+  expect(snap.scenes).toEqual(loaded.scenes);
+  expect(snap).not.toHaveProperty("permissions");
+  await expect(readHistorySnapshot(dir, 99)).rejects.toThrow(/sem histórico/);
 });
 
 it("rejeita correção e preparação inválidas", async () => {

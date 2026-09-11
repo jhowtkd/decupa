@@ -1,4 +1,4 @@
-import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { access } from "node:fs/promises";
 import type {
@@ -326,14 +326,23 @@ function validateAnalysis(value: unknown, sources: Map<string, Source>, seen: Se
   };
 }
 
-function validateSceneShape(value: unknown, index: number): Project["scenes"][number] {
+function validateSceneShape(
+  value: unknown,
+  index: number,
+  sources: Map<string, Source>,
+): Project["scenes"][number] {
   if (!isRecord(value)) throw new Error(`cena ${index} precisa ser um objeto`);
   const speechIds = Array.isArray(value.speechIds) ? value.speechIds.map(String) : [];
+  // Propostas novas chegam sem takes; a tarefa 6 os constrói na validação.
+  const takes = Array.isArray(value.takes)
+    ? (value.takes as unknown[]).map((take) => validateSpeechTake(take, sources))
+    : [];
   return {
     id: nonEmptyString(value.id, `cena ${index}.id`),
     objective: String(value.objective ?? ""),
     rationale: String(value.rationale ?? ""),
     speechIds,
+    takes,
     support: Array.isArray(value.support) ? value.support as Project["scenes"][number]["support"] : [],
     gaps: Array.isArray(value.gaps) ? value.gaps.map(String) : [],
   };
@@ -361,7 +370,7 @@ function validateV2(value: Record<string, unknown>): Project {
   const assembly = validateAssembly(value.assembly);
   const sources = new Map(assembly.sources.map((source) => [source.id, source]));
   const scenes = Array.isArray(value.scenes)
-    ? value.scenes.map((scene, i) => validateSceneShape(scene, i))
+    ? value.scenes.map((scene, i) => validateSceneShape(scene, i, sources))
     : [];
   if (!Array.isArray(value.analyses)) throw new Error("projeto.analyses precisa ser um array");
   const seenAnalyses = new Set<string>();
@@ -425,6 +434,27 @@ function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
   const assembly = value.assembly as Record<string, unknown>;
   const sources = Array.isArray(assembly.sources) ? assembly.sources : [];
   const analyses = Array.isArray(value.analyses) ? value.analyses : [];
+  const speechById = new Map<string, { sourceId: string; start: number; end: number }>();
+  for (const analysis of analyses) {
+    if (!isRecord(analysis) || !Array.isArray(analysis.speech)) continue;
+    for (const span of analysis.speech) {
+      if (!isRecord(span) || typeof span.id !== "string") continue;
+      const start = span.start;
+      const end = span.end;
+      if (typeof start !== "number" || typeof end !== "number"
+        || !Number.isFinite(start) || !Number.isFinite(end) || !(start < end)) continue;
+      speechById.set(span.id, { sourceId: String(span.sourceId), start, end });
+    }
+  }
+  const scenes = Array.isArray(value.scenes) ? value.scenes : [];
+  const durations = new Map<string, number>();
+  for (const source of sources) {
+    if (!isRecord(source) || typeof source.id !== "string") continue;
+    const duration = (source as Record<string, unknown>).durationSeconds;
+    if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+      durations.set(source.id, duration);
+    }
+  }
   return {
     ...value,
     version: 2,
@@ -440,6 +470,31 @@ function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
         wordsStatus: "missing",
         visualCoverage: { requested: [], returned: [], missing: [] },
       };
+    }),
+    scenes: (scenes as unknown[]).map((scene) => {
+      if (!isRecord(scene) || !Array.isArray(scene.speechIds) || typeof scene.id !== "string") {
+        return scene;
+      }
+      const takes: Record<string, unknown>[] = [];
+      for (const speechId of scene.speechIds.map(String)) {
+        const span = speechById.get(speechId);
+        const duration = durations.get(span?.sourceId ?? "");
+        // Sem catálogo ou com span fora da fonte, preserva speechIds para
+        // consulta e pede reanálise; nunca infere tempos por texto.
+        if (!span || duration === undefined || span.start < 0 || span.end > duration) {
+          return { ...scene, takes: [] };
+        }
+        takes.push({
+          id: `${scene.id}:${speechId}`,
+          sourceId: span.sourceId,
+          speechId,
+          start: span.start,
+          end: span.end,
+          removed: [],
+          protected: [],
+        });
+      }
+      return { ...scene, takes };
     }),
     corrections: [],
     preparation: null,
@@ -578,6 +633,53 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
 
 export function backupPath(dir: string): string {
   return join(dir, "project.v1.backup.json");
+}
+
+/** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
+export type EditorialSnapshot = {
+  revision: number;
+  input: Project["input"];
+  scenes: Project["scenes"];
+  corrections: Project["corrections"];
+  proposal: Project["proposal"];
+};
+
+function historyPath(dir: string, revision: number): string {
+  return join(dir, "history", `rev-${revision}.json`);
+}
+
+/** Guarda o estado editorial antes da mutação; sobrescreve o mesmo rev. */
+export async function writeHistorySnapshot(dir: string, project: Project): Promise<void> {
+  const snapshot: EditorialSnapshot = {
+    revision: project.revision,
+    input: project.input,
+    scenes: project.scenes,
+    corrections: project.corrections,
+    proposal: project.proposal,
+  };
+  await mkdir(join(dir, "history"), { recursive: true });
+  await writeFile(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+}
+
+export async function readHistorySnapshot(dir: string, revision: number): Promise<EditorialSnapshot> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(historyPath(dir, revision), "utf8"));
+  } catch {
+    throw new Error(`sem histórico para a revisão ${revision}`);
+  }
+  if (!isRecord(raw) || raw.revision !== revision) {
+    throw new Error(`histórico inválido para a revisão ${revision}`);
+  }
+  if (!isRecord(raw.input) || !Array.isArray(raw.scenes) || !Array.isArray(raw.corrections)) {
+    throw new Error(`histórico inválido para a revisão ${revision}`);
+  }
+  for (const [i, scene] of raw.scenes.entries()) {
+    if (!isRecord(scene) || typeof scene.id !== "string" || !Array.isArray(scene.takes)) {
+      throw new Error(`histórico com cena inválida na revisão ${revision} (índice ${i})`);
+    }
+  }
+  return raw as EditorialSnapshot;
 }
 
 export async function saveProject(

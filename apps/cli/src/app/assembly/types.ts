@@ -55,9 +55,28 @@ export type Scene = {
   objective: string;
   rationale: string;
   speechIds: string[];
+  /**
+   * Seleção canônica de mídia (tarefa 3+): cada take menos seus `removed`.
+   * `speechIds` segue como legado de consulta até a tarefa 6 trocar o
+   * compilador; cenas sem takes (catálogo ausente na migração) ainda
+   * compilam pelo legado e pedem reanálise para edição por palavra.
+   */
+  takes: SpeechTake[];
   support: { visualId: string; offsetFrames: number; durationFrames: number }[];
   gaps: string[];
 };
+
+/**
+ * Edição pelo texto. remove/restore/protect/unprotect/include operam em
+ * intervalos da fonte resolvidos por Word IDs — nunca em offsets de texto.
+ * correct é overlay de grafia e não move a seleção de mídia.
+ */
+export type EditAction =
+  | { type: "remove" | "restore" | "protect" | "unprotect"; sceneId: string; takeId: string; wordIds: string[] }
+  | { type: "correct"; sourceId: string; start: number; end: number; text: string }
+  | { type: "include"; sceneId: string; sourceId: string; wordIds: string[] }
+  | { type: "move-scene"; sceneId: string; direction: "up" | "down" }
+  | { type: "delete-scene"; sceneId: string };
 
 /** Intervalo semiaberto em segundos: [start, end). */
 export type SourceRange = { start: number; end: number };
@@ -171,13 +190,16 @@ export type LegacyAnalysis = {
   error?: string;
 };
 
+/** Cena legada: sem takes (a migração os resolve do catálogo). */
+export type LegacyScene = Omit<Scene, "takes">;
+
 export type LegacyProject = {
   version: 1;
   id: string;
   revision: number;
   input: { kind: "script" | "brief"; text: string; targetSeconds: number };
   assembly: Omit<Assembly, "sources"> & { sources: Omit<Source, "included">[] };
-  scenes: Scene[];
+  scenes: LegacyScene[];
   analyses: LegacyAnalysis[];
   proposal: Proposal | null;
   structureApprovedRevision: number | null;

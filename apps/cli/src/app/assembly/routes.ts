@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, realpath } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { hashFile, probe } from "@decupa/media";
+import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
+import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
 import type { Executor } from "../pipeline.ts";
@@ -12,12 +14,14 @@ import { describeSource } from "./model.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import {
-  applyProposal, approveFinal, approveStructure, recordPreview,
+  applyHistorySnapshot, applyProposal, approveFinal, approveStructure, recordPreview,
 } from "./revisions.ts";
 import { proposeScenes, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
-import { createProject, loadProject, mergeAnalyses, saveProject } from "./store.ts";
+import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
 import type { Project, Rate, Source } from "./types.ts";
+import type { AlignmentOutcome } from "./words.ts";
+import { applyTextEdit, parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const PAID_BLOCKED = "análise paga exige lote e custo autorizados";
@@ -150,6 +154,112 @@ async function sourceFromFile(path: string, id: string): Promise<Source> {
 
 function nextSourceId(project: Project): string {
   return `src-${project.assembly.sources.length + 1}`;
+}
+
+/**
+ * Publica o resultado do alinhamento sem criar revisão nova: é a conclusão
+ * da edição que registrou o pending. CAS pelo expectedRevision descarta o
+ * resultado quando outra edição ou undo passou na frente (obsoleto).
+ */
+async function publishCorrection(
+  dir: string,
+  expectedRevision: number,
+  correctionId: string,
+  outcome: AlignmentOutcome,
+): Promise<void> {
+  try {
+    await saveProject(dir, expectedRevision, (current) => {
+      const correction = current.corrections.find((item) => item.id === correctionId);
+      if (!correction || correction.status !== "pending") {
+        throw new Error(`correção ${correctionId} obsoleta`);
+      }
+      try {
+        return settleCorrection(current, correctionId, outcome);
+      } catch (err) {
+        return settleCorrection(current, correctionId, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  } catch {
+    // Revisão andou: resultado obsoleto, descarta sem tocar no projeto.
+  }
+}
+
+/**
+ * Alinha uma correção pendente em background: recorta o áudio, roda o
+ * sidecar com --text-file (sem ASR), refina os cortes com snapCut e publica
+ * via CAS. Nunca derruba o servidor; o pending permite retomada.
+ */
+async function alignCorrectionJob(
+  dir: string,
+  correctionId: string,
+  expectedRevision: number,
+): Promise<void> {
+  try {
+    const current = await loadProject(dir);
+    if (current.revision !== expectedRevision) return;
+    const correction = current.corrections.find((item) => item.id === correctionId);
+    if (!correction || correction.status !== "pending") return;
+    const source = current.assembly.sources.find((item) => item.id === correction.sourceId);
+    if (!source) {
+      await publishCorrection(dir, expectedRevision, correctionId, {
+        error: `fonte ausente: ${correction.sourceId}`,
+      });
+      return;
+    }
+    let transcript;
+    try {
+      transcript = await alignText({
+        input: source.path,
+        text: correction.text,
+        startSeconds: correction.start,
+        endSeconds: correction.end,
+      });
+    } catch (err) {
+      await publishCorrection(dir, expectedRevision, correctionId, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    const words: {
+      text: string; start: number; end: number;
+      confidence: number | null; cutStart?: number; cutEnd?: number;
+    }[] = transcript.tokens.map((token) => ({
+      text: token.text,
+      start: token.startMs / 1000,
+      end: token.endMs / 1000,
+      confidence: token.confidence,
+    }));
+    try {
+      const clipDir = await mkdtemp(join(tmpdir(), "decupa-snap-"));
+      try {
+        const wav = join(clipDir, "clip.wav");
+        await extractAudio({
+          input: source.path,
+          output: wav,
+          startSeconds: correction.start,
+          durationSeconds: correction.end - correction.start,
+        });
+        const pcm = await readPcm({ input: wav });
+        const cuts = snapWordCuts(
+          pcm,
+          words.map((word) => ({ start: word.start - correction.start, end: word.end - correction.start })),
+        );
+        for (const [i, word] of words.entries()) {
+          word.cutStart = cuts[i]!.start + correction.start;
+          word.cutEnd = cuts[i]!.end + correction.start;
+        }
+      } finally {
+        await rm(clipDir, { recursive: true, force: true });
+      }
+    } catch {
+      // Sem refino acústico, valem as fronteiras do alinhamento.
+    }
+    await publishCorrection(dir, expectedRevision, correctionId, { words });
+  } catch {
+    // O pending segue retomável; o erro será registrado na próxima tentativa.
+  }
 }
 
 function requireRevision(body: Record<string, unknown>): number {
@@ -511,6 +621,83 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return applyProposal(project, project.proposal);
         });
         sendJson(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "edit" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        let action;
+        try {
+          action = parseEditAction(body.action);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        // Descobre o id da correção de forma pura antes de salvar
+        // (mint determinístico: o save reaplica o mesmo id).
+        let correctionId: string | null = null;
+        if (action.type === "correct") {
+          const current = await loadProject(dir);
+          if (current.revision !== baseRevision) {
+            throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
+          }
+          try {
+            const preview = applyTextEdit(current, action);
+            const oldIds = new Set(current.corrections.map((item) => item.id));
+            const created = preview.corrections.map((item) => item.id).filter((id) => !oldIds.has(id));
+            if (created.length !== 1 || !created[0]) throw new Error("correção não criada");
+            correctionId = created[0];
+          } catch (err) {
+            throw new HttpError(400, err instanceof Error ? err.message : String(err));
+          }
+        }
+        let project: Project;
+        try {
+          project = await mutate(baseRevision, async (loaded) => {
+            await writeHistorySnapshot(dir, loaded);
+            return applyTextEdit(loaded, action);
+          });
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        if (correctionId) {
+          // Alinhamento continua em background; o pending permite retomada.
+          void alignCorrectionJob(dir, correctionId, project.revision);
+          sendJson(res, { project, ...snapshot() }, 202);
+          return true;
+        }
+        sendJson(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "undo" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const target = Number(body.revision);
+        if (!Number.isSafeInteger(target) || target < 0) {
+          throw new HttpError(400, "revision inválida para desfazer");
+        }
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        if (target >= loaded.revision) {
+          throw new HttpError(409, "nada a desfazer nessa revisão");
+        }
+        let snap;
+        try {
+          snap = await readHistorySnapshot(dir, target);
+        } catch (err) {
+          throw new HttpError(404, err instanceof Error ? err.message : String(err));
+        }
+        await writeHistorySnapshot(dir, loaded);
+        try {
+          // Forma funcional: substitui o conteúdo editorial (sem unir correções
+          // antigas de volta) e valida antes de gravar.
+          await saveProject(dir, baseRevision, (current) => applyHistorySnapshot(current, snap));
+        } catch (err) {
+          throw new HttpError(409, err instanceof Error ? err.message : String(err));
+        }
+        sendJson(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 

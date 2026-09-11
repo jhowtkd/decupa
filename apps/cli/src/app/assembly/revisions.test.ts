@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import {
-  applyProposal, approveFinal, approveStructure, recordPreview,
+  applyHistorySnapshot, applyProposal, approveFinal, approveStructure, recordPreview,
 } from "./revisions.ts";
 import type { Project, Proposal } from "./types.ts";
 
@@ -37,6 +37,7 @@ function proposalFor(p: Project): Proposal {
       objective: "abrir",
       rationale: "tema",
       speechIds: [],
+      takes: [],
       support: [],
       gaps: [],
     }],
@@ -60,4 +61,45 @@ it("aplicar proposta incrementa revisão e invalida aprovações", () => {
   expect(next.structureApprovedRevision).toBeNull();
   expect(next.previewRevision).toBeNull();
   expect(next.finalApprovedRevision).toBeNull();
+});
+
+it("undo restaura cena e correção como revisão nova sem tocar permissões", () => {
+  const p = {
+    ...project(),
+    revision: 5,
+    permissions: { model: true, visual: true },
+    structureApprovedRevision: 5,
+    analyses: [{
+      sourceId: "a",
+      key: "k",
+      speech: [{ id: "a:u001", sourceId: "a", start: 0, end: 2, text: "olá tema" }],
+      visual: [],
+      status: "ready" as const,
+      words: [],
+      wordsStatus: "missing" as const,
+      visualCoverage: { requested: [], returned: [], missing: [] },
+    }],
+  };
+  const snap = {
+    revision: 4,
+    input: p.input,
+    scenes: [{
+      id: "s1", objective: "abrir", rationale: "tema", speechIds: ["a:u001"],
+      takes: [{
+        id: "t1", sourceId: "a", speechId: "a:u001",
+        start: 0, end: 2, removed: [], protected: [],
+      }],
+      support: [], gaps: [],
+    }],
+    corrections: [],
+    proposal: null,
+  };
+  const undone = applyHistorySnapshot(p, snap);
+  expect(undone.revision).toBe(6);
+  expect(undone.assembly.revision).toBe(6);
+  expect(undone.scenes).toEqual(snap.scenes);
+  expect(undone.permissions).toEqual({ model: true, visual: true });
+  expect(undone.structureApprovedRevision).toBeNull();
+  expect(undone.previewRevision).toBeNull();
+  expect(undone.finalApprovedRevision).toBeNull();
 });

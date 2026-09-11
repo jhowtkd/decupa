@@ -8,11 +8,16 @@ export interface TranscriptToken {
   endMs: number;
   confidence: number;
   sentenceIndex: number;
+  /** Corte refinado por snap acústico, quando calculado; leitores ignoram. */
+  cutStartMs?: number;
+  cutEndMs?: number;
 }
 
 export interface Transcript {
   language: string;
   tokens: TranscriptToken[];
+  /** Textos que o alinhador não vinculou a tempo — nunca com tempo inventado. */
+  unaligned?: string[];
 }
 
 /** Formato cru vindo do sidecar Python, antes de ganhar ID. */

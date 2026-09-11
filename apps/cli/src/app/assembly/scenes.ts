@@ -63,6 +63,8 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
       objective: String(item.objective ?? ""),
       rationale: String(item.rationale ?? ""),
       speechIds,
+      // Takes nascem na edição (tarefa 3) ou na proposta com evidência (tarefa 6).
+      takes: [],
       support,
       gaps: Array.isArray(item.gaps) ? item.gaps.map(String) : [],
     };

@@ -1,4 +1,5 @@
 import type { Assembly, Project, Proposal, Scene } from "./types.ts";
+import type { EditorialSnapshot } from "./store.ts";
 import { compileScenes, validateProposal } from "./scenes.ts";
 
 export function applyProposal(p: Project, proposal: Proposal): Project {
@@ -22,6 +23,28 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
     scenes: valid.scenes,
     assembly: { ...assembly, revision },
     proposal: valid,
+    structureApprovedRevision: null,
+    previewRevision: null,
+    finalApprovedRevision: null,
+  };
+}
+
+/**
+ * Restaura conteúdo editorial como revisão nova (nunca decrementa).
+ * Consentimentos, preparação, análises e aprovações seguem os atuais;
+ * a prévia anterior segue no disco, stale por revisão.
+ */
+export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Project {
+  const assembly = compileScenes({ ...p, scenes: snap.scenes }, snap.scenes);
+  const revision = p.revision + 1;
+  return {
+    ...p,
+    revision,
+    input: snap.input,
+    scenes: snap.scenes,
+    corrections: snap.corrections,
+    proposal: snap.proposal,
+    assembly: { ...assembly, revision },
     structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,

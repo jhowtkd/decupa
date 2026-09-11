@@ -257,7 +257,7 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
   await saveProject(dir, opened.revision, (current) => ({
     ...current,
     scenes: [{
-      id: "s1", objective: "abrir", rationale: "tema", speechIds: [], support: [], gaps: [],
+      id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [], support: [], gaps: [],
     }],
     structureApprovedRevision: current.revision,
   }));
