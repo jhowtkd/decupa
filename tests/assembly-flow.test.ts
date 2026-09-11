@@ -370,3 +370,115 @@ it("edit→preview→export: /edit recompila o assembly que preview e export usa
   expect((await fetch(`${base}/project/export`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ baseRevision: after.project.revision }) })).status).toBe(200);
 });
+
+it("edição concorrente à preparação faz rebase: ready sem perder a correção (Task 11)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-prep-rebase-"));
+  const speech = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  let speechId = "desconhecida";
+  // Executor lento no áudio (promise controlada); o resto é rápido.
+  let audioGate: Promise<void> | null = null;
+  let releaseAudio!: () => void;
+  const executor: Executor = {
+    async run(call: ExecCall) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      if (audioGate && (call.args.includes("condense-prep") || call.args.includes("index"))) {
+        await audioGate;
+      }
+      if (work && call.args.includes("index")) {
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
+      }
+      if (call.command === "ffmpeg") {
+        await writeFile(call.args[call.args.length - 1], "clip");
+      }
+      if (call.command === "python3" && call.args.includes("--out")) {
+        await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech],
+    port: 0,
+    executor,
+    proposeSend: async () =>
+      JSON.stringify({
+        scenes: [{ id: "sc-1", objective: "Abertura", selections: [{ speechId }] }],
+        changedSceneIds: ["sc-1"],
+        explanation: "fluxo com rebase",
+      }),
+    describeClient: {
+      async send(content: unknown[]) {
+        const match = /janela local: 0s → ([\d.]+)s/.exec(JSON.stringify(content));
+        const end = match ? Number(match[1]) : 1;
+        return JSON.stringify({
+          spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
+        });
+      },
+    },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  const opened = await (await fetch(`${base}/project`)).json() as {
+    project: { revision: number; assembly: { sources: { id: string }[] } };
+  };
+  expect(opened.project.assembly.sources).toHaveLength(1);
+  const sourceId = opened.project.assembly.sources[0]!.id;
+  speechId = `${sourceId}:u001`;
+
+  audioGate = new Promise<void>((resolve) => {
+    releaseAudio = resolve;
+  });
+  const preparing = await fetch(`${base}/project/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      request: "montar tudo",
+      modelOptIn: true,
+      visualOptIn: true,
+    }),
+  });
+  expect(preparing.status).toBe(202);
+  // A edição passa na frente com o áudio ainda preso no gate.
+  await vi.waitFor(async () => {
+    const body = await (await fetch(`${base}/project`)).json() as {
+      project: { preparation: { status: string } | null };
+    };
+    expect(body.project.preparation?.status).toBe("running");
+  });
+  const edited = await fetch(`${base}/project/edit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      action: { type: "correct", sourceId, start: 0, end: 1, text: "tema corrigido" },
+    }),
+  });
+  // correct alinha em background: 202 com a correção registrada.
+  expect(edited.status).toBe(202);
+  releaseAudio();
+  audioGate = null;
+  await vi.waitFor(async () => {
+    const body = await (await fetch(`${base}/project`)).json() as {
+      project: {
+        revision: number;
+        scenes: unknown[];
+        analyses: { sourceId: string; status: string }[];
+        corrections: { sourceId: string; text: string }[];
+        preparation: { status: string } | null;
+        previewArtifact: { revision: number } | null;
+      };
+    };
+    expect(body.project.preparation?.status).toBe("ready");
+    expect(body.project.analyses.find((a) => a.sourceId === sourceId)?.status).toBe("ready");
+    expect(body.project.corrections).toHaveLength(1);
+    expect(body.project.corrections[0]).toMatchObject({ sourceId, text: "tema corrigido" });
+    expect(body.project.scenes).toHaveLength(1);
+    expect(body.project.previewArtifact?.revision).toBe(body.project.revision);
+    expect(body.project.revision).toBe(opened.project.revision + 2);
+  }, { timeout: 15000, interval: 200 });
+});
