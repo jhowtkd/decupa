@@ -123,17 +123,24 @@ it("serve a página de montagem, não a de limpeza", async () => {
   const html = await (await fetch(base)).text();
   const css = await (await fetch(`${base}/page.css`)).text();
   const js = await (await fetch(`${base}/page.js`)).text();
+  const rail = await (await fetch(`${base}/editor/rail.js`)).text();
+  const contexto = await (await fetch(`${base}/editor/contexto.js`)).text();
   expect(html).toContain("decupa · montagem");
   expect(html).not.toContain("decupa · limpar fala");
-  expect(html).toContain("<video");
-  expect(html).toContain("previewPlayer");
-  expect(html).toContain("Preparar montagem");
-  expect(html).toContain("review-grid");
-  expect(css).toContain(".review-grid");
-  expect(js).toContain("/project/output/");
-  expect(js).toContain("download");
-  expect(html).toContain("Retomar");
-  expect(js).toContain("Subir");
+  // Casca de 4 regiões, sem header global.
+  expect(html).toContain('id="rail"');
+  expect(html).toContain('id="texto"');
+  expect(html).toContain('id="contexto"');
+  expect(html).toContain('id="faixa"');
+  expect(html).not.toContain("<header");
+  expect(css).toContain(".riscado");
+  expect(js).toContain("/editor/rail.js");
+  expect(js).toContain("scheduleAutoPreview");
+  expect(contexto).toContain("previewPlayer");
+  expect(contexto).toContain("/project/output/");
+  expect(contexto).toContain("Preparar montagem");
+  expect(rail).toContain("Retomar");
+  expect(rail).toContain("download");
   expect(html).not.toContain("approve-structure");
 });
 
