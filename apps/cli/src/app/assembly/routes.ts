@@ -17,14 +17,14 @@ import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import {
-  applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
+  applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
 import { proposeScenes, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
 import type { Project, Rate, Source } from "./types.ts";
 import type { AlignmentOutcome } from "./words.ts";
-import { applyTextEdit, parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
+import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const PAID_BLOCKED = "análise paga exige lote e custo autorizados";
@@ -879,7 +879,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
           }
           try {
-            const preview = applyTextEdit(current, action);
+            const preview = applyEdit(current, action);
             const oldIds = new Set(current.corrections.map((item) => item.id));
             const created = preview.corrections.map((item) => item.id).filter((id) => !oldIds.has(id));
             if (created.length !== 1 || !created[0]) throw new Error("correção não criada");
@@ -892,7 +892,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             await writeHistorySnapshot(dir, loaded);
-            return applyTextEdit(loaded, action);
+            return applyEdit(loaded, action);
           });
         } catch (err) {
           if (err instanceof HttpError) throw err;

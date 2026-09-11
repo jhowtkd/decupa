@@ -37,6 +37,26 @@ it("não usa chave live nos testes de modelo", () => {
   expect(Boolean(process.env.OPENAI_API_KEY)).toBe(false);
 });
 
+const TRANSCRIPT = {
+  segments: [{ words: [
+    { text: "olá", start: 0.1, end: 0.5 },
+    { text: "tema", start: 0.6, end: 1.0 },
+  ] }],
+};
+
+function indexingAndRenderWithWords(): Executor {
+  const base = indexingAndRender();
+  return {
+    async run(call: ExecCall) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      if (work && call.args.includes("index")) {
+        await writeFile(join(work, "transcript.json"), `${JSON.stringify(TRANSCRIPT)}\n`);
+      }
+      return base.run(call);
+    },
+  };
+}
+
 it("percorre briefing → proposta local → exportação offline", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-flow-"));
   const speech = join(dir, "fala.mp4");
@@ -233,4 +253,120 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
     expect(body.project.previewArtifact?.revision).toBe(body.project.revision);
     expect(body.project.finalApprovedRevision).toBeNull();
   }, { timeout: 15000, interval: 200 });
+});
+
+it("edit→preview→export: /edit recompila o assembly que preview e export usam", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-edit-"));
+  const speech = join(dir, "fala.mp4");
+  const support = join(dir, "apoio.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  await copyFile(join(FIXTURES, "clip.mp4"), support);
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech, support],
+    port: 0,
+    executor: indexingAndRenderWithWords(),
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  const opened = await (await fetch(`${base}/project`)).json() as {
+    project: { revision: number; assembly: { sources: { id: string }[] } };
+  };
+  const brief = await fetch(`${base}/project/input`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      kind: "brief", text: "contar o tema", targetSeconds: 2,
+    }),
+  });
+  expect(brief.status).toBe(200);
+
+  const analyze = await fetch(`${base}/project/analyze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceIds: opened.project.assembly.sources.map((s) => s.id) }),
+  });
+  expect(analyze.status).toBe(200);
+  const analyzed = await analyze.json() as {
+    project: {
+      revision: number;
+      analyses: { sourceId: string; speech: { id: string }[] }[];
+    };
+  };
+  const speechId = analyzed.project.analyses[0]?.speech[0]?.id;
+  expect(speechId).toMatch(/u001/);
+
+  const propose = await fetch(`${base}/project/propose`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: analyzed.project.revision,
+      proposal: {
+        id: "prop-1",
+        baseRevision: analyzed.project.revision,
+        changedSceneIds: ["s1"],
+        explanation: "abertura com o tema",
+        scenes: [{
+          id: "s1", objective: "abrir", rationale: "tema",
+          speechIds: [speechId], support: [], gaps: [],
+        }],
+      },
+    }),
+  });
+  expect(propose.status).toBe(200);
+
+  const apply = await fetch(`${base}/project/apply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: analyzed.project.revision,
+      proposalId: "prop-1",
+    }),
+  });
+  expect(apply.status).toBe(200);
+  const applied = await apply.json() as { project: { revision: number } };
+
+  type FlowProject = {
+    revision: number;
+    scenes: { id: string; takes: { id: string }[] }[];
+    analyses: { words: { id: string }[] }[];
+    assembly: { tracks: { kind: string; clips: { durationFrames: number }[] }[] };
+    previewRevision: number | null;
+  };
+  const before = await (await fetch(`${base}/project`)).json() as { project: FlowProject };
+  expect(before.project.revision).toBe(applied.project.revision);
+  const w = before.project.analyses[0]?.words[0];
+  expect(w?.id).toMatch(/:w000000/);
+  const videoBefore = before.project.assembly.tracks
+    .find((t) => t.kind === "Video")!.clips.reduce((n, c) => n + c.durationFrames, 0);
+
+  const edited = await fetch(`${base}/project/edit`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: before.project.revision,
+      action: { type: "remove", sceneId: "s1", takeId: before.project.scenes[0]!.takes[0]!.id, wordIds: [w!.id] },
+    }),
+  });
+  expect(edited.status).toBe(200);
+  const after = await edited.json() as { project: FlowProject };
+  // o assembly da resposta já reflete o corte (não espera o preview):
+  const videoAfter = after.project.assembly.tracks
+    .find((t) => t.kind === "Video")!.clips.reduce((n, c) => n + c.durationFrames, 0);
+  expect(videoAfter).toBeLessThan(videoBefore);
+  // preview e export da revisão editada usam esse assembly:
+  expect((await fetch(`${base}/project/preview`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: after.project.revision }) })).status).toBe(200);
+  const previewed = await (await fetch(`${base}/project`)).json() as { project: FlowProject };
+  expect((await fetch(`${base}/project/approve-final`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: previewed.project.revision,
+      watchedRevision: previewed.project.previewRevision,
+    }),
+  })).status).toBe(200);
+  expect((await fetch(`${base}/project/export`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: after.project.revision }) })).status).toBe(200);
 });

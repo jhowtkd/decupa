@@ -1,6 +1,19 @@
-import type { Assembly, Project, Proposal } from "./types.ts";
+import type { Assembly, EditAction, Project, Proposal } from "./types.ts";
 import type { EditorialSnapshot } from "./store.ts";
 import { compileScenes, validateProposal } from "./scenes.ts";
+import { applyTextEdit } from "./words.ts";
+
+/**
+ * Edição aprovada como transição de revisão: aplica a ação por palavra e
+ * recompila o assembly na mesma revisão — o texto editado e a timeline que
+ * preview/export renderizam nunca divergem. `correct` é overlay de grafia
+ * e não move mídia: segue só invalidando a prévia.
+ */
+export function applyEdit(p: Project, action: EditAction): Project {
+  const next = applyTextEdit(p, action);
+  if (action.type === "correct") return next;
+  return { ...next, assembly: { ...compileScenes(next, next.scenes), revision: next.revision } };
+}
 
 export function applyProposal(p: Project, proposal: Proposal): Project {
   if (proposal.baseRevision !== p.revision) {

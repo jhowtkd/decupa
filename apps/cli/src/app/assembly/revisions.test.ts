@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import {
-  applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
+  applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
 import type { Project, Proposal } from "./types.ts";
 
@@ -43,6 +43,58 @@ function proposalFor(p: Project): Proposal {
     }],
   };
 }
+
+function projectWithTake(): Project {
+  const base = project();
+  const words = [0.1, 0.42, 0.72, 1.0].map((start, i) => ({
+    id: `w${i + 1}`, sourceId: "a", text: `p${i + 1}`,
+    confidence: null, start, end: start + 0.2,
+  }));
+  return {
+    ...base,
+    revision: 1,
+    scenes: [{
+      id: "s1", objective: "abrir", rationale: "tema", speechIds: ["a:u001"],
+      takes: [{ id: "t1", sourceId: "a", speechId: "a:u001", start: 0, end: 2, removed: [], protected: [] }],
+      visualEvidenceIds: [], support: [], gaps: [],
+    }],
+    analyses: [{
+      sourceId: "a", key: "k",
+      speech: [{ id: "a:u001", sourceId: "a", start: 0, end: 2, text: "fala" }],
+      visual: [], status: "ready" as const, words, wordsStatus: "ready" as const,
+      visualCoverage: { requested: [], returned: [], missing: [] },
+    }],
+  };
+}
+
+function twoSceneProject(): Project {
+  const base = projectWithTake();
+  const s2 = {
+    id: "s2", objective: "fechar", rationale: "tema", speechIds: ["a:u001"],
+    takes: [{ id: "t2", sourceId: "a", speechId: "a:u001", start: 0, end: 2, removed: [], protected: [] }],
+    visualEvidenceIds: [], support: [], gaps: [],
+  };
+  return { ...base, scenes: [...base.scenes, s2] };
+}
+
+it("applyEdit recompila o assembly: remove encurta os clips da revisão nova", () => {
+  const before = projectWithTake();
+  const audioBefore = before.assembly.tracks.find((t) => t.kind === "Audio")!.clips;
+  const after = applyEdit(before, { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1", "w2"] });
+  expect(after.revision).toBe(2);
+  expect(after.assembly.revision).toBe(2);
+  const audioAfter = after.assembly.tracks.find((t) => t.kind === "Audio")!.clips;
+  const dur = (clips: { durationFrames: number }[]) => clips.reduce((n, c) => n + c.durationFrames, 0);
+  expect(dur(audioAfter)).toBeLessThan(dur(audioBefore));
+});
+
+it("applyEdit de move-scene troca a ordem dos clips", () => {
+  const p = twoSceneProject();
+  const after = applyEdit(p, { type: "move-scene", sceneId: "s1", direction: "down" });
+  const v1 = after.assembly.tracks.find((t) => t.kind === "Video")!.clips
+    .slice().sort((a, b) => a.startFrame - b.startFrame);
+  expect(v1[0]!.sceneId).toBe("s2");
+});
 
 it("recusa proposta obsoleta e prévia atrasada", () => {
   const p = project();
