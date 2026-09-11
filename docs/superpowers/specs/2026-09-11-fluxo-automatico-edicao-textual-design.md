@@ -1,7 +1,7 @@
 # Decupa — fluxo automático e edição pelo texto
 
 Data: 2026-09-11
-Status: desenho consolidado para revisão do usuário; implementação não iniciada.
+Status: desenho aprovado pelo usuário em 2026-09-11 (“aprovo”); implementação não iniciada.
 
 ## Decisões confirmadas
 
