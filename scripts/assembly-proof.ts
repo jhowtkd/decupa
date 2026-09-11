@@ -140,6 +140,33 @@ async function tryRender(valid: Assembly, dir: string) {
   }
 }
 
+/**
+ * Decodifica o MP4 em 1px RGB por frame: a prova falha automaticamente se
+ * o total de frames ou o primeiro frame azul divergir do esperado. Pega
+ * fronteira de composição errada mesmo quando o render "conclui".
+ */
+async function assertFrames(mp4: string, expectedFrames: number, expectedFirstBlue: number) {
+  const proc = await run("ffmpeg", [
+    "-v", "error", "-i", mp4,
+    "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+  ], { encoding: "buffer", maxBuffer: 1024 * 1024 });
+  const rgb = Buffer.from(proc.stdout as Uint8Array);
+  const frameCount = Math.floor(rgb.length / 3);
+  let firstBlue = -1;
+  for (let n = 0; n < frameCount; n++) {
+    if (rgb[n * 3 + 2]! > rgb[n * 3]! + 80) {
+      firstBlue = n;
+      break;
+    }
+  }
+  if (frameCount !== expectedFrames || firstBlue !== expectedFirstBlue) {
+    throw new Error(
+      `frames=${frameCount} (esperado ${expectedFrames}); primeiro azul=${firstBlue} (esperado ${expectedFirstBlue}) em ${mp4}`,
+    );
+  }
+  return { frameCount, firstBlue };
+}
+
 async function main(): Promise<void> {
   await mkdir(PROOF_ROOT, { recursive: true });
   const dir = await mkdtemp(join(PROOF_ROOT, "run-"));
@@ -157,8 +184,26 @@ async function main(): Promise<void> {
   );
   const fractionalRender = await tryRender(fractionalOut.valid, fractionalDir);
 
+  const frameChecks: Record<string, unknown> = {};
+  const failures: string[] = [];
+  if (baselineRender.ok) {
+    try {
+      frameChecks["baseline"] = await assertFrames(baselineRender.path, 50, 25);
+    } catch (err) {
+      failures.push(`baseline: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (fractionalRender.ok) {
+    try {
+      frameChecks["fractional"] = await assertFrames(fractionalRender.path, 50, 25);
+    } catch (err) {
+      failures.push(`fractional: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const report = {
     dir,
+    frameChecks,
     jsonPath: baseline.jsonPath,
     otioPath: baseline.otioPath,
     enginePath: baseline.enginePath,
@@ -194,6 +239,10 @@ async function main(): Promise<void> {
   if (!baselineRender.ok || !fractionalRender.ok) {
     if (!baselineRender.ok) console.error(baselineRender.error);
     if (!fractionalRender.ok) console.error(fractionalRender.error);
+    process.exitCode = 2;
+  }
+  for (const failure of failures) {
+    console.error(failure);
     process.exitCode = 2;
   }
 }

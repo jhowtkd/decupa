@@ -152,3 +152,21 @@ Percursos manuais de aceite (para QA fora do sandbox):
 - P3 revisão: assistir prévia atual → clicar palavras (seleção amarela) → Remover → Restaurar → Corrigir texto → Subir cena → Atualizar prévia → Aprovar assistida → Exportar → baixar OTIO+MP4 e conferir no DaVinci.
 Não verificado nesta sessão: conferência no navegador a 1280/390px (teclado, foco, playback/seek, capturas) e seek fonte→timeline com loadedmetadata/proxy — roteador de QA com os MPs da Feira na tarefa 10.
 Próxima ação: tarefa 9 (frames/export) e tarefa 10 (Nilton Pinto real + G0-G7).
+
+## Tarefa 9 — precisão de frames, prévia e exportação
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: prévia corresponde ao OTIO frame a frame; exportação entrega o MP4 assistido.
+
+Causa comprovada (antes do fix): `scripts/assembly-proof.ts` nos dois regimes — baseline 25fps: 50 frames, primeiro azul 25; fracionário 30000/1001: 50 frames, primeiro azul **26**. Raiz: `between(t,início,fim)` com fim inclusivo e formatação em 6 casas no motor (`mcp/ve_tools/render.py`): 25 quadros @30000/1001 = 0.8341666…s vira `0.834167`, e o `t` do frame 25 (0.8341666…) satisfaz `t <= 0.834167` no clipe vermelho ao mesmo tempo em que falha o `gte` do início do clipe azul — o frame 25 sai vermelho.
+Fix (motor, patch registrado): `clip_frame_window`/`between_frames_expr` — janela inclusiva de frames inteiros `between(n,first,last)` a partir da taxa do plano para overlays de vídeo (text overlays mantidos em `t`): vermelho 0..27 (com pad anti-flash), azul 25..49, azul por cima. Sem epsilon arbitrário; inícios fora da grade arredondam para o frame mais próximo. Depois do fix: 50/25 nos dois regimes, exit 0; sem o fix a prova estendida sai exit 2 com a mensagem exata acima (sanidade via stash).
+Patch: `scripts/engine/assembly-frame-boundaries.patch` (só `render.py`; WIP `condense_lang.py` preservado fora do patch), base d9fe300, `git apply --check` validado em árvore limpa, instruções em `scripts/engine/assembly-frame-boundaries.APPLY`. Prova estendida com `assertFrames` (decodifica tudo em 1px RGB, exige 50 frames e primeiro azul 25).
+
+App:
+- `render.ts`: pré-render verifica hash de cada fonte (substituída recusa antes do motor); pós-render valida probe (streams + duração>0). Caminho `rev-N` mantido para serving estável (rename atômico garante atualidade) — unicidade por hash vive no artefato+manifest, não no diretório.
+- `export.ts`: `exportApproved(project, dir)` sem Executor — copia exatamente o MP4 do `previewArtifact` (revisão + assemblySha + sha do arquivo + probe verificados; traversal recusado; revisão relida contra corrida com 409). Manifest reutilizado só com hashes iguais (timeline+referência+fontes). Testes: cópia byte-idêntica, outra montagem/revisão recusadas, truncada/ausente recusadas, lock concorrente, reuso idempotente.
+- `routes.ts`: export sem exec; 409 para prévia desatualizada/outra montagem/corrida.
+- Fakes de render nos testes agora copiam clip real (probe passa).
+
+Testes: comando T10 offline — 149 passed, 21 failed, todos `listen EPERM` (19 routes HTTP + 2 fluxo HTTP; G0-F01). `pnpm typecheck` 0 erros, `git diff --check` limpo. Prova real 25/30000-1001 após correção: 50/25 em ambos + áudio coerente (beds inalterados), OTIO com os mesmos intervalos.
+Próxima ação: tarefa 10 (Nilton Pinto real + G0-G7).

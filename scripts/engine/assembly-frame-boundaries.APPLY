@@ -1,0 +1,17 @@
+Patch do motor: fronteiras de composição em frames inteiros.
+
+Base: work/video-agent-kit-plugin @ d9fe300
+Arquivo: mcp/ve_tools/render.py (somente este; condense_lang.py WIP não incluído)
+
+Aplicar (sem executar setup-engine.sh):
+  cd work/video-agent-kit-plugin
+  git apply --check ../../scripts/engine/assembly-frame-boundaries.patch
+  git apply ../../scripts/engine/assembly-frame-boundaries.patch
+
+Reverter:
+  cd work/video-agent-kit-plugin
+  git checkout -- mcp/ve_tools/render.py
+
+Verificar:
+  VE_PLUGIN_ROOT="$PWD/work/video-agent-kit-plugin" node --experimental-strip-types scripts/assembly-proof.ts
+  Esperado: exit 0, frameChecks baseline+fractional {frameCount 50, firstBlue 25}.

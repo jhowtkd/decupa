@@ -104,7 +104,7 @@ function makeFakes(opts: FakeOpts = {}): {
       if (opts.failRender) return { code: 1, stdout: "", stderr: "no render" };
       const out = call.args[call.args.indexOf("--out") + 1];
       await mkdir(join(out, ".."), { recursive: true }).catch(() => undefined);
-      await writeFile(out, `reference-${calls.render}`);
+      await cp(CLIP, out);
       return { code: 0, stdout: "", stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };

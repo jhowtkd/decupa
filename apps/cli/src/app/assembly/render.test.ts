@@ -1,8 +1,10 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { FakeExecutor, type Executor } from "../pipeline.ts";
+import { hashFile } from "@decupa/media";
+import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { renderAssembly, toEngineTimeline } from "./render.ts";
 
@@ -34,30 +36,63 @@ it("recusa path relativo no contrato do motor", () => {
   expect(() => toEngineTimeline(a)).toThrow(/absoluto/);
 });
 
+async function assemblyWithMedia(dir: string) {
+  const media = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), media);
+  const assembly = fixtureAssembly();
+  for (const source of assembly.sources) {
+    source.path = media;
+    source.sha256 = await hashFile(media);
+  }
+  return assembly;
+}
+
 it("não trata falha do Executor como sucesso", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
   const exec = new FakeExecutor({ code: 1, stderr: "[ERROR] motor ausente" });
-  await expect(renderAssembly(fixtureAssembly(), dir, exec)).rejects.toThrow(/render|falhou|código 1/i);
+  await expect(renderAssembly(await assemblyWithMedia(dir), dir, exec)).rejects.toThrow(/render|falhou|código 1/i);
 });
 
 it("não declara sucesso se o mp4 não existe", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
   const exec = new FakeExecutor({ code: 0, stdout: "ok" });
-  await expect(renderAssembly(fixtureAssembly(), dir, exec)).rejects.toThrow(/saída|mp4|não/i);
+  await expect(renderAssembly(await assemblyWithMedia(dir), dir, exec)).rejects.toThrow(/saída|mp4|não/i);
 });
 
 it("devolve o mp4 quando o Executor conclui e o arquivo existe", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
+  const media = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), media);
+  const assembly = fixtureAssembly();
+  for (const source of assembly.sources) {
+    source.path = media;
+    source.sha256 = await hashFile(media);
+  }
   const exec: Executor = {
     async run(call) {
       const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await writeFile(join(work, "reference.mp4"), "fake", "utf8");
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
-  await expect(renderAssembly(fixtureAssembly(), dir, exec)).resolves.toBe(
+  await expect(renderAssembly(assembly, dir, exec)).resolves.toBe(
     join(dir, "rev-1", "reference.mp4"),
   );
+});
+
+it("recusa fonte substituída antes de renderizar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
+  const media = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), media);
+  const assembly = fixtureAssembly();
+  assembly.sources[0]!.path = media;
+  assembly.sources[0]!.sha256 = "0".repeat(64);
+  const exec: Executor = {
+    async run() {
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  await expect(renderAssembly(assembly, dir, exec)).rejects.toThrow(/substituída/);
 });
 
 it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () => {

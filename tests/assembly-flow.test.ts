@@ -26,7 +26,7 @@ function indexingAndRender(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await writeFile(join(work, "reference.mp4"), "mp4");
+      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -165,7 +165,7 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
         await writeFile(call.args[call.args.length - 1], "clip");
       }
       if (call.command === "python3" && call.args.includes("--out")) {
-        await writeFile(call.args[call.args.indexOf("--out") + 1], "mp4");
+        await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
       }
       return { code: 0, stdout: "", stderr: "" };
     },

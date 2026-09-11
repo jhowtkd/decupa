@@ -979,11 +979,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
         try {
-          const dest = await exportApproved(loaded, dir, deps.exec);
+          const dest = await exportApproved(loaded, dir);
           sendJson(res, { project: loaded, path: dest, ...snapshot() });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (/aprovação final|mídia ausente|substitu|absoluto|andamento/.test(message)) {
+          if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante/.test(message)) {
             throw new HttpError(409, message);
           }
           throw err;

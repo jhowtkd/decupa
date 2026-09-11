@@ -29,7 +29,7 @@ function indexingExec(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await writeFile(join(work, "reference.mp4"), "mp4");
+      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };

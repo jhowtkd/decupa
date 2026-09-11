@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
@@ -108,6 +109,12 @@ export async function renderAssembly(
   exec: Executor,
 ): Promise<string> {
   const valid = validateAssembly(a);
+  for (const source of valid.sources) {
+    const current = await hashFile(absolutePath(source.path, `fonte ${source.id}`));
+    if (current !== source.sha256) {
+      throw new Error(`fonte ${source.id} foi substituída; reanalise ou relink com o hash original`);
+    }
+  }
   const published = join(outDir, `rev-${valid.revision}`);
   const work = join(
     published,
@@ -141,6 +148,15 @@ export async function renderAssembly(
     );
     await rename(outPath, tmp);
     await rename(tmp, dest);
+    const info = await probe(dest).catch((err: unknown) => {
+      throw new Error(`prévia sem integridade: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    if (!info.hasVideo && !info.hasAudio) {
+      throw new Error("prévia sem streams de vídeo nem áudio");
+    }
+    if (info.durationMs <= 0) {
+      throw new Error("prévia com duração zerada");
+    }
     return dest;
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});

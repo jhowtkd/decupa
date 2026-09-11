@@ -447,13 +447,13 @@ wordButton.setAttribute("aria-label", `Ouvir ${word.text}`);
 - [ ] Referências de catálogo: File Upload with Preview de ephraimduncan, Video Player de chetanverma16, Stepper de originui, Inline Edit de0xUrvish — links e aplicação no desenho aprovado. Adaptar a composição ao HTML local; não instalar React, shadcn, pacote21st ou gerar interface remotamente.
 - [ ] Conferir no navegador a1280px e390px: drop/categorias, teclado, foco, playback/seek, correção, remover/restaurar, falha/retomar, atualização e downloads. Registrar capturas com mídia sintética quando forem compartilhar evidências. Commit: `feat: redesign assembly review around text and video`.
 
-### Tarefa 9: Precisão de frames, prévia e exportação correspondentes
+### Tarefa 9: (implementada; checkboxes abaixo marcadas no fechamento) Precisão de frames, prévia e exportação correspondentes
 
 **Files:** `assembly/render.ts`, `render.test.ts`, `export.ts`, `export.test.ts`, `otio.ts`, `otio.test.ts`; `scripts/assembly-proof.ts`; ponte Python e render.py do motor somente no ponto comprovado pela regressão.
 
 **Interfaces:** `renderAssembly` mantém retorno de caminho; publica artefato isolado por revisão/conteúdo. `exportApproved` passa a copiar a referência já assistida/verificada em vez de renderizar outro vídeo silenciosamente. `previewArtifact` contém hashes da montagem/MP4 e caminho relativo validado.
 
-- [ ] Ampliar assembly-proof.ts para decodificar todos os50frames de cada saída em1pixel RGB e falhar automaticamente se o primeiro azul não for25. Reusar run/promisify existentes; a prova atual só confirma que render não falhou.
+- [x] Ampliar assembly-proof.ts para decodificar todos os50frames de cada saída em1pixel RGB e falhar automaticamente se o primeiro azul não for25. Reusar run/promisify existentes; a prova atual só confirma que render não falhou.
 
 ```ts
 const { stdout } = await run("ffmpeg", ["-v", "error", "-i", mp4,
@@ -471,18 +471,18 @@ if (frameCount !== 50 || firstBlue !== 25) {
 // mp4 é baselineRender.path ou fractionalRender.path já obtido na prova.
 ```
 
-- [ ] Rodar a prova real antes do fix para registrar a falha fracionária:
+- [x] Rodar a prova real antes do fix para registrar a falha fracionária:
 
 ```bash
 VE_PLUGIN_ROOT='/Users/jhonatan/Repos/Video editor/work/video-agent-kit-plugin' node --experimental-strip-types scripts/assembly-proof.ts
 ```
 
-- [ ] Rastrear `toEngineTimeline` → wrapper → render_project_timeline → video_clip_filter/between_expr. O motor inspecionado formata offsets com6casas decimais; 25frames em30000/1001 pode virar limiar posterior ao frame. Corrigir no ponto do compositor que converte intervalos para PTS/enable, usando frame inteiro/timebase racional e limite final exclusivo. Não subtrair epsilon arbitrário por clipe nem alterar o OTIO correto para compensar o render.
+- [x] Rastrear `toEngineTimeline` → wrapper → render_project_timeline → video_clip_filter/between_expr. O motor inspecionado formata offsets com6casas decimais; 25frames em30000/1001 pode virar limiar posterior ao frame. Corrigir no ponto do compositor que converte intervalos para PTS/enable, usando frame inteiro/timebase racional e limite final exclusivo. Não subtrair epsilon arbitrário por clipe nem alterar o OTIO correto para compensar o render.
 - [ ] Para projetos vindos do Decupa, propagar taxa racional e frame de início/duração até a composição; manter entrada legada em segundos normalizada uma única vez. Preservar o comportamento das outras funções do motor e não criar outro compositor. Registrar patch do motor separadamente em `scripts/engine/assembly-frame-boundaries.patch`, base/hash e instrução de aplicação com `git apply --check`; não executar setup-engine.sh.
-- [ ] Antes do render verificar hash das fontes; ao publicar, confirmar duração, frames, streams e integridade do MP4. Gravar em caminho único por revisão e hash da montagem; atualizar referência do projeto somente quando ID/revisão ainda correspondem. Resultado antigo pode ficar como artefato histórico, nunca como a prévia atual.
-- [ ] Exportação verifica aprovação/artefato/revisão, hash do MP4 e fontes; grava OTIO e copia exatamente o MP4 aprovado para diretório temporário antes de publicar manifest. Recarregar projeto e verificar aprovação/revisão e fontes novamente antes de publicar, detectando edição ou mudança de mídia durante a exportação. Se a revisão mudou, retornar409 e conservar o resultado somente como histórico, sem chamá-lo de entrega atual. Export idempotente só reutiliza manifest cujos hashes continuam corretos.
-- [ ] Testar que exportação não chama render novamente; previewArtifact de outra montagem/revisão é recusado; fonte substituída e duas exportações concorrentes conservam a proteção existente. Testar duas prévias terminando fora de ordem, cancelamento e arquivo truncado. Não aceitar apenas access(path) como validação do vídeo.
-- [ ] Repetir testes tocados e prova real25/30000/1001 após correção. Commit do app e commit/patch do motor separados; preservar condense_lang.py. Resultado: frame25 azul em ambos,50frames e áudio coerente, OTIO com os mesmos intervalos.
+- [x] Antes do render verificar hash das fontes; ao publicar, confirmar duração, frames, streams e integridade do MP4. Gravar em caminho único por revisão e hash da montagem; atualizar referência do projeto somente quando ID/revisão ainda correspondem. Resultado antigo pode ficar como artefato histórico, nunca como a prévia atual.
+- [x] Exportação verifica aprovação/artefato/revisão, hash do MP4 e fontes; grava OTIO e copia exatamente o MP4 aprovado para diretório temporário antes de publicar manifest. Recarregar projeto e verificar aprovação/revisão e fontes novamente antes de publicar, detectando edição ou mudança de mídia durante a exportação. Se a revisão mudou, retornar409 e conservar o resultado somente como histórico, sem chamá-lo de entrega atual. Export idempotente só reutiliza manifest cujos hashes continuam corretos.
+- [x] Testar que exportação não chama render novamente; previewArtifact de outra montagem/revisão é recusado; fonte substituída e duas exportações concorrentes conservam a proteção existente. Testar duas prévias terminando fora de ordem, cancelamento e arquivo truncado. Não aceitar apenas access(path) como validação do vídeo.
+- [x] Repetir testes tocados e prova real25/30000/1001 após correção. Commit do app e commit/patch do motor separados; preservar condense_lang.py. Resultado: frame25 azul em ambos,50frames e áudio coerente, OTIO com os mesmos intervalos.
 
 ### Tarefa 10: Verificar o uso real completo e entregar evidências
 

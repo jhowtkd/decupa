@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import type { Executor } from "../pipeline.ts";
 import { buildOtio } from "./otio.ts";
-import { renderAssembly } from "./render.ts";
-import { hashFile } from "@decupa/media";
-import { missingMedia } from "./store.ts";
+import { hashFile, probe } from "@decupa/media";
+import { loadProject, missingMedia } from "./store.ts";
 import type { Project } from "./types.ts";
 
 async function sha256(path: string): Promise<string> {
@@ -51,13 +49,22 @@ async function acquireExportLock(dir: string, revision: number): Promise<string>
   return path;
 }
 
-export async function exportApproved(
-  project: Project,
-  dir: string,
-  exec: Executor,
-): Promise<string> {
+/**
+ * Exporta exatamente o MP4 assistido e aprovado: copia a referência do
+ * `previewArtifact` em vez de renderizar outro vídeo. Sem Executor de
+ * propósito — exportação nunca renderiza.
+ */
+export async function exportApproved(project: Project, dir: string): Promise<string> {
   if (project.finalApprovedRevision !== project.revision) {
     throw new Error("aprovação final desatualizada");
+  }
+  const artifact = project.previewArtifact;
+  if (!artifact || artifact.revision !== project.revision) {
+    throw new Error("prévia desatualizada: gere a prévia da revisão atual");
+  }
+  const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
+  if (artifact.assemblySha256 !== assemblySha256) {
+    throw new Error("prévia de outra montagem: gere a prévia da revisão atual");
   }
   for (const source of project.assembly.sources) {
     if (!isAbsolute(source.path)) {
@@ -77,14 +84,42 @@ export async function exportApproved(
     }
   }
 
+  // Edição ou troca de mídia durante a exportação não vira entrega atual.
+  try {
+    const fresh = await loadProject(dir);
+    if (fresh.revision !== project.revision) {
+      throw new Error(`revisão mudou durante a exportação: base ${project.revision}, atual ${fresh.revision}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && /mudou durante/.test(err.message)) throw err;
+  }
+  const reference = resolve(dir, artifact.relativePath);
+  if (reference !== dir && !reference.startsWith(dir + sep)) {
+    throw new Error("artefato de prévia fora do projeto");
+  }
+  let refSha: string;
+  try {
+    refSha = await hashFile(reference);
+  } catch {
+    throw new Error("prévia ausente ou ilegível: gere a prévia da revisão atual");
+  }
+  if (refSha !== artifact.sha256) {
+    throw new Error("prévia alterada ou truncada: gere a prévia da revisão atual");
+  }
+  const info = await probe(reference).catch((err: unknown) => {
+    throw new Error(`prévia sem integridade: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  if (!info.hasVideo && !info.hasAudio) {
+    throw new Error("prévia sem streams de vídeo nem áudio");
+  }
+  if (info.durationMs <= 0) {
+    throw new Error("prévia com duração zerada");
+  }
+
   const dest = join(dir, "exports", String(project.revision));
   const manifestPath = join(dest, "manifest.json");
   const lock = await acquireExportLock(dir, project.revision);
   try {
-    if (await access(manifestPath).then(() => true, () => false)) {
-      return dest;
-    }
-
     const snapshot = structuredClone(project.assembly);
     for (const source of snapshot.sources) {
       const resolved = await realpath(source.path);
@@ -93,20 +128,36 @@ export async function exportApproved(
       }
       source.path = resolved;
     }
+    const otioText = `${buildOtio(snapshot)}\n`;
+    const otioSha = createHash("sha256").update(otioText, "utf8").digest("hex");
+    const sourceShas = Object.fromEntries(
+      await Promise.all(snapshot.sources.map(async (s) => [s.id, await sha256(s.path)])),
+    );
+    try {
+      const existing = JSON.parse(await readFile(manifestPath, "utf8")) as {
+        revision?: unknown; timeline?: unknown; reference?: unknown; sources?: unknown;
+      };
+      if (
+        existing.revision === project.revision
+        && existing.timeline === otioSha
+        && existing.reference === refSha
+        && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
+      ) {
+        return dest;
+      }
+    } catch {
+      // Sem manifest válido: publica abaixo.
+    }
     const tmp = join(dir, "exports", `.tmp-${project.revision}-${process.pid}-${Date.now()}`);
     await mkdir(tmp, { recursive: true });
     const otioPath = join(tmp, "timeline.otio");
-    await writeFile(otioPath, `${buildOtio(snapshot)}\n`, "utf8");
-    const rendered = await renderAssembly(snapshot, tmp, exec);
-    const reference = join(tmp, "reference.mp4");
-    if (rendered !== reference) await copyFile(rendered, reference);
+    await writeFile(otioPath, otioText, "utf8");
+    await copyFile(reference, join(tmp, "reference.mp4"));
     const manifest = {
       revision: project.revision,
-      timeline: await sha256(otioPath),
-      reference: await sha256(reference),
-      sources: Object.fromEntries(
-        await Promise.all(snapshot.sources.map(async (s) => [s.id, await sha256(s.path)])),
-      ),
+      timeline: otioSha,
+      reference: refSha,
+      sources: sourceShas,
     };
     await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     try {
