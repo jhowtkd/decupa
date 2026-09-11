@@ -193,8 +193,9 @@ Conclusão honesta: **nenhuma perda em camada local** — ASR, words e índice c
 - G6 prévia/export/frames: prova 50/25 nos dois regimes ✓, export=cópia do assistido ✓; **import OTIO no DaVinci pendente** (só o usuário tem o app/projeto).
 - G7 estilo A: estáticos + smoke ✓; **capturas 1280/390 + teclado pendentes**.
 
+Adjudicação do usuário (11/09): o locutor diz **"Rafael Cortez"** — pipeline correto, sem mangle. G5/Nilton Pinto **fechado**: nenhuma correção necessária; "Cebrae/valícia/Empredador" seguem como fragilidade conhecida de nomes próprios no whisper-small, coberta por Corrigir texto (T3).
+
 ### Pendências com ação exata de desbloqueio
-1. Ouvido humano 24–27s de `10092026_162919.mp4` (usuário) → decide mangle-vs-verdade.
 2. Autorização explícita de gasto Z.ai (usuário) → `prepare` real nos 2 vídeos fora do sandbox (com `allowPaidModel/Visual` + opt-ins), depois P1–P3 no navegador.
 3. `env -u ZAI_API_KEY -u OPENAI_API_KEY pnpm exec vitest run apps/cli/src/app/assembly tests/assembly-flow.test.ts` fora do sandbox (qualquer shell sem restrição) → fecha F01.
 4. Abrir `exports/<rev>/timeline.otio` em projeto de teste no DaVinci (usuário) → confere duração/V1/V2/A1/canvas/taxa/recortes.
