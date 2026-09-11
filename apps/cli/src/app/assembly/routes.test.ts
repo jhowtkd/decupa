@@ -121,14 +121,20 @@ it("recusa mídia de fonte ausente e path arbitrário", async () => {
 it("serve a página de montagem, não a de limpeza", async () => {
   const { base } = await boot();
   const html = await (await fetch(base)).text();
+  const css = await (await fetch(`${base}/page.css`)).text();
+  const js = await (await fetch(`${base}/page.js`)).text();
   expect(html).toContain("decupa · montagem");
   expect(html).not.toContain("decupa · limpar fala");
   expect(html).toContain("<video");
   expect(html).toContain("previewPlayer");
-  expect(html).toContain("/project/output/");
-  expect(html).toContain("download");
+  expect(html).toContain("Preparar montagem");
+  expect(html).toContain("review-grid");
+  expect(css).toContain(".review-grid");
+  expect(js).toContain("/project/output/");
+  expect(js).toContain("download");
   expect(html).toContain("Retomar");
-  expect(html).toContain("Subir");
+  expect(js).toContain("Subir");
+  expect(html).not.toContain("approve-structure");
 });
 
 it("serve a prévia em rev-N quando ainda não há export", async () => {

@@ -488,6 +488,8 @@ async function startAssemblyApp(opts: {
   const dir = resolve(opts.projectDir);
   const exec = opts.executor ?? new SpawnExecutor();
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
+  const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -512,6 +514,16 @@ async function startAssemblyApp(opts: {
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(page);
+        return;
+      }
+      if (url.pathname === "/page.css") {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+        res.end(pageCss);
+        return;
+      }
+      if (url.pathname === "/page.js") {
+        res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+        res.end(pageJs);
         return;
       }
       const handled = await runtime.handleAssembly(req, res, dir);

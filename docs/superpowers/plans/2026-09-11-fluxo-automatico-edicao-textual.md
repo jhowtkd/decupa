@@ -415,8 +415,8 @@ await vi.waitFor(async () => {
 
 **Interfaces:** page.js usa os endpoints da tabela HTTP. Seu estado é o projeto retornado pelo servidor, não outro modelo editorial no navegador. Player usa a URL do artefato da revisão e o mapa temporal derivado da montagem; original usa sourceId e tempo na fonte.
 
-- [ ] Antes de substituir a página, registrar os três percursos manuais de aceite: materiais em lote, preparação, revisão. Não criar suíte que apenas procura strings no HTML. Os checks de integração ficam nas rotas/fluxo existentes; os visuais são inspecionados no navegador.
-- [ ] Aplicar a hierarquia A, usando apenas CSS e DOM existentes/nativos. Grade sugerida:
+- [x] Antes de substituir a página, registrar os três percursos manuais de aceite: materiais em lote, preparação, revisão. Não criar suíte que apenas procura strings no HTML. Os checks de integração ficam nas rotas/fluxo existentes; os visuais são inspecionados no navegador.
+- [x] Aplicar a hierarquia A, usando apenas CSS e DOM existentes/nativos. Grade sugerida:
 
 ```css
 .review-grid { display:grid; grid-template-columns:minmax(320px,.9fr) minmax(0,1.1fr); gap:24px; }
@@ -428,10 +428,10 @@ await vi.waitFor(async () => {
 @media (prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto !important; animation:none !important; } }
 ```
 
-- [ ] Materiais: dropzone, thumbnails, nome/duração, checkbox para lote, categorias em português, seleção nativa, detalhes/relink contextual, briefing/duração e Preparar montagem. Categoria por menu/botão oferece o mesmo resultado que drag. Não tornar miniatura de arquivo um campo de caminho.
-- [ ] Preparação: estado por arquivo/etapa, contagem real, cancelar/retomar, erro legível e detalhes recolhidos. Não mostrar quatro abas técnicas nem botões de autorização repetidos. Sucesso leva automaticamente à revisão quando a prévia atual realmente existe.
-- [ ] Revisão: vídeo à esquerda, texto à direita, cena ativa, sequência abaixo; badge de visual baseado em evidenceIds válidos. Mostrar fonte/tempo e apoio nos detalhes. Preservar seleção, foco e playhead entre atualizações; não recriar todo o player a cada polling.
-- [ ] Renderizar palavras com textContent e data-word-id; não inserir texto de transcrição/LLM via innerHTML. Selection/Range resolve elementos de palavra para ações explícitas Corrigir texto, Remover, Restaurar e Preservar. Palavras removidas ficam disponíveis em modo de revisão para restauração. Não usar contenteditable irrestrito para alterar áudio por acidente.
+- [x] Materiais: dropzone, thumbnails, nome/duração, checkbox para lote, categorias em português, seleção nativa, detalhes/relink contextual, briefing/duração e Preparar montagem. Categoria por menu/botão oferece o mesmo resultado que drag. Não tornar miniatura de arquivo um campo de caminho.
+- [x] Preparação: estado por arquivo/etapa, contagem real, cancelar/retomar, erro legível e detalhes recolhidos. Não mostrar quatro abas técnicas nem botões de autorização repetidos. Sucesso leva automaticamente à revisão quando a prévia atual realmente existe.
+- [x] Revisão: vídeo à esquerda, texto à direita, cena ativa, sequência abaixo; badge de visual baseado em evidenceIds válidos. Mostrar fonte/tempo e apoio nos detalhes. Preservar seleção, foco e playhead entre atualizações; não recriar todo o player a cada polling.
+- [x] Renderizar palavras com textContent e data-word-id; não inserir texto de transcrição/LLM via innerHTML. Selection/Range resolve elementos de palavra para ações explícitas Corrigir texto, Remover, Restaurar e Preservar. Palavras removidas ficam disponíveis em modo de revisão para restauração. Não usar contenteditable irrestrito para alterar áudio por acidente.
 
 ```js
 const wordButton = document.createElement("button");
@@ -443,7 +443,7 @@ wordButton.setAttribute("aria-label", `Ouvir ${word.text}`);
 
 - [ ] Ao clicar em palavra retida, mapear fonte→timeline considerando exclusões; palavra removida oferece original/restauração. Ouvir original mostra claramente a fonte com contexto de1s antes/depois, limitado à duração. Aguardar loadedmetadata para seek; capturar error/play rejeitado e mostrar ação reproduzir/retomar proxy.
 - [ ] Corrigir texto abre campo próprio; salvar mantém áudio e exibe alinhamento pendente. Cortes invalidam a prévia e mostram Atualizando prévia. O último vídeo continua identificado como anterior até substituição atômica pela revisão nova.
-- [ ] Cena sobe/desce/exclui, desfazer restaura revisão editorial; Pedir ajuste usa /adjust. Exportação contém confirmação editorial da revisão assistida e mostra downloads separados de OTIO/MP4. Não chamar export automaticamente quando render termina.
+- [x] Cena sobe/desce/exclui, desfazer restaura revisão editorial; Pedir ajuste usa /adjust. Exportação contém confirmação editorial da revisão assistida e mostra downloads separados de OTIO/MP4. Não chamar export automaticamente quando render termina.
 - [ ] Referências de catálogo: File Upload with Preview de ephraimduncan, Video Player de chetanverma16, Stepper de originui, Inline Edit de0xUrvish — links e aplicação no desenho aprovado. Adaptar a composição ao HTML local; não instalar React, shadcn, pacote21st ou gerar interface remotamente.
 - [ ] Conferir no navegador a1280px e390px: drop/categorias, teclado, foco, playback/seek, correção, remover/restaurar, falha/retomar, atualização e downloads. Registrar capturas com mídia sintética quando forem compartilhar evidências. Commit: `feat: redesign assembly review around text and video`.
 

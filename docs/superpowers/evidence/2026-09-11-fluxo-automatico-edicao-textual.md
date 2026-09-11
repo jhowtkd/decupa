@@ -133,3 +133,22 @@ Implementado:
 Testes: `preparation.test.ts` (10: snippet ponta a ponta, segunda fonte falha/primeira fica, duplo início com 1 chamada ao provedor, cancelamento, edição durante proposta, gaps→attention, opt-in persiste, proposta inválida→interrupted, preview sem nova proposta, adjust sem cenas 409); `routes.test.ts` + gate puro de `paidBlockedReason` (6 casos) e HTTP 402-sem-chamada + 202→interrupted em projeto vazio; `tests/assembly-flow.test.ts` + fluxo prepare 202→ready com cenas+artefato atuais e final null (snippet do plano) e remoção do passo `approve-structure` extinto. Comando amplo: 111 passed nos arquivos offline; `routes.test.ts`/`assembly-flow` HTTP seguem EPERM no sandbox (G0-F01); `pnpm typecheck` 0 erros, `git diff --check` limpo. Armadilha encontrada: cópias idênticas do clip partilham sha+cache e pulam o ingest (comportamento correto do motor) — o teste de falha por fonte diverge 1 byte.
 Achados: nenhum P0/P1. Recheck HTTP fora do sandbox: 402/202/interrupted + fluxo até ready + suíte EPERM existente.
 Próxima ação: tarefa 8 (interface A).
+
+## Tarefa 8 — interface A (texto+vídeo lado a lado)
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: direção A aprovada (revisão com vídeo à esquerda e texto à direita).
+
+Implementado:
+- `page.html` reescrito (esqueleto; `page.css`+`page.js` separados): cabeçalho com Preparar montagem + par único de opt-ins pagos; Materiais (dropzone com input file, Escolher arquivos, lote por checkbox com categorizar-apoio/incluir/excluir, categorias em português Fala/Apoio/Fala+apoio, miniatura/nome/duração, relink, ver original, briefing); Preparação (tabela por arquivo×etapa com contagem real, resumo, erros em details, Retomar/Cancelar); Revisão (grade A: viewer fixo à esquerda, texto à direita; cena ativa, sequência, badge de evidência visual válida, fonte/tempo por take com Ouvir trecho; palavras como botões com textContent+data-word-id+aria-pressed, sem innerHTML/contenteditable; ações Remover/Restaurar/Preservar/Liberar/Corrigir via /project/edit; sequência Subir/Descer; Excluir cena; Desfazer; Ajustar via /adjust; Atualizar prévia; Aprovar desabilitado com prévia desatualizada; downloads OTIO/MP4 após aprovação). Polling retoma preparation running após reload; sucesso com cenas leva à revisão; playhead/foco/seleção preservados (src só troca com data-rev, foco restaurado por word-id, seleção em Set).
+- `server.ts` serve somente `/page.css` e `/page.js` além do HTML.
+- Removidos da página: 4 abas técnicas, botões de análise/proposta/aplicação manuais, `approve-structure` e `structureApprovedRevision` (rota extinta na T7).
+
+Testes: `node --check` + smoke de DOM falso em /tmp (boot, 1 cena, 2 palavras-botão, toggle de seleção, tabela de preparação, visibilidade das seções — achou bug real: cena sem append, corrigido); teste de rota da página atualizado para os 3 assets; typecheck 0 erros, diff limpo. HTTP e navegador seguem EPERM no sandbox (G0-F01).
+
+Percursos manuais de aceite (para QA fora do sandbox):
+- P1 lote: arrastar 2 mp4 → checkbox nos dois → Categorizar como apoio num deles → briefing → Preparar montagem com opt-ins → 202.
+- P2 preparação: acompanhar tabela por fonte → Cancelar no meio (status cancelled) → Retomar (conclui) ou aguardar ready/attention com detalhes recolhidos.
+- P3 revisão: assistir prévia atual → clicar palavras (seleção amarela) → Remover → Restaurar → Corrigir texto → Subir cena → Atualizar prévia → Aprovar assistida → Exportar → baixar OTIO+MP4 e conferir no DaVinci.
+Não verificado nesta sessão: conferência no navegador a 1280/390px (teclado, foco, playback/seek, capturas) e seek fonte→timeline com loadedmetadata/proxy — roteador de QA com os MPs da Feira na tarefa 10.
+Próxima ação: tarefa 9 (frames/export) e tarefa 10 (Nilton Pinto real + G0-G7).
