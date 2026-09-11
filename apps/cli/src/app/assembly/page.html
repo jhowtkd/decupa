@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>decupa · montagem</title>
+<style>
+  :root {
+    --bg: #12171a; --panel: #1a2125; --line: #2a3439; --line-strong: #3c484e;
+    --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230;
+    --ok: #63be97; --warn: #e0765c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 ui-serif, Georgia, serif; min-height: 100dvh;
+  }
+  header, nav, button, label, input, textarea, select {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 18px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+    font-size: 13px;
+  }
+  header .hint { color: var(--muted); font-size: 12px; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; }
+  nav button[aria-current="page"] { border-color: var(--accent); color: var(--accent); }
+  main { max-width: 52rem; margin: 0 auto; padding: 28px 20px 120px; }
+  section { display: none; }
+  section.active { display: block; }
+  button {
+    font-size: 13px; font-weight: 600; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line-strong); border-radius: 5px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1c2226; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  textarea, input, select {
+    width: 100%; background: #101518; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 5px; padding: 8px; font: inherit;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; background: var(--panel); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .warn { color: var(--warn); }
+  .ok { color: var(--ok); }
+  ul { padding-left: 1.2rem; }
+  video { width: 100%; max-height: 360px; background: #000; border-radius: 8px; margin: 8px 0; }
+  a { color: var(--accent); }
+  .hit { cursor: pointer; text-decoration: underline; }
+  .hit:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <strong>decupa</strong>
+  <span class="hint" id="status">carregando…</span>
+  <nav aria-label="Etapas">
+    <button type="button" data-step="files" aria-current="page">1. Arquivos</button>
+    <button type="button" data-step="analysis">2. Análise</button>
+    <button type="button" data-step="scenes">3. Cenas</button>
+    <button type="button" data-step="delivery">4. Prévia</button>
+  </nav>
+</header>
+<main>
+  <section id="files" class="active">
+    <h1>Arquivos e briefing</h1>
+    <p class="muted">Fontes locais. O original não é enviado a terceiros nesta tela.</p>
+    <div class="row">
+      <button type="button" class="primary" id="select">Escolher arquivos</button>
+    </div>
+    <ul id="sources"></ul>
+    <label>Tipo
+      <select id="kind"><option value="brief">briefing</option><option value="script">roteiro</option></select>
+    </label>
+    <label>Texto
+      <textarea id="inputText" rows="6"></textarea>
+    </label>
+    <label>Duração alvo (s)
+      <input id="target" type="number" min="1" value="60">
+    </label>
+    <div class="row">
+      <button type="button" id="saveInput">Guardar briefing</button>
+    </div>
+  </section>
+  <section id="analysis">
+    <h1>Análise</h1>
+    <p class="muted">Transcrição local. Descrição visual paga fica atrás do gate de custo.</p>
+    <div class="row">
+      <button type="button" class="primary" id="analyze">Analisar fontes</button>
+      <button type="button" id="analyzeVisual">Analisar visual (pago)</button>
+    </div>
+    <p class="muted" id="analyzeProgress"></p>
+    <label>Consultar segundo
+      <input id="second" type="number" min="0" value="0">
+    </label>
+    <video id="sourcePlayer" controls preload="metadata"></video>
+    <p class="muted" id="sourceCue"></p>
+    <ul id="hits"></ul>
+    <div id="analyses"></div>
+  </section>
+  <section id="scenes">
+    <h1>Cenas</h1>
+    <label>Pedido
+      <textarea id="request" rows="3" placeholder="Propor abertura com o tema"></textarea>
+    </label>
+    <div class="row">
+      <button type="button" id="propose">Pedir proposta</button>
+      <button type="button" id="apply">Aplicar proposta</button>
+      <button type="button" class="primary" id="approveStructure">Aprovar estrutura</button>
+    </div>
+    <pre class="card" id="diff"></pre>
+    <div id="sceneCards"></div>
+  </section>
+  <section id="delivery">
+    <h1>Prévia e entrega</h1>
+    <div class="row">
+      <button type="button" id="preview">Renderizar prévia</button>
+      <button type="button" id="approveFinal">Aprovar prévia</button>
+      <button type="button" class="primary" id="export">Exportar revisão</button>
+      <button type="button" id="cancel">Cancelar</button>
+    </div>
+    <p class="muted" id="deliveryMeta"></p>
+    <video id="previewPlayer" controls preload="metadata"></video>
+    <p class="muted">Assista à prévia atual antes de aprovar.</p>
+    <p id="downloads"></p>
+  </section>
+</main>
+<script>
+const statusEl = document.getElementById("status");
+const sourcePlayer = document.getElementById("sourcePlayer");
+const previewPlayer = document.getElementById("previewPlayer");
+let project = null;
+let operation = null;
+let pollTimer = 0;
+
+function show(step) {
+  document.querySelectorAll("section").forEach((el) => el.classList.toggle("active", el.id === step));
+  document.querySelectorAll("nav button").forEach((btn) => {
+    btn.setAttribute("aria-current", btn.dataset.step === step ? "page" : "false");
+  });
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "content-type": "application/json", ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 409) {
+    statusEl.textContent = body.error || "O projeto mudou. Atualize a proposta antes de aplicar.";
+  } else if (!res.ok) {
+    statusEl.textContent = body.error || ("erro " + res.status);
+  } else {
+    statusEl.textContent = "revisão " + (body.project ? body.project.revision : (project && project.revision));
+  }
+  if (body.project) {
+    project = body.project;
+    operation = body.operation || null;
+    render();
+  } else if (body.operation !== undefined) {
+    operation = body.operation;
+  }
+  return { res, body };
+}
+
+function speechById(id) {
+  for (const analysis of project.analyses) {
+    const span = analysis.speech.find((item) => item.id === id);
+    if (span) return span;
+  }
+  return null;
+}
+
+function visualById(id) {
+  for (const analysis of project.analyses) {
+    const span = analysis.visual.find((item) => item.id === id);
+    if (span) return span;
+  }
+  return null;
+}
+
+function openSource(sourceId, start, end) {
+  sourcePlayer.src = "/project/media/" + encodeURIComponent(sourceId);
+  sourcePlayer.currentTime = Number(start) || 0;
+  document.getElementById("sourceCue").textContent =
+    sourceId + " · " + start + "s–" + end + "s";
+  sourcePlayer.play().catch(() => {});
+  show("analysis");
+}
+
+function fmtSpan(span) {
+  if (!span) return "(ausente)";
+  return span.sourceId + " " + span.start + "s–" + span.end + "s · " + span.text;
+}
+
+function proposalPayload(scenes, changedSceneIds, explanation) {
+  return {
+    id: crypto.randomUUID(),
+    baseRevision: project.revision,
+    scenes,
+    changedSceneIds,
+    explanation,
+  };
+}
+
+function postProposal(scenes, changedSceneIds, explanation) {
+  return api("/project/propose", {
+    method: "POST",
+    body: JSON.stringify({
+      baseRevision: project.revision,
+      proposal: proposalPayload(scenes, changedSceneIds, explanation),
+    }),
+  });
+}
+
+function diffText() {
+  if (!project.proposal) return "";
+  const current = project.scenes.map((scene) => scene.id).join(" → ") || "(nenhuma)";
+  const next = project.proposal.scenes.map((scene) => scene.id).join(" → ") || "(nenhuma)";
+  const lines = [
+    project.proposal.explanation,
+    "ids: " + project.proposal.changedSceneIds.join(", "),
+    "ordem atual: " + current,
+    "ordem proposta: " + next,
+  ];
+  for (const id of project.proposal.changedSceneIds) {
+    const before = project.scenes.find((scene) => scene.id === id);
+    const after = project.proposal.scenes.find((scene) => scene.id === id);
+    if (!after) {
+      lines.push("excluir " + id + (before ? " · " + before.objective : ""));
+      continue;
+    }
+    const speech = after.speechIds.map((sid) => fmtSpan(speechById(sid))).join(" | ") || "sem fala";
+    const support = after.support.map((item) => {
+      const span = visualById(item.visualId);
+      return item.visualId + " @" + item.offsetFrames + "f +" + item.durationFrames + "f"
+        + (span ? " · " + span.text : "");
+    }).join(" | ") || "sem apoio";
+    lines.push(
+      (before ? "ajustar " : "criar ") + id + " · " + after.objective
+      + "\nfala: " + speech + "\napoio: " + support,
+    );
+  }
+  return lines.join("\n");
+}
+
+function render() {
+  if (!project) return;
+  document.getElementById("kind").value = project.input.kind;
+  document.getElementById("inputText").value = project.input.text;
+  document.getElementById("target").value = String(project.input.targetSeconds);
+  const sources = document.getElementById("sources");
+  sources.replaceChildren();
+  for (const source of project.assembly.sources) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = source.id + " · " + source.role + " · " + source.path;
+    const role = document.createElement("select");
+    for (const value of ["speech", "support", "both"]) {
+      const opt = document.createElement("option");
+      opt.value = value; opt.textContent = value;
+      if (source.role === value) opt.selected = true;
+      role.appendChild(opt);
+    }
+    role.addEventListener("change", () => api("/project/source-role", {
+      method: "POST", body: JSON.stringify({ baseRevision: project.revision, sourceId: source.id, role: role.value }),
+    }));
+    const relink = document.createElement("button");
+    relink.type = "button";
+    relink.textContent = "Relink";
+    relink.addEventListener("click", () => api("/project/relink", {
+      method: "POST", body: JSON.stringify({ baseRevision: project.revision, sourceId: source.id }),
+    }));
+    li.append(label, role, relink);
+    sources.appendChild(li);
+  }
+  const progress = document.getElementById("analyzeProgress");
+  progress.textContent = operation && operation.stage === "analyzing"
+    ? ("analisando " + (operation.sourceId || "") + " · " + (operation.progress || ""))
+    : "";
+  const analyses = document.getElementById("analyses");
+  analyses.replaceChildren();
+  const analyzed = new Set(project.analyses.map((item) => item.sourceId));
+  for (const source of project.assembly.sources) {
+    const analysis = project.analyses.find((item) => item.sourceId === source.id);
+    const card = document.createElement("div");
+    card.className = "card";
+    const title = document.createElement("strong");
+    title.textContent = source.id + " · " + (analysis ? analysis.status : "pendente");
+    card.appendChild(title);
+    if (analysis) {
+      const speech = document.createElement("p");
+      speech.textContent = analysis.speech.map((s) => s.start + "s–" + s.end + "s " + s.text).join(" ") || "sem fala";
+      card.appendChild(speech);
+      if (analysis.error) {
+        const err = document.createElement("p");
+        err.className = "warn";
+        err.textContent = analysis.error;
+        card.appendChild(err);
+      }
+    }
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = analyzed.has(source.id) ? "Retomar" : "Analisar";
+    retry.addEventListener("click", () => {
+      api("/project/analyze", {
+        method: "POST",
+        body: JSON.stringify({ sourceIds: [source.id] }),
+      }).then(watchOperation);
+    });
+    card.appendChild(retry);
+    analyses.appendChild(card);
+  }
+  const second = Number(document.getElementById("second").value);
+  const hits = document.getElementById("hits");
+  hits.replaceChildren();
+  for (const analysis of project.analyses) {
+    for (const span of analysis.visual) {
+      if (span.start <= second && second < span.end) {
+        const li = document.createElement("li");
+        li.className = "hit";
+        li.textContent = analysis.sourceId + " @ " + second + "s · " + span.text
+          + " · " + span.start + "s–" + span.end + "s · " + span.confidence;
+        li.tabIndex = 0;
+        const open = () => openSource(analysis.sourceId, span.start, span.end);
+        li.addEventListener("click", open);
+        li.addEventListener("keydown", (ev) => { if (ev.key === "Enter") open(); });
+        hits.appendChild(li);
+      }
+    }
+  }
+  const cards = document.getElementById("sceneCards");
+  cards.replaceChildren();
+  project.scenes.forEach((scene, index) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    const t = document.createElement("strong");
+    t.textContent = (index + 1) + ". " + scene.id + " · " + scene.objective;
+    const p = document.createElement("p");
+    p.textContent = scene.rationale;
+    const speech = document.createElement("p");
+    speech.textContent = "fala: " + (scene.speechIds.map((id) => fmtSpan(speechById(id))).join(" | ") || "nenhuma");
+    const support = document.createElement("p");
+    support.textContent = "apoio: " + (scene.support.map((item) => {
+      const span = visualById(item.visualId);
+      return item.visualId + " @" + item.offsetFrames + "f +" + item.durationFrames + "f"
+        + (span ? " · " + span.start + "s–" + span.end + "s " + span.text : "");
+    }).join(" | ") || "nenhum");
+    const g = document.createElement("p");
+    g.className = scene.gaps.length ? "warn" : "ok";
+    g.textContent = scene.gaps.length ? "lacunas: " + scene.gaps.join("; ") : "sem lacuna";
+    const actions = document.createElement("div");
+    actions.className = "row";
+    const up = document.createElement("button");
+    up.type = "button"; up.textContent = "Subir"; up.disabled = index === 0;
+    up.addEventListener("click", () => moveScene(index, -1));
+    const down = document.createElement("button");
+    down.type = "button"; down.textContent = "Descer"; down.disabled = index === project.scenes.length - 1;
+    down.addEventListener("click", () => moveScene(index, 1));
+    const del = document.createElement("button");
+    del.type = "button"; del.textContent = "Excluir";
+    del.addEventListener("click", () => deleteScene(index));
+    const replace = document.createElement("select");
+    const ph = document.createElement("option");
+    ph.value = ""; ph.textContent = "Substituir fala";
+    replace.appendChild(ph);
+    for (const analysis of project.analyses) {
+      for (const span of analysis.speech) {
+        const opt = document.createElement("option");
+        opt.value = span.id;
+        opt.textContent = fmtSpan(span);
+        replace.appendChild(opt);
+      }
+    }
+    replace.addEventListener("change", () => {
+      if (!replace.value) return;
+      replaceSpeech(index, replace.value);
+    });
+    const offset = document.createElement("input");
+    offset.type = "number"; offset.min = "0";
+    offset.value = String(scene.support[0]?.offsetFrames ?? 0);
+    offset.setAttribute("aria-label", "offset do apoio em frames");
+    const dur = document.createElement("input");
+    dur.type = "number"; dur.min = "1";
+    dur.value = String(scene.support[0]?.durationFrames ?? 25);
+    dur.setAttribute("aria-label", "duração do apoio em frames");
+    const adj = document.createElement("button");
+    adj.type = "button"; adj.textContent = "Ajustar apoio";
+    adj.addEventListener("click", () => adjustSupport(index, Number(offset.value), Number(dur.value)));
+    actions.append(up, down, del, replace, offset, dur, adj);
+    card.append(t, p, speech, support, g, actions);
+    cards.appendChild(card);
+  });
+  document.getElementById("diff").textContent = diffText();
+  document.getElementById("deliveryMeta").textContent =
+    "estrutura " + project.structureApprovedRevision +
+    " · prévia " + project.previewRevision +
+    " · final " + project.finalApprovedRevision +
+    " · " + project.assembly.width + "×" + project.assembly.height +
+    " @ " + project.assembly.fps.num + "/" + project.assembly.fps.den;
+  if (project.previewRevision != null) {
+    const src = "/project/output/" + project.previewRevision + "/mp4";
+    if (previewPlayer.getAttribute("data-rev") !== String(project.previewRevision)) {
+      previewPlayer.src = src;
+      previewPlayer.setAttribute("data-rev", String(project.previewRevision));
+    }
+  } else {
+    previewPlayer.removeAttribute("src");
+    previewPlayer.removeAttribute("data-rev");
+  }
+  const downloads = document.getElementById("downloads");
+  downloads.replaceChildren();
+  if (project.finalApprovedRevision != null) {
+    const rev = project.finalApprovedRevision;
+    const otio = document.createElement("a");
+    otio.href = "/project/output/" + rev + "/otio";
+    otio.textContent = "Baixar timeline.otio";
+    otio.setAttribute("download", "timeline.otio");
+    const mp4 = document.createElement("a");
+    mp4.href = "/project/output/" + rev + "/mp4";
+    mp4.textContent = "Baixar reference.mp4";
+    mp4.setAttribute("download", "reference.mp4");
+    downloads.append(otio, document.createTextNode(" · "), mp4);
+  }
+}
+
+function moveScene(index, delta) {
+  const scenes = project.scenes.slice();
+  const next = index + delta;
+  const [item] = scenes.splice(index, 1);
+  scenes.splice(next, 0, item);
+  postProposal(scenes, [item.id, scenes[index].id], "reordenar " + item.id);
+}
+
+function deleteScene(index) {
+  const scenes = project.scenes.slice();
+  const [removed] = scenes.splice(index, 1);
+  postProposal(scenes, [removed.id], "excluir " + removed.id);
+}
+
+function replaceSpeech(index, speechId) {
+  const scenes = project.scenes.map((scene, i) => i === index
+    ? { ...scene, speechIds: [speechId], gaps: [] }
+    : scene);
+  postProposal(scenes, [project.scenes[index].id], "substituir fala de " + project.scenes[index].id);
+}
+
+function adjustSupport(index, offsetFrames, durationFrames) {
+  const scene = project.scenes[index];
+  if (!scene.support.length) return;
+  const scenes = project.scenes.map((item, i) => i === index
+    ? {
+        ...item,
+        support: item.support.map((entry, j) => j === 0
+          ? { ...entry, offsetFrames, durationFrames }
+          : entry),
+      }
+    : item);
+  postProposal(scenes, [scene.id], "ajustar apoio de " + scene.id);
+}
+
+function watchOperation() {
+  clearTimeout(pollTimer);
+  const tick = async () => {
+    const { body } = await api("/project");
+    const op = body.operation;
+    if (op && op.stage && op.stage !== "ready" && op.stage !== "cancelled") {
+      pollTimer = setTimeout(tick, 400);
+    }
+  };
+  pollTimer = setTimeout(tick, 400);
+}
+
+document.querySelectorAll("nav button").forEach((btn) => {
+  btn.addEventListener("click", () => show(btn.dataset.step));
+});
+document.getElementById("select").onclick = () => api("/project/select", {
+  method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+});
+document.getElementById("saveInput").onclick = () => api("/project/input", {
+  method: "POST",
+  body: JSON.stringify({
+    baseRevision: project.revision,
+    kind: document.getElementById("kind").value,
+    text: document.getElementById("inputText").value,
+    targetSeconds: Number(document.getElementById("target").value),
+  }),
+});
+document.getElementById("analyze").onclick = () => {
+  api("/project/analyze", {
+    method: "POST",
+    body: JSON.stringify({ sourceIds: project.assembly.sources.map((s) => s.id) }),
+  }).then(watchOperation);
+};
+document.getElementById("analyzeVisual").onclick = () => {
+  api("/project/analyze", {
+    method: "POST",
+    body: JSON.stringify({ sourceIds: project.assembly.sources.map((s) => s.id), visual: true }),
+  }).then(watchOperation);
+};
+document.getElementById("second").addEventListener("input", render);
+document.getElementById("propose").onclick = async () => {
+  const button = document.getElementById("propose");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "Gerando proposta…";
+  statusEl.textContent = "Gerando proposta…";
+  try {
+    await api("/project/propose", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: project.revision, request: document.getElementById("request").value }),
+    });
+  } catch (error) {
+    statusEl.textContent = error.message || "Não foi possível gerar a proposta.";
+  } finally {
+    button.disabled = false;
+    button.textContent = "Pedir proposta";
+  }
+};
+document.getElementById("apply").onclick = () => {
+  if (!project.proposal) return;
+  api("/project/apply", {
+    method: "POST",
+    body: JSON.stringify({ baseRevision: project.revision, proposalId: project.proposal.id }),
+  });
+};
+document.getElementById("approveStructure").onclick = () => api("/project/approve-structure", {
+  method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+});
+document.getElementById("preview").onclick = () => api("/project/preview", {
+  method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+});
+document.getElementById("approveFinal").onclick = () => api("/project/approve-final", {
+  method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+});
+document.getElementById("export").onclick = () => api("/project/export", {
+  method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+});
+document.getElementById("cancel").onclick = () => api("/project/cancel", { method: "POST", body: "{}" });
+
+api("/project").then(({ body }) => { project = body.project; operation = body.operation || null; render(); });
+</script>
+</body>
+</html>

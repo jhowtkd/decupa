@@ -16,6 +16,7 @@ import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
+import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -100,7 +101,9 @@ export interface AppHandle {
 }
 
 export async function startApp(opts: {
-  input: string;
+  input?: string;
+  projectDir?: string;
+  inputs?: string[];
   port?: number;
   provider?: string;
   executor?: Executor;
@@ -110,6 +113,33 @@ export async function startApp(opts: {
   workDir?: string;
   /** Mesma injeção do pipeline.runTriage: os testes do server substituem a
    *  chamada de biblioteca, que exigiria provider e índice de verdade. */
+  triageFn?: (opts: {
+    indexPath: string;
+    videoPath: string;
+    outDir: string;
+    provider?: string;
+  }) => Promise<{ keepList: string }>;
+  selectFn?: AssemblyDeps["selectFn"];
+  proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
+  describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
+  /** Autorização explícita; desligada por padrão. Não dispara chamada sozinha. */
+  allowPaidModel?: boolean;
+  allowPaidVisual?: boolean;
+}): Promise<AppHandle> {
+  if (opts.projectDir && !opts.input) {
+    return startAssemblyApp(opts as typeof opts & { projectDir: string });
+  }
+  if (!opts.input) throw new Error("startApp precisa de input ou projectDir");
+  return startCleanupApp({ ...opts, input: opts.input });
+}
+
+async function startCleanupApp(opts: {
+  input: string;
+  port?: number;
+  provider?: string;
+  executor?: Executor;
+  autoStart?: boolean;
+  workDir?: string;
   triageFn?: (opts: {
     indexPath: string;
     videoPath: string;
@@ -426,6 +456,86 @@ export async function startApp(opts: {
 
   return {
     port, address: "127.0.0.1", jobId: job.id,
+    close: async () => {
+      if (exec instanceof SpawnExecutor) exec.killAll();
+      await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+    },
+  };
+}
+
+function lazyPaidSend(): (content: unknown[], signal?: AbortSignal) => Promise<string> {
+  let client: { send(content: unknown[], signal?: AbortSignal): Promise<string> } | undefined;
+  return async (content, signal) => {
+    if (!client) {
+      const { ZaiClient } = await import("@decupa/triage");
+      client = new ZaiClient();
+    }
+    return client.send(content, signal);
+  };
+}
+
+async function startAssemblyApp(opts: {
+  projectDir: string;
+  inputs?: string[];
+  port?: number;
+  executor?: Executor;
+  selectFn?: AssemblyDeps["selectFn"];
+  proposeSend?: AssemblyDeps["proposeSend"];
+  describeClient?: AssemblyDeps["describeClient"];
+  allowPaidModel?: boolean;
+  allowPaidVisual?: boolean;
+}): Promise<AppHandle> {
+  const dir = resolve(opts.projectDir);
+  const exec = opts.executor ?? new SpawnExecutor();
+  const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  let boundPort = opts.port ?? 7788;
+  const allowPaidModel = opts.allowPaidModel === true;
+  const allowPaidVisual = opts.allowPaidVisual === true;
+  const runtime = createAssemblyRuntime(dir, {
+    exec,
+    port: () => boundPort,
+    selectFn: opts.selectFn,
+    allowPaidModel,
+    allowPaidVisual,
+    proposeSend: opts.proposeSend ?? (allowPaidModel ? lazyPaidSend() : undefined),
+    describeClient: opts.describeClient ?? (allowPaidVisual ? { send: lazyPaidSend() } : undefined),
+  });
+  const project = await runtime.ensureProject(opts.inputs);
+
+  const server = createServer((req, res) => {
+    const handle = async (): Promise<void> => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+        sendJson(res, { error: "origem não permitida" }, 403);
+        return;
+      }
+      if (url.pathname === "/") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(page);
+        return;
+      }
+      const handled = await runtime.handleAssembly(req, res, dir);
+      if (handled) return;
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("não encontrado");
+    };
+    handle().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!res.headersSent) sendJson(res, { error: message }, 500);
+      else res.end();
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(opts.port ?? 7788, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
+  boundPort = port;
+
+  return {
+    port, address: "127.0.0.1", jobId: project.id,
     close: async () => {
       if (exec instanceof SpawnExecutor) exec.killAll();
       await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });

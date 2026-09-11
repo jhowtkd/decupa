@@ -43,6 +43,12 @@ const USAGE = `decupa — bancada de medição
   decupa limpar --input <vídeo> [--port 7788] [--provider zai]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
       que não quer, exporta MP4, EDL, legendas ou transcrição.
+
+  decupa montar --project <pasta> [--input <arquivo>] [--port 7788]
+           [--allow-paid-model] [--allow-paid-visual]
+      Abre o fluxo de montagem multiarquivo. --input acrescenta uma fonte;
+      omitir --input reabre o projeto já gravado na pasta.
+      Pagos ficam desligados; as flags só autorizam o cliente, não disparam chamada.
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -276,6 +282,48 @@ async function main(argv: string[]): Promise<number> {
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
+    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    await new Promise<void>((resolve) => {
+      let closing = false;
+      const shutdown = async () => {
+        if (closing) return;
+        closing = true;
+        await app.close();
+        resolve();
+        process.exit(0);
+      };
+      process.once("SIGINT", () => { void shutdown(); });
+      process.once("SIGTERM", () => { void shutdown(); });
+    });
+    return 0;
+  }
+
+  if (command === "montar") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        project: { type: "string" },
+        input: { type: "string" },
+        port: { type: "string" },
+        "allow-paid-model": { type: "boolean" },
+        "allow-paid-visual": { type: "boolean" },
+      },
+    });
+    if (!values.project) {
+      console.error("montar precisa de --project");
+      return 1;
+    }
+    const { startApp } = await import("./app/server.ts");
+    const app = await startApp({
+      projectDir: values.project,
+      inputs: values.input ? [values.input] : undefined,
+      port: values.port ? Number(values.port) : undefined,
+      allowPaidModel: values["allow-paid-model"] === true,
+      allowPaidVisual: values["allow-paid-visual"] === true,
+    });
+    const url = `http://127.0.0.1:${app.port}`;
+    console.log(`tela de montagem aberta em ${url}`);
+    console.log("Ctrl+C para encerrar");
     spawn("open", [url], { stdio: "ignore", detached: true }).unref();
     await new Promise<void>((resolve) => {
       let closing = false;
