@@ -170,3 +170,32 @@ App:
 
 Testes: comando T10 offline — 149 passed, 21 failed, todos `listen EPERM` (19 routes HTTP + 2 fluxo HTTP; G0-F01). `pnpm typecheck` 0 erros, `git diff --check` limpo. Prova real 25/30000-1001 após correção: 50/25 em ambos + áudio coerente (beds inalterados), OTIO com os mesmos intervalos.
 Próxima ação: tarefa 10 (Nilton Pinto real + G0-G7).
+
+## Tarefa 10 — uso real e gates (parcial: sem chamadas pagas nesta sessão)
+
+Commit: (a registrar). Review próprio (não independente).
+
+### Nilton Pinto: causa localizada por camada (áudio real, só passos locais)
+Mídia: cópias em /tmp (originais intactos em Downloads/Videos Feira). `10092026_162919.mp4` (39.4s) via `condense-prep` local (whisperx small, sem custo): 6 segmentos, 86 palavras.
+- Segmento 14.6–27.0s: "…atitude transformadora com Rafael Cortez." — palavras `Rafael@25.54s conf 0.995`, `Cortez.@25.98s conf 0.994`. "Tom"+"Carvalho," @19.34–19.50s.
+- `grep -i Nilton Pinto` no transcript JSON, nas words e no `speech_index.json` (7 units; unit 20.6–27.0s contém o nome ouvido): **zero ocorrências em todas as camadas locais**.
+- Estabilidade: fatia isolada 24–32s retranscrita ouve o mesmo "Rafael Cortez" (0.1–2.5s locais).
+- Tentativa de modelo medium abortada no sandbox (sem espaço para pesos + lookup de align bloqueado); sem custo incorrido.
+Conclusão honesta: **nenhuma perda em camada local** — ASR, words e índice concordam em "Rafael Cortez" com confiança alta e estável. O que falta é ouvido humano nos 24–27s de `162919`: se o locutor diz "Rafael Cortez", o pipeline está certo; se diz "Nilton Pinto", a causa é confusão do whisper-small em nome próprio (família já vista: "Cebrae", "valícia", "Empredador") e o remédio é retranscrever com modelo maior (fora do sandbox) ou Corrigir texto (T3, funciona hoje). Seleção/proposta/render não foram executados no áudio real (exigem modelo pago; sem autorização explícita nesta sessão).
+
+### Matriz G0–G7 (definida no fechamento a partir da matriz de aceite)
+- G0 base/preservação: typecheck 0, diff limpo, suíte offline 149 passed; **F01 aberto** (21 HTTP EPERM; recheck fora do sandbox com o comando T10).
+- G1 materiais/lote: rotas offline ✓; **navegador pendente** (P1).
+- G2 automático até prévia: runner+rotas+fluxo offline ✓ (fluxo HTTP 202→ready aguarda F01); **percurso pago real pendente de autorização**.
+- G3 falha/cancelamento/retomada: fakes com barreiras ✓; **retomada na UI pendente** (P2).
+- G4 cobertura/evidência: janelas reais + gaps ✓ offline; **visual pago real pendente de autorização**.
+- G5 palavras/correção/Nilton Pinto: offline ✓; **ouvido humano + correção real pendentes** (ver acima).
+- G6 prévia/export/frames: prova 50/25 nos dois regimes ✓, export=cópia do assistido ✓; **import OTIO no DaVinci pendente** (só o usuário tem o app/projeto).
+- G7 estilo A: estáticos + smoke ✓; **capturas 1280/390 + teclado pendentes**.
+
+### Pendências com ação exata de desbloqueio
+1. Ouvido humano 24–27s de `10092026_162919.mp4` (usuário) → decide mangle-vs-verdade.
+2. Autorização explícita de gasto Z.ai (usuário) → `prepare` real nos 2 vídeos fora do sandbox (com `allowPaidModel/Visual` + opt-ins), depois P1–P3 no navegador.
+3. `env -u ZAI_API_KEY -u OPENAI_API_KEY pnpm exec vitest run apps/cli/src/app/assembly tests/assembly-flow.test.ts` fora do sandbox (qualquer shell sem restrição) → fecha F01.
+4. Abrir `exports/<rev>/timeline.otio` em projeto de teste no DaVinci (usuário) → confere duração/V1/V2/A1/canvas/taxa/recortes.
+Nenhum push, nenhuma mídia privada commitada, nenhuma chave em disco ou log.
