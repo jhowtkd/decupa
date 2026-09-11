@@ -24,6 +24,7 @@ export function fixtureAssembly(): Assembly {
         height: 240,
         role: "speech",
         included: true,
+        name: "fala.mp4",
       },
       {
         id: "b",
@@ -37,6 +38,7 @@ export function fixtureAssembly(): Assembly {
         height: 240,
         role: "support",
         included: true,
+        name: "apoio.mp4",
       },
     ],
     tracks: [

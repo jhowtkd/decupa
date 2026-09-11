@@ -86,7 +86,7 @@ function validateSource(value: unknown, index: number, seen: Set<string>): Sourc
     throw new Error(`fonte ${id}.durationSeconds precisa ser positiva`);
   }
 
-  return {
+  const source: Source = {
     id,
     path: nonEmptyString(value.path, `fonte ${id}.path`),
     sha256,
@@ -98,7 +98,15 @@ function validateSource(value: unknown, index: number, seen: Set<string>): Sourc
     height: optionalPositiveEven(value.height, `fonte ${id}.height`),
     role: role as Source["role"],
     included: value.included === undefined ? true : booleanField(value.included, `fonte ${id}.included`),
+    name: nonEmptyString(value.name, `fonte ${id}.name`),
   };
+  for (const key of ["size", "mtimeMs"] as const) {
+    if (value[key] === undefined) continue;
+    const n = finiteNumber(value[key], `fonte ${id}.${key}`);
+    if (n < 0) throw new Error(`fonte ${id}.${key} não pode ser negativo`);
+    source[key] = n;
+  }
+  return source;
 }
 
 function validateClip(value: unknown, index: number, trackName: string, seen: Set<string>): Clip {

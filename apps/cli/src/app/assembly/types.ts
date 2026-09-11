@@ -13,6 +13,11 @@ export type Source = {
   role: "speech" | "support" | "both";
   /** false retira a fonte do conjunto sem apagar bytes nem revisão anterior. */
   included: boolean;
+  /** Nome de exibição (arquivo original); bytes salvos usam sha/UUID. */
+  name: string;
+  /** Sentinelas baratas de identidade; ausentes em dados antigos. */
+  size?: number;
+  mtimeMs?: number;
 };
 
 export type Clip = {

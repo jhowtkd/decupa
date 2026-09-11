@@ -50,7 +50,7 @@ Próxima ação: tarefa 3 (words.ts, edição, alinhamento, undo).
 
 ## Tarefa 3 — cortar, restaurar, corrigir e desfazer
 
-Commit: (a registrar). Review próprio (não independente).
+Commit: `29d3586`. Review próprio (não independente).
 Requisitos cobertos: R-003, R-004 (parcial: invariantes, proteção, undo persistente; caso Nilton Pinto segue para prova auditiva na tarefa 10).
 
 Implementado:
@@ -68,6 +68,23 @@ Ajustes documentados vs plano: (1) takes persistidos na cena já na tarefa 3 (ne
 Testes: `words.test.ts` (11, inclui snippet do plano + roundtrip + proteção + snap com PCM sintético), `transcribe.test.ts` (+5: offset 10,2s únicos, unaligned nomeado, vazio), migração de takes (resolve/não-resolve), histórico roundtrip/ausente, undo puro. Comando amplo: 120 passed, 11 failed — todos `routes.test.ts` EPERM de sandbox (G0-F01). `pnpm typecheck` 0 erros, `git diff --check` limpo, `py_compile` OK.
 Achados: nenhum P0/P1. Rotas edit/undo não executáveis neste sandbox (mesma causa); recheck fora do sandbox precisa cobrir: edit remove/restore roundtrip HTTP, correct→202→aligned via sidecar fake, undo 404/409 e concorrência (duas edições, edição-durante-alinhamento).
 Próxima ação: tarefa 4 (media.ts, importação, Range).
+
+## Tarefa 4 — importar e reproduzir materiais de verdade
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: R-005 (parcial: importação, lote/categorias, miniaturas, proxy, seek; UI de materiais na tarefa 8).
+
+Implementado:
+- Novo `assembly/media.ts`: `ensurePlayback` (proxy H.264/yuv420p+AAC faststart + miniatura JPEG, publicados por rename após probe; parcial nunca vira cache; reuso sem re-rodar ffmpeg; áudio-sem-vídeo sem miniatura), `verifySourceIdentity` (stat tamanho+mtime no caminho rápido, hash no caminho lento/dados antigos; troca no mesmo caminho vira erro com ID).
+- `Source`: `name` (exibição), `size?`/`mtimeMs?` (sentinelas); migração preenche nome pelo basename; `sourceFromFile` registra tudo; validação exige nome.
+- `routes.ts`: `GET /project/media/:id?view=playback` (proxy verificado, Range real), sem view serve o original registrado (com identidade); `GET /project/thumbnail/:id` (JPEG ou 404 áudio-only); `POST /project/import` (stream para `imports/<uuid>.part`, tamanho declarado validado + teto 8 GiB, probe/hash, reuso por hash, nome UUID + exibição separada, traversal recusado, abort/ENOSPC limpam só a tentativa, 409 desfaz o registrado); `POST /project/source-selection` (included em lote, sem apagar bytes); `POST /project/source-role` (lote `sourceIds[]`, singular compatível). Import fica antes da leitura do body JSON (binário ≠ 1 MiB).
+- Nota de produto (cai na UI da tarefa 8): drop copia para o servidor local; seletor nativo referencia o original.
+
+Ajuste documentado vs plano: espaço livre checado de forma reativa (ENOSPC→507 + limpeza) em vez de pré-checagem — stdlib Node não tem statvfs e `df` é frágil entre plataformas; o comportamento observável (sem corrupção, erro claro) é o mesmo.
+
+Testes: `media.test.ts` (6, inclui ffmpeg+probe reais: proxy/miniatura gerados e validados em ~400ms; falha sem publicação; lixo rejeitado; reuso; áudio-only; identidade ausente/trocada mesmo-tamanho). `routes.test.ts` +6 (206+Content-Range, 409 com ID, ausente 404/substituído 409 sem exec, import+reuso+400s, abort sem `.part`, lote/seleção). Comando amplo: 126 passed, 17 failed — todos `routes.test.ts` EPERM (G0-F01; +6 novos também HTTP). `pnpm typecheck` 0 erros, `diff --check` limpo.
+Achados: nenhum P0/P1. Recheck HTTP fora do sandbox cobre os 17 de routes (comando G2 do plano).
+Próxima ação: tarefa 5 (model.ts/visual.ts, janelas e cobertura).
 
 ## Gates seguintes
 

@@ -1,5 +1,5 @@
 import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { access } from "node:fs/promises";
 import type {
   Analysis,
@@ -460,7 +460,11 @@ function migrateV1(value: Record<string, unknown>): Record<string, unknown> {
     version: 2,
     assembly: {
       ...assembly,
-      sources: sources.map((source) => ({ included: true, ...(source as Record<string, unknown>) })),
+      sources: sources.map((source) => {
+        const raw = source as Record<string, unknown>;
+        const path = typeof raw.path === "string" ? raw.path : "";
+        return { included: true, name: basename(path) || "mídia", ...raw };
+      }),
     },
     analyses: (analyses as unknown[]).map((analysis) => {
       if (!isRecord(analysis)) throw new Error("projeto v1 com análise inválida");

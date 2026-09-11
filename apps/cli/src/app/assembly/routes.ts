@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
@@ -11,6 +11,7 @@ import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { describeSource } from "./model.ts";
+import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import {
@@ -132,11 +133,12 @@ function bump(project: Project): Project {
   };
 }
 
-async function sourceFromFile(path: string, id: string): Promise<Source> {
+async function sourceFromFile(path: string, id: string, displayName?: string): Promise<Source> {
   if (!isAbsolute(path)) throw new HttpError(400, `fonte precisa de caminho absoluto: ${path}`);
   const resolved = await realpath(path);
   const info = await probe(resolved);
   const durationSeconds = Math.max(info.durationMs / 1000, 0.001);
+  const { size, mtimeMs } = await stat(resolved);
   return {
     id,
     path: resolved,
@@ -149,11 +151,33 @@ async function sourceFromFile(path: string, id: string): Promise<Source> {
     height: info.height,
     role: info.hasAudio ? "speech" : "support",
     included: true,
+    name: displayName ?? basename(resolved),
+    size,
+    mtimeMs,
   };
 }
 
 function nextSourceId(project: Project): string {
   return `src-${project.assembly.sources.length + 1}`;
+}
+
+function mediaError(err: unknown): HttpError {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/ausente|não cadastrada/.test(message)) return new HttpError(404, message);
+  return new HttpError(409, message);
+}
+
+const MAX_IMPORT_BYTES = 8 * 1024 * 1024 * 1024;
+
+function validImportName(raw: string | null): string {
+  if (!raw || raw.length > 255 || /[/\\\0]/.test(raw)) {
+    throw new HttpError(400, "nome de arquivo inválido para importação");
+  }
+  const name = raw.trim();
+  if (name === "" || name === "." || name === "..") {
+    throw new HttpError(400, "nome de arquivo inválido para importação");
+  }
+  return raw;
 }
 
 /**
@@ -389,7 +413,37 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const project = await loadProject(dir);
         const source = project.assembly.sources.find((item) => item.id === sourceId);
         if (!source) throw new HttpError(404, "fonte não cadastrada");
+        if (url.searchParams.get("view") === "playback") {
+          try {
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+            await serveMedia(req, res, videoPath);
+          } catch (err) {
+            throw mediaError(err);
+          }
+          return true;
+        }
+        try {
+          await verifySourceIdentity(source);
+        } catch (err) {
+          throw mediaError(err);
+        }
         await serveMedia(req, res, source.path);
+        return true;
+      }
+
+      if (parts[1] === "thumbnail" && req.method === "GET") {
+        const sourceId = decodeURIComponent(parts[2] ?? "");
+        const project = await loadProject(dir);
+        const source = project.assembly.sources.find((item) => item.id === sourceId);
+        if (!source) throw new HttpError(404, "fonte não cadastrada");
+        try {
+          const { thumbnailPath } = await ensurePlayback(source, dir, deps.exec);
+          if (!thumbnailPath) throw new HttpError(404, "fonte sem miniatura (somente áudio)");
+          await serveMedia(req, res, thumbnailPath, "image/jpeg");
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          throw mediaError(err);
+        }
         return true;
       }
 
@@ -422,6 +476,91 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
         sendJson(res, { ok: true, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "import" && req.method === "POST") {
+        const baseRevision = Number(url.searchParams.get("baseRevision"));
+        if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+          throw new HttpError(400, "baseRevision inválido");
+        }
+        const name = validImportName(url.searchParams.get("name"));
+        const declared = Number(req.headers["x-file-size"]);
+        if (!Number.isSafeInteger(declared) || declared <= 0 || declared > MAX_IMPORT_BYTES) {
+          throw new HttpError(400, "x-file-size ausente ou inválido");
+        }
+        const before = await loadProject(dir);
+        if (before.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${before.revision}`);
+        }
+        // Arquivos arrastados são copiados para o projeto local por stream;
+        // o seletor nativo continua referenciando o original sem cópia.
+        const importsDir = join(dir, "imports");
+        await mkdir(importsDir, { recursive: true });
+        const part = join(importsDir, `${randomUUID()}.part`);
+        const cleanup = () => unlink(part).catch(() => {});
+        let received = 0;
+        try {
+          const handle = await open(part, "wx");
+          try {
+            for await (const chunk of req) {
+              const buf = chunk as Buffer;
+              received += buf.length;
+              if (received > declared) throw new HttpError(400, "tamanho além do declarado");
+              await handle.write(buf);
+            }
+          } finally {
+            await handle.close();
+          }
+        } catch (err) {
+          await cleanup();
+          if (err instanceof HttpError) throw err;
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ENOSPC") throw new HttpError(507, "sem espaço local para importar");
+          throw err;
+        }
+        if (received !== declared) {
+          await cleanup();
+          throw new HttpError(400, "tamanho recebido diverge do declarado");
+        }
+        let info;
+        try {
+          info = await probe(part);
+        } catch {
+          await cleanup();
+          throw new HttpError(400, "arquivo não decodificável como mídia");
+        }
+        if (!info.hasVideo && !info.hasAudio) {
+          await cleanup();
+          throw new HttpError(400, "arquivo sem áudio nem vídeo");
+        }
+        const sha256 = await hashFile(part);
+        const known = before.assembly.sources.find((item) => item.sha256 === sha256);
+        if (known) {
+          await cleanup();
+          sendJson(res, { project: await loadProject(dir), source: known, reused: true });
+          return true;
+        }
+        const ext = /\.([A-Za-z0-9]{1,5})$/.exec(name)?.[1] ?? "bin";
+        const stored = join(importsDir, `${randomUUID()}.${ext}`);
+        try {
+          await rename(part, stored);
+        } catch (err) {
+          await cleanup();
+          throw err;
+        }
+        let project: Project;
+        try {
+          project = await mutate(baseRevision, async (loaded) => {
+            const source = await sourceFromFile(stored, nextSourceId(loaded), name);
+            return bump(addSource(loaded, source));
+          });
+        } catch (err) {
+          await unlink(stored).catch(() => {});
+          throw err;
+        }
+        const source = project.assembly.sources.find((item) => item.path === stored);
+        sendJson(res, { project, source });
         return true;
       }
 
@@ -483,24 +622,52 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "source-role" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const sourceId = String(body.sourceId ?? "");
+        const rawIds = Array.isArray(body.sourceIds)
+          ? body.sourceIds
+          : body.sourceId !== undefined ? [body.sourceId] : [];
+        const sourceIds = rawIds.map(String);
+        if (sourceIds.length === 0) throw new HttpError(400, "sourceIds ausente");
         const role = body.role;
         if (role !== "speech" && role !== "support" && role !== "both") {
           throw new HttpError(400, "role inválido");
         }
         const project = await mutate(baseRevision, (project) => {
           const nextRole = role as Source["role"];
-          const sources = project.assembly.sources.map((source) =>
-            source.id === sourceId ? { ...source, role: nextRole } : source,
-          );
-          if (!sources.some((source) => source.id === sourceId)) {
-            throw new HttpError(404, "fonte não cadastrada");
+          const known = new Set(project.assembly.sources.map((source) => source.id));
+          for (const id of sourceIds) {
+            if (!known.has(id)) throw new HttpError(404, `fonte não cadastrada: ${id}`);
           }
+          const wanted = new Set(sourceIds);
+          const sources = project.assembly.sources.map((source) =>
+            wanted.has(source.id) ? { ...source, role: nextRole } : source,
+          );
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
         sendJson(res, { project, ...snapshot() });
         return true;
       }
+
+      if (parts[1] === "source-selection" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds.map(String) : [];
+        if (sourceIds.length === 0) throw new HttpError(400, "sourceIds ausente");
+        if (typeof body.included !== "boolean") throw new HttpError(400, "included inválido");
+        const included = body.included;
+        const project = await mutate(baseRevision, (project) => {
+          const known = new Set(project.assembly.sources.map((source) => source.id));
+          for (const id of sourceIds) {
+            if (!known.has(id)) throw new HttpError(404, `fonte não cadastrada: ${id}`);
+          }
+          const wanted = new Set(sourceIds);
+          const sources = project.assembly.sources.map((source) =>
+            wanted.has(source.id) ? { ...source, included } : source,
+          );
+          return bump({ ...project, assembly: { ...project.assembly, sources } });
+        });
+        sendJson(res, { project, ...snapshot() });
+        return true;
+      }
+
 
       if (parts[1] === "relink" && req.method === "POST") {
         const baseRevision = requireRevision(body);

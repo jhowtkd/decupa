@@ -1,7 +1,7 @@
-import { copyFile, mkdir, mkdtemp, writeFile, appendFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, unlink, writeFile, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
@@ -278,4 +278,173 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
   expect(a.status).toBe(200);
   expect(b.status).toBe(200);
   expect(new Set(workDirs).size).toBeGreaterThan(1);
+});
+
+type ProjectSummary = {
+  project: {
+    revision: number;
+    assembly: { sources: { id: string; name: string; path: string; included: boolean; role: string }[] };
+  };
+};
+
+async function selectClip(base: string, baseRevision = 0): Promise<ProjectSummary> {
+  const res = await fetch(`${base}/project/select`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision }),
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()) as ProjectSummary;
+}
+
+async function importBytes(
+  base: string,
+  name: string,
+  baseRevision: number,
+  bytes: Uint8Array,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(`${base}/project/import?name=${encodeURIComponent(name)}&baseRevision=${baseRevision}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-file-size": String(bytes.length),
+      ...extraHeaders,
+    },
+    body: bytes,
+  });
+}
+
+it("busca trecho do proxy por Range e serve miniatura", async () => {
+  const { base } = await boot();
+  const selected = await selectClip(base);
+  const id = selected.project.assembly.sources[0]!.id;
+  const full = await fetch(`${base}/project/media/${id}?view=playback`);
+  expect(full.status).toBe(200);
+  const part = await fetch(`${base}/project/media/${id}?view=playback`, {
+    headers: { range: "bytes=0-99" },
+  });
+  expect(part.status).toBe(206);
+  expect(part.headers.get("content-range")).toMatch(/^bytes 0-99\//);
+  const thumb = await fetch(`${base}/project/thumbnail/${id}`);
+  expect(thumb.status).toBe(200);
+  expect(thumb.headers.get("content-type")).toBe("image/jpeg");
+});
+
+it("falha de proxy não publica parcial e nomeia a fonte", async () => {
+  const { base } = await boot([], {
+    executor: {
+      async run() { return { code: 1, stdout: "", stderr: "boom" }; },
+    },
+  });
+  const selected = await selectClip(base);
+  const id = selected.project.assembly.sources[0]!.id;
+  const res = await fetch(`${base}/project/media/${id}?view=playback`);
+  expect(res.status).toBe(409);
+  expect(await res.text()).toContain(id);
+});
+
+it("mídia ausente e substituída viram erro com ID, sem render", async () => {
+  const calls: { args: string[] }[] = [];
+  const { base, dir, clip } = await boot([], {
+    executor: { async run(call: { args: string[] }) { calls.push(call); return { code: 0, stdout: "", stderr: "" }; } },
+  });
+  const selected = await selectClip(base);
+  const id = selected.project.assembly.sources[0]!.id;
+  await unlink(clip);
+  expect((await fetch(`${base}/project/media/${id}`)).status).toBe(404);
+  expect((await fetch(`${base}/project/media/${id}?view=playback`)).status).toBe(404);
+  await copyFile(join(FIXTURES, "edited.wav"), clip);
+  const sub = await fetch(`${base}/project/media/${id}?view=playback`);
+  expect(sub.status).toBe(409);
+  expect(await sub.text()).toContain(id);
+  expect(calls).toHaveLength(0);
+});
+
+it("importa por stream, reutiliza por hash e recusa entrada inválida", async () => {
+  const { base } = await boot();
+  const bytes = await readFile(join(FIXTURES, "clip.mp4"));
+  const first = await importBytes(base, "fala.mp4", 0, bytes);
+  expect(first.status).toBe(200);
+  const firstBody = (await first.json()) as ProjectSummary & { source: { id: string; name: string } };
+  expect(firstBody.source.name).toBe("fala.mp4");
+  const stored = firstBody.project.assembly.sources[0]!;
+  expect(stored.path).toContain("imports");
+  expect(stored.path).not.toContain("fala.mp4");
+  expect(firstBody.project.revision).toBe(1);
+  const second = await importBytes(base, "outro-nome.mp4", 1, bytes);
+  const secondBody = (await second.json()) as { reused: boolean; source: { id: string } };
+  expect(second.status).toBe(200);
+  expect(secondBody.reused).toBe(true);
+  expect(secondBody.source.id).toBe(firstBody.source.id);
+  expect((await importBytes(base, "../x.mp4", 1, bytes)).status).toBe(400);
+  const noSize = await fetch(`${base}/project/import?name=a.mp4&baseRevision=1`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: bytes,
+  });
+  expect(noSize.status).toBe(400);
+  const txt = Buffer.from("não é mídia");
+  expect((await importBytes(base, "nota.txt", 1, txt)).status).toBe(400);
+});
+
+it("upload abortado não registra fonte nem deixa .part", async () => {
+  const { base, dir } = await boot();
+  const bytes = await readFile(join(FIXTURES, "clip.mp4"));
+  const controller = new AbortController();
+  const req = fetch(`${base}/project/import?name=grande.mp4&baseRevision=0`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-file-size": String(bytes.length * 10),
+    },
+    body: bytes,
+    signal: controller.signal,
+  });
+  controller.abort();
+  await expect(req).rejects.toThrow();
+  await vi.waitFor(async () => {
+    const files = await readdir(join(dir, "imports")).catch(() => [] as string[]);
+    expect(files.filter((file) => file.endsWith(".part"))).toEqual([]);
+  });
+  const body = (await (await fetch(`${base}/project`)).json()) as ProjectSummary;
+  expect(body.project.revision).toBe(0);
+  expect(body.project.assembly.sources).toEqual([]);
+});
+
+it("lote e categorias: selection e role em lote e singular", async () => {
+  const { base } = await boot();
+  const clip = await readFile(join(FIXTURES, "clip.mp4"));
+  const wav = await readFile(join(FIXTURES, "edited.wav"));
+  const one = (await (await importBytes(base, "um.mp4", 0, clip)).json()) as { source: { id: string } };
+  const two = (await (await importBytes(base, "dois.wav", 1, wav)).json()) as { source: { id: string } };
+  const roleBatch = await fetch(`${base}/project/source-role`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 2, sourceIds: [one.source.id, two.source.id], role: "support" }),
+  });
+  expect(roleBatch.status).toBe(200);
+  const roles = ((await roleBatch.json()) as ProjectSummary).project.assembly.sources;
+  expect(roles.map((source) => source.role)).toEqual(["support", "support"]);
+  const roleOne = await fetch(`${base}/project/source-role`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 3, sourceId: one.source.id, role: "speech" }),
+  });
+  expect(roleOne.status).toBe(200);
+  const single = await fetch(`${base}/project/source-selection`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 4, sourceIds: [two.source.id], included: false }),
+  });
+  expect(single.status).toBe(200);
+  const sources = ((await single.json()) as ProjectSummary).project.assembly.sources;
+  expect(sources.find((source) => source.id === two.source.id)!.included).toBe(false);
+  expect(sources.find((source) => source.id === one.source.id)!.included).toBe(true);
+  const unknown = await fetch(`${base}/project/source-selection`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 5, sourceIds: ["fantasma"], included: false }),
+  });
+  expect(unknown.status).toBe(404);
 });
