@@ -3,13 +3,14 @@ import { relative } from "node:path";
 import { hashFile } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
-import { verifySourceIdentity } from "./media.ts";
+import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource } from "./model.ts";
 import { renderAssembly } from "./render.ts";
 import { applyProposal, recordPreview } from "./revisions.ts";
 import { proposeScenes } from "./scenes.ts";
 import { loadProject, mergeAnalyses, saveProject } from "./store.ts";
 import { visualCoverage } from "./visual.ts";
+import { buildPeaks, peaksPath } from "./waveform.ts";
 import type { Preparation, PreviewArtifact, Project, Source } from "./types.ts";
 
 export type PreparationMode = "prepare" | "adjust" | "preview";
@@ -253,6 +254,19 @@ export async function runPreparation(
               media: "error",
               error: err instanceof Error ? err.message : String(err),
             });
+          }
+          if (current.preparation?.sources[source.id]?.media !== "ready") continue;
+          // Peaks de waveform (Task 8): após o proxy existir, best-effort —
+          // nunca marca erro na fonte nem entra no caminho crítico.
+          try {
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+            await buildPeaks(deps.exec, {
+              proxyPath: videoPath,
+              sha256: source.sha256,
+              outPath: peaksPath(dir, source.sha256),
+            });
+          } catch {
+            // Sem waveform a faixa segue só com os blocos.
           }
         }
 
