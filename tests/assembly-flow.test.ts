@@ -1,7 +1,7 @@
 import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { startApp } from "../apps/cli/src/app/server.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
 import { FIXTURES } from "./fixtures/global-setup.ts";
@@ -119,12 +119,6 @@ it("percorre briefing → proposta local → exportação offline", async () => 
   expect(apply.status).toBe(200);
   const applied = await apply.json() as { project: { revision: number } };
 
-  expect((await fetch(`${base}/project/approve-structure`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ baseRevision: applied.project.revision }),
-  })).status).toBe(200);
-
   expect((await fetch(`${base}/project/preview`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -153,4 +147,83 @@ it("percorre briefing → proposta local → exportação offline", async () => 
     await readFile(join(dir, "exports", String(applied.project.revision), "manifest.json"), "utf8"),
   ) as { revision: number };
   expect(manifest.revision).toBe(applied.project.revision);
+});
+
+it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-prepare-"));
+  const speech = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  let speechId = "desconhecida";
+  const executor: Executor = {
+    async run(call: ExecCall) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      if (work && call.args.includes("index")) {
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
+      }
+      if (call.command === "ffmpeg") {
+        await writeFile(call.args[call.args.length - 1], "clip");
+      }
+      if (call.command === "python3" && call.args.includes("--out")) {
+        await writeFile(call.args[call.args.indexOf("--out") + 1], "mp4");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech],
+    port: 0,
+    executor,
+    proposeSend: async () =>
+      JSON.stringify({
+        scenes: [{ id: "sc-1", objective: "Abertura", selections: [{ speechId }] }],
+        changedSceneIds: ["sc-1"],
+        explanation: "fluxo automático",
+      }),
+    describeClient: {
+      async send(content: unknown[]) {
+        const match = /janela local: 0s → ([\d.]+)s/.exec(JSON.stringify(content));
+        const end = match ? Number(match[1]) : 1;
+        return JSON.stringify({
+          spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
+        });
+      },
+    },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  const opened = await (await fetch(`${base}/project`)).json() as {
+    project: { revision: number; assembly: { sources: { id: string }[] } };
+  };
+  expect(opened.project.assembly.sources).toHaveLength(1);
+  speechId = `${opened.project.assembly.sources[0]!.id}:u001`;
+
+  const response = await fetch(`${base}/project/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      request: "montar tudo",
+      modelOptIn: true,
+      visualOptIn: true,
+    }),
+  });
+  expect(response.status).toBe(202);
+  await vi.waitFor(async () => {
+    const body = await (await fetch(`${base}/project`)).json() as {
+      project: {
+        revision: number;
+        scenes: unknown[];
+        preparation: { status: string } | null;
+        previewArtifact: { revision: number } | null;
+        finalApprovedRevision: number | null;
+      };
+    };
+    expect(body.project.preparation?.status).toBe("ready");
+    expect(body.project.scenes).toHaveLength(1);
+    expect(body.project.previewArtifact?.revision).toBe(body.project.revision);
+    expect(body.project.finalApprovedRevision).toBeNull();
+  }, { timeout: 15000, interval: 200 });
 });

@@ -10,13 +10,14 @@ import { originAllowed } from "../../http/origin.ts";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
+import { runPreparation } from "./preparation.ts";
 import { describeSource } from "./model.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import {
-  applyHistorySnapshot, applyProposal, approveFinal, approveStructure, recordPreview,
+  applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
 import { proposeScenes, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
@@ -52,6 +53,30 @@ export type AssemblyDeps = {
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
 };
+
+/**
+ * Barreira paga do percurso: modelo para propor, visual para fontes com
+ * vídeo. Retorna o motivo do bloqueio ou null quando há autorização
+ * (flag de lote, permissão persistida ou opt-in do clique). Pura para
+ * teste sem HTTP; a rota converte em 402 antes de qualquer chamada.
+ */
+export function paidBlockedReason(
+  project: Project,
+  flags: {
+    allowPaidModel?: boolean;
+    allowPaidVisual?: boolean;
+    proposeSend?: unknown;
+    describeClient?: unknown;
+  },
+  opts: { modelOptIn: boolean; visualOptIn: boolean; needsModel: boolean },
+): string | null {
+  const modelOk = flags.allowPaidModel === true || project.permissions.model || opts.modelOptIn;
+  const visualOk = flags.allowPaidVisual === true || project.permissions.visual || opts.visualOptIn;
+  if (opts.needsModel && (!modelOk || !flags.proposeSend)) return PAID_BLOCKED;
+  const needsVisual = project.assembly.sources.some((source) => source.included && source.hasVideo);
+  if (needsVisual && (!visualOk || !flags.describeClient)) return PAID_BLOCKED;
+  return null;
+}
 
 function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   const payload = JSON.stringify(body);
@@ -112,7 +137,6 @@ export function blankProject(id: string): Project {
     scenes: [],
     analyses: [],
     proposal: null,
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
     corrections: [],
@@ -128,7 +152,6 @@ function bump(project: Project): Project {
     ...project,
     revision,
     assembly: { ...project.assembly, revision },
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
   };
@@ -757,6 +780,48 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if ((parts[1] === "prepare" || parts[1] === "adjust") && req.method === "POST") {
+        const mode = parts[1] as "prepare" | "adjust";
+        const baseRevision = requireRevision(body);
+        const request = String(body.request ?? "");
+        const modelOptIn = body.modelOptIn === true;
+        const visualOptIn = body.visualOptIn === true;
+        const current = await loadProject(dir);
+        if (current.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
+        }
+        if (mode === "adjust" && current.scenes.length === 0) {
+          throw new HttpError(409, "nada a ajustar: ainda não há cenas; use prepare");
+        }
+        const blocked = paidBlockedReason(
+          current,
+          { allowPaidModel: deps.allowPaidModel, allowPaidVisual: deps.allowPaidVisual, proposeSend: deps.proposeSend, describeClient: deps.describeClient },
+          { modelOptIn, visualOptIn, needsModel: true },
+        );
+        if (blocked) throw new HttpError(402, blocked);
+        // Um novo início cancela o anterior (mesma semântica de analyze e
+        // propose): o percurso abortado registra cancelled sem escrever mais.
+        const { gen, signal } = begin("preparing");
+        void runPreparation(
+          dir,
+          baseRevision,
+          { mode, request, modelOptIn, visualOptIn },
+          { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient },
+          { signal, isCurrent: () => stillCurrent(gen) },
+        ).then(
+          () => {
+            if (stillCurrent(gen)) operation = { stage: "ready" };
+          },
+          (err: unknown) => {
+            if (stillCurrent(gen)) {
+              operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+            }
+          },
+        );
+        sendJson(res, { project: await loadProject(dir), ...snapshot() }, 202);
+        return true;
+      }
+
       if (parts[1] === "propose" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const project = await mutate(baseRevision, async (project) => {
@@ -867,13 +932,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));
         }
         sendJson(res, { project: await loadProject(dir), ...snapshot() });
-        return true;
-      }
-
-      if (parts[1] === "approve-structure" && req.method === "POST") {
-        const baseRevision = requireRevision(body);
-        const project = await mutate(baseRevision, (project) => approveStructure(project));
-        sendJson(res, { project, ...snapshot() });
         return true;
       }
 

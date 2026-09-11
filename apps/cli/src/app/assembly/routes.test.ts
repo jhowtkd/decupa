@@ -5,6 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
+import { paidBlockedReason, PAID_BLOCKED, blankProject } from "./routes.ts";
+import { fixtureAssembly } from "./fixture.ts";
 import { loadProject, saveProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -185,6 +187,97 @@ it("recusa visual pago sem autorização explícita mesmo com cliente", async ()
   expect(res.status).toBe(402);
 });
 
+it("gate pago do percurso: bloqueia sem autorização, libera com opt-in ou permissão", () => {
+  const withVideo = {
+    ...blankProject("gate"),
+    assembly: { ...blankProject("gate").assembly, sources: [fixtureAssembly().sources[0]!] },
+  };
+  const transports = { proposeSend: "x", describeClient: "x" };
+  expect(
+    paidBlockedReason(withVideo, {}, { modelOptIn: false, visualOptIn: false, needsModel: true }),
+  ).toBe(PAID_BLOCKED);
+  expect(
+    paidBlockedReason(withVideo, transports, { modelOptIn: true, visualOptIn: false, needsModel: true }),
+  ).toBe(PAID_BLOCKED);
+  expect(
+    paidBlockedReason(withVideo, transports, { modelOptIn: true, visualOptIn: true, needsModel: true }),
+  ).toBeNull();
+  expect(
+    paidBlockedReason(
+      withVideo,
+      { allowPaidModel: true, allowPaidVisual: true, ...transports },
+      { modelOptIn: false, visualOptIn: false, needsModel: true },
+    ),
+  ).toBeNull();
+  const permitted = {
+    ...withVideo,
+    permissions: { model: true, visual: true },
+  };
+  expect(
+    paidBlockedReason(permitted, transports, { modelOptIn: false, visualOptIn: false, needsModel: true }),
+  ).toBeNull();
+  const audioOnly = {
+    ...blankProject("gate-audio"),
+    assembly: { ...blankProject("gate-audio").assembly, sources: [] },
+  };
+  expect(
+    paidBlockedReason(audioOnly, { proposeSend: "x" }, { modelOptIn: true, visualOptIn: false, needsModel: true }),
+  ).toBeNull();
+});
+
+it("prepare sem autorização devolve 402 sem chamar o provedor", async () => {
+  let called = 0;
+  const { base } = await boot([], {
+    executor: indexingExec(),
+    proposeSend: async () => {
+      called += 1;
+      return "{}";
+    },
+    describeClient: {
+      async send() {
+        called += 1;
+        return JSON.stringify({ spans: [] });
+      },
+    },
+  });
+  const res = await fetch(`${base}/project/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0, request: "montar tudo" }),
+  });
+  expect(res.status).toBe(402);
+  expect(called).toBe(0);
+});
+
+it("prepare com opt-in devolve 202 e interrompe sem fala em projeto vazio", async () => {
+  const { base } = await boot([], {
+    executor: indexingExec(),
+    proposeSend: async () => "{}",
+    describeClient: {
+      async send() {
+        return JSON.stringify({ spans: [] });
+      },
+    },
+  });
+  const started = await fetch(`${base}/project/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0, request: "montar tudo", modelOptIn: true, visualOptIn: true }),
+  });
+  expect(started.status).toBe(202);
+  let status: string | null = null;
+  for (let i = 0; i < 50 && !status; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const poll = (await (await fetch(`${base}/project`)).json()) as {
+      project: { preparation: { status: string } | null };
+    };
+    if (poll.project.preparation && poll.project.preparation.status !== "running") {
+      status = poll.project.preparation.status;
+    }
+  }
+  expect(status).toBe("interrupted");
+});
+
 it("grava análise por arquivo e conserva a primeira se a segunda falha", async () => {
   const clipB = async (dir: string) => {
     const path = join(dir, "apoio.mp4");
@@ -260,7 +353,6 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
       id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
       visualEvidenceIds: [], support: [], gaps: [],
     }],
-    structureApprovedRevision: current.revision,
   }));
   const loaded = await loadProject(dir);
   const url = `http://127.0.0.1:${app.port}`;

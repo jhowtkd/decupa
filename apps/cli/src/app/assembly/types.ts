@@ -178,7 +178,6 @@ export type Project = {
   scenes: Scene[];
   analyses: Analysis[];
   proposal: Proposal | null;
-  structureApprovedRevision: number | null;
   previewRevision: number | null;
   finalApprovedRevision: number | null;
   corrections: TextCorrection[];

@@ -185,7 +185,6 @@ function invalidatePreview(project: Project): Project {
     ...project,
     revision: project.revision + 1,
     assembly: { ...project.assembly, revision: project.revision + 1 },
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
   };

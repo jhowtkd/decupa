@@ -29,7 +29,6 @@ async function projectWithMedia(dir: string, revision = 1): Promise<Project> {
     scenes: [],
     analyses: [],
     proposal: null,
-    structureApprovedRevision: revision,
     previewRevision: revision,
     finalApprovedRevision: revision,
     corrections: [],

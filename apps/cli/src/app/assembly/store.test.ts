@@ -87,11 +87,11 @@ it("não deixa snapshot antigo na mesma revisão apagar aprovação", async () =
   }];
   await createProject(dir, initial);
   const snap = await loadProject(dir);
-  await saveProject(dir, 3, { ...snap, structureApprovedRevision: 3 });
+  await saveProject(dir, 3, { ...snap, previewRevision: 3 });
   await saveProject(dir, 3, { ...snap, analyses: [] });
   const loaded = await loadProject(dir);
   expect(loaded.revision).toBe(3);
-  expect(loaded.structureApprovedRevision).toBe(3);
+  expect(loaded.previewRevision).toBe(3);
   expect(loaded.analyses).toHaveLength(1);
   expect(loaded.analyses[0]!.sourceId).toBe("a");
 });

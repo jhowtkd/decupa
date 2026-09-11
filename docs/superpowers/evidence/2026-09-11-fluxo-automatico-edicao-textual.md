@@ -119,3 +119,17 @@ Próxima ação: tarefa 7 (preparação automática persistente).
 ## Gates seguintes
 
 (G1–G7 a preencher durante a execução.)
+
+## Tarefa 7 — preparação automática persistente
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: R-001/R-002 (um início leva a cenas+prévia), R-005 (402 sem chamada), R-008 (cancelamento), preparação persistente/retomável.
+
+Implementado:
+- `preparation.ts` novo: `runPreparation(dir, baseRevision, req, deps, control)` executa media→audio→visual→proposal→preview persistindo `preparation` (id `prep-<base>-<modo>-…`, stage, por-fonte) após cada resultado; `applyProposal` é o único bump (+1); todo o resto grava na mesma revisão com cheque atômico de id dentro do lock do store; `needsAttention` (erro de análise/etapa ou `visualCoverage.missing`) decide attention vs ready; zero fala / proposta inválida / stale no apply / falha de render em modo preview → interrupted; falha de render com proposta aplicada → attention; abort → cancelled; obsoleto → sai sem escrever. Mutex por diretório colapsa inícios concorrentes na mesma base (o perdedor contendido adota o desfecho; nova tentativa sequencial reexecuta, inclusive após falha/cancelamento). Opt-in pago monotônico via `withGrantedPermissions` (nunca revoga).
+- `routes.ts`: `POST /project/prepare` e `/project/adjust` validam 409/402 de forma síncrona e devolvem 202 com a operação `preparing`; o percurso roda em background com `{ signal, isCurrent }` e a operação reflete ready/error ao assentar. `paidBlockedReason` pura (modelo sempre; visual quando há fonte incluída com vídeo; libera por flag de lote, permissão persistida ou opt-in do clique). Novo início cancela o anterior (mesma semântica de analyze/propose); `/project/cancel` existente dispara o cancelled sem escrita extra. `/project/preview` direto mantido (sem mudança de contrato).
+- Desvios do plano com motivo: função `runPreparation` em vez da classe `createPreparationRunner` (start/cancel/recover/close) — cancelamento via AbortSignal+op da rota e retomada via novo POST sobre caches (análise por hash, visual por janela) cobrem os casos sem nova abstração; duplicata na rota cancela a anterior em vez de devolver a mesma operação (consistência com analyze/propose; o colapso com adoção existe no nível do runner para chamadas diretas); `begin/opGen` mantido (alimenta `isCurrent`); recuperação pós-restart (running→interrupted + Retomar) fica para a T8 com a UI.
+
+Testes: `preparation.test.ts` (10: snippet ponta a ponta, segunda fonte falha/primeira fica, duplo início com 1 chamada ao provedor, cancelamento, edição durante proposta, gaps→attention, opt-in persiste, proposta inválida→interrupted, preview sem nova proposta, adjust sem cenas 409); `routes.test.ts` + gate puro de `paidBlockedReason` (6 casos) e HTTP 402-sem-chamada + 202→interrupted em projeto vazio; `tests/assembly-flow.test.ts` + fluxo prepare 202→ready com cenas+artefato atuais e final null (snippet do plano) e remoção do passo `approve-structure` extinto. Comando amplo: 111 passed nos arquivos offline; `routes.test.ts`/`assembly-flow` HTTP seguem EPERM no sandbox (G0-F01); `pnpm typecheck` 0 erros, `git diff --check` limpo. Armadilha encontrada: cópias idênticas do clip partilham sha+cache e pulam o ingest (comportamento correto do motor) — o teste de falha por fonte diverge 1 byte.
+Achados: nenhum P0/P1. Recheck HTTP fora do sandbox: 402/202/interrupted + fluxo até ready + suíte EPERM existente.
+Próxima ação: tarefa 8 (interface A).

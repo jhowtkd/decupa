@@ -26,7 +26,6 @@ function project(): Project {
       visualCoverage: { requested: [], returned: [], missing: [] },
     }],
     proposal: null,
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
     corrections: [],

@@ -418,7 +418,6 @@ function validateV2(value: Record<string, unknown>): Project {
     scenes,
     analyses,
     proposal: (value.proposal ?? null) as Project["proposal"],
-    structureApprovedRevision: approvalRevision(value.structureApprovedRevision, "projeto.structureApprovedRevision"),
     previewRevision: approvalRevision(value.previewRevision, "projeto.previewRevision"),
     finalApprovedRevision: approvalRevision(value.finalApprovedRevision, "projeto.finalApprovedRevision"),
     corrections,
@@ -613,7 +612,6 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
       analyses,
       corrections,
       proposal: next.proposal ?? current.proposal,
-      structureApprovedRevision: next.structureApprovedRevision ?? current.structureApprovedRevision,
       previewRevision: next.previewRevision ?? current.previewRevision,
       finalApprovedRevision: next.finalApprovedRevision ?? current.finalApprovedRevision,
       preparation: next.preparation ?? current.preparation,
@@ -627,9 +625,6 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     analyses,
     corrections,
     proposal: next.proposal !== base.proposal ? next.proposal : current.proposal,
-    structureApprovedRevision: next.structureApprovedRevision !== base.structureApprovedRevision
-      ? next.structureApprovedRevision
-      : current.structureApprovedRevision,
     previewRevision: next.previewRevision !== base.previewRevision
       ? next.previewRevision
       : current.previewRevision,

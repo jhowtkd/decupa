@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import {
-  applyHistorySnapshot, applyProposal, approveFinal, approveStructure, recordPreview,
+  applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
 import type { Project, Proposal } from "./types.ts";
 
@@ -16,7 +16,6 @@ function project(): Project {
     scenes: [],
     analyses: [],
     proposal: null,
-    structureApprovedRevision: 2,
     previewRevision: 2,
     finalApprovedRevision: null,
     corrections: [],
@@ -70,7 +69,6 @@ it("aplicar proposta incrementa revisão e invalida aprovações", () => {
   const next = applyProposal(p, proposalFor(p));
   expect(next.revision).toBe(3);
   expect(next.assembly.revision).toBe(3);
-  expect(next.structureApprovedRevision).toBeNull();
   expect(next.previewRevision).toBeNull();
   expect(next.finalApprovedRevision).toBeNull();
 });
@@ -80,7 +78,6 @@ it("undo restaura cena e correção como revisão nova sem tocar permissões", (
     ...project(),
     revision: 5,
     permissions: { model: true, visual: true },
-    structureApprovedRevision: 5,
     analyses: [{
       sourceId: "a",
       key: "k",
@@ -112,7 +109,6 @@ it("undo restaura cena e correção como revisão nova sem tocar permissões", (
   expect(undone.assembly.revision).toBe(6);
   expect(undone.scenes).toEqual(snap.scenes);
   expect(undone.permissions).toEqual({ model: true, visual: true });
-  expect(undone.structureApprovedRevision).toBeNull();
   expect(undone.previewRevision).toBeNull();
   expect(undone.finalApprovedRevision).toBeNull();
 });

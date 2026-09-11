@@ -23,7 +23,6 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
     scenes: valid.scenes,
     assembly: { ...assembly, revision },
     proposal: valid,
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
   };
@@ -45,19 +44,9 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
     corrections: snap.corrections,
     proposal: snap.proposal,
     assembly: { ...assembly, revision },
-    structureApprovedRevision: null,
     previewRevision: null,
     finalApprovedRevision: null,
   };
-}
-
-export function approveStructure(p: Project): Project {
-  if (p.scenes.length === 0) throw new Error("não há cenas para aprovar");
-  const unresolved = p.scenes.flatMap((scene) => scene.gaps);
-  if (unresolved.length > 0) {
-    throw new Error(`lacunas não resolvidas: ${unresolved.join("; ")}`);
-  }
-  return { ...p, structureApprovedRevision: p.revision };
 }
 
 export function recordPreview(
