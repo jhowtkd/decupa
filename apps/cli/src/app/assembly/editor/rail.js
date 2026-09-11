@@ -75,6 +75,7 @@ export function mountRail({ state, api, player }) {
   const delivery = document.createElement("section");
   delivery.setAttribute("aria-label", "Entrega");
   delivery.innerHTML = "<h1>Entrega</h1>"
+    + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
     + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
     + '<p id="downloads"></p>';
   root.appendChild(delivery);
@@ -218,7 +219,17 @@ export function mountRail({ state, api, player }) {
   function renderDelivery(project) {
     const downloads = document.getElementById("downloads");
     downloads.replaceChildren();
-    if (project.finalApprovedRevision != null) {
+    // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
+    // o servidor também recusa export sem aprovação (exportApproved).
+    const approved = project.finalApprovedRevision != null;
+    const lock = document.getElementById("deliveryLock");
+    if (lock) {
+      lock.textContent = approved
+        ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
+        : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
+    }
+    setDisabled(document.getElementById("export"), !approved);
+    if (approved) {
       const rev = project.finalApprovedRevision;
       const otio = document.createElement("a");
       otio.href = "/project/output/" + rev + "/otio";
@@ -245,8 +256,7 @@ export function mountRail({ state, api, player }) {
       && project.preparation.status !== "ready"
     );
     renderPreparation(project);
-    // O cartão de entrega só libera depois de assistir e aprovar (o cadeado
-    // vem na Task 9); sem cenas, equivale à revisão oculta da tela antiga.
+    // Sem cenas, o cartão equivale à revisão oculta da tela antiga.
     const hasScenes = project.scenes.length > 0;
     delivery.hidden = !hasScenes;
     renderDelivery(project);

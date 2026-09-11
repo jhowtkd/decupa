@@ -2,6 +2,7 @@
 // pedido em linguagem natural. Cada render assina o estado e porta o bloco
 // original do page.js monolítico, mantendo o comentário de comportamento.
 import { takeWords } from "./montage.js";
+import { watchedState } from "./watched.js";
 
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let lastPreviewRev = null;
@@ -49,6 +50,7 @@ export function mountContexto({ state, api, player }) {
   preview.innerHTML = "<h1>Prévia</h1>"
     + '<video id="previewPlayer" controls preload="metadata"></video>'
     + '<p class="muted" id="previewNote" hidden aria-live="polite"></p>'
+    + '<p class="muted" id="freshChip" aria-live="polite"></p>'
     + '<p class="muted" id="deliveryMeta"></p>'
     + '<p class="muted">Assista à prévia atual antes de aprovar.</p>'
     + '<div class="row"><button type="button" id="refreshPreview">Atualizar prévia</button>'
@@ -82,6 +84,44 @@ export function mountContexto({ state, api, player }) {
 
   const previewPlayer = document.getElementById("previewPlayer");
 
+  // Rastreio "assistido de verdade" (Task 9): só a prévia atual conta, e só
+  // quando vista até o fim (perto do fim ou evento ended). Troca de src,
+  // seek para trás ou revisão nova resetam.
+  let lastTime = 0;
+  function isPreviewSrc(project) {
+    return !!project && project.previewRevision != null
+      && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
+  }
+  function nearEnd() {
+    const duration = previewPlayer.duration;
+    return Number.isFinite(previewPlayer.currentTime) && Number.isFinite(duration)
+      && duration > 0 && previewPlayer.currentTime >= duration - 0.05;
+  }
+  function markWatched() {
+    const project = state.get("project");
+    if (!isPreviewSrc(project)) return;
+    state.set("watched", { revision: project.previewRevision, ended: true });
+  }
+  function resetWatched() {
+    state.set("watched", { revision: null, ended: false });
+    lastTime = previewPlayer.currentTime || 0;
+  }
+  previewPlayer.addEventListener("timeupdate", () => {
+    if (!Number.isFinite(previewPlayer.currentTime)) return;
+    lastTime = previewPlayer.currentTime;
+    if (nearEnd()) markWatched();
+  });
+  previewPlayer.addEventListener("ended", markWatched);
+  previewPlayer.addEventListener("seeked", () => {
+    if (!Number.isFinite(previewPlayer.currentTime)) return;
+    if (previewPlayer.currentTime < lastTime - 0.25) resetWatched();
+    else lastTime = previewPlayer.currentTime;
+  });
+  previewPlayer.addEventListener("loadstart", () => {
+    lastTime = 0;
+    state.set("watched", { revision: null, ended: false });
+  });
+
   function backgroundBusy(project, operation) {
     const OP_LABEL = {
       analyzing: "Analisando mídia",
@@ -93,6 +133,15 @@ export function mountContexto({ state, api, player }) {
     if (project && project.preparation && project.preparation.status === "running") return true;
     if (player.previewBusy()) return true;
     return false;
+  }
+
+  /** Chip de frescor + gate do botão aprovar (Task 9). */
+  function renderFreshness(project) {
+    if (!project) return;
+    const status = watchedState(project, state.get("watched"));
+    const chip = document.getElementById("freshChip");
+    if (chip) chip.textContent = status.label;
+    setDisabled(document.getElementById("approveFinal"), !status.canApprove);
   }
 
   function renderPreview(project) {
@@ -111,6 +160,9 @@ export function mountContexto({ state, api, player }) {
         previewPlayer.setAttribute("data-rev", String(project.previewRevision));
         previewPlayer.removeAttribute("data-prev");
         previewPlayer.currentTime = time;
+        // Troca de src invalida o "assistido" (o loadstart cobre o resto).
+        state.set("watched", { revision: null, ended: false });
+        lastTime = Number.isFinite(time) ? time : 0;
       }
       lastPreviewRev = project.previewRevision;
       if (noteEl) {
@@ -149,7 +201,7 @@ export function mountContexto({ state, api, player }) {
         noteEl.textContent = "Sem prévia ainda.";
       }
     }
-    setDisabled(document.getElementById("approveFinal"), !current);
+    renderFreshness(project);
     // Atualizar prévia renderiza no servidor: bloqueia o segundo clique.
     setDisabled(
       document.getElementById("refreshPreview"),
@@ -306,16 +358,24 @@ export function mountContexto({ state, api, player }) {
       });
     }
   });
-  document.getElementById("approveFinal").onclick = () => api.call("/project/approve-final", {
-    method: "POST",
-    // Task 9 rastreia "assistida até o fim" de verdade (timeupdate/ended);
-    // até lá, mantém o envio atual de previewRevision.
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      watchedRevision: state.get("project").previewRevision,
-    }),
-    label: "Aprovando prévia…",
-  });
+  document.getElementById("approveFinal").onclick = () => {
+    // O front nunca mente: só parte com canApprove e envia a revisão
+    // assistida de verdade do state (o back-end rejeita divergência).
+    const project = state.get("project");
+    const watched = state.get("watched") || { revision: null, ended: false };
+    if (!watchedState(project, watched).canApprove) {
+      api.notifyError("Assista à prévia atual até o fim antes de aprovar.");
+      return;
+    }
+    void api.call("/project/approve-final", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: project.revision,
+        watchedRevision: watched.revision,
+      }),
+      label: "Aprovando prévia…",
+    });
+  };
   // O desfazer mora aqui até a Task 7 montar a faixa de transporte.
   document.getElementById("undo").onclick = () => {
     const project = state.get("project");
@@ -329,5 +389,6 @@ export function mountContexto({ state, api, player }) {
 
   state.subscribe("project", render);
   state.subscribe("operation", () => render(state.get("project")));
+  state.subscribe("watched", () => renderFreshness(state.get("project")));
   render(state.get("project"));
 }

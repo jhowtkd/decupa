@@ -5,14 +5,31 @@
 export function createState(initial = {}) {
   const values = { ...initial };
   const listeners = new Map();
+  function notify(key, value) {
+    const subs = listeners.get(key);
+    if (subs) for (const fn of [...subs]) fn(value);
+  }
   return {
     get(key) {
       return values[key];
     },
     set(key, value) {
+      if (key === "project") {
+        const prev = values.project;
+        const prevRev = prev ? prev.revision : undefined;
+        const nextRev = value ? value.revision : undefined;
+        values[key] = value;
+        notify(key, value);
+        // Edição (revisão nova) invalida o "assistido": é preciso assistir
+        // à prévia atual até o fim de novo (Task 9).
+        if (prevRev !== nextRev) {
+          values.watched = { revision: null, ended: false };
+          notify("watched", values.watched);
+        }
+        return;
+      }
       values[key] = value;
-      const subs = listeners.get(key);
-      if (subs) for (const fn of [...subs]) fn(value);
+      notify(key, value);
     },
     subscribe(key, fn) {
       if (!listeners.has(key)) listeners.set(key, new Set());
