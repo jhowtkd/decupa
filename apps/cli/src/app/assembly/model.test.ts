@@ -64,7 +64,7 @@ it("janela roteirizada devolve spans na origem da fonte", async () => {
   expect(spans[0]?.sourceId).toBe("a");
 });
 
-it("cancelar interrompe janelas seguintes e devolve o parcial", async () => {
+it("cancelar após a primeira janela estoura em vez de devolver parcial", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir, 45);
   let calls = 0;
@@ -79,7 +79,110 @@ it("cancelar interrompe janelas seguintes e devolve o parcial", async () => {
       return payload;
     },
   };
-  const spans = await describeSource(source, dir, ac.signal, { client, exec: copyProxy });
+  await expect(describeSource(source, dir, ac.signal, { client, exec: copyProxy })).rejects.toThrow();
   expect(calls).toBe(1);
-  expect(spans).toHaveLength(1);
+});
+
+it("sinal já abortado nem começa", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 45);
+  const ac = new AbortController();
+  ac.abort();
+  let calls = 0;
+  const client = { async send() { calls += 1; return '{"spans":[]}'; } };
+  await expect(describeSource(source, dir, ac.signal, { client, exec: copyProxy })).rejects.toThrow(/cancelada/);
+  expect(calls).toBe(0);
+});
+
+function windowMarkerExec(seen: { args: string[][] }): Executor {
+  return {
+    async run(call) {
+      seen.args.push(call.args);
+      const out = call.args[call.args.length - 1]!;
+      const ss = call.args[call.args.indexOf("-ss") + 1] ?? "?";
+      const t = call.args[call.args.indexOf("-t") + 1] ?? "?";
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(out, `clip-from-${ss}-dur-${t}`);
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+function localSpanClient(captured: { payloads: string[]; prompts: string[] }) {
+  let n = 0;
+  return {
+    async send(content: unknown[]) {
+      n += 1;
+      const video = content.find((part) => (part as { type?: string }).type === "video_url") as {
+        video_url: { url: string };
+      };
+      const text = content.find((part) => (part as { type?: string }).type === "text") as { text: string };
+      captured.payloads.push(video.video_url.url);
+      captured.prompts.push(text.text);
+      // Janela 1 não tem contexto; as demais têm 1s: o conteúdo começa em 1 local.
+      const start = n === 1 ? 0 : 1;
+      return JSON.stringify({
+        spans: [{ id: `local-${n}`, start, end: start + 1, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+}
+
+it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 45);
+  const seen: { args: string[][] } = { args: [] };
+  const captured = { payloads: [] as string[], prompts: [] as string[] };
+  const client = localSpanClient(captured);
+  const { payloads, prompts } = captured;
+  const spans = await describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: windowMarkerExec(seen),
+  });
+  // 3 janelas, cada uma com seu recorte — nunca o proxy inteiro.
+  expect(seen.args).toHaveLength(3);
+  expect(new Set(payloads).size).toBe(3);
+  expect(spans).toHaveLength(3);
+  // Segunda janela: origem 20 somada uma vez (1 local + 19), sem dupla soma.
+  const second = spans.filter((span) => span.start >= 20 && span.start < 40);
+  expect(second.map((span) => [span.start, span.end])).toEqual([[20, 21]]);
+  expect(prompts[1]).toContain("[20, 40)");
+  expect(prompts[1]).toContain("origem 0");
+  // Última janela parcial: recorte [39, 45), não [40, 45) sem contexto.
+  const last = seen.args[2]!;
+  expect(last[last.indexOf("-ss") + 1]).toBe("39");
+  expect(last[last.indexOf("-t") + 1]).toBe("6");
+});
+
+it("retomada reaproveita janelas prontas e não reenvia", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 45);
+  const seen: { args: string[][] } = { args: [] };
+  let calls = 0;
+  let failOn = 2;
+  const client = {
+    async send() {
+      calls += 1;
+      if (calls === failOn) throw new Error("provedor falhou");
+      // Janela 1 sem contexto; demais com 1s (conteúdo em 1 local).
+      const start = calls === 1 ? 0 : 1;
+      return JSON.stringify({
+        spans: [{ id: `local-${calls}`, start, end: start + 1, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  await expect(describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: windowMarkerExec(seen),
+  })).rejects.toThrow(/provedor falhou/);
+  expect(calls).toBe(2);
+  failOn = -1;
+  const before = calls;
+  const spans = await describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: windowMarkerExec(seen),
+  });
+  // Janela 1 veio do cache: só 2 envios novos (janelas 2 e 3).
+  expect(calls - before).toBe(2);
+  expect(spans).toHaveLength(3);
 });

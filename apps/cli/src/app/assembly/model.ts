@@ -1,6 +1,6 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ZaiClient } from "@decupa/triage";
+import { ZAI_DEFAULT_MODEL, ZaiClient } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
@@ -17,38 +17,118 @@ Responda só sobre a mídia recebida, em JSON:
 start/end são segundos locais deste trecho (origem 0). confidence é observed, uncertain ou unavailable.
 Não invente o que não aparece. Se um segundo não for observável, confidence unavailable.`;
 
+/** Versão do prompt (invalida o cache) e do envelope de cache em disco. */
+export const VISUAL_PROMPT_VERSION = 1;
+export const VISUAL_CACHE_VERSION = "visual-v2";
+
 export type DescribeDeps = {
   client: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
   exec?: Executor;
 };
 
-function parseSpans(text: string, source: Source): VisualSpan[] {
+type VisualWindow = { start: number; end: number; fetchStart: number };
+
+type VisualWindowCache = {
+  version: string;
+  sha256: string;
+  promptVersion: number;
+  model: string;
+  window: VisualWindow;
+  spans: VisualSpan[];
+};
+
+function cacheFile(cacheDir: string, window: VisualWindow): string {
+  return join(cacheDir, `w-${window.start}-${window.end}.json`);
+}
+
+function parseWindowCache(raw: unknown, source: Source, window: VisualWindow): VisualSpan[] | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const cache = raw as Partial<VisualWindowCache>;
+  if (cache.version !== VISUAL_CACHE_VERSION) return null;
+  if (cache.sha256 !== source.sha256) return null;
+  if (cache.promptVersion !== VISUAL_PROMPT_VERSION) return null;
+  if (cache.model !== ZAI_DEFAULT_MODEL) return null;
+  const bounds = cache.window;
+  if (!bounds || bounds.start !== window.start || bounds.end !== window.end
+    || bounds.fetchStart !== window.fetchStart) {
+    return null;
+  }
+  if (!Array.isArray(cache.spans)) return null;
+  // Mesmo hash sob outra fonte (relink): remapeia IDs como adaptAnalysis.
+  const prefix = `${(cache.spans[0] as VisualSpan | undefined)?.sourceId ?? ""}:`;
+  const remapped = (cache.spans as VisualSpan[]).map((span) => {
+    if (span.sourceId === source.id) return span;
+    const suffix = span.id.startsWith(prefix) ? span.id.slice(prefix.length) : span.id;
+    return { ...span, id: `${source.id}:${suffix}`, sourceId: source.id };
+  });
+  return validateVisual(remapped, source);
+}
+
+/**
+ * Recorta o vídeo da janela [fetchStart, end) e envia SÓ esses bytes,
+ * pedindo tempos locais [0, end-fetchStart). O recorte usa seek de saída
+ * (frame-accurate, mais lento) em vez de seek de entrada (rápido mas preso
+ * ao keyframe): evidência precisa corresponder ao intervalo enviado.
+ */
+async function windowClip(
+  source: Source,
+  window: VisualWindow,
+  cacheDir: string,
+  exec: Executor,
+): Promise<string> {
+  const clip = join(cacheDir, `w-${window.start}-${window.end}.mp4`);
+  try {
+    const { size } = await stat(clip);
+    if (size > 0) return clip;
+    await unlink(clip).catch(() => {});
+  } catch {
+    // Gera abaixo.
+  }
+  const tmp = join(cacheDir, `w-${window.start}-${window.end}.${process.pid}.tmp.mp4`);
+  const made = await exec.run({
+    command: "ffmpeg",
+    args: ["-n", "-i", source.path,
+      "-ss", String(window.fetchStart),
+      "-t", String(window.end - window.fetchStart),
+      "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+      "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", tmp],
+  });
+  if (made.code !== 0) {
+    await unlink(tmp).catch(() => {});
+    throw new Error(
+      `recorte visual [${window.fetchStart}, ${window.end}) falhou (código ${made.code})`,
+    );
+  }
+  await rename(tmp, clip);
+  return clip;
+}
+
+function parseLocalSpans(text: string, source: Source, window: VisualWindow): VisualSpan[] {
   const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const payload = JSON.parse(unfenced) as { spans?: unknown };
   const rawSpans = Array.isArray(payload.spans) ? payload.spans : [];
-  const unbounded = { ...source, durationSeconds: Number.MAX_SAFE_INTEGER };
-  return validateVisual(
+  // Valida os limites locais ANTES de somar fetchStart — uma única soma.
+  const local = validateVisual(
     rawSpans.map((span) => {
       const rec = (span && typeof span === "object") ? span as Record<string, unknown> : {};
       return { ...rec, sourceId: source.id };
     }),
-    unbounded,
+    { ...source, durationSeconds: window.end - window.fetchStart },
   );
-}
-
-function shiftToOrigin(spans: VisualSpan[], fetchStart: number, windowStart: number, windowEnd: number): VisualSpan[] {
-  const shifted = spans.map((span) => ({
-    ...span,
-    start: span.start + fetchStart,
-    end: span.end + fetchStart,
-  }));
-  return shifted
+  const shifted = local
     .map((span) => ({
       ...span,
-      start: Math.max(span.start, windowStart),
-      end: Math.min(span.end, windowEnd),
+      start: span.start + window.fetchStart,
+      end: span.end + window.fetchStart,
     }))
-    .filter((span) => span.end > span.start);
+    .map((span) => ({
+      ...span,
+      start: Math.max(span.start, window.start),
+      end: Math.min(span.end, window.end),
+    }))
+    .filter((span) => span.end > span.start)
+    .map((span, i) => ({ ...span, id: `${source.id}:w${window.start}:${i}` }));
+  return validateVisual(shifted, source);
 }
 
 export async function describeSource(
@@ -58,57 +138,56 @@ export async function describeSource(
   deps?: DescribeDeps,
 ): Promise<VisualSpan[]> {
   if (!source.hasVideo) return [];
+  if (source.durationSeconds <= 0) throw new Error(`fonte ${source.id} sem duração para descrever`);
   const client = deps?.client ?? new ZaiClient();
   const exec = deps?.exec ?? new SpawnExecutor();
-  const cacheDir = join(analysisCacheDir(dir, source.sha256), "visual");
+  const cacheDir = join(analysisCacheDir(dir, source.sha256), VISUAL_CACHE_VERSION);
   await mkdir(cacheDir, { recursive: true });
-  const proxy = join(cacheDir, "proxy.mp4");
-  const hasProxy = await access(proxy).then(() => true, () => false);
-  if (!hasProxy) {
-    const made = await exec.run({
-      command: "ffmpeg",
-      args: [
-        "-n", "-i", source.path,
-        "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
-        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        proxy,
-      ],
-    });
-    if (made.code !== 0) {
-      throw new Error(`proxy visual falhou (código ${made.code})`);
-    }
-  }
 
   const collected: VisualSpan[] = [];
   for (const window of visualWindows(source.durationSeconds)) {
-    if (signal.aborted) break;
-    const cacheFile = join(cacheDir, `w-${window.start}-${window.end}.json`);
+    if (signal.aborted) throw new Error("descrição visual cancelada");
+    const file = cacheFile(cacheDir, window);
     try {
-      const cached = JSON.parse(await readFile(cacheFile, "utf8")) as VisualSpan[];
-      collected.push(...cached);
-      continue;
+      const cached = parseWindowCache(JSON.parse(await readFile(file, "utf8")), source, window);
+      if (cached) {
+        collected.push(...cached);
+        continue;
+      }
     } catch {
-      // cache miss
+      // cache miss ou inválido: processa a janela
     }
-    const bytes = await readFile(proxy).catch(() => Buffer.from(""));
-    const dataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
     try {
+      const clip = await windowClip(source, window, cacheDir, exec);
+      if (signal.aborted) throw new Error("descrição visual cancelada");
+      const bytes = await readFile(clip);
+      const dataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
+      const localDuration = window.end - window.fetchStart;
       const text = await client.send([
         { type: "video_url", video_url: { url: dataUrl } },
         {
           type: "text",
-          text: `${VISUAL_PROMPT}\n\njanela local: ${window.fetchStart}s → ${window.end}s (contexto incluso)\n`
-            + `descreva só [${window.start}, ${window.end}) na origem da fonte.`,
+          text: `${VISUAL_PROMPT}\n\njanela local: 0s → ${localDuration}s `
+            + `(segundos locais deste trecho; origem 0). `
+            + `descreva o intervalo da fonte [${window.start}, ${window.end}).`,
         },
       ], signal);
-      const origin = shiftToOrigin(parseSpans(text, source), window.fetchStart, window.start, window.end)
-        .map((span, i) => ({ ...span, id: `${source.id}:w${window.start}:${i}` }));
-      validateVisual(origin, source);
-      await writeFile(cacheFile, `${JSON.stringify(origin)}\n`, "utf8");
-      collected.push(...origin);
+      const spans = parseLocalSpans(text, source, window);
+      const envelope: VisualWindowCache = {
+        version: VISUAL_CACHE_VERSION,
+        sha256: source.sha256,
+        promptVersion: VISUAL_PROMPT_VERSION,
+        model: ZAI_DEFAULT_MODEL,
+        window,
+        spans,
+      };
+      const tmp = `${file}.${process.pid}.tmp`;
+      await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
+      await rename(tmp, file);
+      collected.push(...spans);
     } catch (err) {
-      if (signal.aborted) break;
-      throw err;
+      // Cancelamento propaga como erro: lista parcial não é sucesso.
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
   return mergeAdjacent(collected);

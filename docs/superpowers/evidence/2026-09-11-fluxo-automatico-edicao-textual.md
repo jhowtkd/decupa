@@ -71,7 +71,7 @@ Próxima ação: tarefa 4 (media.ts, importação, Range).
 
 ## Tarefa 4 — importar e reproduzir materiais de verdade
 
-Commit: (a registrar). Review próprio (não independente).
+Commit: `2ff49be`. Review próprio (não independente).
 Requisitos cobertos: R-005 (parcial: importação, lote/categorias, miniaturas, proxy, seek; UI de materiais na tarefa 8).
 
 Implementado:
@@ -85,6 +85,21 @@ Ajuste documentado vs plano: espaço livre checado de forma reativa (ENOSPC→50
 Testes: `media.test.ts` (6, inclui ffmpeg+probe reais: proxy/miniatura gerados e validados em ~400ms; falha sem publicação; lixo rejeitado; reuso; áudio-only; identidade ausente/trocada mesmo-tamanho). `routes.test.ts` +6 (206+Content-Range, 409 com ID, ausente 404/substituído 409 sem exec, import+reuso+400s, abort sem `.part`, lote/seleção). Comando amplo: 126 passed, 17 failed — todos `routes.test.ts` EPERM (G0-F01; +6 novos também HTTP). `pnpm typecheck` 0 erros, `diff --check` limpo.
 Achados: nenhum P0/P1. Recheck HTTP fora do sandbox cobre os 17 de routes (comando G2 do plano).
 Próxima ação: tarefa 5 (model.ts/visual.ts, janelas e cobertura).
+
+## Tarefa 5 — janelas visuais e cobertura
+
+Commit: (a registrar). Review próprio (não independente).
+Requisitos cobertos: R-006 (parcial: evidência refere a janela enviada + gaps reais; "considerada" na proposta é tarefa 6).
+
+Implementado:
+- `model.ts`: cada janela recorta `[fetchStart, end)` com seek de saída (frame-accurate; decisão contra seek de entrada preso a keyframe) e envia SÓ esses bytes pedindo tempos locais `[0, end-fetchStart)`; validação local antes da soma única de `fetchStart`; sobreposição de contexto recortada para `[start, end)`; cache versionado `visual-v2` (envelope com versão/prompt/modelo/sha/limites, rename por janela; janelas antigas temporalmente ambíguas nunca reutilizadas); abort lança em vez de devolver parcial; IDs únicos por janela; clipe reutilizado por tamanho>0.
+- `visual.ts`: `visualCoverage` (células de 1s + parcial final; zero descrições = zero cobertura; `unavailable` explícito conta como examinado, sem virar evidência observada); `validateVisual` rejeita início negativo e id duplicado.
+- `routes.ts`: análise com visual aprovado recebe `visualCoverage` real (fonte sem vídeo segue vazia).
+- Nenhum log embute payload/base64 (nada do envelope é logado).
+
+Testes: `model.test.ts` (6: recorte-diferente-por-janela + soma única + prompt local + parcial final + retomada com 2 reenvios + 2 de cancelamento; o teste antigo "devolve o parcial" atualizado para o comportamento correto) e `visual.test.ts` (7: snippet do plano + zero/unavailable + parcial + validações). Comando amplo: 133 passed, 17 failed — todos `routes.test.ts` EPERM (G0-F01). `pnpm typecheck` 0 erros, `diff --check` limpo.
+Achados: nenhum P0/P1. Nota para a tarefa 7: chamar `verifySourceIdentity` antes de reutilizar análises (troca no mesmo caminho); cobertura parcial deve impedir "resultado completo".
+Próxima ação: tarefa 6 (scenes.ts: takes, selections, evidência visual).
 
 ## Gates seguintes
 

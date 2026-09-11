@@ -12,6 +12,7 @@ import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { describeSource } from "./model.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
+import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import {
@@ -726,6 +727,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
                 client: deps.describeClient,
                 exec: deps.exec,
               });
+              analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
             } catch (err) {
               analysis.status = "partial";
               analysis.error = err instanceof Error ? err.message : String(err);

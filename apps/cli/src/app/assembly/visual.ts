@@ -1,5 +1,6 @@
+import { normalizeRanges } from "./words.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import type { Source, VisualSpan } from "./types.ts";
+import type { Analysis, Source, SourceRange, VisualSpan } from "./types.ts";
 
 const CONFIDENCE = new Set(["observed", "uncertain", "unavailable"]);
 
@@ -10,16 +11,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function validateVisual(raw: unknown, source: Source): VisualSpan[] {
   if (!Array.isArray(raw)) throw new Error("mapa visual precisa ser um array");
   const spans: VisualSpan[] = [];
+  const seen = new Set<string>();
   for (const [i, item] of raw.entries()) {
     if (!isRecord(item)) throw new Error(`observação ${i} precisa ser um objeto`);
     const sourceId = String(item.sourceId ?? "");
     if (sourceId !== source.id) {
       throw new Error(`observação ${i} referencia fonte inventada ${sourceId}`);
     }
+    const id = String(item.id ?? `${source.id}:${i}`);
+    if (seen.has(id)) throw new Error(`observação ${i} com id duplicado: ${id}`);
+    seen.add(id);
     const start = Number(item.start);
     const end = Number(item.end);
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       throw new Error(`observação ${i} tem intervalo inválido`);
+    }
+    if (start < 0) {
+      throw new Error(`observação ${i} começa antes da fonte ${source.id}`);
     }
     if (end > source.durationSeconds + 1e-9) {
       throw new Error(`observação ${i} termina depois da fonte ${source.id}`);
@@ -30,7 +38,7 @@ export function validateVisual(raw: unknown, source: Source): VisualSpan[] {
       throw new Error(`observação ${i} tem confiança inválida`);
     }
     spans.push({
-      id: String(item.id ?? `${source.id}:${i}`),
+      id,
       sourceId,
       start,
       end,
@@ -69,6 +77,25 @@ export function mergeAdjacent(spans: VisualSpan[]): VisualSpan[] {
     out.push({ ...span, tags: [...span.tags] });
   }
   return out;
+}
+
+/**
+ * Cobertura real da análise visual: cada segundo solicitado vira uma célula;
+ * segundo sem nenhuma evidência (nem `unavailable` explícito) é lacuna.
+ * Zero descrições significa zero segundos examinados — nunca cobertura total.
+ */
+export function visualCoverage(spans: VisualSpan[], duration: number): Analysis["visualCoverage"] {
+  const requested: SourceRange[] = [];
+  for (let start = 0; start < duration; start += 1) {
+    requested.push({ start, end: Math.min(start + 1, duration) });
+  }
+  const returned = normalizeRanges(
+    spans.map((span) => ({ start: Math.max(0, span.start), end: Math.min(span.end, duration) })),
+  ).filter((range) => range.start < range.end);
+  const missing = requested.filter((cell) =>
+    !returned.some((range) => range.start < cell.end && cell.start < range.end)
+  );
+  return { requested, returned, missing };
 }
 
 export function visualWindows(durationSeconds: number): { start: number; end: number; fetchStart: number }[] {
