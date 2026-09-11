@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, open, realpath, rename, rm, stat, unlink } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
@@ -28,6 +29,8 @@ import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const PAID_BLOCKED = "análise paga exige lote e custo autorizados";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 class HttpError extends Error {
   readonly status: number;
@@ -410,6 +413,26 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     return select();
   }
 
+  // Módulos ES do editor texto-centrado, servidos sem build: leitura única
+  // por arquivo com cache em memória, como page.js no startup do servidor.
+  // O nome restrito a kebab-case impede escape do diretório editor/.
+  const editorFiles = new Map<string, string>();
+  async function serveEditor(res: ServerResponse, name: string): Promise<boolean> {
+    if (!/^[a-z0-9-]+\.js$/.test(name)) return false;
+    let body = editorFiles.get(name);
+    if (body === undefined) {
+      try {
+        body = await readFile(join(HERE, "editor", name), "utf8");
+      } catch {
+        return false;
+      }
+      editorFiles.set(name, body);
+    }
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    res.end(body);
+    return true;
+  }
+
   async function handleAssembly(
     req: IncomingMessage,
     res: ServerResponse,
@@ -417,7 +440,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   ): Promise<boolean> {
     if (projectDir !== dir) return false;
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (!url.pathname.startsWith("/project")) return false;
+    if (!url.pathname.startsWith("/project") && !url.pathname.startsWith("/editor/")) return false;
     const parts = url.pathname.split("/").filter(Boolean);
 
     try {
@@ -425,6 +448,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return true;
       }
+
+      if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
       if (parts.length === 1 && req.method === "GET") {
         const project = await loadProject(dir);

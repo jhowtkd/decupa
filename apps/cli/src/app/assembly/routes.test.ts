@@ -137,6 +137,15 @@ it("serve a página de montagem, não a de limpeza", async () => {
   expect(html).not.toContain("approve-structure");
 });
 
+it("serve módulos editor sem build", async () => {
+  const { base } = await boot();
+  const res = await fetch(`${base}/editor/state.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("text/javascript");
+  const bad = await fetch(`${base}/editor/..%2F..%2Fwords.ts`);
+  expect([403, 404]).toContain(bad.status);
+});
+
 it("serve a prévia em rev-N quando ainda não há export", async () => {
   const { base, dir } = await boot();
   await mkdir(join(dir, "rev-2"), { recursive: true });
