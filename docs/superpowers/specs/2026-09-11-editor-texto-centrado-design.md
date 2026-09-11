@@ -115,10 +115,12 @@ para o implementador não inventar:
    reproduz dali, na posição correspondente da montagem. O texto é o meio
    de navegação.
 2. **Seleção de trecho (arraste sobre as palavras) = menu de ações**
-   flutuante no ponto: ouvir · tirar · preservar · corrigir (e incluir, no
-   trecho fora da montagem). A barra de ações global da tela atual é
-   extinta. "Ouvir" toca o trecho **na fonte original, com contexto** ao
-   redor — não na posição da montagem.
+   flutuante no ponto: ouvir · tirar · preservar · corrigir — e, conforme a
+   seleção: **liberar** quando o trecho está protegido (`remove` rejeita
+   trecho protegido, então preservar sem liberar no ponto trava o corte) e
+   **incluir** quando o trecho está fora da montagem. A barra de ações
+   global da tela atual é extinta. "Ouvir" toca o trecho **na fonte
+   original, com contexto** ao redor — não na posição da montagem.
 3. **Clique em trecho cortado (riscado) = restaurar**, sem seek — o trecho
    volta à montagem. Riscado legível é decisão nova desta tela (tese
    Descript): a limpeza colapsa a unidade em marcador de propósito, para a
@@ -133,7 +135,11 @@ para o implementador não inventar:
    mudança de apoio é por pedido em linguagem natural** — não existe
    contrato de edição de apoio (`move-support`/`resize-support`) e ele não
    é criado aqui. Promessa sem rota foi erro da versão anterior deste
-   documento.
+   documento. O adiamento declara três coisas: (a) suspende, nesta etapa, o
+   ajuste *direto* de posição/duração que o spec de montagem multiarquivo
+   exige; (b) o chip é **localizador** — mostra onde o apoio entra —, não
+   alça de edição; (c) mudar apoio pelo pedido NL dispara o mesmo lote pago
+   de ajuste, uma chamada por pedido — não um nudge gratuito por pixel.
 6. **Faixa de sequência navega, não edita:** clique busca (seek), arrastar
    faz scrub, o bloco aceso acompanha a cena atual. Reordenar não acontece
    na faixa.
@@ -248,6 +254,9 @@ serviço ou dependência. Mesma rota e porta de entrada (`decupa montar`).
 
 - Teste de contrato edit → preview → export (pega o bug da recompilação;
   hoje nenhum teste cobre `/edit` antes de `/preview`).
+- Teste de que o caminho NL de ajuste (incluindo apoio) preserva as cenas
+  fora do escopo do pedido (`changedSceneIds`) — a declaração no motor
+  não basta; o plano herda este teste.
 - Teste de edição concorrente à preparação (CAS 409 vira retomável, sem
   perda de trabalho).
 - Teste do tracking de "assistido até o fim": aprovação sem `ended` real
