@@ -445,11 +445,6 @@ export function mountTexto({ state, api, player }) {
       listenSelection();
       return;
     }
-    if (action === "corrigir") {
-      // O campo mora no contexto; a seleção já está no estado para ele.
-      document.getElementById("correctText")?.focus();
-      return;
-    }
     const group = selectedTake(p, selection());
     if (!group) {
       api.notifyError("Selecione palavras de um mesmo trecho.");
@@ -487,6 +482,66 @@ export function mountTexto({ state, api, player }) {
     });
   }
 
+  /** "Corrigir": mesmo POST da antiga barra global, com o texto do campo inline. */
+  async function submitCorrection(text) {
+    const p = state.get("project");
+    if (!p) return;
+    const group = selectedTake(p, selection());
+    if (!group) {
+      api.notifyError("Selecione palavras de um mesmo trecho.");
+      return;
+    }
+    if (!text) {
+      api.notifyError("Digite o texto corrigido.");
+      return;
+    }
+    const ordered = group.words.slice().sort((a, b) => a.start - b.start);
+    await api.call("/project/edit", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: p.revision,
+        action: {
+          type: "correct",
+          sourceId: group.sourceId,
+          start: ordered[0].start,
+          end: ordered[ordered.length - 1].end,
+          text,
+        },
+      }),
+      label: "Enviando correção…",
+    });
+    // O alinhamento conclui em background; a assinatura de "project"
+    // retoma o render e o bootstrap (page.js) retoma o polling (V3).
+    if (closeMenu) closeMenu();
+  }
+
+  /** Expande o campo inline de correção dentro do próprio menu flutuante. */
+  function openCorrectForm(menu, btn) {
+    const again = menu.querySelector(".texto-correct input");
+    if (again) {
+      again.focus();
+      return;
+    }
+    btn.disabled = true;
+    const form = document.createElement("form");
+    form.className = "texto-correct";
+    form.style.cssText = "display:flex;gap:4px;";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.setAttribute("aria-label", "Correção do trecho");
+    input.placeholder = "Correção do trecho";
+    const apply = document.createElement("button");
+    apply.type = "submit";
+    apply.textContent = "Aplicar";
+    form.append(input, apply);
+    menu.appendChild(form);
+    input.focus();
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      void submitCorrection(input.value.trim());
+    };
+  }
+
   function openSelectionMenu(anchorRect) {
     if (closeMenu) closeMenu();
     const p = state.get("project");
@@ -509,10 +564,16 @@ export function mountTexto({ state, api, player }) {
       btn.type = "button";
       btn.textContent = item.label;
       btn.setAttribute("role", "menuitem");
-      btn.onclick = () => {
-        if (closeMenu) closeMenu();
-        void runMenuAction(item.action);
-      };
+      if (item.action === "corrigir") {
+        // Corrigir expande o campo inline no próprio menu (sem fechar).
+        btn.setAttribute("aria-haspopup", "dialog");
+        btn.onclick = () => openCorrectForm(menu, btn);
+      } else {
+        btn.onclick = () => {
+          if (closeMenu) closeMenu();
+          void runMenuAction(item.action);
+        };
+      }
       menu.appendChild(btn);
     }
     document.body.appendChild(menu);

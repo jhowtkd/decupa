@@ -1,7 +1,7 @@
-// Região de contexto (Task 5): player da prévia, revisão por seleção e
-// pedido em linguagem natural. Cada render assina o estado e porta o bloco
-// original do page.js monolítico, mantendo o comentário de comportamento.
-import { takeWords } from "./montage.js";
+// Região de contexto (Task 5): player da prévia, estado das correções de
+// texto e pedido em linguagem natural. Cada render assina o estado e porta
+// o bloco original do page.js monolítico, mantendo o comentário de
+// comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
@@ -16,23 +16,6 @@ function setDisabled(el, value) {
   }
   el.disabled = !!value;
 }
-
-/**
- * Chave da ocorrência editorial selecionada: cena/take/palavra. A palavra
- * mantém sua identidade na fonte (wordId), mas a seleção distingue em qual
- * take ela foi clicada — o mesmo ID pode existir no take antigo (removido)
- * e no take reincluído (R3).
- */
-function selectionKey(sceneId, takeId, wordId) {
-  return sceneId + "\0" + takeId + "\0" + wordId;
-}
-
-const WORD_ACTION_LABEL = {
-  remove: "Removendo trecho…",
-  restore: "Restaurando trecho…",
-  protect: "Preservando trecho…",
-  unprotect: "Liberando trecho…",
-};
 
 /** Sem checkboxes: o NL ecoa a permissão já concedida no lote (o contrato segue com as flags). */
 function paidFlags(project) {
@@ -59,16 +42,11 @@ export function mountContexto({ state, api, player }) {
     + '<button type="button" id="undo">Desfazer edição</button></div>';
   root.appendChild(preview);
 
+  // Só o estado das correções mora aqui; as ações por palavra (incluindo
+  // corrigir, com campo inline) moram no menu flutuante do texto.
   const review = document.createElement("section");
-  review.setAttribute("aria-label", "Revisão por seleção");
-  review.innerHTML = "<h1>Revisão por seleção</h1>"
-    + '<div class="row" aria-label="Ações de palavra">'
-    + '<button type="button" id="actRemove">Remover</button>'
-    + '<button type="button" id="actRestore">Restaurar</button>'
-    + '<button type="button" id="actProtect">Preservar</button>'
-    + '<button type="button" id="actUnprotect">Liberar</button></div>'
-    + '<label>Correção do trecho <input type="text" id="correctText" placeholder="Correção do trecho"></label>'
-    + '<div class="row"><button type="button" id="actCorrect">Corrigir texto</button></div>'
+  review.setAttribute("aria-label", "Correções de texto");
+  review.innerHTML = "<h1>Correções de texto</h1>"
     + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
   root.appendChild(review);
 
@@ -234,75 +212,6 @@ export function mountContexto({ state, api, player }) {
     }
   }
 
-  function selectedTake(project) {
-    const selection = state.get("selection") || new Set();
-    const groups = new Map();
-    for (const scene of project.scenes) {
-      for (const take of scene.takes) {
-        const prefix = scene.id + "\0" + take.id + "\0";
-        const catalog = new Map(takeWords(project, scene, take).map((word) => [word.id, word]));
-        const words = [];
-        for (const key of selection) {
-          if (!key.startsWith(prefix)) continue;
-          const word = catalog.get(key.slice(prefix.length));
-          if (word) words.push(word);
-        }
-        if (words.length) groups.set(scene.id + "\0" + take.id, { scene, take, words });
-      }
-    }
-    return groups.size === 1 ? groups.values().next().value : null;
-  }
-
-  async function wordAction(type) {
-    const project = state.get("project");
-    const group = selectedTake(project);
-    if (!group) {
-      api.notifyError("Selecione palavras de um mesmo trecho.");
-      return;
-    }
-    const ordered = group.words.slice().sort((a, b) => a.start - b.start);
-    await api.call("/project/edit", {
-      method: "POST",
-      body: JSON.stringify({
-        baseRevision: project.revision,
-        action: { type, sceneId: group.scene.id, takeId: group.take.id, wordIds: ordered.map((w) => w.id) },
-      }),
-      label: WORD_ACTION_LABEL[type] || "Aplicando edição…",
-    });
-  }
-
-  async function correctSelection() {
-    const project = state.get("project");
-    const group = selectedTake(project);
-    const text = document.getElementById("correctText").value.trim();
-    if (!group) {
-      api.notifyError("Selecione palavras de um mesmo trecho.");
-      return;
-    }
-    if (!text) {
-      api.notifyError("Digite o texto corrigido.");
-      return;
-    }
-    const ordered = group.words.slice().sort((a, b) => a.start - b.start);
-    await api.call("/project/edit", {
-      method: "POST",
-      body: JSON.stringify({
-        baseRevision: project.revision,
-        action: {
-          type: "correct",
-          sourceId: group.take.sourceId,
-          start: ordered[0].start,
-          end: ordered[ordered.length - 1].end,
-          text,
-        },
-      }),
-      label: "Enviando correção…",
-    });
-    document.getElementById("correctText").value = "";
-    // O alinhamento conclui em background; a assinatura de "project" no
-    // page.js retoma o polling e o catálogo na tela (V3).
-  }
-
   function render(project) {
     if (!project) return;
     const operation = state.get("operation");
@@ -322,12 +231,6 @@ export function mountContexto({ state, api, player }) {
       ? "Propor mudanças (já autorizado)"
       : "Propor mudanças (modelo pago)";
   }
-
-  document.getElementById("actRemove").onclick = () => void wordAction("remove");
-  document.getElementById("actRestore").onclick = () => void wordAction("restore");
-  document.getElementById("actProtect").onclick = () => void wordAction("protect");
-  document.getElementById("actUnprotect").onclick = () => void wordAction("unprotect");
-  document.getElementById("actCorrect").onclick = () => void correctSelection();
 
   document.getElementById("cancelPrep").onclick = () => api.call(
     "/project/cancel",
