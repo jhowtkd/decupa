@@ -319,6 +319,26 @@ it("apoio além da cena é limitado com nota na explicação", () => {
   expect(v2[0]!.durationFrames).toBe(10);
 });
 
+it("apoio posicionado após o início da cena mantém entrada correta e não é descartado", () => {
+  const p = project();
+  p.analyses[0]!.visual.push(
+    { id: "b:v_short", sourceId: "b", start: 0, end: 1, text: "apoio curto", confidence: "observed", tags: [] },
+  );
+  const proposal = validateProposal(propose("p_broll", 1, [{
+    id: "s1", objective: "abrir", rationale: "tema",
+    selections: [{ speechId: "a:u001" }],
+    support: [{ visualId: "b:v_short", offsetFrames: 30, durationFrames: 15 }],
+    gaps: [],
+  }], ["s1"]), p);
+
+  const compiled = compileScenes(p, proposal.scenes);
+  const v2 = compiled.tracks.find((t) => t.name === "V2")!.clips;
+  expect(v2).toHaveLength(1);
+  expect(v2[0]!.startFrame).toBe(30);
+  expect(v2[0]!.durationFrames).toBe(15);
+  expect(v2[0]!.sourceStartSeconds).toBe(0);
+});
+
 it("proposeScenes envia fala com texto efetivo corrigido", async () => {
   const p = project();
   p.analyses[0]!.words = [

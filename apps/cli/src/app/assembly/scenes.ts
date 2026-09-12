@@ -372,8 +372,7 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
       if (!source.hasVideo) continue;
       const sceneBounds = bounds.get(scene.id)!;
       const available = sceneBounds.end - (sceneBounds.start + item.offsetFrames);
-      const srcStartSeconds = span.start + (item.offsetFrames * fpsDen) / fpsNum;
-      const srcAvailable = toFrames(span.end) - toFrames(srcStartSeconds);
+      const srcAvailable = toFrames(span.end) - toFrames(span.start);
       const durationFrames = Math.min(item.durationFrames, available, srcAvailable);
       // Apoio sem duração na cena é descartado aqui e anotado na validação;
       // nunca atravessa outra cena silenciosamente.
@@ -382,7 +381,7 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
         id: `${scene.id}-${item.visualId}`,
         sceneId: scene.id,
         sourceId: span.sourceId,
-        sourceStartSeconds: toSeconds(toFrames(srcStartSeconds)),
+        sourceStartSeconds: toSeconds(toFrames(span.start)),
         startFrame: sceneBounds.start + item.offsetFrames,
         durationFrames,
       });
