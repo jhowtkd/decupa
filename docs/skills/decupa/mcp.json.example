@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "decupa": {
+      "command": "pnpm",
+      "args": ["decupa", "mcp"]
+    }
+  }
+}
