@@ -372,8 +372,11 @@ async function startCleanupApp(opts: {
             let info: MediaInfo | null = null;
             try {
               info = await probe(pipelineJob.videoPath);
-            } catch {
+            } catch (err) {
               // fallback se a mídia não for probeável no momento (ex.: teste unitário)
+              console.warn(
+                `[export otio] probe não obteve metadados de ${pipelineJob.videoPath} (${err instanceof Error ? err.message : String(err)}); usando fallback 30fps 1920x1080`,
+              );
             }
             const rate = info?.frameRate ?? { num: 30, den: 1 };
             const fps = rate.num / rate.den;

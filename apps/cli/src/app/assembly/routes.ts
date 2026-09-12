@@ -238,6 +238,7 @@ export async function publishCorrection(
       if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) return;
     }
   }
+  console.warn(`[publishCorrection] correção ${correctionId} não aplicada após 3 tentativas de rebase concorrente`);
 }
 
 /**
