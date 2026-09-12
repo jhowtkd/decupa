@@ -1,0 +1,44 @@
+// Cliente HTTP mínimo do editor texto-centrado (Task 4). Sem DOM:
+// o estado de carregamento sai via `onStatus({busy, label?, error?})`
+// injetado pela página. Mantém o espírito de trackStart/trackEnd do
+// page.js (contagem de em-voo + rótulo + erro por resposta).
+export function createApi({ onStatus } = {}) {
+  let inflight = 0;
+  let label = null;
+
+  function emit(patch = {}) {
+    if (typeof onStatus === "function") {
+      onStatus({ busy: inflight > 0, label, error: null, ...patch });
+    }
+  }
+
+  async function call(path, opts = {}) {
+    const { label: callLabel, ...fetchOpts } = opts;
+    const tracked = callLabel != null;
+    if (tracked) {
+      inflight += 1;
+      label = callLabel;
+      emit({ error: null });
+    }
+    try {
+      const res = await fetch(path, {
+        ...fetchOpts,
+        headers: { "content-type": "application/json", ...(fetchOpts.headers || {}) },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) emit({ error: body.error || "erro " + res.status });
+      return { res, body };
+    } catch (err) {
+      emit({ error: (err && err.message) || String(err) });
+      throw err;
+    } finally {
+      if (tracked) {
+        inflight = Math.max(0, inflight - 1);
+        if (inflight === 0) label = null;
+        emit({});
+      }
+    }
+  }
+
+  return { call };
+}

@@ -3,13 +3,14 @@ import { relative } from "node:path";
 import { hashFile } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
-import { verifySourceIdentity } from "./media.ts";
+import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource } from "./model.ts";
 import { renderAssembly } from "./render.ts";
 import { applyProposal, recordPreview } from "./revisions.ts";
 import { proposeScenes } from "./scenes.ts";
 import { loadProject, mergeAnalyses, saveProject } from "./store.ts";
 import { visualCoverage } from "./visual.ts";
+import { buildPeaks, peaksPath } from "./waveform.ts";
 import type { Preparation, PreviewArtifact, Project, Source } from "./types.ts";
 
 export type PreparationMode = "prepare" | "adjust" | "preview";
@@ -47,6 +48,13 @@ class CancelledExit extends Error {
 class ObsoleteExit extends Error {
   constructor() {
     super("preparação obsoleta");
+  }
+}
+
+/** Terminal já registrado (interrupted retomável): só retorna o estado atual. */
+class InterruptedExit extends Error {
+  constructor() {
+    super("preparação interrompida");
   }
 }
 
@@ -216,10 +224,54 @@ export async function runPreparation(
       current = await loadProject(dir);
       if (current.preparation?.id !== id) return current;
 
+      const byId = new Map<string, Source>(current.assembly.sources.map((source) => [source.id, source]));
+      const targets = included.filter((source) => byId.has(source.id));
+
+      // Rebase sobre a revisão atual: a edição passou na frente e o save
+      // com a revisão capturada falha; aplica fn sobre o estado novo.
+      // Impossível só se a fonte sumiu no meio: persiste o produzido e
+      // interrompe retomável em vez de falhar.
+      const rebaseSave = async (fn: (p: Project) => Project): Promise<void> => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          checkAlive();
+          const fresh = await loadProject(dir);
+          if (fresh.preparation?.id !== id) throw new ObsoleteExit();
+          const missing = targets.filter((source) =>
+            !fresh.assembly.sources.some((item) => item.id === source.id));
+          try {
+            await saveProject(dir, fresh.revision, (p) =>
+              p.preparation?.id === id ? fn(p) : p);
+          } catch (err) {
+            if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) throw err;
+            continue;
+          }
+          if (missing.length > 0) {
+            await markTerminal(
+              "interrupted",
+              `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
+            );
+            throw new InterruptedExit();
+          }
+          return;
+        }
+        await markTerminal("interrupted", "edição concorrente durante a preparação; retome para prosseguir");
+        throw new InterruptedExit();
+      };
+
+      // Save do percurso com rebase (Task 11): quando a revisão avançou
+      // (edição passou na frente), não falha com 409 genérico — aplica as
+      // mutações de análise/preparação sobre `current`, nunca scenes ou
+      // corrections, e o percurso segue até ready.
       const save = async (fn: (p: Project) => Project): Promise<void> => {
         checkAlive();
-        await saveProject(dir, current.revision, (p) =>
-          p.preparation?.id === id ? fn(p) : p);
+        try {
+          await saveProject(dir, current.revision, (p) =>
+            p.preparation?.id === id ? fn(p) : p);
+        } catch (err) {
+          if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) throw err;
+          checkAlive();
+          await rebaseSave(fn);
+        }
         current = await loadProject(dir);
         if (current.preparation?.id !== id) throw new ObsoleteExit();
       };
@@ -239,9 +291,6 @@ export async function runPreparation(
         }));
       };
 
-      const byId = new Map<string, Source>(current.assembly.sources.map((source) => [source.id, source]));
-      const targets = included.filter((source) => byId.has(source.id));
-
       if (req.mode !== "preview") {
         for (const source of targets) {
           checkAlive();
@@ -253,6 +302,19 @@ export async function runPreparation(
               media: "error",
               error: err instanceof Error ? err.message : String(err),
             });
+          }
+          if (current.preparation?.sources[source.id]?.media !== "ready") continue;
+          // Peaks de waveform (Task 8): após o proxy existir, best-effort —
+          // nunca marca erro na fonte nem entra no caminho crítico.
+          try {
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+            await buildPeaks(deps.exec, {
+              proxyPath: videoPath,
+              sha256: source.sha256,
+              outPath: peaksPath(dir, source.sha256),
+            });
+          } catch {
+            // Sem waveform a faixa segue só com os blocos.
           }
         }
 
@@ -421,6 +483,7 @@ export async function runPreparation(
 
       return await markTerminal(needsAttention(current) ? "attention" : "ready");
     } catch (err) {
+      if (err instanceof InterruptedExit) return await loadProject(dir);
       if (err instanceof ObsoleteExit) return await loadProject(dir);
       if (err instanceof CancelledExit) return await markTerminal("cancelled");
       throw err;

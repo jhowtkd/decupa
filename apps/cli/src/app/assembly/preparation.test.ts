@@ -2,13 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createProject, loadProject, saveProject } from "./store.ts";
 import { blankProject } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { runPreparation, type PreparationDeps } from "./preparation.ts";
+import { applyTextEdit } from "./words.ts";
 import type { ExecCall, ExecResult } from "../pipeline.ts";
 import type { Project, Source } from "./types.ts";
 
@@ -49,6 +50,10 @@ type FakeOpts = {
   failVisual?: boolean;
   /** Resposta visual por janela (segundos da fonte); {throw} simula falha. */
   describeImpl?: (start: number, end: number) => { spans: { start: number; end: number; text: string }[] } | { throw: string };
+  /** Grava palavras no transcript do fake para edições por palavra. */
+  withWords?: boolean;
+  /** Proposta enlatada alternativa (padrão: cena nova sc-1 via speechId). */
+  proposalJson?: string;
 };
 type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; describe: number };
 
@@ -57,10 +62,12 @@ function makeFakes(opts: FakeOpts = {}): {
   calls: Calls;
   failNextPropose: () => void;
   blockPropose: () => { release: (json: string) => void; gate: Promise<string> };
+  blockAudio: () => { release: () => void };
 } {
   const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
   let nextFail = false;
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
+  let audioGate: Promise<void> | null = null;
   const proposalJson = JSON.stringify({
     scenes: [
       {
@@ -75,6 +82,7 @@ function makeFakes(opts: FakeOpts = {}): {
   const exec = async (call: ExecCall): Promise<ExecResult> => {
     if (call.command === "pnpm" || call.args.includes("condense-prep")) {
       calls.ingest += 1;
+      if (audioGate) await audioGate;
       const input = call.args[call.args.indexOf("--input") + 1];
       const id = input.includes("apoio") ? "b" : "a";
       if (opts.failAudioFor === id) return { code: 1, stdout: "", stderr: "boom" };
@@ -82,12 +90,22 @@ function makeFakes(opts: FakeOpts = {}): {
       await mkdir(join(work, "out"), { recursive: true });
       await writeFile(
         call.args[call.args.indexOf("--out") + 1],
-        JSON.stringify({ segments: [{ start: 0, end: 2, text: `fala ${id}` }] }),
+        opts.withWords
+          ? JSON.stringify({
+            segments: [{
+              words: [
+                { text: "olá", start: 0.1, end: 0.5 },
+                { text: "tema", start: 0.6, end: 1.0 },
+              ],
+            }],
+          })
+          : JSON.stringify({ segments: [{ start: 0, end: 2, text: `fala ${id}` }] }),
       );
       return { code: 0, stdout: "", stderr: "" };
     }
     if (call.command === "python3" && call.args.includes("index")) {
       calls.ingest += 1;
+      if (audioGate) await audioGate;
       const work = call.env?.CLAUDE_PROJECT_DIR ?? "";
       await mkdir(join(work, "out"), { recursive: true });
       await writeFile(
@@ -128,7 +146,7 @@ function makeFakes(opts: FakeOpts = {}): {
       gate = null;
       return g.gate;
     }
-    return proposalJson;
+    return opts.proposalJson ?? proposalJson;
   };
   const deps: PreparationDeps = {
     exec: { run: exec },
@@ -176,6 +194,13 @@ function makeFakes(opts: FakeOpts = {}): {
       const slot = { release, gate: gatePromise };
       gate = slot;
       return slot;
+    },
+    blockAudio: () => {
+      let release!: () => void;
+      audioGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { release };
     },
   };
 }
@@ -363,7 +388,7 @@ describe("runPreparation", () => {
 
   it("edição do usuário durante a proposta não é sobrescrita", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
-    const { deps, blockPropose } = makeFakes();
+    const { deps, calls, blockPropose } = makeFakes();
     const gate = blockPropose();
     const run = runPreparation(
       dir,
@@ -372,7 +397,11 @@ describe("runPreparation", () => {
       deps,
       ctrl(),
     );
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Edição pós-snapshot (a proposta já foi calculada sobre a base antiga):
+    // o percurso não a sobrescreve — interrompe retomável com ela intacta.
+    await vi.waitFor(async () => {
+      expect(calls.propose).toBe(1);
+    });
     await saveProject(dir, base.revision, (p) => ({
       ...p,
       revision: p.revision + 1,
@@ -390,6 +419,137 @@ describe("runPreparation", () => {
     expect(done.preparation?.status).toBe("interrupted");
     expect(done.assembly.name).toBe("Edição do usuário");
     expect(done.revision).toBe(edited.revision);
+  });
+
+  it("edição correct durante o áudio faz rebase: ready sem perder a correção", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, blockAudio } = makeFakes();
+    const gate = blockAudio();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    await vi.waitFor(async () => {
+      const claimed = await loadProject(dir);
+      expect(claimed.preparation?.status).toBe("running");
+    });
+    const before = await loadProject(dir);
+    await saveProject(dir, before.revision, (p) =>
+      applyTextEdit(p, { type: "correct", sourceId: "fala", start: 0, end: 1, text: "olá corrigido" }));
+    gate.release();
+    const done = await run;
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.revision).toBe(base.revision + 2);
+    expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.status).toBe("ready");
+    expect(done.corrections).toHaveLength(1);
+    expect(done.corrections[0]).toMatchObject({ sourceId: "fala", text: "olá corrigido" });
+    expect(done.scenes).toHaveLength(1);
+  });
+
+  it("edição remove durante o áudio faz rebase: ready com o corte preservado", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const first = makeFakes({ withWords: true });
+    const prepared = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+    expect(prepared.preparation?.status).toBe("ready");
+    const takeId = prepared.scenes[0]?.takes[0]?.id;
+    const wordId = prepared.analyses.find((analysis) => analysis.sourceId === "fala")?.words[0]?.id;
+    expect(takeId).toMatch(/^sc-1:/);
+    expect(wordId).toMatch(/:w000000$/);
+    // Força re-análise lenta: sem cache, o áudio volta a passar pelo executor.
+    await rm(join(dir, "analysis"), { recursive: true, force: true });
+    // A proposta ecoa a cena existente só-com-id: o percurso não reescreve
+    // takes (a edição segue byte-a-byte igual) e termina ready.
+    const second = makeFakes({
+      withWords: true,
+      proposalJson: JSON.stringify({
+        scenes: [{ id: "sc-1" }],
+        changedSceneIds: [],
+        gaps: [],
+      }),
+    });
+    const gate = second.blockAudio();
+    const run = runPreparation(
+      dir,
+      prepared.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      second.deps,
+      ctrl(),
+    );
+    await vi.waitFor(async () => {
+      const claimed = await loadProject(dir);
+      expect(claimed.preparation?.status).toBe("running");
+      expect(claimed.preparation?.revision).toBe(prepared.revision);
+    });
+    const before = await loadProject(dir);
+    await saveProject(dir, before.revision, (p) =>
+      applyTextEdit(p, { type: "remove", sceneId: "sc-1", takeId: takeId!, wordIds: [wordId!] }));
+    gate.release();
+    const done = await run;
+    // O rebase salvou a análise sobre a revisão editada (sem o rebase o
+    // percurso rejeitava com "revisão desatualizada" e nada persistia).
+    expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.status).toBe("ready");
+    // A edição segue intacta: o corte e a revisão dela sobreviveram.
+    expect(done.scenes[0]?.takes[0]?.removed).toHaveLength(1);
+    // Limite pré-existente (fora da Task 11): proposta resolvida que toca
+    // cena com takes não sobrevive à revalidação do applyProposal, então o
+    // percurso interrompe retomável em vez de aplicar as cenas.
+    expect(done.preparation?.status).toBe("interrupted");
+    expect(done.preparation?.error).toMatch(/use takeId para preservar cortes/);
+    expect(done.revision).toBe(prepared.revision + 1);
+  });
+
+  it("fonte removida durante a preparação interrompe retomável sem perder a outra fonte", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
+    const { deps, calls, blockAudio } = makeFakes();
+    const gate = blockAudio();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    // Espera o áudio começar (fase de mídia concluída): a remoção chega com
+    // a primeira análise já produzida, que o interrupted deve preservar.
+    await vi.waitFor(async () => {
+      expect(calls.ingest).toBeGreaterThan(0);
+    });
+    const before = await loadProject(dir);
+    await saveProject(dir, before.revision, (p) => ({
+      ...p,
+      revision: p.revision + 1,
+      assembly: {
+        ...p.assembly,
+        revision: p.revision + 1,
+        sources: p.assembly.sources.filter((source) => source.id !== "apoio"),
+      },
+    }));
+    gate.release();
+    const done = await run;
+    expect(done.preparation?.status).toBe("interrupted");
+    expect(done.preparation?.error).toMatch(/fonte removida.*apoio/);
+    expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.status).toBe("ready");
+    // Retomável: a tentativa seguinte conclui sem refazer o áudio (cache).
+    const retry = makeFakes();
+    const resumed = await runPreparation(
+      dir,
+      done.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(retry.calls.ingest).toBe(0);
+    expect(resumed.scenes).toHaveLength(1);
   });
 
   it("cobertura parcial impede proposta e retomada completa só o faltante", async () => {

@@ -1,3 +1,4 @@
+/* page.css — casca de 4 regiões (Task 5); o tema vem do css anterior. */
 :root {
   --bg: #f4f2ec; --panel: #ffffff; --line: #e3ded2; --line-strong: #c8c1ae;
   --ink: #23282b; --muted: #66707a; --accent: #e3a008;
@@ -7,18 +8,17 @@
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  min-height: 100dvh;
+  display: grid; height: 100dvh;
+  grid-template: "rail texto contexto" 1fr "faixa faixa faixa" auto / 240px 1fr 300px;
 }
-header, nav, button, label, input, textarea, select { font-family: ui-sans-serif, system-ui, sans-serif; }
-header {
-  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 14px;
-  padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
-  font-size: 13px; flex-wrap: wrap;
-}
-header .hint { color: var(--muted); font-size: 12px; }
-main { max-width: 72rem; margin: 0 auto; padding: 24px 20px 120px; }
-h1 { font-size: 20px; margin: 28px 0 8px; }
-h2 { font-size: 16px; margin: 18px 0 8px; }
+button, label, input, textarea, select { font-family: ui-sans-serif, system-ui, sans-serif; }
+#rail { grid-area: rail; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 12px 40px; font-size: 13px; }
+#texto { grid-area: texto; overflow-y: auto; padding: 24px 28px 120px; max-width: 56rem; }
+#contexto { grid-area: contexto; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 14px 12px 40px; font-size: 13px; }
+#faixa { grid-area: faixa; border-top: 1px solid var(--line); background: var(--panel); min-height: 44px; }
+/* Task 7 monta a faixa-bússola aqui; até lá, presença vazia. */
+h1 { font-size: 16px; margin: 20px 0 8px; }
+h2 { font-size: 13px; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 button {
   font-size: 13px; font-weight: 600; background: var(--panel); color: var(--ink);
   border: 1px solid var(--line-strong); border-radius: 5px; padding: 6px 12px; cursor: pointer;
@@ -46,29 +46,26 @@ a { color: #8a6100; }
 video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #111; border-radius: 8px; }
 [hidden] { display: none !important; }
 
-/* Direção A: vídeo à esquerda, texto à direita. */
-.review-grid {
-  display: grid; grid-template-columns: minmax(320px, .9fr) minmax(0, 1.1fr);
-  gap: 24px; align-items: start;
-}
-.transcript { min-width: 0; overflow-wrap: anywhere; line-height: 1.65; }
-.viewer { position: sticky; top: 76px; }
+/* Rail: nome do produto + estado da operação no contexto do que os causa
+   (spec: não existe header global). */
+.rail-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rail-head .hint { color: var(--muted); font-size: 12px; }
 
 /* Materiais. */
-#dropzone {
-  border: 2px dashed var(--line-strong); border-radius: 8px; padding: 28px;
-  text-align: center; color: var(--muted); cursor: pointer;
-}
-#dropzone.over { border-color: var(--accent); color: var(--ink); }
-.source { display: flex; gap: 12px; align-items: flex-start; }
-.source img { width: 120px; aspect-ratio: 16/9; object-fit: cover; background: #000; border-radius: 5px; }
+#dropzone { position: fixed; inset: 0; z-index: 10; display: grid;
+  place-items: center; background: var(--bg, #12171a); }
+#dropzone.over { outline: 2px dashed var(--accent); outline-offset: -12px; }
+#dropzone[aria-disabled="true"] { opacity: .55; cursor: progress; }
+.source { display: flex; gap: 10px; align-items: flex-start; }
+.source img { width: 72px; aspect-ratio: 16/9; object-fit: cover; background: #000; border-radius: 5px; }
 .source .meta { min-width: 0; flex: 1; }
-.source .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
+.source .controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 .source select { width: auto; }
+#rail ul.plain, #contexto ul.plain { list-style: none; padding: 0; }
 
-/* Preparação: estado por arquivo/etapa. */
-.prep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.prep-table th, .prep-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+/* Preparação: estado por arquivo/etapa (a tabela antiga virou lista). */
+.prep-file { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: var(--panel); }
+.prep-file .stages { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .stage { font-weight: 700; }
 .stage.pending { color: var(--muted); }
 .stage.running { color: var(--accent); }
@@ -77,44 +74,35 @@ video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; ba
 details { margin: 8px 0; font-size: 13px; }
 summary { cursor: pointer; color: var(--muted); }
 
-/* Revisão: palavras como botões de texto. */
+/* Centro: os dois documentos do spec (transcrição por fonte, prosa). */
+.doc-source { margin: 22px 0; }
+.doc-source h2 { text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--ink); }
+.doc-source .parcial { color: var(--accent); font-weight: 700; }
+.prose { font-size: 18px; line-height: 1.7; overflow-wrap: anywhere; }
+.scene-head { font-size: 14px; color: var(--muted); margin: 22px 0 4px; }
+.take .src { font-size: 12px; color: var(--muted); }
 .word {
   font: inherit; background: none; border: none; border-radius: 3px;
   padding: 0 1px; margin: 0; color: inherit; font-weight: 400; cursor: pointer;
 }
 .word:hover { background: #ece4cf; }
 .word[aria-pressed="true"] { background: var(--accent); color: #23282b; }
-.word.removed { text-decoration: line-through; color: var(--muted); background: var(--removed); }
+.word.riscado { text-decoration: line-through; color: var(--muted); background: var(--removed); }
+.riscado { text-decoration: line-through; opacity: .55; }
 .word.protected { border-bottom: 2px solid var(--protected); }
 .word.corrected { font-style: italic; }
-.take { border-left: 3px solid var(--line-strong); padding-left: 10px; margin: 10px 0; }
-.take .src { font-size: 12px; color: var(--muted); }
-.scene.active { border-color: var(--accent); }
-.seq { display: flex; gap: 8px; flex-wrap: wrap; list-style: none; padding: 0; }
-.seq li { border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; font-size: 13px; }
-.seq li.active { border-color: var(--accent); }
 
-/* Estados de loading das ações: spinner no status e no botão que disparou. */
+/* Estados de loading: spinner no status do rail. */
 #status.busy::before {
   content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px;
   border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent);
   animation: decupa-spin .8s linear infinite; vertical-align: -2px;
 }
-button.is-loading { position: relative; padding-right: 28px; }
-button.is-loading::after {
-  content: ""; position: absolute; right: 8px; top: 50%; width: 12px; height: 12px;
-  margin-top: -7px; border-radius: 50%;
-  border: 2px solid var(--line-strong); border-top-color: var(--accent);
-  animation: decupa-spin .8s linear infinite;
-}
-.word.is-loading { padding-right: 1px; }
-.word.is-loading::after { display: none; }
-#dropzone[aria-disabled="true"] { opacity: .55; cursor: progress; }
 @keyframes decupa-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 900px) {
-  .review-grid { grid-template-columns: minmax(0, 1fr); }
-  .viewer { position: static; }
+  body { grid-template: "rail" auto "texto" 1fr "contexto" auto "faixa" auto / minmax(0, 1fr); height: auto; min-height: 100dvh; }
+  #texto { max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; }
