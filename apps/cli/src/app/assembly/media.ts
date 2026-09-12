@@ -38,7 +38,7 @@ export async function verifySourceIdentity(source: Source): Promise<void> {
   const sha256 = await hashFile(source.path);
   if (sha256 !== source.sha256) {
     throw new Error(
-      `conteúdo substituído na fonte ${source.id} (${source.path}): reanálise ou relink necessário`,
+      `conteúdo substituído na fonte ${source.id} (${source.path}): fonte ${source.id} foi substituída; reanálise ou relink necessário`,
     );
   }
 }

@@ -2,8 +2,9 @@ import { randomBytes } from "node:crypto";
 import { access, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hashFile, probe } from "@decupa/media";
+import { probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
+import { verifySourceIdentity } from "./media.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 
@@ -110,10 +111,8 @@ export async function renderAssembly(
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
-    const current = await hashFile(absolutePath(source.path, `fonte ${source.id}`));
-    if (current !== source.sha256) {
-      throw new Error(`fonte ${source.id} foi substituída; reanalise ou relink com o hash original`);
-    }
+    absolutePath(source.path, `fonte ${source.id}`);
+    await verifySourceIdentity(source);
   }
   const published = join(outDir, `rev-${valid.revision}`);
   const work = join(

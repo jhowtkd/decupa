@@ -6,6 +6,7 @@ import { realpath } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { buildOtio } from "./otio.ts";
 import { hashFile, probe } from "@decupa/media";
+import { verifySourceIdentity } from "./media.ts";
 import { loadProject, missingMedia } from "./store.ts";
 import type { Project } from "./types.ts";
 
@@ -118,12 +119,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     throw new Error(`mídia ausente: ${missing.map((s) => `${s.id} (${s.path})`).join(", ")}`);
   }
   for (const source of project.assembly.sources) {
-    const current = await hashFile(source.path);
-    if (current !== source.sha256) {
-      throw new Error(
-        `fonte ${source.id} foi substituída; reanalise ou relink com o hash original`,
-      );
-    }
+    await verifySourceIdentity(source);
   }
 
   // Edição ou troca de mídia durante a exportação não vira entrega atual.
@@ -173,7 +169,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     const otioText = `${buildOtio(snapshot)}\n`;
     const otioSha = createHash("sha256").update(otioText, "utf8").digest("hex");
     const sourceShas = Object.fromEntries(
-      await Promise.all(snapshot.sources.map(async (s) => [s.id, await sha256(s.path)])),
+      snapshot.sources.map((s) => [s.id, s.sha256]),
     );
     let matchesExpected = false;
     try {

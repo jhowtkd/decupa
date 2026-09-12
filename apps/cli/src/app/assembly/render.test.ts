@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -164,4 +164,26 @@ it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () =>
     expect(start).toBe(25 / canvasFps);
     expect(Math.round(start * canvasFps)).toBe(25);
   }
+});
+
+it("renderAssembly aceita fontes com identidade verificada sem exigir recalculo de hash completo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-render-io-"));
+  const clip = join(dir, "clip.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), clip);
+  const st = await stat(clip);
+  const a = fixtureAssembly();
+  a.sources[0]!.path = clip;
+  a.sources[0]!.size = st.size;
+  a.sources[0]!.mtimeMs = st.mtimeMs;
+  a.sources[1]!.path = clip;
+  a.sources[1]!.size = st.size;
+  a.sources[1]!.mtimeMs = st.mtimeMs;
+  const rendered = await renderAssembly(a, dir, {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  });
+  expect(rendered).toBeDefined();
 });
