@@ -145,8 +145,14 @@ export function validateWord(value: unknown, sources: Map<string, Source>): Word
   for (const key of ["cutStart", "cutEnd"] as const) {
     if (value[key] === undefined) continue;
     const cut = finiteNumber(value[key], `palavra ${id}.${key}`);
-    if (cut < start || cut > end) {
-      throw new Error(`palavra ${id}.${key} fora do intervalo da palavra`);
+    if (cut < 0 || cut > source.durationSeconds) {
+      throw new Error(`palavra ${id}.${key} fora da fonte`);
+    }
+    if (key === "cutStart" && cut > end) {
+      throw new Error(`palavra ${id}.cutStart depois do fim da palavra`);
+    }
+    if (key === "cutEnd" && cut < start) {
+      throw new Error(`palavra ${id}.cutEnd antes do início da palavra`);
     }
     word[key] = cut;
   }

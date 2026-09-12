@@ -239,3 +239,16 @@ it("snapWordCuts prende aos vizinhos e aproveita pausa anterior", () => {
   expect(dipped[0]!.start).toBeLessThan(1.0);
   expect(dipped[0]!.start).toBeGreaterThanOrEqual(0.9);
 });
+
+it("remove a primeira palavra do take clamba o corte acústico ao início do take", () => {
+  const p = project();
+  p.analyses[0]!.words[0] = { ...p.analyses[0]!.words[0]!, cutStart: 0.0 };
+  p.scenes[0]!.takes[0] = { ...p.scenes[0]!.takes[0]!, start: 0.1, end: 2 };
+  expect(() => applyTextEdit(p, {
+    type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1"],
+  })).not.toThrow();
+  const removed = applyTextEdit(p, {
+    type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1"],
+  });
+  expect(removed.scenes[0]!.takes[0]!.removed).toEqual([{ start: 0.1, end: 0.4 }]);
+});
