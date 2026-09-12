@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Provider, StoredProvider } from "./provider.ts";
 
@@ -49,7 +49,17 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
   if (creds.model) body.model = creds.model;
   if (creds.baseUrl) body.baseUrl = creds.baseUrl;
   if (creds.apiKey) body.apiKey = creds.apiKey;
-  await writeFile(path, `${JSON.stringify(body, null, 2)}\n`, "utf8");
-  await chmod(path, 0o600);
+  try {
+    await chmod(path, 0o600);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const fh = await open(path, "w", 0o600);
+  try {
+    await fh.chmod(0o600);
+    await fh.writeFile(`${JSON.stringify(body, null, 2)}\n`, "utf8");
+  } finally {
+    await fh.close();
+  }
   return path;
 }

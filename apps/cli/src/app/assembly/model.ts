@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ZAI_DEFAULT_MODEL, ZaiClient } from "@decupa/triage";
+import { createAnalysisClient, readCredentials, ZAI_DEFAULT_MODEL } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
@@ -174,7 +174,8 @@ export async function describeSource(
 ): Promise<VisualSpan[]> {
   if (!source.hasVideo) return [];
   if (source.durationSeconds <= 0) throw new Error(`fonte ${source.id} sem duração para descrever`);
-  const client = deps?.client ?? new ZaiClient();
+  const stored = await readCredentials(dir).catch(() => null);
+  const client = deps?.client ?? createAnalysisClient({ stored });
   const exec = deps?.exec ?? new SpawnExecutor();
   const cacheDir = join(analysisCacheDir(dir, source.sha256), VISUAL_CACHE_VERSION);
   await mkdir(cacheDir, { recursive: true });

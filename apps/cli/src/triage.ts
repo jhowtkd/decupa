@@ -14,9 +14,11 @@ import {
   mechanicalClaims,
   parseSpeechIndex,
   parseVisualIndex,
+  presetConfig,
   PROMPT_VERSION,
   readCache,
   renderReport,
+  readCredentials,
   resolveProvider,
   unitsById,
   verifyClaims,
@@ -44,6 +46,8 @@ export interface TriageOptions {
   modelName?: string;
   /** Qual motor responde. Resolvido pela chave quando ausente. */
   provider?: string;
+  /** Pasta com `.decupa/credentials`, se houver. */
+  projectDir?: string;
   /** Teto de tokens por chamada; default 16000. O thinking do GLM consome
    *  antes da resposta — chamadas com unitsBlock grande podem precisar de mais. */
   maxTokens?: number;
@@ -220,9 +224,16 @@ async function defaultTranscode(src: string, dst: string): Promise<void> {
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
-  const provider = resolveProvider(opts.provider);
-  const modelName = opts.modelName ?? ZAI_DEFAULT_MODEL;
-  const model = opts.model ?? new ZaiTriageModel({ model: modelName, maxTokens: opts.maxTokens });
+  const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null);
+  const provider = resolveProvider(opts.provider, process.env, stored);
+  const cfg = presetConfig(provider, process.env, stored);
+  const modelName = opts.modelName ?? cfg.model;
+  const model = opts.model ?? new ZaiTriageModel({
+    provider,
+    stored,
+    model: modelName,
+    maxTokens: opts.maxTokens,
+  });
   const videoPath = await ensureLightVideo(opts.videoPath, opts.outDir);
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
   const byId = unitsById(index);

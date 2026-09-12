@@ -47,6 +47,17 @@ describe("PRESETS", () => {
 });
 
 describe("presetConfig", () => {
+  it("não aplica URL salva de outro preset", () => {
+    const cfg = presetConfig("gemini", {}, {
+      preset: "zai",
+      baseUrl: "https://api.z.ai/hacked",
+      model: "glm-hack",
+    });
+    expect(cfg.baseUrl).toBe(PRESETS.gemini.baseUrl);
+    expect(cfg.model).toBe(PRESETS.gemini.model);
+    expect(cfg.envKey).toBe("GEMINI_API_KEY");
+  });
+
   it("custom exige URL e modelo", () => {
     expect(() => presetConfig("custom", {})).toThrow(/DECUPA_BASE_URL/);
     const cfg = presetConfig("custom", {

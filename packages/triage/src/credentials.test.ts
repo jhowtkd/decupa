@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,5 +30,14 @@ describe("credentials", () => {
 
   it("recusa diretório relativo", () => {
     expect(() => credentialsPath("projeto")).toThrow(/absoluto/);
+  });
+
+  it("restringe arquivo 0644 existente antes de reescrever", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-cred-"));
+    const path = credentialsPath(dir);
+    await writeCredentials(dir, { preset: "zai" });
+    await chmod(path, 0o644);
+    await writeCredentials(dir, { preset: "zai", apiKey: "nova" });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 });

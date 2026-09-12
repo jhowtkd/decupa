@@ -1,4 +1,11 @@
-import { ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL } from "./zai-client.ts";
+export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
+
+/**
+ * A Z.ai serve dois endpoints quase idênticos que cobram de formas diferentes:
+ * `/api/paas/v4` é pay-as-you-go e precisa de crédito pré-carregado, enquanto
+ * `/api/coding/paas/v4` é a assinatura do Coding Plan.
+ */
+export const ZAI_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4/chat/completions";
 
 export type Provider = "zai" | "gemini" | "minimax" | "custom";
 
@@ -64,8 +71,10 @@ export function presetConfig(
   stored?: StoredProvider | null,
 ): { provider: Provider; baseUrl: string; model: string; envKey: string } {
   const preset = PRESETS[provider];
-  const baseUrl = stored?.baseUrl || env.DECUPA_BASE_URL || preset.baseUrl;
-  const model = stored?.model || env.DECUPA_MODEL || preset.model;
+  const fromStore = stored?.preset === provider ? stored : null;
+  const customEnv = provider === "custom";
+  const baseUrl = fromStore?.baseUrl || (customEnv ? env.DECUPA_BASE_URL : undefined) || preset.baseUrl;
+  const model = fromStore?.model || (customEnv ? env.DECUPA_MODEL : undefined) || preset.model;
   if (provider === "custom" && (!baseUrl || !model)) {
     throw new Error(
       "preset custom precisa de DECUPA_BASE_URL e DECUPA_MODEL (ou configure_provider com baseUrl e model)",

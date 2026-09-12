@@ -6,6 +6,10 @@ export function isRetryable(error: Error): boolean {
   return /HTTP (429|5\d\d)|tempo esgotado|fetch failed|network/i.test(error.message);
 }
 
+export function isJsonFormatRejected(error: Error): boolean {
+  return /response_format|json_object|unknown.?param|unrecognized.?request/i.test(error.message);
+}
+
 export function isBudgetExhausted(error: Error): boolean {
   return /gastou o orçamento inteiro|Suba max_tokens/.test(error.message);
 }
@@ -67,7 +71,7 @@ export class OpenAiCompatClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly who: string;
-  private readonly jsonObject: boolean;
+  private jsonObject: boolean;
   private readonly usageTotals: ZaiUsage = {
     calls: 0, promptTokens: 0, completionTokens: 0, reasoningChars: 0,
   };
@@ -103,6 +107,10 @@ export class OpenAiCompatClient {
         if (error.name === "AbortError" || signal?.aborted) throw error;
         if (isBudgetExhausted(error) && this.maxTokens < MAX_TOKENS_CEILING) {
           this.maxTokens = Math.min(this.maxTokens * 2, MAX_TOKENS_CEILING);
+          continue;
+        }
+        if (this.jsonObject && isJsonFormatRejected(error)) {
+          this.jsonObject = false;
           continue;
         }
         if (!isRetryable(error) || retriesLeft <= 0) throw error;

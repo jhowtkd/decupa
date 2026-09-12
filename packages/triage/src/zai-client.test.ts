@@ -5,6 +5,21 @@ const body = (message: Record<string, unknown>, finish = "stop") => ({
   choices: [{ finish_reason: finish, index: 0, message }],
 });
 
+it("gemini usa a URL e a chave do Gemini, não a da Z.ai", async () => {
+  let url = "";
+  const fetchImpl = (async (input: string | URL) => {
+    url = String(input);
+    return new Response(JSON.stringify(body({ content: '{"ok":true}' })), { status: 200 });
+  }) as typeof fetch;
+  const client = new ZaiClient({
+    provider: "gemini",
+    env: { GEMINI_API_KEY: "g", ZAI_API_KEY: "z" },
+    fetchImpl,
+  });
+  await client.send(["oi"]);
+  expect(url).toContain("generativelanguage.googleapis.com");
+});
+
 it("send devolve o content e acumula usage", async () => {
   const fetchImpl = (async () => new Response(JSON.stringify({
     ...body({ content: '{"ok":true}', reasoning_content: "x" }),

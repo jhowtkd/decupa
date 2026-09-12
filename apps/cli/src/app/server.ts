@@ -535,12 +535,13 @@ async function startCleanupApp(opts: {
   };
 }
 
-function lazyPaidSend(): (content: unknown[], signal?: AbortSignal) => Promise<string> {
+function lazyPaidSend(projectDir: string): (content: unknown[], signal?: AbortSignal) => Promise<string> {
   let client: { send(content: unknown[], signal?: AbortSignal): Promise<string> } | undefined;
   return async (content, signal) => {
     if (!client) {
-      const { ZaiClient } = await import("@decupa/triage");
-      client = new ZaiClient();
+      const { createAnalysisClient, readCredentials } = await import("@decupa/triage");
+      const stored = await readCredentials(projectDir).catch(() => null);
+      client = createAnalysisClient({ stored });
     }
     return client.send(content, signal);
   };
@@ -571,8 +572,8 @@ async function startAssemblyApp(opts: {
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
-    proposeSend: opts.proposeSend ?? (allowPaidModel ? lazyPaidSend() : undefined),
-    describeClient: opts.describeClient ?? (allowPaidVisual ? { send: lazyPaidSend() } : undefined),
+    proposeSend: opts.proposeSend ?? (allowPaidModel ? lazyPaidSend(dir) : undefined),
+    describeClient: opts.describeClient ?? (allowPaidVisual ? { send: lazyPaidSend(dir) } : undefined),
   });
   const project = await runtime.ensureProject(opts.inputs);
 

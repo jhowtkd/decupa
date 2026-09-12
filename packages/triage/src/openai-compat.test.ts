@@ -50,6 +50,27 @@ describe("OpenAiCompatClient", () => {
     expect(n).toBe(1);
   });
 
+  it("repete sem response_format quando o endpoint recusa json_object", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    let n = 0;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      n += 1;
+      bodies.push(JSON.parse(String(init.body)));
+      if (n === 1) {
+        return new Response(JSON.stringify({
+          error: { message: "Unknown parameter: response_format" },
+        }), { status: 400 });
+      }
+      return new Response(JSON.stringify(body({ content: '{"ok":true}' })), { status: 200 });
+    }) as typeof fetch;
+    const client = new OpenAiCompatClient({
+      apiKey: "k", baseUrl: "https://example.test/v1", model: "m", fetchImpl, retries: 0,
+    });
+    await expect(client.send(["oi"])).resolves.toBe('{"ok":true}');
+    expect(bodies[0]).toHaveProperty("response_format");
+    expect(bodies[1]).not.toHaveProperty("response_format");
+  });
+
   it("estoura no timeout", async () => {
     const fetchImpl = ((_url: string, init: { signal: AbortSignal }) =>
       new Promise((_resolve, reject) => {

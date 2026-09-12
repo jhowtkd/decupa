@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Executor } from "../pipeline.ts";
-import { ZaiClient } from "@decupa/triage";
+import { createAnalysisClient } from "@decupa/triage";
 import type {
   Assembly,
   Clip,
@@ -437,7 +437,9 @@ export async function proposeScenes(
   deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string },
   exec?: Executor,
 ): Promise<Proposal> {
-  const client = deps ?? { send: (content: unknown[], signal?: AbortSignal) => new ZaiClient().send(content, signal) };
+  const client = deps ?? {
+    send: (content: unknown[], signal?: AbortSignal) => createAnalysisClient().send(content, signal),
+  };
   // Snapshot profundo: mutação do chamador durante o send não contamina
   // nem o prompt nem a validação.
   const snapshot: Project = structuredClone(project);
