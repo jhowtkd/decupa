@@ -102,16 +102,25 @@ export function wordsFromTranscript(source: Source, raw: unknown): Word[] {
         throw new Error(`palavra ${si}.${wi} sem texto`);
       }
       const start = entry.start;
-      const end = entry.end;
+      const endRaw = entry.end;
       if (
-        typeof start !== "number" || typeof end !== "number"
-        || !Number.isFinite(start) || !Number.isFinite(end)
-        || start < 0 || end <= start || end > source.durationSeconds
+        typeof start !== "number" || typeof endRaw !== "number"
+        || !Number.isFinite(start) || !Number.isFinite(endRaw)
+        || start < 0 || endRaw <= start
       ) {
         throw new Error(
-          `palavra "${entry.text}" com intervalo inválido [${String(start)}, ${String(end)}) na fonte ${source.id}`,
+          `palavra "${entry.text}" com intervalo inválido [${String(start)}, ${String(endRaw)}) na fonte ${source.id}`,
         );
       }
+      // durationMs é round(s*1000): ASR real frequentemente termina 0,1–1 ms
+      // além. Excesso ≤ 1 ms clamba; além disso continua erro (não é arredondamento).
+      const slack = 0.001;
+      if (endRaw > source.durationSeconds + slack) {
+        throw new Error(
+          `palavra "${entry.text}" com intervalo inválido [${String(start)}, ${String(endRaw)}) na fonte ${source.id}`,
+        );
+      }
+      const end = Math.min(endRaw, source.durationSeconds);
       const confidence = entry.confidence;
       flat.push({
         text: entry.text,

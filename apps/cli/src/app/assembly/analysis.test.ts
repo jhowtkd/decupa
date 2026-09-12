@@ -202,6 +202,27 @@ it("cache antigo sem palavras deriva do transcript válido sem retranscrever", a
   expect(second.wordsStatus).toBe("ready");
 });
 
+it("clamba palavra que ultrapassa a duração arredondada por até 1 ms", () => {
+  const source = fixtureAssembly().sources[0]!; // durationSeconds: 3
+  const words = wordsFromTranscript(source, {
+    segments: [{ words: [
+      { text: "olá", start: 0.10, end: 0.40 },
+      { text: "fim", start: 2.90, end: 3.0004 },
+    ] }],
+  });
+  expect(words).toHaveLength(2);
+  expect(words[1]!.text).toBe("fim");
+  expect(words[1]!.end).toBe(3);
+  expect(words[1]!.start).toBe(2.90);
+});
+
+it("continua recusando excesso maior que 1 ms", () => {
+  const source = fixtureAssembly().sources[0]!;
+  expect(() => wordsFromTranscript(source, {
+    segments: [{ words: [{ text: "depois", start: 2.9, end: 3.5 }] }],
+  })).toThrow(/intervalo/);
+});
+
 it("fonte sem áudio recebe palavras vazias prontas", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
   const path = join(dir, "apoio.mp4");
