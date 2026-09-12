@@ -6,6 +6,7 @@ import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { hashFile } from "@decupa/media";
 import { exportApproved } from "./export.ts";
 import { fixtureAssembly } from "./fixture.ts";
+import { createProject } from "./store.ts";
 import type { Project } from "./types.ts";
 
 let failNextCopy = false;
@@ -99,6 +100,7 @@ it("recusa path relativo na exportação final", async () => {
 it("recusa export concorrente da mesma revisão", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const project = await projectWithMedia(dir, 3);
+  await createProject(dir, project);
   await mkdir(join(dir, "exports"), { recursive: true });
   await writeFile(join(dir, "exports", ".rev-3.lock"), `${process.pid}\n`, "utf8");
   await expect(exportApproved(project, dir))
@@ -108,6 +110,7 @@ it("recusa export concorrente da mesma revisão", async () => {
 it("grava timeline, referência e manifest na pasta da revisão", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const project = await projectWithMedia(dir, 4);
+  await createProject(dir, project);
   const dest = await exportApproved(project, dir);
   expect(dest).toBe(join(dir, "exports", "4"));
   const { readFile } = await import("node:fs/promises");
@@ -122,6 +125,7 @@ it("grava timeline, referência e manifest na pasta da revisão", async () => {
 it("copia exatamente o mp4 assistido sem renderizar", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const project = await projectWithMedia(dir, 6);
+  await createProject(dir, project);
   const dest = await exportApproved(project, dir);
   const { readFile } = await import("node:fs/promises");
   const exported = await readFile(join(dest, "reference.mp4"));
@@ -142,6 +146,7 @@ it("recusa prévia de outra montagem ou revisão", async () => {
 it("recusa prévia truncada ou ausente", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const project = await projectWithMedia(dir, 8);
+  await createProject(dir, project);
   await writeFile(join(dir, "rev-8", "reference.mp4"), "curta");
   await expect(exportApproved(project, dir)).rejects.toThrow(/alterada ou truncada/);
   const { unlink } = await import("node:fs/promises");
@@ -160,6 +165,7 @@ it("recusa fonte cujo hash atual diverge do sha256 aprovado", async () => {
 it("export corrompido não é reutilizado como sucesso: republica íntegro (V2)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const project = await projectWithMedia(dir, 9);
+  await createProject(dir, project);
   const dest = await exportApproved(project, dir);
   expect(dest).toBe(join(dir, "exports", "9"));
   await writeFile(join(dest, "reference.mp4"), "conteúdo-inválido");
@@ -175,6 +181,7 @@ it("falha na substituta preserva a entrega anterior (R4)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const { readdir, readFile, stat } = await import("node:fs/promises");
   const project = await projectWithMedia(dir, 11);
+  await createProject(dir, project);
   const dest = await exportApproved(project, dir);
   await writeFile(join(dest, "reference.mp4"), "conteúdo-inválido");
   failNextCopy = true;
@@ -195,6 +202,7 @@ it("otio ausente ou corrompido republica em vez de reutilizar (V2)", async () =>
   const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
   const { unlink } = await import("node:fs/promises");
   const project = await projectWithMedia(dir, 10);
+  await createProject(dir, project);
   const dest = await exportApproved(project, dir);
   await unlink(join(dest, "timeline.otio"));
   await expect(exportApproved(project, dir)).resolves.toBe(dest);
@@ -204,4 +212,18 @@ it("otio ausente ou corrompido republica em vez de reutilizar (V2)", async () =>
   await expect(exportApproved(project, dir)).resolves.toBe(dest);
   const otio = await readFile(join(dest, "timeline.otio"), "utf8");
   expect(otio).toContain("Timeline");
+});
+
+it("recusa export se o projeto em disco estiver ausente ou ilegível", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 10);
+  await expect(exportApproved(project, dir)).rejects.toThrow();
+});
+
+it("exporta quando o project.json da mesma revisão está íntegro", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 10);
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  expect(dest).toContain("exports");
 });
