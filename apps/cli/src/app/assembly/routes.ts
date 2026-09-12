@@ -11,7 +11,7 @@ import { originAllowed } from "../../http/origin.ts";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
-import { runPreparation } from "./preparation.ts";
+import { isPreparationActive, runPreparation } from "./preparation.ts";
 import { describeSource } from "./model.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
@@ -454,7 +454,27 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
       if (parts.length === 1 && req.method === "GET") {
-        const project = await loadProject(dir);
+        let project = await loadProject(dir);
+        if (project.preparation?.status === "running" && !isPreparationActive(dir)) {
+          try {
+            await saveProject(dir, project.revision, (current) => {
+              if (current.preparation?.status === "running") {
+                return {
+                  ...current,
+                  preparation: {
+                    ...current.preparation,
+                    status: "interrupted",
+                    error: "preparação interrompida: servidor reiniciado; clique em Retomar",
+                  },
+                };
+              }
+              return current;
+            });
+            project = await loadProject(dir);
+          } catch {
+            // Se falhou o salvamento atômico, devolve o que tem
+          }
+        }
         sendJson(res, { project, ...snapshot() });
         return true;
       }

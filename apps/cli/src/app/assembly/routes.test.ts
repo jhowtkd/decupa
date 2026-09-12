@@ -592,3 +592,22 @@ it("publishCorrection faz rebase e publica quando a revisão avançou por ediç�
   expect(corr?.status).toBe("aligned");
   expect(corr?.words[0]?.text).toBe("certa");
 });
+
+it("GET /project reconcilia status running órfão para interrupted após reinício do servidor", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-orphan-run-"));
+  const p = blankProject("p1");
+  p.assembly.sources.push({ ...fixtureAssembly().sources[0]!, id: "src1" });
+  p.preparation = {
+    id: "prep-stale", revision: 0, mode: "prepare", request: "teste",
+    status: "running", stage: "media", sources: {},
+  };
+  await createProject(dir, p);
+
+  const app = await startApp({ projectDir: dir, port: 0 });
+  stop = app.close;
+  const res = await fetch(`http://127.0.0.1:${app.port}/project`);
+  const body = await res.json() as { project: { preparation?: { status?: string; error?: string } } };
+  expect(body.project.preparation?.status).toBe("interrupted");
+  expect(body.project.preparation?.error).toContain("servidor reiniciado");
+});
+

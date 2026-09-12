@@ -78,6 +78,10 @@ export function withGrantedPermissions(
 const prepLocks = new Map<string, Promise<void>>();
 const prepActive = new Map<string, number>();
 
+export function isPreparationActive(dir: string): boolean {
+  return (prepActive.get(dir) ?? 0) > 0;
+}
+
 async function withPreparationLock<T>(dir: string, fn: (contended: boolean) => Promise<T>): Promise<T> {
   const prev = prepLocks.get(dir);
   const contended = (prepActive.get(dir) ?? 0) > 0;
