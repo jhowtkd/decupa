@@ -1,6 +1,6 @@
 # Correções da Auditoria ICE — Plano de Implementação
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Corrigir os 10 problemas confirmados pela auditoria ICE de 2026-09-12 (B-roll descartado, micro-slivers de corte textual, rates mistos no OTIO, correção travada em `pending`, I/O duplicado, fps fracionário no `decupa limpar`, `pnpm test` quebrado por env, preparação órfã em `running`, waveform achatado) e fechar o Gate G6 com harness de importação real no DaVinci Resolve.
 
@@ -33,12 +33,12 @@
 - Consumes: teste existente `tests/assembly-flow.test.ts:35-38` (afirma `Boolean(process.env.ZAI_API_KEY) === false`).
 - Produces: `test.env` no config do vitest zerando `ZAI_API_KEY` e `OPENAI_API_KEY` para todos os testes.
 
-- [ ] **Step 1: Demonstrar a falha com a chave presente no ambiente**
+- [x] **Step 1: Demonstrar a falha com a chave presente no ambiente**
 
 Run: `ZAI_API_KEY=fake-key npx vitest run tests/assembly-flow.test.ts`
 Expected: FAIL em `não usa chave live nos testes de modelo` (esperava `false`, recebeu `true`).
 
-- [ ] **Step 2: Aplicar o isolamento no config**
+- [x] **Step 2: Aplicar o isolamento no config**
 
 Substitua o conteúdo de `vitest.config.ts` por:
 
@@ -60,17 +60,17 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 3: Verificar o teste que antes falhava**
+- [x] **Step 3: Verificar o teste que antes falhava**
 
 Run: `ZAI_API_KEY=fake-key npx vitest run tests/assembly-flow.test.ts`
 Expected: PASS (todos os testes do arquivo).
 
-- [ ] **Step 4: Suíte completa**
+- [x] **Step 4: Suíte completa**
 
 Run: `pnpm test`
 Expected: PASS em todos os arquivos (a auditoria contou 698 testes; 1 falhava por este motivo).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add vitest.config.ts
@@ -91,7 +91,7 @@ Em `compileScenes`, `srcStartSeconds` soma `item.offsetFrames` (posição na **c
 - Consumes: `Scene["support"]` (`{ visualId, offsetFrames, durationFrames }`), catálogo visual (`visualCatalog`), helpers `toFrames`/`toSeconds` locais de `compileScenes`.
 - Produces: `Clip` de V2 com `sourceStartSeconds = span.start` (sem dependência de `offsetFrames`). Nenhuma assinatura muda.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Adicione ao final de `apps/cli/src/app/assembly/scenes.test.ts` (mesmo estilo do teste `apoio além da cena é limitado com nota na explicação`; o helper `project()` e os imports `compileScenes`/`validateProposal` já existem no arquivo):
 
@@ -127,12 +127,12 @@ it("apoio no meio da cena entra pelo início do span da fonte", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/scenes.test.ts`
 Expected: FAIL — o novo teste recebe `v2` vazio (apoio descartado).
 
-- [ ] **Step 3: Corrigir o cálculo em `compileScenes`**
+- [x] **Step 3: Corrigir o cálculo em `compileScenes`**
 
 Em `apps/cli/src/app/assembly/scenes.ts`, substitua o corpo do laço de support (linhas 367-389, de `for (const item of scene.support) {` até o `}` antes de `return validateAssembly`) por:
 
@@ -165,12 +165,12 @@ Em `apps/cli/src/app/assembly/scenes.ts`, substitua o corpo do laço de support 
 
 (A mudança efetiva: `srcAvailable` agora é `toFrames(span.end) - toFrames(span.start)` e `sourceStartSeconds` é `toSeconds(toFrames(span.start))`; a variável `srcStartSeconds` deixa de existir.)
 
-- [ ] **Step 4: Rodar os testes de scenes**
+- [x] **Step 4: Rodar os testes de scenes**
 
 Run: `npx vitest run apps/cli/src/app/assembly/scenes.test.ts`
 Expected: PASS — incluindo o teste pré-existente `apoio além da cena é limitado com nota na explicação` (offset 40, span 2 s: o resultado continua 10 frames) e o novo teste.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/scenes.ts apps/cli/src/app/assembly/scenes.test.ts
@@ -191,7 +191,7 @@ Ao remover `w1` [0.1, 0.4] e `w2` [0.42, 0.7], o `removed` guarda dois intervalo
 - Consumes: `wordCutInterval(word, prev?, next?)` (já existente, linhas 113-124), `Word`, `SpeechTake`, `SourceRange`.
 - Produces: `wordIntervalsInTake(words, ordered, take): SourceRange[]` com a mesma assinatura — agora com runs de índices consecutivos fundidos. `normalizeRanges` no chamador continua fundindo sobreposições.
 
-- [ ] **Step 1: Atualizar o teste existente que pina o comportamento bugado**
+- [x] **Step 1: Atualizar o teste existente que pina o comportamento bugado**
 
 Em `apps/cli/src/app/assembly/words.test.ts`, no teste `remove corta a mídia e restore devolve a seleção anterior`, troque a asserção dos dois intervalos separados:
 
@@ -211,7 +211,7 @@ por:
 
 (o restante do teste — catálogo intacto e restore devolvendo `[]` — permanece.)
 
-- [ ] **Step 2: Escrever os novos testes**
+- [x] **Step 2: Escrever os novos testes**
 
 Adicione ao final de `apps/cli/src/app/assembly/words.test.ts`:
 
@@ -245,12 +245,12 @@ it("palavras não vizinhas continuam em intervalos separados", () => {
 });
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/words.test.ts`
 Expected: FAIL nos testes novos/editados (o `removed` ainda vem com dois intervalos para vizinhas).
 
-- [ ] **Step 4: Implementar a fusão de runs em `wordIntervalsInTake`**
+- [x] **Step 4: Implementar a fusão de runs em `wordIntervalsInTake`**
 
 Em `apps/cli/src/app/assembly/words.ts`, substitua a função `wordIntervalsInTake` (linhas 153-167) por:
 
@@ -285,12 +285,12 @@ function wordIntervalsInTake(
 
 (`ordered[first - 1]` com `first === 0` é `undefined`, exatamente o `prev?` opcional que `wordCutInterval` aceita.)
 
-- [ ] **Step 5: Rodar os testes de words**
+- [x] **Step 5: Rodar os testes de words**
 
 Run: `npx vitest run apps/cli/src/app/assembly/words.test.ts`
 Expected: PASS em todos (incluindo os de `snapWordCuts` e `settleCorrection`, que não mudaram).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/words.ts apps/cli/src/app/assembly/words.test.ts
@@ -311,7 +311,7 @@ git commit -m "fix: cortar palavras vizinhas engloba as pausas intermediárias"
 - Consumes: `time(value, rate)` e `fpsNumber(assembly)` já existentes em `otio.ts`; `Clip.sourceStartSeconds` e `Clip.durationFrames`.
 - Produces: OTIO `Clip.1.source_range.start_time = { value: frames, rate: fps }` — mesma taxa do `duration`. `buildOtio(assembly): string` não muda de assinatura.
 
-- [ ] **Step 1: Reescrever o teste que pina o comportamento antigo**
+- [x] **Step 1: Reescrever o teste que pina o comportamento antigo**
 
 Em `apps/cli/src/app/assembly/otio.test.ts`, substitua o teste `exporta início fracionário da fonte sem arredondar fps 30000/1001` por:
 
@@ -336,12 +336,12 @@ it("exporta início em frames na taxa da timeline (sem rates mistos)", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/otio.test.ts`
 Expected: FAIL — `start_time` ainda é `{ value: 1.5, rate: 1 }`.
 
-- [ ] **Step 3: Corrigir `clipItem`**
+- [x] **Step 3: Corrigir `clipItem`**
 
 Em `apps/cli/src/app/assembly/otio.ts`, substitua a função `clipItem` por:
 
@@ -363,12 +363,12 @@ function clipItem(clip: Clip, source: Source, assembly: Assembly, fps: number) {
 }
 ```
 
-- [ ] **Step 4: Rodar os testes de otio**
+- [x] **Step 4: Rodar os testes de otio**
 
 Run: `npx vitest run apps/cli/src/app/assembly/otio.test.ts`
 Expected: PASS em todos.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/otio.ts apps/cli/src/app/assembly/otio.test.ts
@@ -389,7 +389,7 @@ git commit -m "fix: OTIO emite início em frames na taxa da timeline para o Reso
 - Consumes: `saveProject(dir, expectedRevision, fn)` (erro `revisão desatualizada` no CAS), `settleCorrection` e `AlignmentOutcome` de `./words.ts`, `alignText` de `@decupa/transcript`.
 - Produces: `publishCorrection(dir, correctionId, outcome): Promise<void>` (**sem** `expectedRevision`) e `alignCorrectionJob(dir, correctionId): Promise<void>` (idem). `settleCorrection` continua sem criar revisão nova.
 
-- [ ] **Step 1: Adicionar o mock de `alignText` no topo do arquivo de teste**
+- [x] **Step 1: Adicionar o mock de `alignText` no topo do arquivo de teste**
 
 Em `apps/cli/src/app/assembly/routes.test.ts`, imediatamente após os imports existentes, adicione:
 
@@ -402,7 +402,7 @@ vi.mock("@decupa/transcript", () => ({ alignText: vi.fn() }));
 
 (`vi` já é importado do vitest nesse arquivo.)
 
-- [ ] **Step 2: Escrever o teste de rebase**
+- [x] **Step 2: Escrever o teste de rebase**
 
 Adicione ao final de `apps/cli/src/app/assembly/routes.test.ts`:
 
@@ -485,12 +485,12 @@ it("edição concorrente durante o alinhamento não descarta a correção (rebas
 });
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/routes.test.ts`
 Expected: FAIL — `final` continua `null` (a correção fica `pending` para sempre porque o job retorna cedo na revisão divergente).
 
-- [ ] **Step 4: Implementar o rebase em `routes.ts`**
+- [x] **Step 4: Implementar o rebase em `routes.ts`**
 
 Substitua as funções `publishCorrection` e o trecho inicial de `alignCorrectionJob` (linhas 211-255) por:
 
@@ -567,12 +567,12 @@ por:
           void alignCorrectionJob(dir, correctionId);
 ```
 
-- [ ] **Step 5: Rodar os testes de routes**
+- [x] **Step 5: Rodar os testes de routes**
 
 Run: `npx vitest run apps/cli/src/app/assembly/routes.test.ts`
 Expected: PASS em todos.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/routes.ts apps/cli/src/app/assembly/routes.test.ts
@@ -593,7 +593,7 @@ git commit -m "fix: publicação de correção rebasa sobre edições concorrent
 - Consumes: `verifySourceIdentity(source: Source): Promise<void>` de `./media.ts` (erros: `mídia ausente: fonte …` e `conteúdo substituído na fonte …`); `absolutePath` local.
 - Produces: `renderAssembly(a, outDir, exec): Promise<string>` com a mesma assinatura — agora sem leitura integral quando as sentinelas `size`/`mtimeMs` batem.
 
-- [ ] **Step 1: Atualizar a regex do teste existente**
+- [x] **Step 1: Atualizar a regex do teste existente**
 
 Em `apps/cli/src/app/assembly/render.test.ts`, teste `recusa fonte substituída antes de renderizar`, troque:
 
@@ -609,7 +609,7 @@ por:
 
 (a nova mensagem é `conteúdo substituído na fonte …` — masculino).
 
-- [ ] **Step 2: Escrever o teste novo com spy em `hashFile`**
+- [x] **Step 2: Escrever o teste novo com spy em `hashFile`**
 
 No topo de `apps/cli/src/app/assembly/render.test.ts`, logo após os imports, adicione:
 
@@ -650,12 +650,12 @@ it("confere identidade pelas sentinelas sem reler a fonte inteira", async () => 
 });
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/render.test.ts`
 Expected: FAIL no teste novo — `hashFile` é chamado para `media` (leitura integral) e o render atual nem olha sentinelas.
 
-- [ ] **Step 4: Trocar o hash integral por `verifySourceIdentity`**
+- [x] **Step 4: Trocar o hash integral por `verifySourceIdentity`**
 
 Em `apps/cli/src/app/assembly/render.ts`:
 
@@ -674,12 +674,12 @@ Em `apps/cli/src/app/assembly/render.ts`:
   }
 ```
 
-- [ ] **Step 5: Rodar os testes de render**
+- [x] **Step 5: Rodar os testes de render**
 
 Run: `npx vitest run apps/cli/src/app/assembly/render.test.ts`
 Expected: PASS em todos (o teste `recusa fonte substituída` continua falhando corretamente porque as fixtures não têm sentinelas → fallback a hash → divergência detectada).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/render.ts apps/cli/src/app/assembly/render.test.ts
@@ -700,7 +700,7 @@ Em `exportApproved`, as fontes são lidas duas vezes: uma para conferir identida
 - Consumes: `verifySourceIdentity` de `./media.ts`; helper local `sha256(path)` (mantido — ainda usado por `exportedDirValid`).
 - Produces: `exportApproved(project, dir): Promise<string>` inalterada; `manifest.sources` agora vem do `source.sha256` registrado.
 
-- [ ] **Step 1: Escrever o teste do manifest**
+- [x] **Step 1: Escrever o teste do manifest**
 
 Adicione ao final de `apps/cli/src/app/assembly/export.test.ts` (usa o helper `projectWithMedia` já existente no arquivo):
 
@@ -720,7 +720,7 @@ it("manifest registra o sha registrado das fontes após verificação", async ()
 
 (confirme que `readFile` já está importado no arquivo; se não, acrescente ao import de `node:fs/promises`.)
 
-- [ ] **Step 2: Implementar**
+- [x] **Step 2: Implementar**
 
 Em `apps/cli/src/app/assembly/export.ts`:
 
@@ -745,12 +745,12 @@ Em `apps/cli/src/app/assembly/export.ts`:
     );
 ```
 
-- [ ] **Step 3: Rodar os testes de export**
+- [x] **Step 3: Rodar os testes de export**
 
 Run: `npx vitest run apps/cli/src/app/assembly/export.test.ts`
 Expected: PASS em todos — inclusive `recusa fonte cujo hash atual diverge do sha256 aprovado` (o teste reescreve o arquivo, size/mtime mudam, o fallback a hash detecta a divergência; a regex `/substitu|reanalise|relink/` já cobre a mensagem `conteúdo substituído na fonte …`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/export.ts apps/cli/src/app/assembly/export.test.ts
@@ -773,7 +773,7 @@ O fluxo de limpeza só exporta edl/mp4/srt; para fps fracionário (29,97 de iPho
 - Consumes: `buildOtio(assembly): string` de `./assembly/otio.ts` (valida via `validateAssembly`); `probe(path)` de `@decupa/media` (devolve `frameRate: Rate | null`, `durationMs`, `hasVideo/hasAudio`, `width/height`); `hashFile(path)`; `plan.clips` (`{ start, end }` em segundos).
 - Produces: `buildCutOtio(opts: { clips: { start: number; end: number }[]; source: CutSourceMeta; title: string }): string` com `CutSourceMeta = { path, sha256, durationSeconds, hasVideo, hasAudio, fps: Rate | null, width: number | null, height: number | null, name }`. Dependência da Task 4: o `start_time` sai em frames na taxa da timeline.
 
-- [ ] **Step 1: Escrever o teste unitário do adaptador**
+- [x] **Step 1: Escrever o teste unitário do adaptador**
 
 Crie `apps/cli/src/app/cut-otio.test.ts`:
 
@@ -813,12 +813,12 @@ it("gera OTIO do corte com fps fracionário da fonte", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/cut-otio.test.ts`
 Expected: FAIL — módulo `./cut-otio.ts` não existe.
 
-- [ ] **Step 3: Implementar o adaptador**
+- [x] **Step 3: Implementar o adaptador**
 
 Crie `apps/cli/src/app/cut-otio.ts`:
 
@@ -902,12 +902,12 @@ export function buildCutOtio(opts: {
 }
 ```
 
-- [ ] **Step 4: Rodar o teste unitário**
+- [x] **Step 4: Rodar o teste unitário**
 
 Run: `npx vitest run apps/cli/src/app/cut-otio.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Escrever o teste da rota**
+- [x] **Step 5: Escrever o teste da rota**
 
 Adicione ao final de `apps/cli/src/app/server.test.ts` (no bloco `describe` onde vive o teste `export srt achata o transcript...`; confira que `copyFile` e `FIXTURES` estão importados no arquivo — se faltarem, acrescente ao import de `node:fs/promises` e importe `FIXTURES` de `"../../../../../tests/fixtures/global-setup.ts"`):
 
@@ -943,7 +943,7 @@ Adicione ao final de `apps/cli/src/app/server.test.ts` (no bloco `describe` onde
   });
 ```
 
-- [ ] **Step 6: Implementar a rota**
+- [x] **Step 6: Implementar a rota**
 
 Em `apps/cli/src/app/server.ts`:
 
@@ -982,12 +982,12 @@ Em `apps/cli/src/app/server.ts`:
             otio: join(workDir, "corte.otio"),
 ```
 
-- [ ] **Step 7: Rodar os testes do server**
+- [x] **Step 7: Rodar os testes do server**
 
 Run: `npx vitest run apps/cli/src/app/server.test.ts`
 Expected: PASS em todos.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/cli/src/app/cut-otio.ts apps/cli/src/app/cut-otio.test.ts apps/cli/src/app/server.ts apps/cli/src/app/server.test.ts
@@ -1009,7 +1009,7 @@ git commit -m "feat: exportação OTIO no fluxo limpar aceita fps fracionário"
 - Consumes: `buildEdl(opts)` existente; `probeFps(job, exec)` existente.
 - Produces: `dropFrameTimecode(totalFrames: number): string` (exportado, formato `HH:MM:SS;FF` a 30000/1001). `buildEdl` passa a aceitar `fps === 30000/1001` (tolerância 1e-6) emitindo `FCM: DROP FRAME`.
 
-- [ ] **Step 1: Escrever os testes de timecode drop-frame**
+- [x] **Step 1: Escrever os testes de timecode drop-frame**
 
 Adicione ao final de `apps/cli/src/app/edl.test.ts` (confira o import de `buildEdl`; acrescente `dropFrameTimecode`):
 
@@ -1043,7 +1043,7 @@ it("buildEdl recusa 23,976 com instrução de OTIO", () => {
 });
 ```
 
-- [ ] **Step 2: Escrever o teste do `probeFps`**
+- [x] **Step 2: Escrever o teste do `probeFps`**
 
 Em `apps/cli/src/app/pipeline.test.ts`, bloco `describe("probeFps")`: o caso existente que espera `/29\.97/` para fps fracionário deve passar a usar `"24000/1001\n"` no stdout e esperar `/OTIO/` (23,976 segue recusado no EDL). Adicione também:
 
@@ -1057,12 +1057,12 @@ Em `apps/cli/src/app/pipeline.test.ts`, bloco `describe("probeFps")`: o caso exi
 
 (confira o formato do `PipelineJob` usado pelos casos vizinhos e alinhe o objeto `job` a eles.)
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/edl.test.ts apps/cli/src/app/pipeline.test.ts`
 Expected: FAIL — `dropFrameTimecode` não existe; `buildEdl`/`probeFps` recusam 29,97.
 
-- [ ] **Step 4: Implementar o drop-frame em `edl.ts`**
+- [x] **Step 4: Implementar o drop-frame em `edl.ts`**
 
 Substitua o corpo de `buildEdl` e acrescente o helper (mantendo `timecode` e `EdlClip` como estão; atualize o docblock de escopo):
 
@@ -1136,7 +1136,7 @@ E em `buildEdl`, substitua a validação e a montagem por:
 
 (O caminho non-drop-frame passa pela conversão frames→segundos→frames, que é exata em double para durações de vídeo — a saída NDF fica byte a byte igual à anterior.)
 
-- [ ] **Step 5: Liberar 30000/1001 no `probeFps`**
+- [x] **Step 5: Liberar 30000/1001 no `probeFps`**
 
 Em `apps/cli/src/app/pipeline.ts`, substitua o cheque de `probeFps` (linhas 428-436) por:
 
@@ -1156,12 +1156,12 @@ Em `apps/cli/src/app/pipeline.ts`, substitua o cheque de `probeFps` (linhas 428-
 
 (e atualize o docblock da função, que hoje diz "fracionário estoura aqui".)
 
-- [ ] **Step 6: Rodar os testes de edl e pipeline**
+- [x] **Step 6: Rodar os testes de edl e pipeline**
 
 Run: `npx vitest run apps/cli/src/app/edl.test.ts apps/cli/src/app/pipeline.test.ts`
 Expected: PASS em todos.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/cli/src/app/edl.ts apps/cli/src/app/edl.test.ts apps/cli/src/app/pipeline.ts apps/cli/src/app/pipeline.test.ts
@@ -1183,7 +1183,7 @@ Se o servidor morrer durante a preparação, o `project.json` fica com `preparat
 - Consumes: `prepActive` (mapa module-level já existente em `preparation.ts`), `loadProject`/`saveProject` de `./store.ts`.
 - Produces: `reconcileStalePreparation(dir: string): Promise<void>` — exportado de `preparation.ts`.
 
-- [ ] **Step 1: Escrever o teste**
+- [x] **Step 1: Escrever o teste**
 
 Adicione ao final de `apps/cli/src/app/assembly/routes.test.ts`:
 
@@ -1211,12 +1211,12 @@ it("GET do projeto reconcilia preparação órfã de servidor reiniciado", async
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/routes.test.ts`
 Expected: FAIL — o status devolvido continua `"running"`.
 
-- [ ] **Step 3: Implementar a reconciliação**
+- [x] **Step 3: Implementar a reconciliação**
 
 Ao final de `apps/cli/src/app/assembly/preparation.ts`, acrescente:
 
@@ -1272,12 +1272,12 @@ e o handler `GET /project` (linhas 455-459) para:
       }
 ```
 
-- [ ] **Step 4: Rodar os testes de routes e preparation**
+- [x] **Step 4: Rodar os testes de routes e preparation**
 
 Run: `npx vitest run apps/cli/src/app/assembly/routes.test.ts apps/cli/src/app/assembly/preparation.test.ts`
 Expected: PASS em todos (os testes de `runPreparation` não criam status `running` órfão no load, então não são afetados).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/preparation.ts apps/cli/src/app/assembly/routes.ts apps/cli/src/app/assembly/routes.test.ts
@@ -1298,7 +1298,7 @@ git commit -m "fix: preparação órfã de servidor reiniciado vira interrupted 
 - Consumes: `PEAKS_SAMPLE_RATE` (8000) já exportado; `opts.buckets` opcional permanece como override explícito.
 - Produces: `defaultPeaksBuckets(durationSeconds: number): number` — exportado, `max(500, min(10000, round(duração × 20)))`.
 
-- [ ] **Step 1: Escrever os testes**
+- [x] **Step 1: Escrever os testes**
 
 Adicione ao final de `apps/cli/src/app/assembly/waveform.test.ts` (acrescente `defaultPeaksBuckets` ao import de `./waveform.ts`):
 
@@ -1321,12 +1321,12 @@ it("buildPeaks sem buckets explícitos usa a densidade dinâmica", async () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run apps/cli/src/app/assembly/waveform.test.ts`
 Expected: FAIL — `defaultPeaksBuckets` não existe e o default hoje é 1000.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `apps/cli/src/app/assembly/waveform.ts`:
 
@@ -1348,12 +1348,12 @@ export function defaultPeaksBuckets(durationSeconds: number): number {
 
 (mantendo a validação existente de `proxyPath`/`sha256`/`outPath` onde está).
 
-- [ ] **Step 4: Rodar os testes de waveform**
+- [x] **Step 4: Rodar os testes de waveform**
 
 Run: `npx vitest run apps/cli/src/app/assembly/waveform.test.ts`
 Expected: PASS em todos (os testes com `buckets` explícito não mudam de comportamento).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/cli/src/app/assembly/waveform.ts apps/cli/src/app/assembly/waveform.test.ts
@@ -1374,7 +1374,7 @@ Nenhum OTIO do decupa foi aberto no Resolve de verdade; a prova atual é decodif
 - Consumes: OTIO gerado por `scripts/assembly-proof.ts` (escreve `work/assembly-proof/<run>/timeline.otio`); DaVinci Resolve instalado em `/Applications/DaVinci Resolve` (confirmado nesta máquina).
 - Produces: `scripts/davinci-verify.py --otio <caminho>` → JSON no stdout; exit 0 = pass, 1 = divergência, 2 = uso, 3 = scripting indisponível.
 
-- [ ] **Step 1: Criar o script Python**
+- [x] **Step 1: Criar o script Python**
 
 Crie `scripts/davinci-verify.py`:
 
@@ -1483,17 +1483,17 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 2: Checagem de sintaxe**
+- [x] **Step 2: Checagem de sintaxe**
 
 Run: `python3 -m py_compile scripts/davinci-verify.py && chmod +x scripts/davinci-verify.py`
 Expected: sem saída, exit 0.
 
-- [ ] **Step 3: Gerar o OTIO de prova com o fluxo existente**
+- [x] **Step 3: Gerar o OTIO de prova com o fluxo existente**
 
 Run: `node --experimental-strip-types scripts/assembly-proof.ts`
 Expected: executa e grava `work/assembly-proof/<run>/timeline.otio` (+ `report.json`). Descubra o run mais recente com `ls -t work/assembly-proof | head -1`.
 
-- [ ] **Step 4: Rodar a verificação e registrar a evidência**
+- [x] **Step 4: Rodar a verificação e registrar a evidência**
 
 Run (com DaVinci fechado ou aberto — ambos são resultados válidos):
 
@@ -1518,7 +1518,7 @@ Crie `docs/superpowers/evidence/2026-09-12-g6-importacao-davinci.md` com o conte
   `davinciImportSettings` (procedure em `apps/cli/src/app/assembly/otio.ts`).
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/davinci-verify.py docs/superpowers/evidence/2026-09-12-g6-importacao-davinci.md
@@ -1529,10 +1529,10 @@ git commit -m "feat: harness de importação real de OTIO no DaVinci Resolve (G6
 
 ## Verificação final (após todas as tarefas)
 
-- [ ] `pnpm test` — suíte completa verde (com e sem `ZAI_API_KEY` no ambiente).
-- [ ] `pnpm run typecheck` — sem erros.
-- [ ] `git status` limpo exceto a mudança pré-existente do usuário em `.gitignore` (`.foglamp/`), que permanece não commitada.
-- [ ] Marcar os checkboxes deste plano conforme as tarefas forem concluídas.
+- [x] `pnpm test` — suíte completa verde (com e sem `ZAI_API_KEY` no ambiente).
+- [x] `pnpm run typecheck` — sem erros.
+- [x] `git status` limpo exceto a mudança pré-existente do usuário em `.gitignore` (`.foglamp/`), que permanece não commitada.
+- [x] Marcar os checkboxes deste plano conforme as tarefas forem concluídas.
 
 ## Mapa auditoria → tarefas
 
