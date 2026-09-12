@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
 import { originAllowed } from "../http/origin.ts";
-import { hashFile, probe, type MediaInfo } from "@decupa/media";
+import { hashFile, probe } from "@decupa/media";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
@@ -375,18 +375,21 @@ async function startCleanupApp(opts: {
               throw new Error("fonte sem frame rate para exportar OTIO");
             }
             const fps = rate.num / rate.den;
-            const maxClipEnd = Math.max(
-              0,
-              ...(plan.clips as { start: number; end: number }[]).map((c) => c.end),
-            );
-            const durationSeconds = Math.max(info.durationMs / 1000, maxClipEnd, 0.001);
+            const durationSeconds = Math.max(info.durationMs / 1000, 0.001);
+            const clips = plan.clips as { start: number; end: number }[];
+            const overflow = clips.find((clip) => clip.end > durationSeconds + 1e-9);
+            if (overflow) {
+              throw new Error(
+                `clipe [${overflow.start}, ${overflow.end}) ultrapassa a fonte (${durationSeconds}s)`,
+              );
+            }
             const width = info.width;
             const height = info.height;
             if (!width || !height || width % 2 !== 0 || height % 2 !== 0) {
               throw new Error("fonte com canvas inválido para exportar OTIO");
             }
             const sha256 = await hashFile(input);
-            const videoClips = (plan.clips as { start: number; end: number }[]).map((clip, i) => {
+            const videoClips = clips.map((clip, i) => {
               const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
               return {
                 id: `v_c${i + 1}`,

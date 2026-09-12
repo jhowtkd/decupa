@@ -456,6 +456,11 @@ describe("startApp", () => {
   it("export otio gera timeline compatível e serve no endpoint de download", async () => {
     const { base, app, dir } = await bootComPlano();
     await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "v.mp4"));
+    await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+      source_duration: 3, output_duration: 1.5,
+      clips: [{ unit_ids: ["u002"], start: 0.5, end: 1.5 }, { unit_ids: ["u003"], start: 2, end: 2.5 }],
+      joins: [],
+    }), "utf8");
     const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -471,9 +476,23 @@ describe("startApp", () => {
     expect(doc.metadata.Resolve.timelineFrameRate).toBe("25");
     expect(doc.metadata.Resolve.timelineResolutionWidth).toBe("320");
     expect(otio).not.toContain(`"sha256": "${"0".repeat(64)}"`);
+    expect(otio).not.toMatch(/"durationSeconds": 30/);
     const dl = await fetch(`${base}${body.downloadUrl}`);
     expect(dl.status).toBe(200);
     expect(await dl.text()).toBe(otio);
+  });
+
+  it("export otio recusa clipe além da duração real da fonte", async () => {
+    const { base, app, dir } = await bootComPlano();
+    await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "v.mp4"));
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "otio" }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toMatch(/ultrapassa a fonte/);
   });
 
   it("export otio falha em vez de inventar 30 fps quando o probe quebra", async () => {
