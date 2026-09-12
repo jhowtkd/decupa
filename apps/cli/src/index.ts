@@ -49,10 +49,20 @@ const USAGE = `decupa — bancada de medição
       Abre o fluxo de montagem multiarquivo. --input acrescenta uma fonte;
       omitir --input reabre o projeto já gravado na pasta.
       Pagos ficam desligados; as flags só autorizam o cliente, não disparam chamada.
+
+  decupa mcp
+      Servidor MCP stdio para o agente da pessoa (doctor, start, status, stop,
+      configure_provider). Não imprime nada além de JSON-RPC.
 `;
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+
+  if (command === "mcp") {
+    const { runMcpStdio } = await import("./mcp/stdio.ts");
+    await runMcpStdio();
+    return 0;
+  }
 
   if (command === "doctor") {
     const { runDoctor, renderDoctor } = await import("./doctor.ts");
