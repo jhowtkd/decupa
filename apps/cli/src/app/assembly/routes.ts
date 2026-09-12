@@ -28,6 +28,11 @@ import type { Project, Rate, Source } from "./types.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
+const alignActive = new Set<string>();
+function alignKey(dir: string, correctionId: string): string {
+  return `${dir}\0${correctionId}`;
+}
+
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const PAID_BLOCKED = "análise paga exige lote e custo autorizados";
 
@@ -219,6 +224,16 @@ export async function publishCorrection(
   correctionId: string,
   outcome: AlignmentOutcome,
 ): Promise<void> {
+  const settleError = async (message: string) => {
+    const fresh = await loadProject(dir);
+    const pending = fresh.corrections.find((item) => item.id === correctionId);
+    if (!pending || pending.status !== "pending") return;
+    await saveProject(dir, fresh.revision, (current) => {
+      const correction = current.corrections.find((item) => item.id === correctionId);
+      if (!correction || correction.status !== "pending") return current;
+      return settleCorrection(current, correctionId, { error: message });
+    });
+  };
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fresh = await loadProject(dir);
@@ -235,10 +250,12 @@ export async function publishCorrection(
       });
       return;
     } catch (err) {
-      if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) return;
+      if (err instanceof Error && /revisão desatualizada/.test(err.message)) continue;
+      await settleError(err instanceof Error ? err.message : String(err)).catch(() => undefined);
+      return;
     }
   }
-  console.warn(`[publishCorrection] correção ${correctionId} não aplicada após 3 tentativas de rebase concorrente`);
+  await settleError("correção não aplicada após 3 tentativas de rebase concorrente").catch(() => undefined);
 }
 
 /**
@@ -251,6 +268,9 @@ async function alignCorrectionJob(
   correctionId: string,
   expectedRevision: number,
 ): Promise<void> {
+  const key = alignKey(dir, correctionId);
+  if (alignActive.has(key)) return;
+  alignActive.add(key);
   try {
     const current = await loadProject(dir);
     const correction = current.corrections.find((item) => item.id === correctionId);
@@ -311,8 +331,12 @@ async function alignCorrectionJob(
       // Sem refino acústico, valem as fronteiras do alinhamento.
     }
     await publishCorrection(dir, expectedRevision, correctionId, { words });
-  } catch {
-    // O pending segue retomável; o erro será registrado na próxima tentativa.
+  } catch (err) {
+    await publishCorrection(dir, expectedRevision, correctionId, {
+      error: err instanceof Error ? err.message : String(err),
+    }).catch(() => undefined);
+  } finally {
+    alignActive.delete(key);
   }
 }
 
@@ -474,6 +498,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             project = await loadProject(dir);
           } catch {
             // Se falhou o salvamento atômico, devolve o que tem
+          }
+        }
+        for (const correction of project.corrections) {
+          if (correction.status === "pending" && !alignActive.has(alignKey(dir, correction.id))) {
+            void alignCorrectionJob(dir, correction.id, project.revision);
           }
         }
         sendJson(res, { project, ...snapshot() });
