@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { FakeExecutor, SpawnExecutor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
 
@@ -454,6 +455,7 @@ describe("startApp", () => {
 
   it("export otio gera timeline compatível e serve no endpoint de download", async () => {
     const { base, app, dir } = await bootComPlano();
+    await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "v.mp4"));
     const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -463,11 +465,26 @@ describe("startApp", () => {
     const body = await res.json() as { downloadUrl: string };
     expect(body.downloadUrl).toBe(`/jobs/${app.jobId}/download/otio`);
     const otio = await readFile(join(dir, "corte.otio"), "utf8");
-    expect(otio).toContain("Timeline.1");
-    expect(otio).toContain("tracks");
+    const doc = JSON.parse(otio) as {
+      metadata: { Resolve: { timelineFrameRate: string; timelineResolutionWidth: string } };
+    };
+    expect(doc.metadata.Resolve.timelineFrameRate).toBe("25");
+    expect(doc.metadata.Resolve.timelineResolutionWidth).toBe("320");
+    expect(otio).not.toContain(`"sha256": "${"0".repeat(64)}"`);
     const dl = await fetch(`${base}${body.downloadUrl}`);
     expect(dl.status).toBe(200);
     expect(await dl.text()).toBe(otio);
+  });
+
+  it("export otio falha em vez de inventar 30 fps quando o probe quebra", async () => {
+    const { base, app, dir } = await bootComPlano();
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "otio" }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    await expect(readFile(join(dir, "corte.otio"), "utf8")).rejects.toThrow();
   });
 
   it("recusa POST de outra origem, e aceita o da própria página", async () => {

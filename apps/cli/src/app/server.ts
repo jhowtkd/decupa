@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
 import { originAllowed } from "../http/origin.ts";
-import { probe, type MediaInfo } from "@decupa/media";
+import { hashFile, probe, type MediaInfo } from "@decupa/media";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
@@ -369,27 +369,23 @@ async function startCleanupApp(opts: {
             return;
           }
           if (kind === "otio") {
-            let info: MediaInfo | null = null;
-            try {
-              info = await probe(pipelineJob.videoPath);
-            } catch (err) {
-              // fallback se a mídia não for probeável no momento (ex.: teste unitário)
-              console.warn(
-                `[export otio] probe não obteve metadados de ${pipelineJob.videoPath} (${err instanceof Error ? err.message : String(err)}); usando fallback 30fps 1920x1080`,
-              );
+            const info = await probe(input);
+            const rate = info.frameRate;
+            if (!rate) {
+              throw new Error("fonte sem frame rate para exportar OTIO");
             }
-            const rate = info?.frameRate ?? { num: 30, den: 1 };
             const fps = rate.num / rate.den;
             const maxClipEnd = Math.max(
               0,
               ...(plan.clips as { start: number; end: number }[]).map((c) => c.end),
             );
-            const durationSeconds = Math.max((info?.durationMs ?? 0) / 1000, maxClipEnd + 10);
-            const width = info?.width ?? 1920;
-            const height = info?.height ?? 1080;
-            const hasAudio = info ? info.hasAudio : true;
-            const hasVideo = info ? info.hasVideo : true;
-
+            const durationSeconds = Math.max(info.durationMs / 1000, maxClipEnd, 0.001);
+            const width = info.width;
+            const height = info.height;
+            if (!width || !height || width % 2 !== 0 || height % 2 !== 0) {
+              throw new Error("fonte com canvas inválido para exportar OTIO");
+            }
+            const sha256 = await hashFile(input);
             const videoClips = (plan.clips as { start: number; end: number }[]).map((clip, i) => {
               const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
               return {
@@ -406,24 +402,7 @@ async function startCleanupApp(opts: {
               clip.startFrame = cursor;
               cursor += clip.durationFrames;
             }
-
-            const audioClips = (plan.clips as { start: number; end: number }[]).map((clip, i) => {
-              const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
-              return {
-                id: `a_c${i + 1}`,
-                sceneId: `scene_${i + 1}`,
-                sourceId: "src1",
-                sourceStartSeconds: clip.start,
-                durationFrames,
-                startFrame: 0,
-              };
-            });
-            let aCursor = 0;
-            for (const clip of audioClips) {
-              clip.startFrame = aCursor;
-              aCursor += clip.durationFrames;
-            }
-
+            const audioClips = videoClips.map((clip, i) => ({ ...clip, id: `a_c${i + 1}` }));
             const assembly: Assembly = {
               version: 1,
               revision: 1,
@@ -433,11 +412,11 @@ async function startCleanupApp(opts: {
               height,
               sources: [{
                 id: "src1",
-                path: resolve(pipelineJob.videoPath),
-                sha256: "0".repeat(64),
+                path: resolve(input),
+                sha256,
                 durationSeconds,
-                hasVideo,
-                hasAudio,
+                hasVideo: info.hasVideo,
+                hasAudio: info.hasAudio,
                 fps: rate,
                 width,
                 height,
@@ -446,9 +425,9 @@ async function startCleanupApp(opts: {
                 name: basename(input),
               }],
               tracks: [
-                { kind: "Video", name: "V1", clips: videoClips },
+                { kind: "Video", name: "V1", clips: info.hasVideo ? videoClips : [] },
                 { kind: "Video", name: "V2", clips: [] },
-                { kind: "Audio", name: "A1", clips: hasAudio ? audioClips : [] },
+                { kind: "Audio", name: "A1", clips: info.hasAudio ? audioClips : [] },
               ],
             };
             const out = join(workDir, "corte.otio");
