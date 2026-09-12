@@ -611,3 +611,43 @@ it("GET /project reconcilia status running órfão para interrupted após reiní
   expect(body.project.preparation?.error).toContain("servidor reiniciado");
 });
 
+it("publishCorrection assenta error quando o save não é conflito de revisão", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-corr-err-"));
+  const p = blankProject("p1");
+  p.assembly.sources.push({ ...fixtureAssembly().sources[0]!, id: "src1" });
+  p.corrections.push({
+    id: "corr-1", sourceId: "src1", start: 0, end: 1, text: "certa", status: "pending", words: [],
+  });
+  await createProject(dir, p);
+  await publishCorrection(dir, 0, "corr-1", {
+    words: [{ text: "certa", start: 0, end: 1, confidence: 0.95, cutStart: -1, cutEnd: 1 }],
+  });
+  const final = await loadProject(dir);
+  const corr = final.corrections.find((c) => c.id === "corr-1");
+  expect(corr?.status).toBe("error");
+  expect(corr?.error?.length).toBeGreaterThan(0);
+});
+
+it("GET /project relança pending órfão e assenta error se a fonte falhar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-corr-resume-"));
+  const p = blankProject("p1");
+  p.assembly.sources.push({ ...fixtureAssembly().sources[0]!, id: "src1" });
+  p.corrections.push({
+    id: "corr-stale", sourceId: "src1", start: 0, end: 1, text: "certa", status: "pending", words: [],
+  });
+  await createProject(dir, p);
+  const app = await startApp({ projectDir: dir, port: 0 });
+  stop = app.close;
+  await fetch(`http://127.0.0.1:${app.port}/project`);
+  let settled: { status?: string } | undefined;
+  for (let i = 0; i < 50 && !settled; i += 1) {
+    await new Promise((r) => setTimeout(r, 100));
+    const body = await (await fetch(`http://127.0.0.1:${app.port}/project`)).json() as {
+      project: { corrections: { id: string; status: string }[] };
+    };
+    const corr = body.project.corrections.find((c) => c.id === "corr-stale");
+    if (corr && corr.status !== "pending") settled = corr;
+  }
+  expect(settled?.status).toBe("error");
+});
+
