@@ -123,13 +123,9 @@ export async function exportApproved(project: Project, dir: string): Promise<str
   }
 
   // Edição ou troca de mídia durante a exportação não vira entrega atual.
-  try {
-    const fresh = await loadProject(dir);
-    if (fresh.revision !== project.revision) {
-      throw new Error(`revisão mudou durante a exportação: base ${project.revision}, atual ${fresh.revision}`);
-    }
-  } catch (err) {
-    if (err instanceof Error && /mudou durante/.test(err.message)) throw err;
+  const fresh = await loadProject(dir);
+  if (fresh.revision !== project.revision) {
+    throw new Error(`revisão mudou durante a exportação: base ${project.revision}, atual ${fresh.revision}`);
   }
   const reference = resolve(dir, artifact.relativePath);
   if (reference !== dir && !reference.startsWith(dir + sep)) {
