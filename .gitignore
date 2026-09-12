@@ -13,3 +13,4 @@ work/
 # cache de índice, frames e waveforms do QC. Artefato de execução.
 .video_agent/
 .superpowers/
+.decupa/
