@@ -5,29 +5,38 @@ const run = promisify(execFile);
 
 export const DEFAULT_SAMPLE_RATE = 16_000;
 
-/** Extrai a trilha de áudio como WAV PCM s16le mono. Sobrescreve o destino. */
+export function extractAudioArgs(opts: {
+  input: string;
+  output: string;
+  sampleRate?: number;
+  startSeconds?: number;
+  durationSeconds?: number;
+}): string[] {
+  const sampleRate = opts.sampleRate ?? DEFAULT_SAMPLE_RATE;
+  const args = ["-v", "error", "-y", "-i", opts.input];
+  // Seek de saída: -ss depois de -i. Seek de entrada (antes de -i) para em
+  // keyframe e desloca o PCM que o snap/alinhamento trata como t=0.
+  if (opts.startSeconds !== undefined) args.push("-ss", String(opts.startSeconds));
+  if (opts.durationSeconds !== undefined) args.push("-t", String(opts.durationSeconds));
+  args.push(
+    "-vn",
+    "-ar", String(sampleRate),
+    "-ac", "1",
+    "-c:a", "pcm_s16le",
+    opts.output,
+  );
+  return args;
+}
+
 export async function extractAudio(opts: {
   input: string;
   output: string;
   sampleRate?: number;
-  /** Recorte opcional em segundos; omitidos extraem o arquivo inteiro. */
   startSeconds?: number;
   durationSeconds?: number;
 }): Promise<void> {
-  const sampleRate = opts.sampleRate ?? DEFAULT_SAMPLE_RATE;
-  const args = ["-v", "error", "-y"];
-  if (opts.startSeconds !== undefined) args.push("-ss", String(opts.startSeconds));
-  args.push("-i", opts.input);
-  if (opts.durationSeconds !== undefined) args.push("-t", String(opts.durationSeconds));
   try {
-    await run("ffmpeg", [
-      ...args,
-      "-vn",
-      "-ar", String(sampleRate),
-      "-ac", "1",
-      "-c:a", "pcm_s16le",
-      opts.output,
-    ]);
+    await run("ffmpeg", extractAudioArgs(opts));
   } catch (cause) {
     throw new Error(`extração de áudio falhou em ${opts.input}`, { cause });
   }
