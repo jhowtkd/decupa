@@ -53,21 +53,24 @@ it("distingue dois arquivos com o mesmo basename", () => {
   expect(urlA).not.toBe(urlB);
 });
 
-it("exporta início fracionário da fonte sem arredondar fps 30000/1001", () => {
+it("exporta início fracionário da fonte com mesma taxa e frames inteiros no start_time", () => {
   const a = fixtureAssembly();
   a.fps = { num: 30000, den: 1001 };
+  const fps = 30000 / 1001;
   a.tracks[0]!.clips[0]!.sourceStartSeconds = 1.5;
-  a.tracks[0]!.clips[0]!.durationFrames = 1;
+  a.tracks[0]!.clips[0]!.durationFrames = 10;
   a.tracks[1]!.clips = [];
-  a.tracks[2]!.clips[0]!.durationFrames = 1;
+  a.tracks[2]!.clips[0]!.durationFrames = 10;
   const doc = JSON.parse(buildOtio(validateAssembly(a)));
   const clip = doc.tracks.children[0].children[0];
-  expect(clip.source_range.start_time.value).toBe(1.5);
-  expect(clip.source_range.start_time.rate).toBe(1);
-  expect(clip.source_range.duration.value).toBe(1);
-  expect(clip.source_range.duration.rate).toBe(30000 / 1001);
+  const expectedStartFrame = Math.round(1.5 * fps);
+  expect(clip.source_range.start_time.value).toBe(expectedStartFrame);
+  expect(clip.source_range.start_time.rate).toBe(fps);
+  expect(clip.source_range.start_time.rate).not.toBe(29.97);
+  expect(clip.source_range.duration.value).toBe(10);
+  expect(clip.source_range.duration.rate).toBe(fps);
   expect(clip.source_range.duration.rate).not.toBe(29.97);
-  expect(doc.global_start_time.rate).toBe(30000 / 1001);
+  expect(doc.global_start_time.rate).toBe(fps);
   expect(doc.global_start_time.rate).not.toBe(29.97);
-  expect(doc.global_start_time.value).toBe((30000 / 1001) * 3600);
+  expect(doc.global_start_time.value).toBe(fps * 3600);
 });

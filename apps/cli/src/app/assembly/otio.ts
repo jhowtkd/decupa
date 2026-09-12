@@ -56,12 +56,13 @@ function externalReference(source: Source, assembly: Assembly, fps: number) {
 }
 
 function clipItem(clip: Clip, source: Source, assembly: Assembly, fps: number) {
+  const startFrame = Math.round(clip.sourceStartSeconds * fps);
   return {
     OTIO_SCHEMA: "Clip.1",
     name: clip.id,
     source_range: {
       OTIO_SCHEMA: "TimeRange.1",
-      start_time: time(clip.sourceStartSeconds, 1),
+      start_time: time(startFrame, fps),
       duration: time(clip.durationFrames, fps),
     },
     media_reference: externalReference(source, assembly, fps),
