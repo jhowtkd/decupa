@@ -5,5 +5,9 @@ export default defineConfig({
     globalSetup: ["./tests/fixtures/global-setup.ts"],
     testTimeout: 60_000,
     hookTimeout: 180_000,
+    env: {
+      ZAI_API_KEY: "",
+      OPENAI_API_KEY: "",
+    },
   },
 });
