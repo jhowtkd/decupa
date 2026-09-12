@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FIXTURES } from "../../../tests/fixtures/global-setup.ts";
-import { extractAudio, readPcm } from "./audio.ts";
+import { extractAudio, extractAudioArgs, readPcm } from "./audio.ts";
 import { probe } from "./probe.ts";
 
 describe("extractAudio", () => {
@@ -22,6 +22,23 @@ describe("extractAudio", () => {
     expect(info.durationMs).toBeGreaterThanOrEqual(3000);
     expect(info.durationMs).toBeLessThan(3100);
     expect((await stat(out)).size).toBeGreaterThan(0);
+  });
+
+  it("coloca -ss depois de -i para o recorte ser preciso no GOP", () => {
+    const args = extractAudioArgs({
+      input: "/tmp/fala.mp4",
+      output: "/tmp/clip.wav",
+      startSeconds: 12.5,
+      durationSeconds: 1.2,
+    });
+    const iAt = args.indexOf("-i");
+    const ssAt = args.indexOf("-ss");
+    expect(iAt).toBeGreaterThan(0);
+    expect(ssAt).toBeGreaterThan(iAt);
+    expect(args[iAt + 1]).toBe("/tmp/fala.mp4");
+    expect(args[ssAt + 1]).toBe("12.5");
+    expect(args).toContain("-t");
+    expect(args[args.indexOf("-t") + 1]).toBe("1.2");
   });
 });
 
