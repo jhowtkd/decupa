@@ -156,14 +156,50 @@ function wordIntervalsInTake(
   take: SpeechTake,
 ): SourceRange[] {
   const byId = new Map(ordered.map((word, i) => [word.id, i]));
-  return words.map((word) => {
-    const i = byId.get(word.id)!;
-    const interval = wordCutInterval(word, ordered[i - 1], ordered[i + 1]);
-    if (interval.start < take.start || interval.end > take.end) {
-      throw new Error(`palavra ${word.id} fora do take ${take.id}`);
+  const indices = words.map((w) => {
+    const idx = byId.get(w.id);
+    if (idx === undefined) throw new Error(`palavra ${w.id} não encontrada na fonte: ${w.id}`);
+    return idx;
+  }).sort((a, b) => a - b);
+
+  const ranges: SourceRange[] = [];
+  if (indices.length === 0) return ranges;
+
+  let groupStart = indices[0]!;
+  let groupEnd = indices[0]!;
+
+  for (let k = 1; k < indices.length; k++) {
+    const idx = indices[k]!;
+    if (idx === groupEnd + 1) {
+      groupEnd = idx;
+    } else {
+      const firstWord = ordered[groupStart]!;
+      const lastWord = ordered[groupEnd]!;
+      const prev = ordered[groupStart - 1];
+      const next = ordered[groupEnd + 1];
+      const startRange = wordCutInterval(firstWord, prev, ordered[groupStart + 1]);
+      const endRange = wordCutInterval(lastWord, ordered[groupEnd - 1], next);
+      if (startRange.start < take.start || endRange.end > take.end) {
+        throw new Error(`palavra ${firstWord.id} fora do take ${take.id}`);
+      }
+      ranges.push({ start: startRange.start, end: endRange.end });
+      groupStart = idx;
+      groupEnd = idx;
     }
-    return interval;
-  });
+  }
+
+  const firstWord = ordered[groupStart]!;
+  const lastWord = ordered[groupEnd]!;
+  const prev = ordered[groupStart - 1];
+  const next = ordered[groupEnd + 1];
+  const startRange = wordCutInterval(firstWord, prev, ordered[groupStart + 1]);
+  const endRange = wordCutInterval(lastWord, ordered[groupEnd - 1], next);
+  if (startRange.start < take.start || endRange.end > take.end) {
+    throw new Error(`palavra ${firstWord.id} fora do take ${take.id}`);
+  }
+  ranges.push({ start: startRange.start, end: endRange.end });
+
+  return ranges;
 }
 
 function overlaps(range: SourceRange, list: SourceRange[]): boolean {

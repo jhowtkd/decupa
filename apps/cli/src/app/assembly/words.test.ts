@@ -77,13 +77,30 @@ it("remove corta a mídia e restore devolve a seleção anterior", () => {
   const removed = applyTextEdit(before, { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1", "w2"] });
   expect(removed.revision).toBe(2);
   expect(removed.scenes[0]!.takes[0]!.removed).toEqual([
-    { start: 0.1, end: 0.4 }, { start: 0.42, end: 0.7 },
+    { start: 0.1, end: 0.7 },
   ]);
   // Catálogo textual intacto: remover não destrói a transcrição.
   expect(removed.analyses[0]!.words).toEqual(before.analyses[0]!.words);
   const restored = applyTextEdit(removed, { type: "restore", sceneId: "s1", takeId: "t1", wordIds: ["w1", "w2"] });
   expect(restored.scenes[0]!.takes[0]!.removed).toEqual([]);
   expect(retainedRanges(restored.scenes[0]!.takes[0]!)).toEqual([{ start: 0, end: 2 }]);
+});
+
+it("remove de palavras não contíguas preserva a palavra do meio", () => {
+  const before = project();
+  // w1: [0.1, 0.4], w3: [0.72, 0.8]. w2 [0.42, 0.7] fica no meio.
+  const removed = applyTextEdit(before, { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1", "w3"] });
+  expect(removed.scenes[0]!.takes[0]!.removed).toEqual([
+    { start: 0.1, end: 0.4 },
+    { start: 0.72, end: 0.8 },
+  ]);
+  const retained = retainedRanges(removed.scenes[0]!.takes[0]!);
+  // Preserva [0, 0.1], o meio [0.4, 0.72] (que contém w2) e [0.8, 2]
+  expect(retained).toEqual([
+    { start: 0, end: 0.1 },
+    { start: 0.4, end: 0.72 },
+    { start: 0.8, end: 2 },
+  ]);
 });
 
 it("correct não move a seleção de mídia", () => {
