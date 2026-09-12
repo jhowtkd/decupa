@@ -364,3 +364,26 @@ it("proposeScenes envia fala com texto efetivo corrigido", async () => {
   expect(prompt).toContain("Nilton Pinto");
   expect(prompt).not.toContain("Niltão");
 });
+
+it("fragmento de ~1 frame na grade não é descartado na compilação", () => {
+  const p = project();
+  // 25 fps: 0.02s=0.5f → round 1; 0.04s=1.0f → round 1; last<=first descarta.
+  p.scenes = [{
+    id: "s1",
+    objective: "abrir",
+    rationale: "tema",
+    speechIds: ["a:u001"],
+    takes: [{
+      id: "t1", sourceId: "a", speechId: "a:u001",
+      start: 0.02, end: 0.04, removed: [], protected: [],
+    }],
+    visualEvidenceIds: [],
+    support: [],
+    gaps: [],
+  }];
+  const compiled = compileScenes(p, p.scenes);
+  const v1 = compiled.tracks.find((t) => t.name === "V1")!.clips;
+  expect(v1).toHaveLength(1);
+  expect(v1[0]!.durationFrames).toBe(1);
+  expect(v1[0]!.startFrame).toBe(0);
+});

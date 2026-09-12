@@ -345,9 +345,9 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
       const source = bySource.get(take.sourceId);
       if (!source) throw new Error(`take ${take.id} referencia fonte ausente ${take.sourceId}`);
       retainedRanges(take).forEach((fragment, i) => {
-        const first = toFrames(fragment.start);
-        const last = toFrames(fragment.end);
-        // Sliver sub-frame não tem frame renderizável: pula sem perder conteúdo.
+        const first = Math.floor((fragment.start * fpsNum) / fpsDen);
+        const lastRounded = Math.round((fragment.end * fpsNum) / fpsDen);
+        const last = Math.max(first + 1, lastRounded);
         if (last <= first) return;
         const id = `${scene.id}-${take.id}#${i}`;
         const clip = {
