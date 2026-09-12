@@ -74,3 +74,22 @@ it("exporta início fracionário da fonte com mesma taxa e frames inteiros no st
   expect(doc.global_start_time.rate).not.toBe(29.97);
   expect(doc.global_start_time.value).toBe(fps * 3600);
 });
+
+it("available_range do media_reference usa a mesma rate do source_range do clipe", () => {
+  const a = fixtureAssembly();
+  a.fps = { num: 30000, den: 1001 };
+  a.sources[0]!.fps = { num: 25, den: 1 };
+  a.sources[0]!.durationSeconds = 3;
+  a.tracks[1]!.clips = [];
+  a.tracks[2]!.clips[0]!.durationFrames = 10;
+  a.tracks[0]!.clips[0]!.durationFrames = 10;
+  const doc = JSON.parse(buildOtio(validateAssembly(a)));
+  const clip = doc.tracks.children[0].children[0];
+  const fps = 30000 / 1001;
+  expect(clip.source_range.start_time.rate).toBe(fps);
+  expect(clip.media_reference.available_range.duration.rate).toBe(fps);
+  expect(clip.media_reference.available_range.duration.rate)
+    .toBe(clip.source_range.duration.rate);
+  expect(clip.media_reference.available_range.duration.value).toBe(Math.round(3 * fps));
+  expect(clip.media_reference.available_range.start_time.rate).toBe(fps);
+});

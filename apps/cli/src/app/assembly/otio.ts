@@ -23,16 +23,8 @@ function imageBounds(width: number, height: number) {
   };
 }
 
-function sourceDuration(source: Source, fps: number): number {
-  if (source.fps) {
-    return source.durationSeconds * source.fps.num / source.fps.den;
-  }
-  return source.durationSeconds * fps;
-}
-
-function sourceRate(source: Source, fps: number): number {
-  if (source.fps) return source.fps.num / source.fps.den;
-  return fps;
+function mediaAvailableDuration(source: Source, fps: number): number {
+  return Math.round(source.durationSeconds * fps);
 }
 
 function externalReference(source: Source, assembly: Assembly, fps: number) {
@@ -42,7 +34,9 @@ function externalReference(source: Source, assembly: Assembly, fps: number) {
     OTIO_SCHEMA: "ExternalReference.1",
     name: source.id,
     target_url: pathToFileURL(source.path).href,
-    available_range: range(0, sourceDuration(source, fps), sourceRate(source, fps)),
+    // Mesma rate do source_range do clipe: rates mistos no mesmo arquivo
+    // (timeline vs fonte) deslocam in-point em importadores C++.
+    available_range: range(0, mediaAvailableDuration(source, fps), fps),
     available_image_bounds: imageBounds(width, height),
     metadata: {
       decupa: {
