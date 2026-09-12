@@ -22,6 +22,7 @@ export type BuildPeaksOpts = {
   sha256: string;
   outPath: string;
   buckets?: number;
+  durationSeconds?: number;
 };
 
 /**
@@ -42,7 +43,10 @@ export async function buildPeaks(
   opts: BuildPeaksOpts,
 ): Promise<{ path: string; buckets: number; count: number } | null> {
   try {
-    const buckets = opts.buckets ?? 1000;
+    const defaultBuckets = opts.durationSeconds
+      ? Math.max(500, Math.min(20_000, Math.round(opts.durationSeconds * 25)))
+      : 1000;
+    const buckets = opts.buckets ?? defaultBuckets;
     if (!Number.isSafeInteger(buckets) || buckets <= 0) return null;
     if (!opts.proxyPath || !opts.sha256 || !opts.outPath) return null;
     // PCM cru num temporário (o Executor só devolve texto em stdout):

@@ -100,3 +100,18 @@ it("executor que lança vira null (best-effort)", async () => {
   );
   expect(result).toBeNull();
 });
+
+it("calcula buckets proporcionalmente à duração quando não especificado", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-peaks-dur-"));
+  const outPath = join(dir, "test.peaks.json");
+  const count = 80000;
+  const buf = Buffer.alloc(count * 2);
+  const result = await buildPeaks(pcmExec(buf), {
+    proxyPath: "/tmp/proxy.mp4",
+    sha256: "sha-1",
+    outPath,
+    durationSeconds: 120,
+  });
+  expect(result?.buckets).toBe(3000);
+});
+

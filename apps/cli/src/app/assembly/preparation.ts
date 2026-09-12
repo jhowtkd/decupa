@@ -316,6 +316,7 @@ export async function runPreparation(
               proxyPath: videoPath,
               sha256: source.sha256,
               outPath: peaksPath(dir, source.sha256),
+              durationSeconds: source.durationSeconds,
             });
           } catch {
             // Sem waveform a faixa segue só com os blocos.
