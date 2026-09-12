@@ -169,3 +169,30 @@ export function montageDuration(project) {
   const blocks = timelineBlocks(project);
   return blocks.reduce((max, b) => Math.max(max, b.end), 0);
 }
+
+/**
+ * Palavra retida sob o playhead da montagem (pura). Usa o mesmo eixo de
+ * montageTimeOfWord: a prosa acende o botão cujo intervalo contém t.
+ */
+export function wordAtPlayhead(project, playhead) {
+  if (typeof playhead !== "number" || !Number.isFinite(playhead) || !project) return null;
+  let best = null;
+  let bestStart = -Infinity;
+  for (const scene of project.scenes) {
+    for (const take of scene.takes) {
+      for (const word of takeWords(project, scene, take)) {
+        if (word.removed) continue;
+        const start = montageTimeOfWord(project, scene.id, take.id, word);
+        if (start == null) continue;
+        const srcStart = word.cutStart ?? word.start;
+        const srcEnd = word.cutEnd ?? word.end;
+        const end = start + Math.max(0, srcEnd - srcStart);
+        if (playhead >= start && playhead < end && start >= bestStart) {
+          best = { sceneId: scene.id, takeId: take.id, wordId: word.id };
+          bestStart = start;
+        }
+      }
+    }
+  }
+  return best;
+}

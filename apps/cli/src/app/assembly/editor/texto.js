@@ -9,6 +9,7 @@ import {
   omittedWords,
   retainedDuration,
   takeWords,
+  wordAtPlayhead,
 } from "./montage.js";
 
 /** Contexto antes do trecho em "ouvir" — padrão JOIN_PAD da tela de limpeza. */
@@ -728,6 +729,20 @@ export function mountTexto({ state, api, player }) {
     const el = root();
     if (el) paintSelection(el, next || new Set());
   });
+
+  function paintPlayhead(playhead) {
+    const el = root();
+    if (!el) return;
+    const hit = wordAtPlayhead(state.get("project"), playhead);
+    for (const btn of el.querySelectorAll("button.word")) {
+      const on = hit
+        && btn.dataset.scene === hit.sceneId
+        && btn.dataset.take === hit.takeId
+        && btn.dataset.wordId === hit.wordId;
+      btn.classList.toggle("ativa", !!on);
+    }
+  }
+  state.subscribe("playhead", (t) => paintPlayhead(t));
 
   const el = root();
   if (el) {

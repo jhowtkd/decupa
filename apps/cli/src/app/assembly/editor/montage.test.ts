@@ -9,6 +9,7 @@ import {
   retainedOfTake,
   retainedSegments,
   timelineBlocks,
+  wordAtPlayhead,
 } from "./montage.js";
 
 function word(id: string, text: string, start: number, end: number): Word {
@@ -125,4 +126,14 @@ it("timelineBlocks: cena + apoio com tempos de montagem", () => {
   expect(support.end - support.start).toBeCloseTo(2, 5); // 50 frames / 25 fps
   expect(montageDuration(p2)).toBeCloseTo(support.end, 5);
   expect(montageDuration(project())).toBeCloseTo(2, 5);
+});
+
+it("wordAtPlayhead devolve a palavra cujo intervalo de montagem contém o tempo", () => {
+  const p = project();
+  // w1 [0.1, 0.4] é a primeira retida; montageTimeOfWord(w1) == 0.1
+  const hit = wordAtPlayhead(p, 0.2);
+  expect(hit).toEqual({ sceneId: "s1", takeId: "t1", wordId: "w1" });
+  expect(wordAtPlayhead(p, 0.0)).toBeNull();
+  expect(wordAtPlayhead(p, 1.15)?.wordId).toBe("w4");
+  expect(wordAtPlayhead(p, null)).toBeNull();
 });
