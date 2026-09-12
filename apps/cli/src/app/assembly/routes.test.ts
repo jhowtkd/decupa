@@ -5,8 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
-import { paidBlockedReason, PAID_BLOCKED, blankProject, publishCorrection } from "./routes.ts";
+import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
+import type { Source } from "./types.ts";
 import { createProject, loadProject, saveProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -649,5 +650,47 @@ it("GET /project relança pending órfão e assenta error se a fonte falhar", as
     if (corr && corr.status !== "pending") settled = corr;
   }
   expect(settled?.status).toBe("error");
+});
+
+it("canvas vem do primeiro vídeo mesmo com áudio já cadastrado", () => {
+  const audio: Source = {
+    ...fixtureAssembly().sources[0]!,
+    id: "wav",
+    hasVideo: false,
+    hasAudio: true,
+    width: null,
+    height: null,
+    fps: null,
+    role: "speech",
+  };
+  const video: Source = {
+    ...fixtureAssembly().sources[0]!,
+    id: "cam",
+    hasVideo: true,
+    hasAudio: true,
+    width: 1920,
+    height: 1080,
+    fps: { num: 30000, den: 1001 },
+    role: "speech",
+  };
+  let p = blankProject("p1");
+  expect(p.assembly.width).toBe(320);
+  p = {
+    ...p,
+    assembly: { ...p.assembly, sources: [audio] },
+  };
+  const afterAudio = applyCanvasFrom(p, audio);
+  expect(afterAudio.assembly.width).toBe(320);
+  const afterVideo = applyCanvasFrom(afterAudio, video);
+  expect(afterVideo.assembly.width).toBe(1920);
+  expect(afterVideo.assembly.height).toBe(1080);
+  expect(afterVideo.assembly.fps).toEqual({ num: 30000, den: 1001 });
+  const second = { ...video, id: "cam2", width: 640, height: 360, fps: { num: 25, den: 1 } };
+  const afterSecond = applyCanvasFrom({
+    ...afterVideo,
+    assembly: { ...afterVideo.assembly, sources: [audio, video] },
+  }, second);
+  expect(afterSecond.assembly.width).toBe(1920);
+  expect(afterSecond.assembly.fps).toEqual({ num: 30000, den: 1001 });
 });
 

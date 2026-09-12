@@ -346,8 +346,10 @@ function requireRevision(body: Record<string, unknown>): number {
   return n;
 }
 
-function applyCanvasFrom(project: Project, source: Source): Project {
-  if (project.assembly.sources.length > 0 || !source.hasVideo) return project;
+export function applyCanvasFrom(project: Project, source: Source): Project {
+  if (!source.hasVideo) return project;
+  const alreadyHasVideo = project.assembly.sources.some((item) => item.hasVideo);
+  if (alreadyHasVideo) return project;
   const fps: Rate = source.fps ?? project.assembly.fps;
   const width = source.width && source.width % 2 === 0 ? source.width : project.assembly.width;
   const height = source.height && source.height % 2 === 0 ? source.height : project.assembly.height;
