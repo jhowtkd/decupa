@@ -210,31 +210,33 @@ function validImportName(raw: string | null): string {
 
 /**
  * Publica o resultado do alinhamento sem criar revisão nova: é a conclusão
- * da edição que registrou o pending. CAS pelo expectedRevision descarta o
- * resultado quando outra edição ou undo passou na frente (obsoleto).
+ * da edição que registrou o pending. Faz rebase com até 3 tentativas caso a
+ * revisão tenha avançado por edições concorrentes de texto/corte.
  */
-async function publishCorrection(
+export async function publishCorrection(
   dir: string,
-  expectedRevision: number,
+  _expectedRevision: number,
   correctionId: string,
   outcome: AlignmentOutcome,
 ): Promise<void> {
-  try {
-    await saveProject(dir, expectedRevision, (current) => {
-      const correction = current.corrections.find((item) => item.id === correctionId);
-      if (!correction || correction.status !== "pending") {
-        throw new Error(`correção ${correctionId} obsoleta`);
-      }
-      try {
-        return settleCorrection(current, correctionId, outcome);
-      } catch (err) {
-        return settleCorrection(current, correctionId, {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    });
-  } catch {
-    // Revisão andou: resultado obsoleto, descarta sem tocar no projeto.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const fresh = await loadProject(dir);
+      const correction = fresh.corrections.find((item) => item.id === correctionId);
+      if (!correction || correction.status !== "pending") return;
+      await saveProject(dir, fresh.revision, (current) => {
+        try {
+          return settleCorrection(current, correctionId, outcome);
+        } catch (err) {
+          return settleCorrection(current, correctionId, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+      return;
+    } catch (err) {
+      if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) return;
+    }
   }
 }
 
@@ -250,7 +252,6 @@ async function alignCorrectionJob(
 ): Promise<void> {
   try {
     const current = await loadProject(dir);
-    if (current.revision !== expectedRevision) return;
     const correction = current.corrections.find((item) => item.id === correctionId);
     if (!correction || correction.status !== "pending") return;
     const source = current.assembly.sources.find((item) => item.id === correction.sourceId);

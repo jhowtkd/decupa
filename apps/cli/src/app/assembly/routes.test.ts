@@ -5,9 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
-import { paidBlockedReason, PAID_BLOCKED, blankProject } from "./routes.ts";
+import { paidBlockedReason, PAID_BLOCKED, blankProject, publishCorrection } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { loadProject, saveProject } from "./store.ts";
+import { createProject, loadProject, saveProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -563,4 +563,32 @@ it("lote e categorias: selection e role em lote e singular", async () => {
     body: JSON.stringify({ baseRevision: 5, sourceIds: ["fantasma"], included: false }),
   });
   expect(unknown.status).toBe(404);
+});
+
+it("publishCorrection faz rebase e publica quando a revisão avançou por edição concorrente", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-corr-rebase-"));
+  const p = blankProject("p1");
+  p.assembly.sources.push({ ...fixtureAssembly().sources[0]!, id: "src1" });
+  p.analyses.push({
+    sourceId: "src1", key: "k", speech: [], visual: [], status: "ready", words: [
+      { id: "src1:h:w0", sourceId: "src1", start: 0, end: 1, text: "errada", confidence: 0.9 },
+    ], wordsStatus: "ready", visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  p.corrections.push({
+    id: "corr-1", sourceId: "src1", start: 0, end: 1, text: "certa", status: "pending", words: [],
+  });
+  await createProject(dir, p);
+
+  // Simula que uma edição de usuário passou na frente e avançou a revisão para 1
+  await saveProject(dir, 0, (curr) => ({ ...curr, revision: 1 }));
+
+  // publishCorrection chamado com base revision 0 original
+  await publishCorrection(dir, 0, "corr-1", {
+    words: [{ text: "certa", start: 0, end: 1, confidence: 0.95 }],
+  });
+
+  const final = await loadProject(dir);
+  const corr = final.corrections.find((c) => c.id === "corr-1");
+  expect(corr?.status).toBe("aligned");
+  expect(corr?.words[0]?.text).toBe("certa");
 });
