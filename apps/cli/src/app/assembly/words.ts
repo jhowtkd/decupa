@@ -179,10 +179,12 @@ function wordIntervalsInTake(
       const next = ordered[groupEnd + 1];
       const startRange = wordCutInterval(firstWord, prev, ordered[groupStart + 1]);
       const endRange = wordCutInterval(lastWord, ordered[groupEnd - 1], next);
-      if (startRange.start < take.start || endRange.end > take.end) {
+      const start = Math.max(take.start, startRange.start);
+      const end = Math.min(take.end, endRange.end);
+      if (end <= start) {
         throw new Error(`palavra ${firstWord.id} fora do take ${take.id}`);
       }
-      ranges.push({ start: startRange.start, end: endRange.end });
+      ranges.push({ start, end });
       groupStart = idx;
       groupEnd = idx;
     }
@@ -194,10 +196,12 @@ function wordIntervalsInTake(
   const next = ordered[groupEnd + 1];
   const startRange = wordCutInterval(firstWord, prev, ordered[groupStart + 1]);
   const endRange = wordCutInterval(lastWord, ordered[groupEnd - 1], next);
-  if (startRange.start < take.start || endRange.end > take.end) {
+  const start = Math.max(take.start, startRange.start);
+  const end = Math.min(take.end, endRange.end);
+  if (end <= start) {
     throw new Error(`palavra ${firstWord.id} fora do take ${take.id}`);
   }
-  ranges.push({ start: startRange.start, end: endRange.end });
+  ranges.push({ start, end });
 
   return ranges;
 }

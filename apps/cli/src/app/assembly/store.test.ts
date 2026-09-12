@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import type { LegacyProject, Project } from "./types.ts";
-import { createProject, loadProject, missingMedia, readHistorySnapshot, saveProject, validateProject, writeHistorySnapshot } from "./store.ts";
+import { createProject, loadProject, missingMedia, readHistorySnapshot, saveProject, validateProject, validateWord, writeHistorySnapshot } from "./store.ts";
 
 function projectAt(revision: number): LegacyProject {
   const assembly = fixtureAssembly();
@@ -252,4 +252,22 @@ it("rejeita correção e preparação inválidas", async () => {
     ...structuredClone(base),
     preparation: { ...preparation, stage: "forno" },
   })).toThrow(/prepara/);
+});
+
+it("validateWord aceita cutStart na pausa anterior e recusa fora da fonte", () => {
+  const sources = new Map(fixtureAssembly().sources.map((s) => [s.id, s]));
+  const word = validateWord({
+    id: "w1", sourceId: "a", text: "Nilton", confidence: null,
+    start: 1.0, end: 1.5, cutStart: 0.9, cutEnd: 1.5,
+  }, sources);
+  expect(word.cutStart).toBe(0.9);
+  expect(word.cutEnd).toBe(1.5);
+  expect(() => validateWord({
+    id: "w1", sourceId: "a", text: "x", confidence: null,
+    start: 1.0, end: 1.5, cutStart: -0.1, cutEnd: 1.5,
+  }, sources)).toThrow(/fonte/);
+  expect(() => validateWord({
+    id: "w1", sourceId: "a", text: "x", confidence: null,
+    start: 1.0, end: 1.5, cutStart: 1.6, cutEnd: 1.7,
+  }, sources)).toThrow(/cutStart/);
 });
