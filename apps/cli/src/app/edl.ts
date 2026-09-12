@@ -4,8 +4,32 @@ export interface EdlClip {
   end: number;
 }
 
-/** Segundos → `HH:MM:SS:FF`. */
-export function timecode(seconds: number, fps: number): string {
+function framesToDropFrameTimecode(frameNumber: number): string {
+  const FRAMES_PER_MINUTE = 1798;
+  const FRAMES_PER_10_MINUTES = 17982;
+  let frames = frameNumber;
+  if (frames < 0) frames = 0;
+  const d = Math.floor(frames / FRAMES_PER_10_MINUTES);
+  const m = frames % FRAMES_PER_10_MINUTES;
+  if (m > 1) {
+    frames += 18 * d + 2 * Math.floor((m - 2) / FRAMES_PER_MINUTE);
+  } else {
+    frames += 18 * d;
+  }
+  const f = frames % 30;
+  const s = Math.floor(frames / 30) % 60;
+  const min = Math.floor(Math.floor(frames / 30) / 60) % 60;
+  const h = Math.floor(Math.floor(Math.floor(frames / 30) / 60) / 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(min)}:${pad(s)};${pad(f)}`;
+}
+
+/** Segundos → `HH:MM:SS:FF` ou `HH:MM:SS;FF` (drop-frame). */
+export function timecode(seconds: number, fps: number, dropFrame = false): string {
+  if (dropFrame) {
+    const totalFrames = Math.round(seconds * fps);
+    return framesToDropFrameTimecode(totalFrames);
+  }
   const totalFrames = Math.round(seconds * fps);
   const frame = totalFrames % fps;
   const whole = Math.floor(totalFrames / fps);
@@ -19,10 +43,7 @@ export function timecode(seconds: number, fps: number): string {
  * trabalha, com o material original intacto — ao contrário do MP4, que ninguém
  * consegue mais ajustar.
  *
- * Escopo deliberadamente estreito no v1: frame rate inteiro, non-drop-frame,
- * um canal de vídeo, um reel. Drop-frame 29,97 e faixas de áudio separadas são
- * projeto próprio; deixá-los em aberto faria o EDL virar um segundo projeto no
- * meio do primeiro.
+ * Suporta frame rates inteiros (non-drop-frame) e NTSC 29,97 (drop-frame).
  */
 export function buildEdl(opts: {
   clips: EdlClip[];
@@ -34,14 +55,20 @@ export function buildEdl(opts: {
   const { clips, fps, title } = opts;
   const sourceName = opts.sourceName ?? title;
   if (clips.length === 0) throw new Error("nenhum clipe para exportar");
-  if (!Number.isInteger(fps)) {
+
+  const isDropFrame = Math.abs(fps - 29.97) < 0.01;
+  if (!Number.isInteger(fps) && !isDropFrame) {
     throw new Error(
-      `frame rate ${fps} não é inteiro. O EDL do v1 só gera non-drop-frame com fps ` +
-      "inteiro; para 29.97 o timecode sairia errado em silêncio.",
+      `frame rate ${fps} não é suportado no EDL. Suportados: fps inteiro (non-drop-frame) ` +
+      "ou 29.97 (drop-frame); para outros fracionários utilize exportação OTIO.",
     );
   }
 
-  const lines = [`TITLE: ${title}`, "FCM: NON-DROP FRAME", ""];
+  const lines = [
+    `TITLE: ${title}`,
+    isDropFrame ? "FCM: DROP FRAME" : "FCM: NON-DROP FRAME",
+    "",
+  ];
   let recordFrames = 0;
 
   clips.forEach((clip, i) => {
@@ -50,8 +77,8 @@ export function buildEdl(opts: {
     const recordOut = (recordFrames + durationFrames) / fps;
     lines.push(
       `${String(i + 1).padStart(3, "0")}  AX       V     C        ` +
-      `${timecode(clip.start, fps)} ${timecode(clip.end, fps)} ` +
-      `${timecode(recordIn, fps)} ${timecode(recordOut, fps)}`,
+      `${timecode(clip.start, fps, isDropFrame)} ${timecode(clip.end, fps, isDropFrame)} ` +
+      `${timecode(recordIn, fps, isDropFrame)} ${timecode(recordOut, fps, isDropFrame)}`,
     );
     // `AX` no campo de reel significa "sem reel atribuído", e o campo tem só 8
     // caracteres — não cabe nome de arquivo. `* FROM CLIP NAME:` é como o

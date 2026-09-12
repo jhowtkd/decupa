@@ -452,6 +452,24 @@ describe("startApp", () => {
     expect(await dl.text()).toBe(srt);
   });
 
+  it("export otio gera timeline compatível e serve no endpoint de download", async () => {
+    const { base, app, dir } = await bootComPlano();
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "otio" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { downloadUrl: string };
+    expect(body.downloadUrl).toBe(`/jobs/${app.jobId}/download/otio`);
+    const otio = await readFile(join(dir, "corte.otio"), "utf8");
+    expect(otio).toContain("Timeline.1");
+    expect(otio).toContain("tracks");
+    const dl = await fetch(`${base}${body.downloadUrl}`);
+    expect(dl.status).toBe(200);
+    expect(await dl.text()).toBe(otio);
+  });
+
   it("recusa POST de outra origem, e aceita o da própria página", async () => {
     const { base, app } = await boot();
     const alheio = await fetch(`${base}/jobs/${app.jobId}/cancel`, {

@@ -74,8 +74,15 @@ describe("buildEdl", () => {
     }
   });
 
-  it("recusa frame rate fracionário em vez de gerar timecode errado", () => {
-    expect(() => buildEdl({ clips, fps: 29.97, title: "c" })).toThrow(/29\.97|inteiro/);
+  it("recusa frame rate fracionário não suportado em vez de gerar timecode errado", () => {
+    expect(() => buildEdl({ clips, fps: 23.976, title: "c" })).toThrow(/23\.98|inteiro/);
+  });
+
+  it("gera EDL Drop-Frame para frame rate 29.97 sem lançar erro", () => {
+    const clips = [{ start: 0, end: 10 }];
+    const edl = buildEdl({ clips, fps: 29.97, title: "ntsc" });
+    expect(edl).toContain("FCM: DROP FRAME");
+    expect(edl).toContain("00:00:10;00");
   });
 
   it("nomeia o arquivo de origem em cada evento", () => {

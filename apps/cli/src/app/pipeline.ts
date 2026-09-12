@@ -414,7 +414,11 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
  * timecode errado em silêncio — material a 29,97 sai com deriva crescente, e
  * ninguém percebe até a timeline dessincronizar no fim.
  */
-export async function probeFps(job: PipelineJob, exec: Executor): Promise<number> {
+export async function probeFps(
+  job: PipelineJob,
+  exec: Executor,
+  opts?: { allowDropFrame?: boolean },
+): Promise<number> {
   const { code, stdout } = await exec.run({
     command: "ffprobe",
     args: [
@@ -428,6 +432,9 @@ export async function probeFps(job: PipelineJob, exec: Executor): Promise<number
   const [num, den] = stdout.trim().split("/").map(Number);
   const fps = den ? num! / den! : num!;
   if (!Number.isInteger(fps)) {
+    if (opts?.allowDropFrame && Math.abs(fps - 29.97) < 0.01) {
+      return fps;
+    }
     throw new Error(
       `o vídeo tem ${fps.toFixed(2)} fps, e o EDL do v1 só gera non-drop-frame com ` +
       "fps inteiro. Exporte MP4, ou converta a fonte para fps inteiro antes.",

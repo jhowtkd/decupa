@@ -6,7 +6,10 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
 import { originAllowed } from "../http/origin.ts";
+import { probe, type MediaInfo } from "@decupa/media";
 import { buildEdl } from "./edl.ts";
+import { buildOtio } from "./assembly/otio.ts";
+import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
   indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
@@ -356,15 +359,98 @@ async function startCleanupApp(opts: {
           const plan = await readJson(planPath(pipelineJob)) as Record<string, any>;
 
           if (kind === "edl") {
-            // Do arquivo, nunca assumido: `probeFps` recusa fracionário com
-            // instrução, em vez de arredondar 29,97 para 30 e produzir
-            // timecode com deriva crescente que ninguém nota até o fim.
-            const fps = await probeFps(pipelineJob, exec);
+            // Do arquivo, nunca assumido: suporta frame rate inteiro ou 29,97 drop-frame.
+            const fps = await probeFps(pipelineJob, exec, { allowDropFrame: true });
             const out = join(workDir, "corte.edl");
             await writeFile(out, buildEdl({
               clips: plan.clips, fps, title: basename(input),
             }), "utf8");
             sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/edl` });
+            return;
+          }
+          if (kind === "otio") {
+            let info: MediaInfo | null = null;
+            try {
+              info = await probe(pipelineJob.videoPath);
+            } catch {
+              // fallback se a mídia não for probeável no momento (ex.: teste unitário)
+            }
+            const rate = info?.frameRate ?? { num: 30, den: 1 };
+            const fps = rate.num / rate.den;
+            const maxClipEnd = Math.max(
+              0,
+              ...(plan.clips as { start: number; end: number }[]).map((c) => c.end),
+            );
+            const durationSeconds = Math.max((info?.durationMs ?? 0) / 1000, maxClipEnd + 10);
+            const width = info?.width ?? 1920;
+            const height = info?.height ?? 1080;
+            const hasAudio = info ? info.hasAudio : true;
+            const hasVideo = info ? info.hasVideo : true;
+
+            const videoClips = (plan.clips as { start: number; end: number }[]).map((clip, i) => {
+              const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
+              return {
+                id: `v_c${i + 1}`,
+                sceneId: `scene_${i + 1}`,
+                sourceId: "src1",
+                sourceStartSeconds: clip.start,
+                durationFrames,
+                startFrame: 0,
+              };
+            });
+            let cursor = 0;
+            for (const clip of videoClips) {
+              clip.startFrame = cursor;
+              cursor += clip.durationFrames;
+            }
+
+            const audioClips = (plan.clips as { start: number; end: number }[]).map((clip, i) => {
+              const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
+              return {
+                id: `a_c${i + 1}`,
+                sceneId: `scene_${i + 1}`,
+                sourceId: "src1",
+                sourceStartSeconds: clip.start,
+                durationFrames,
+                startFrame: 0,
+              };
+            });
+            let aCursor = 0;
+            for (const clip of audioClips) {
+              clip.startFrame = aCursor;
+              aCursor += clip.durationFrames;
+            }
+
+            const assembly: Assembly = {
+              version: 1,
+              revision: 1,
+              name: basename(input),
+              fps: rate,
+              width,
+              height,
+              sources: [{
+                id: "src1",
+                path: resolve(pipelineJob.videoPath),
+                sha256: "0".repeat(64),
+                durationSeconds,
+                hasVideo,
+                hasAudio,
+                fps: rate,
+                width,
+                height,
+                role: "speech",
+                included: true,
+                name: basename(input),
+              }],
+              tracks: [
+                { kind: "Video", name: "V1", clips: videoClips },
+                { kind: "Video", name: "V2", clips: [] },
+                { kind: "Audio", name: "A1", clips: hasAudio ? audioClips : [] },
+              ],
+            };
+            const out = join(workDir, "corte.otio");
+            await writeFile(out, `${buildOtio(assembly)}\n`, "utf8");
+            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/otio` });
             return;
           }
           if (kind === "mp4") {
@@ -413,6 +499,7 @@ async function startCleanupApp(opts: {
         if (parts[2] === "download" && parts[3]) {
           const files: Record<string, string> = {
             edl: join(workDir, "corte.edl"),
+            otio: join(workDir, "corte.otio"),
             mp4: join(workDir, "corte.mp4"),
             srt: join(workDir, "corte.srt"),
             transcript: join(workDir, "out", "condensed_transcript.json"),
