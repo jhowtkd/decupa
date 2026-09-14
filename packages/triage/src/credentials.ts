@@ -78,7 +78,7 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
     await empty.close();
     try {
       await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", RESTRICT_WINDOWS_FILE], {
-        env: { ...process.env, DECUPA_CREDENTIAL_FILE: path },
+        env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path },
         windowsHide: true,
         timeout: 15_000,
       });

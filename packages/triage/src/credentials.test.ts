@@ -9,7 +9,7 @@ import { credentialsPath, readCredentials, writeCredentials } from "./credential
 const run = promisify(execFile);
 async function windowsAcl(path: string, script: string): Promise<string> {
   const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...process.env, DECUPA_CREDENTIAL_FILE: path }, timeout: 15_000,
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path }, timeout: 15_000,
   });
   return stdout;
 }
