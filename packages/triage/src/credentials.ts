@@ -13,8 +13,9 @@ const run = promisify(execFile);
 const RESTRICT_WINDOWS_FILE = `
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
 $acl.SetAccessRuleProtection($true, $false)
+foreach ($entry in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($entry) }
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
 $acl.AddAccessRule($rule)
 Set-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE -AclObject $acl
@@ -81,8 +82,8 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
         windowsHide: true,
         timeout: 15_000,
       });
-    } catch {
-      throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada");
+    } catch (cause) {
+      throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada", { cause });
     }
   }
   try {
