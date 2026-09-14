@@ -45,7 +45,7 @@ it("instala uma vez, repete e preserva alteração posterior", async () => {
   await installEngine(root, { pin, remote });
   await installEngine(root, { pin, remote });
   const file = join(root, "work/video-agent-kit-plugin/lexicon.txt");
-  expect(await readFile(file, "utf8")).toBe("after\n");
+  expect((await readFile(file, "utf8")).replace(/\r\n/g, "\n")).toBe("after\n");
   await writeFile(file, "my edit\n");
   await expect(installEngine(root, { pin, remote })).rejects.toThrow(/modificado/);
   expect(await readFile(file, "utf8")).toBe("my edit\n");

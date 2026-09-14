@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Provider, StoredProvider } from "./provider.ts";
@@ -5,6 +7,26 @@ import type { Provider, StoredProvider } from "./provider.ts";
 export type Credentials = StoredProvider & { apiKey?: string };
 
 const FILE = "credentials";
+const run = promisify(execFile);
+
+// chmod não restringe ACLs no Windows. Nenhum segredo é enviado ao PowerShell.
+const RESTRICT_WINDOWS_FILE = `
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.FileSecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE -AclObject $acl
+$actual = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
+$rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if (-not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or
+    ($rules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+  throw 'ACL restrita não confirmada'
+}
+`;
+
 
 export function credentialsPath(dir: string): string {
   if (!isAbsolute(dir)) {
@@ -49,6 +71,20 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
   if (creds.model) body.model = creds.model;
   if (creds.baseUrl) body.baseUrl = creds.baseUrl;
   if (creds.apiKey) body.apiKey = creds.apiKey;
+  if (process.platform === "win32") {
+    // Cria somente arquivo vazio; restringe antes de truncar/gravar uma chave.
+    const empty = await open(path, "a");
+    await empty.close();
+    try {
+      await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", RESTRICT_WINDOWS_FILE], {
+        env: { ...process.env, DECUPA_CREDENTIAL_FILE: path },
+        windowsHide: true,
+        timeout: 15_000,
+      });
+    } catch {
+      throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada");
+    }
+  }
   try {
     await chmod(path, 0o600);
   } catch (err) {
