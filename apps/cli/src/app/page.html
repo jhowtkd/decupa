@@ -5,41 +5,70 @@
 <title>decupa · limpar fala</title>
 <style>
   :root {
-    --bg: #12171a; --panel: #1a2125; --line: #2a3439; --line-strong: #3c484e;
-    --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230;
-    --ok: #63be97; --warn: #e0765c;
+    --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
+    --line: #2B3038; --line-strong: #3A414B;
+    --ink: #E9E7E2; --muted: #9AA0A9; --faint: #6B7280;
+    --accent: #F2C230; --on-accent: #1B1508;
+    --warn: #E0765C; --ok: #63BE97;
+    --serif: Charter, "Iowan Old Style", Georgia, serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans-ui: system-ui, -apple-system, sans-serif;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
+    margin: 0; background: var(--bg-0); color: var(--ink);
     font: 16px/1.75 ui-serif, Georgia, serif;
     min-height: 100dvh;
   }
   header {
-    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 18px;
-    padding: 12px 18px; border-bottom: 1px solid var(--line);
-    background: var(--panel); font-family: ui-sans-serif, system-ui, sans-serif;
-    font-size: 13px;
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    background: var(--bg-1); font-family: var(--sans-ui); font-size: 13px;
   }
-  header .hint { color: var(--muted); font-size: 12px; }
-  header[data-mode="process"] .hint { display: none; }
+  header .brand { font-weight: 700; }
+  header .crumb { color: var(--muted); }
+  header .spacer, header .export-wrap { margin-left: 0; }
+  header .spacer { flex: 1; }
+  header[data-mode="process"] .crumb { display: none; }
+  .stats { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .stats b { color: var(--ink); font-size: 16px; font-weight: 600; }
+  .stats .sep { display: inline-block; width: 1px; height: 14px; background: var(--line-strong); margin: 0 8px; vertical-align: -2px; }
+  .stats .dim { color: var(--faint); }
+  .export-wrap { position: relative; }
+  #export-menu {
+    position: absolute; right: 0; top: 38px; z-index: 3; min-width: 180px;
+    background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 10px;
+    padding: 4px; display: flex; flex-direction: column;
+  }
+  #export-menu button {
+    background: none; border: none; height: 30px; border-radius: 6px;
+    font: 500 13px var(--sans-ui); color: var(--ink); justify-content: flex-start;
+  }
+  #export-menu button:hover { background: var(--bg-1); }
+  #export-menu[hidden] { display: none; }
   main { max-width: 44rem; margin: 0 auto; padding: 32px 20px 160px; }
   button {
-    font: inherit; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px;
-    font-weight: 600; background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line-strong); border-radius: 5px; padding: 6px 12px;
-    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px; border-radius: 6px;
+    font: 600 13px/1 var(--sans-ui, system-ui); color: var(--ink);
+    background: var(--bg-2); border: 1px solid var(--line-strong); cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #1c2226; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  button.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+  button.quiet:hover { color: var(--ink); }
+  button.danger { background: transparent; border-color: transparent; color: var(--warn); }
   button:disabled { opacity: .45; cursor: default; }
+  button:active:not(:disabled) { transform: translateY(1px); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* Ouvir é absoluto: no fluxo, até opacity:0 abre buracos na prosa. */
   .u { position: relative; cursor: pointer; border-radius: 3px; transition: background 90ms; }
   .u:hover { background: #e0765c26; box-shadow: 0 0 0 2px #e0765c26; }
+  /* Botão-palavra na prosa: sem o chrome do sistema de botões. */
   .u .play, .gone .play {
     position: absolute; right: 100%; top: 0.2em; margin-right: 4px;
-    opacity: 0; pointer-events: none;
+    opacity: 0; pointer-events: none; height: auto;
+    background: none; border: none;
     font: 600 11px/1 ui-sans-serif, system-ui, sans-serif;
     padding: 2px 6px; white-space: nowrap;
   }
@@ -68,8 +97,7 @@
   .join .flag { color: var(--warn); display: block; padding-left: 10px; border-left: 2px solid var(--warn); }
   .join .hint { color: var(--muted); }
   .join .play { margin-top: 6px; font-weight: 600; }
-  #stage { color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
-  #aviso { color: var(--warn); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; }
+  #aviso { color: var(--warn); font-family: var(--sans-ui); font-size: 12px; }
   .steps {
     list-style: none; margin: 0; padding: 0;
     font-family: ui-sans-serif, system-ui, sans-serif; font-size: 15px;
@@ -86,7 +114,7 @@
   #player { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
   #triage {
     position: sticky; bottom: 0; z-index: 2;
-    background: var(--panel); border-top: 1px solid var(--line);
+    background: var(--bg-1); border-top: 1px solid var(--line);
     padding: 16px 20px 20px; font-family: ui-sans-serif, system-ui, sans-serif;
     font-size: 14px; line-height: 1.5; max-height: 42vh; overflow: auto;
   }
@@ -114,18 +142,27 @@
 </head>
 <body>
 <header data-mode="process">
-  <strong>decupa</strong>
-  <span class="hint">clique num trecho para tirá-lo · clique no marcador para trazer de volta</span>
-  <span id="stage"></span>
+  <span class="brand">decupa</span>
+  <span class="crumb">limpar fala</span>
+  <span id="stage" class="stats" hidden>
+    <b id="kept-count">0</b><span class="dim">/</span><span id="total-count">0</span> trechos
+    <span class="sep"></span>
+    <b id="out-sec">0</b>s <span class="dim">de</span> <span id="src-sec">0</span>s
+  </span>
   <span id="aviso"></span>
-  <span style="flex:1"></span>
+  <span class="spacer"></span>
+  <button id="cancelar" class="danger">cancelar</button>
   <!-- Sem review, keepList() estoura; nascem desabilitados. -->
-  <button id="cancelar">cancelar</button>
   <button id="triar" disabled>sugerir cortes</button>
-  <button id="edl" disabled>exportar EDL</button>
-  <button id="mp4" disabled>exportar MP4</button>
-  <button id="srt" disabled>legendas</button>
-  <button id="txt" disabled>transcrição</button>
+  <div class="export-wrap">
+    <button id="exportar" class="primary" disabled>exportar</button>
+    <div id="export-menu" hidden>
+      <button data-export="edl">timeline .edl</button>
+      <button data-export="mp4">vídeo .mp4</button>
+      <button data-export="srt">legendas .srt</button>
+      <button data-export="transcript">transcrição .txt</button>
+    </div>
+  </div>
 </header>
 <main id="prosa"></main>
 <aside id="triage" hidden>
@@ -231,7 +268,7 @@ function playJoin(join) {
 
 function renderProcessing(stage, progress) {
   setMode("process");
-  el("stage").textContent = "";
+  el("stage").hidden = true;
   const idx = STEPS.findIndex((s) => s[0] === stage);
   const ol = document.createElement("ol");
   ol.className = "steps";
@@ -261,7 +298,7 @@ function renderProcessing(stage, progress) {
 
 function renderMessage(title, body) {
   setMode("process");
-  el("stage").textContent = "";
+  el("stage").hidden = true;
   const h = document.createElement("p");
   h.className = "status-title";
   h.textContent = title;
@@ -317,9 +354,11 @@ function render() {
       main.append(mark);
     }
   }
-  el("stage").textContent =
-    `${review.units.filter((u) => kept.get(u.id)).length}/${review.units.length} trechos · ` +
-    `${review.outputSeconds.toFixed(0)}s de ${review.sourceSeconds.toFixed(0)}s`;
+  el("kept-count").textContent = review.units.filter((u) => kept.get(u.id)).length;
+  el("total-count").textContent = review.units.length;
+  el("out-sec").textContent = review.outputSeconds.toFixed(0);
+  el("src-sec").textContent = review.sourceSeconds.toFixed(0);
+  el("stage").hidden = false;
 }
 
 // Avisos do motor vêm em inglês; traduzir aqui é o julgamento editorial da tela.
@@ -381,7 +420,7 @@ function schedule() {
 function readyFrom(j) {
   review = j.review;
   kept = new Map(review.units.map((u) => [u.id, u.kept]));
-  for (const id of ["triar", "edl", "mp4", "srt", "txt"]) el(id).disabled = false;
+  for (const id of ["triar", "exportar"]) el(id).disabled = false;
   el("cancelar").disabled = true;
   render();
 }
@@ -484,9 +523,15 @@ el("triage-dismiss").onclick = () => {
   pendingKeep = null;
 };
 
-for (const [id, kind] of [["edl", "edl"], ["mp4", "mp4"], ["srt", "srt"], ["txt", "transcript"]]) {
-  el(id).onclick = async () => {
-    const btn = el(id);
+const exportMenu = el("export-menu");
+el("exportar").onclick = () => { exportMenu.hidden = !exportMenu.hidden; };
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest(".export-wrap")) exportMenu.hidden = true;
+});
+for (const btn of exportMenu.querySelectorAll("[data-export]")) {
+  const kind = btn.dataset.export;
+  btn.onclick = async () => {
+    exportMenu.hidden = true;
     const label = btn.textContent;
     btn.disabled = true;
     btn.textContent = "exportando…";

@@ -61,7 +61,7 @@ describe("startApp", () => {
     expect(html).toContain("decupa · limpar fala");
     // O botão de legendas precisa existir na página: o server aceita
     // kind:"srt" no export, mas sem markup a rota é inalcançável pela UI.
-    expect(html).toContain('id="srt"');
+    expect(html).toContain('data-export="srt"');
     expect(html).toContain("legendas");
   });
 
