@@ -284,6 +284,11 @@ async function importFiles(files) {
           state.set("project", body.project);
           state.set("operation", body.operation || null);
         }
+      } catch (err) {
+        ui.error = err instanceof TypeError
+          ? "Sem conexão com o Decupa. Confira o terminal do aplicativo, reabra o mesmo projeto e recarregue esta página antes de tentar importar novamente."
+          : (err && err.message) || String(err);
+        return;
       } finally {
         ui.label = null;
         renderStatus();
