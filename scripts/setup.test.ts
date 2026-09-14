@@ -128,3 +128,24 @@ it("findNpmCli: nada encontrável retorna null sem lançar", async () => {
   const { findNpmCli } = await import("./setup.mjs");
   expect(await findNpmCli(nodeExe)).toBeNull();
 });
+
+it("prepara fala e visão nos ambientes reais, e propaga falha de download", async () => {
+  const { prepareModels } = await import("./setup.mjs");
+  const calls: { command: string; args: string[]; cwd: string }[] = [];
+  const root = join(tmpdir(), "Decupa Modelos");
+  await prepareModels(root, async (command: string, args: string[], cwd: string) => { calls.push({ command, args, cwd }); });
+  expect(calls).toEqual([
+    { command: "uv", args: ["run", "--no-sync", "python", "transcribe.py", "--prepare-models"], cwd: join(root, "services/speech") },
+    { command: "uv", args: ["run", "--no-sync", "python", "visual_index.py", "--prepare-models"], cwd: join(root, "services/vision") },
+  ]);
+  let attempts = 0;
+  await expect(prepareModels(root, async () => { attempts++; throw new Error("download interrompido"); })).rejects.toThrow("download interrompido");
+  expect(attempts).toBe(1);
+});
+
+it("preparo dos modelos é testado sem downloads nos sidecars", () => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  for (const sidecar of ["speech", "vision"]) {
+    execFileSync(python, ["-m", "unittest", "discover", "-s", `services/${sidecar}`, "-p", "test_*.py"], { cwd: process.cwd(), stdio: "pipe" });
+  }
+});
