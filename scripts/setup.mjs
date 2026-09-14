@@ -115,6 +115,13 @@ export async function findNpmCli(nodeExe = process.execPath) {
   return null;
 }
 
+export async function prepareModels(root, execute = run) {
+  step('Baixando e verificando modelos locais de fala (Whisper small, VAD e alinhamento PT-BR)');
+  await execute('uv', ['run', '--no-sync', 'python', 'transcribe.py', '--prepare-models'], join(root, 'services/speech'));
+  step('Baixando e verificando modelos locais de visão (MediaPipe)');
+  await execute('uv', ['run', '--no-sync', 'python', 'visual_index.py', '--prepare-models'], join(root, 'services/vision'));
+}
+
 export async function setup(root) {
   step('Verificando pré-requisitos');
   const missing = [];
@@ -186,7 +193,8 @@ export async function setup(root) {
   step('Executando o diagnóstico local (doctor --local)');
   await run(process.execPath, ['--experimental-strip-types', join(root, 'apps/cli/src/index.ts'), 'doctor', '--local'], root);
 
-  console.log('Setup local concluído. Modelos serão baixados no primeiro processamento.');
+  await prepareModels(root);
+  console.log('Setup local concluído. Modelos padrão de fala PT-BR e visão instalados e carregados.');
 }
 
 // Node resolve o módulo principal via realpath; comparar sem realpath faria o

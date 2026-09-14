@@ -1,6 +1,6 @@
 # Instalar o Decupa em outro computador
 
-Referência: branch `feat/setup-simplificado`, commit `5c9bd89`, conferido em 14/09/2026. Repositório: https://github.com/jhowtkd/decupa.
+Referência: branch `feat/setup-simplificado`, atualizada em 14/09/2026. Registre o commit instalado com `git rev-parse HEAD`. Repositório: https://github.com/jhowtkd/decupa.
 Este guia instala o código existente; não é um instalador nem uma certificação de compatibilidade.
 O prompt para entregar ao agente está em [PROMPT-AGENTE.md](PROMPT-AGENTE.md).
 O resultado do aceite real por plataforma está na [evidência de 14/09/2026](../superpowers/evidence/2026-09-14-setup-simplificado.md).
@@ -21,6 +21,7 @@ node scripts/start.mjs --project "/caminho/absoluto/Meu Projeto"
 3. Instala o motor de condense em `work/video-agent-kit-plugin` no commit pinado `d9fe30076c00ce2968d570622dd22ba068337568`, com o patch PT-BR aplicado. Nunca usa force/reset/stash: motor existente é preservado (seção 5).
 4. Instala Python 3.11/3.12 via uv e cria os três ambientes isolados (seção 4).
 5. Testa o motor (`condense.py --help`) e roda o diagnóstico local (`doctor --local`), que dispensa chave de IA.
+6. Baixa e carrega os modelos padrão de fala (Whisper small, VAD e alinhamento PT-BR) e visão (MediaPipe). Só declara sucesso se todos carregarem.
 
 `node scripts/start.mjs` abre o Decupa sem configurar PATH:
 
@@ -40,7 +41,7 @@ Caminhos absolutos e com espaços funcionam — os scripts não passam por shell
 - Se for usar análise por IA: provedor, modelo/endpoint quando necessário e credencial inserida localmente pelo usuário. Não enviar a chave no prompt.
 - Internet para baixar dependências e modelos. Transcrição local usa CPU por padrão; GPU não é requisito do código atual. Não há mínimo de RAM/disco homologado: medir no computador antes de prometer desempenho.
 
-Pré-requisitos de sistema — o setup confere todos e **não instala nenhum deles** (sem ferramentas globais, sem administrador):
+O agente deve instalar os pré-requisitos ausentes antes de executar o setup, conforme o prompt. Pré-requisitos de sistema — o script confere todos e **não instala nenhum deles** (sem ferramentas globais, sem administrador):
 
 | Ferramenta | Versão/observação | Instalação oficial |
 |---|---|---|
@@ -51,14 +52,18 @@ Pré-requisitos de sistema — o setup confere todos e **não instala nenhum del
 
 Não é preciso instalar pnpm global: o setup instala pnpm 10.32.1 dentro do clone. Reaproveite versões compatíveis já instaladas e não substitua outra instalação de Node usada por projetos existentes. O PATH precisa valer também para o processo do agente, não apenas para o seu terminal.
 
-## 3. Primeiro processamento: downloads de modelos
+## 3. Modelos instalados durante o setup
 
-O setup **não** baixa modelos de IA; eles chegam no primeiro uso real:
+O setup baixa e carrega os modelos antes de declarar a instalação concluída, usando os mesmos carregadores do processamento real:
 
-- Fala (primeira transcrição/limpeza): modelo WhisperX `small` (`Systran/faster-whisper-small`, ~464 MB) e o modelo de alinhamento forçado de PT (`jonatasgrosman/wav2vec2-large-xlsr-53-portuguese`, ~2,4 GB), baixados pelo WhisperX na primeira execução (CPU, int8) para o cache do HuggingFace (`~/.cache/huggingface`).
-- Visão (primeiro índice visual): modelos MediaPipe Face Landmarker e Hand Landmarker (`.task`, ~11 MB) para `services/vision/.models/`.
+- Fala em CPU: Whisper `small` (~464 MB), detector de fala (VAD) e alinhamento PT-BR (~2,4 GB). Os downloads do HuggingFace reutilizam o cache do usuário e respeitam sua configuração de cache.
+- Visão: MediaPipe Face Landmarker e Hand Landmarker (~11 MB) em `services/vision/.models/`.
 
-A duração desses downloads depende da conexão e da máquina; **registre a duração observada no seu relatório por máquina**. Durações observadas no aceite de 14/09/2026 (macOS arm64): ingestão completa de um vídeo de 107 s levou **158 s**, sendo ~142 s na etapa de fala — já incluindo o download do `faster-whisper-small` (o modelo de alinhamento PT estava em cache de uso anterior; numa máquina fria some o download de ~2,4 GB) — e ~10 s na etapa de visão, incluindo o download dos `.task` do MediaPipe. Download frio integral (todos os modelos + dependências): **não medido nesta máquina**; com caches uv/HF quentes, o setup completo levou 44 s. Importar os pacotes (o que o doctor prova) não comprova que os modelos funcionam.
+Aguarde essas etapas: conexão indisponível, download incompleto ou falha ao carregar um modelo fazem o setup terminar com erro. Corrija a causa e repita `node scripts/setup.mjs`; os caches existentes são reutilizados, sem apagar dados.
+
+O primeiro vídeo com os modelos padrão usa esse cache, desde que rode com o mesmo usuário e configuração. Trocar idioma/modelo ou remover o cache pode exigir novos downloads. Transcrição continua local (CPU); downloads de arquivos não são chamadas a um provedor de IA. Configurar um provedor é opcional.
+
+Registre o tempo de instalação dos modelos separado do processamento do vídeo. As medições anteriores de setup (44 s/4 s) e ingestão (158 s para vídeo de 107 s) ocorreram antes desta etapa obrigatória e não estimam uma instalação fria atual. Carregar os modelos comprova sua disponibilidade, mas o teste com vídeo continua necessário para validar transcrição e render.
 
 ## 4. Onde fica cada coisa
 
@@ -90,7 +95,7 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 | Sistema | Situação nesta referência |
 |---|---|
 | macOS arm64 | Aceite real em 14/09/2026 (commit `5c9bd89`): **aprovados** setup novo (44 s com caches quentes) e repetido (4 s, idempotente), proteção do motor com recusa WIP, caminhos com espaços, servidor de montagem (GET 200, SIGINT/Ctrl+C com porta fechada, porta ocupada com erro claro, reabertura), fala local PT-BR (ingestão de vídeo de 107 s em 158 s, sem chamada remota) e MP4 baseline do `assembly-proof`. Pendências: a asserção do `assembly-proof` em 29,97 fps falha por 1 frame (achado preexistente, código não mudado nesta branch) e a suíte completa/CI remota não rodaram no clone de aceite. Na 1ª rodada (`029bd6e`) o setup falhava ao localizar o npm do Node Homebrew — corrigido em `5c9bd89`. Detalhes na [evidência](../superpowers/evidence/2026-09-14-setup-simplificado.md). |
-| Windows x64 nativo | Código portátil nesta referência (abertura de navegador, Python do motor e encerramento de árvore por plataforma em `apps/cli/src/runtime.ts`; suíte sem `say`; matriz CI macOS+Windows configurada). **Não homologado**: sem aceite em máquina Windows real, e a execução remota da CI depende de push autorizado. |
+| Windows x64 nativo | Código portátil nesta referência (abertura de navegador, Python do motor e encerramento de árvore por plataforma em `apps/cli/src/runtime.ts`; suíte sem `say`; matriz CI macOS+Windows configurada). **Não homologado**: sem aceite em máquina Windows real, embora testes e typecheck tenham passado na [CI Windows/macOS](https://github.com/jhowtkd/decupa/actions/runs/34837104426) antes da adição do preparo de modelos. |
 | Windows com WSL2/Linux | Possível caminho de avaliação, ainda sem validação deste produto. Não misture Python/Node do Windows com ambientes Linux nem copie `.venv` entre eles; no DaVinci/Resolve do Windows, religue a mídia se o OTIO conter caminhos Linux. [Instalação oficial do WSL](https://learn.microsoft.com/en-us/windows/wsl/install). |
 
 Se encontrar um bloqueio de plataforma, registre o erro concreto e peça a decisão necessária antes de instalar WSL, reiniciar ou portar código. Não crie executáveis falsos `open`/`say` para ocultar falhas.
@@ -115,7 +120,7 @@ Até corrigir e testar o transporte, use o terminal do agente. Se avaliar um hos
 
 ## 9. Aceite por computador
 
-1. Registre sistema, arquitetura, commit e versões (Node/uv/FFmpeg/Python). Execute `node scripts/setup.mjs` — ele termina com `doctor --local`; explique cada ERR. Rode também `pnpm typecheck`.
+1. Registre sistema, arquitetura, commit e versões (Node/uv/FFmpeg/Python). Execute `node scripts/setup.mjs` — aguarde `doctor --local` e o carregamento dos modelos de fala/visão; explique cada erro. Rode também `pnpm typecheck`.
 2. Abra uma montagem vazia: `node scripts/start.mjs --project "<pasta nova>"`. Confira resposta HTTP (GET `/` e `/project` na montagem), interface visível, encerre com Ctrl+C, verifique a porta fechada e reabra o projeto.
 3. Com um vídeo curto autorizado, teste transcrição PT-BR local (`--input`), timestamps dentro da duração medida da mídia, prévia e exportação MP4. Registre downloads e duração; uma tela aberta não comprova esse fluxo.
 4. Prova sintética de render/OTIO: `node --experimental-strip-types scripts/assembly-proof.ts` com `DECUPA_ENGINE_PYTHON=<clone>/work/engine-venv/bin/python`; confira o MP4 com ffprobe (streams e decodificação sem erro).

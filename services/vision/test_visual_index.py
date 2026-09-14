@@ -65,5 +65,20 @@ class AggregateTest(unittest.TestCase):
         )
 
 
+class PrepareModelsTest(unittest.TestCase):
+    def test_prepares_without_video_and_propagates_failure(self):
+        import sys
+        from unittest.mock import Mock, patch
+        import visual_index
+        face, hand = Mock(), Mock()
+        with patch.object(sys, "argv", ["visual_index.py", "--prepare-models"]), patch.object(visual_index, "create_landmarkers", return_value=(face, hand)) as create:
+            self.assertEqual(visual_index.main(), 0)
+            face.close.assert_called_once()
+            hand.close.assert_called_once()
+            create.side_effect = RuntimeError("modelo inválido")
+            with self.assertRaisesRegex(RuntimeError, "modelo inválido"):
+                visual_index.main()
+
+
 if __name__ == "__main__":
     unittest.main()
