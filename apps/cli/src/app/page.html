@@ -46,7 +46,11 @@
   }
   #export-menu button:hover { background: var(--bg-1); }
   #export-menu[hidden] { display: none; }
-  main { max-width: 44rem; margin: 0 auto; padding: 32px 20px 160px; }
+  main { max-width: none; padding: 40px 24px 180px; }
+  #prosa {
+    max-width: 34em; margin: 0 auto;
+    font-family: var(--serif); font-size: 20px; line-height: 1.65;
+  }
   button {
     display: inline-flex; align-items: center; gap: 6px;
     height: 32px; padding: 0 12px; border-radius: 6px;
@@ -75,28 +79,26 @@
   .u:hover .play, .gone:hover .play, .u .play:focus-visible, .gone .play:focus-visible {
     opacity: 1; pointer-events: auto;
   }
-  /* Dropada: colapsa; o título traz o texto inteiro. */
+  /* Cortado: o próprio texto, riscado inline — sem chip, sem elipse. */
   .gone {
-    position: relative;
-    display: inline-block; vertical-align: bottom;
-    margin: 0 2px; cursor: pointer;
+    color: var(--faint);
+    text-decoration: line-through; text-decoration-color: var(--warn); text-decoration-thickness: 1.5px;
+    cursor: pointer; border-radius: 3px;
   }
-  .gone .gone-text {
-    display: inline-block; max-width: 12rem; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap;
-    font-family: ui-sans-serif, sans-serif; font-size: 11px;
-    color: var(--muted); background: #ffffff0d; border: 1px dashed var(--line);
-    border-radius: 4px; padding: 0 6px;
-  }
-  .gone:hover .gone-text { color: var(--ink); border-color: var(--accent); }
+  .gone:hover { color: var(--muted); background: #ffffff0d; }
   .flag-badge {
     display: inline-block; width: 0.42em; height: 0.42em; margin: 0 0.1em 0.35em;
     border-radius: 50%; background: var(--warn); vertical-align: super; opacity: 0.75;
   }
-  .join { display: block; margin: 14px 0; font-family: ui-sans-serif, sans-serif; font-size: 12px; }
-  .join .flag { color: var(--warn); display: block; padding-left: 10px; border-left: 2px solid var(--warn); }
-  .join .hint { color: var(--muted); }
-  .join .play { margin-top: 6px; font-weight: 600; }
+  .join { display: block; margin: 16px 0; font-family: var(--sans-ui); font-size: 12.5px; }
+  .join-head {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    color: var(--faint); border-left: 2px solid var(--line-strong); padding-left: 8px;
+  }
+  .join .flag { color: var(--warn); display: block; padding: 2px 0 0 10px; border-left: 2px solid var(--warn); }
+  .join .play { color: var(--accent); }
+  .join-dur { color: var(--warn); text-transform: none; letter-spacing: 0; }
   #aviso { color: var(--warn); font-family: var(--sans-ui); font-size: 12px; }
   .steps {
     list-style: none; margin: 0; padding: 0;
@@ -115,15 +117,24 @@
   #triage {
     position: sticky; bottom: 0; z-index: 2;
     background: var(--bg-1); border-top: 1px solid var(--line);
-    padding: 16px 20px 20px; font-family: ui-sans-serif, system-ui, sans-serif;
-    font-size: 14px; line-height: 1.5; max-height: 42vh; overflow: auto;
+    padding: 18px 22px 20px; font-family: var(--sans-ui); font-size: 13px;
+    max-height: 46vh; overflow: auto;
   }
   #triage[hidden] { display: none; }
-  #triage h2 { margin: 0 0 10px; font-size: 15px; }
-  #triage .lbl { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin: 12px 0 4px; }
-  #triage ul { margin: 0; padding: 0 0 0 1.1rem; }
-  #triage li { margin: 4px 0; }
+  #triage h2 { margin: 0; font-size: 14px; }
+  #triage .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 6px; }
+  #triage .lbl { color: var(--muted); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; margin: 12px 0 4px; }
+  #triage .lbl.data { font-family: var(--mono); text-transform: none; letter-spacing: 0; }
+  #triage ul { margin: 0; padding: 0; list-style: none; }
+  #triage li { margin: 3px 0; color: var(--ink); }
   #triage .actions { display: flex; gap: 8px; margin-top: 14px; }
+  @media (max-width: 760px) { #triage .cols { grid-template-columns: 1fr; } }
+  .skeleton { max-width: 34em; margin: 0 auto 22px; display: flex; flex-direction: column; gap: 12px; }
+  .skeleton span { height: 14px; border-radius: 4px; background: var(--bg-2); animation: pulse 1.2s ease-in-out infinite; }
+  .skeleton span:nth-child(2) { width: 88%; }
+  .skeleton span:nth-child(3) { width: 62%; }
+  @keyframes pulse { 50% { opacity: .5; } }
+  @media (prefers-reduced-motion: reduce) { .skeleton span { animation: none; } }
   kbd {
     font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: var(--ink);
     background: #232c31; border: 1px solid var(--line-strong); border-bottom-width: 2px;
@@ -167,11 +178,17 @@
 <main id="prosa"></main>
 <aside id="triage" hidden>
   <h2>prévia da triagem</h2>
-  <p id="triage-stats" class="lbl"></p>
-  <p class="lbl">vai cair (retake limpo)</p>
-  <ul id="triage-drop"></ul>
-  <p class="lbl">olhe isto (sem substituto)</p>
-  <ul id="triage-look"></ul>
+  <p id="triage-stats" class="lbl data"></p>
+  <div class="cols">
+    <div>
+      <p class="lbl">vai cair (retake limpo)</p>
+      <ul id="triage-drop"></ul>
+    </div>
+    <div>
+      <p class="lbl">olhe isto (sem substituto)</p>
+      <ul id="triage-look"></ul>
+    </div>
+  </div>
   <div class="actions">
     <button type="button" class="primary" id="triage-apply">aplicar</button>
     <button type="button" id="triage-dismiss">descartar</button>
@@ -283,7 +300,11 @@ function renderProcessing(stage, progress) {
   hint.textContent = stage === "transcribing"
     ? "a transcrição leva alguns minutos"
     : "aguardando o motor…";
-  const nodes = [ol, hint];
+  // Três barras no lugar da prosa que ainda não existe.
+  const skel = document.createElement("div");
+  skel.className = "skeleton";
+  for (let i = 0; i < 3; i++) skel.append(document.createElement("span"));
+  const nodes = [skel, ol, hint];
   if (progress) {
     // A última linha do processo, verbatim. Não é barra de progresso: é prova
     // de que ainda está andando, que é a pergunta que a pessoa tem.
@@ -313,6 +334,7 @@ function render() {
   const joinsBy = new Map(review.joins.map((j) => [j.afterUnitId, j]));
   const main = el("prosa");
   main.replaceChildren();
+  let joinCount = 0;
   for (const u of review.units) {
     if (kept.get(u.id)) {
       const span = document.createElement("span");
@@ -337,14 +359,11 @@ function render() {
       };
       main.append(span);
       const join = joinsBy.get(u.id);
-      if (join?.flags?.length) main.append(joinNode(join));
+      if (join?.flags?.length) main.append(joinNode(join, ++joinCount));
     } else {
       const mark = document.createElement("span");
       mark.className = "gone";
-      const label = document.createElement("span");
-      label.className = "gone-text";
-      label.textContent = u.text;      // o CSS trunca; o título mostra inteiro
-      mark.append(label);
+      mark.textContent = u.text;   // inteiro: o risco mostra tudo, sem elipse
       const goneReasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
       mark.title = goneReasons.length
         ? `restaurar: ${u.text}\n${goneReasons.join(" · ")}`
@@ -374,9 +393,17 @@ const AVISOS = {
   visual_in_point: ["a junção entra com um problema visual (mão no rosto, olhar baixo ou sem rosto)", "mova o in-point +0,4s no EDL"],
 };
 
-function joinNode(join) {
+function joinNode(join, n) {
   const box = document.createElement("span");
   box.className = "join";
+  const head = document.createElement("span");
+  head.className = "join-head";
+  head.textContent = `corte ${n}`;
+  const dur = document.createElement("span");
+  dur.className = "join-dur";
+  dur.textContent = ` -${join.removedSeconds.toFixed(1).replace(".", ",")}s`;
+  head.append(dur);
+  box.append(head);
   for (const f of join.flags) {
     const pt = AVISOS[f.code];
     const node = document.createElement("span");
