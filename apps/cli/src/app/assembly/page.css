@@ -129,3 +129,27 @@ summary { cursor: pointer; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; }
 }
+
+/* Task 4: rail/contexto do editor em cards (materiais, briefing, prévia). */
+#rail, #contexto { padding: 14px; }
+.source {
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; margin: 8px 0; align-items: center;
+}
+.source img { width: 64px; border-radius: 6px; }
+.source .controls { margin-top: 8px; }
+.source select { background: var(--bg-1); border-radius: 6px; }
+.source .m-body { min-width: 0; flex: 1; }
+.source .m-name { font-weight: 600; overflow-wrap: anywhere; }
+.source .m-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.rail-actions { display: none; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+#rail.has-selection .rail-actions { display: flex; }
+.rail-head h1 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin: 0 0 10px; }
+/* Títulos de seção viram panel-label (tokens da Task 3; muted garante AA). */
+#rail section h1, #contexto section h1 {
+  font: 600 11px/1.6 var(--sans-ui); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: 18px 0 8px;
+}
+.delivery a { display: inline-flex; margin-right: 10px; }
+#downloads .data, .delivery .data { font-family: var(--mono); font-size: 12px; }
+.preview-meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }

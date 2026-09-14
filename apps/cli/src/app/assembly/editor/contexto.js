@@ -3,9 +3,13 @@
 // o bloco original do page.js monolítico, mantendo o comentário de
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
+import { montageDuration } from "./montage.js";
 
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let lastPreviewRev = null;
+
+/** Chip mono (.chip da Task 3): metadados curtos da prévia em linha. */
+const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
 
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
 function setDisabled(el, value) {
@@ -33,12 +37,12 @@ export function mountContexto({ state, api, player }) {
   preview.setAttribute("aria-label", "Prévia");
   preview.innerHTML = "<h1>Prévia</h1>"
     + '<video id="previewPlayer" controls preload="metadata"></video>'
-    + '<p class="muted" id="previewNote" hidden aria-live="polite"></p>'
+    + '<div class="preview-meta" id="previewNote" hidden aria-live="polite"></div>'
+    + '<div class="preview-meta" id="deliveryMeta"></div>'
     + '<p class="muted" id="freshChip" aria-live="polite"></p>'
-    + '<p class="muted" id="deliveryMeta"></p>'
     + '<p class="muted">Assista à prévia atual antes de aprovar.</p>'
     + '<div class="row"><button type="button" id="refreshPreview">Atualizar prévia</button>'
-    + '<button type="button" id="approveFinal">Aprovar prévia assistida</button></div>';
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
   root.appendChild(preview);
 
   // Só o estado das correções mora aqui; as ações por palavra (incluindo
@@ -55,8 +59,8 @@ export function mountContexto({ state, api, player }) {
   briefingActions.setAttribute("aria-label", "Ajuste");
   briefingActions.innerHTML = "<h1>Ajuste</h1>"
     + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
-    + '<div class="row"><button type="button" id="adjust">Propor mudanças (modelo pago)</button>'
-    + '<button type="button" id="cancelPrep" hidden>Cancelar</button></div>';
+    + '<div class="row"><button type="button" class="primary" id="adjust">Propor mudanças (modelo pago)</button>'
+    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar</button></div>';
   root.appendChild(briefingActions);
 
   const previewPlayer = document.getElementById("previewPlayer");
@@ -123,12 +127,21 @@ export function mountContexto({ state, api, player }) {
 
   function renderPreview(project) {
     if (!project.scenes.length) return;
-    document.getElementById("deliveryMeta").textContent =
-      "prévia " + project.previewRevision + " · final " + project.finalApprovedRevision
-      + " · " + project.assembly.width + "×" + project.assembly.height
-      + " @ " + project.assembly.fps.num + "/" + project.assembly.fps.den;
-    const current = project.previewRevision != null && project.previewRevision === project.revision;
+    // Metadados da prévia em linha de chips mono (Task 4).
+    document.getElementById("deliveryMeta").replaceChildren(
+      chip("prévia " + project.previewRevision),
+      chip(Math.round(montageDuration(project)) + "s"),
+      chip(project.assembly.width + "×" + project.assembly.height
+        + " @ " + project.assembly.fps.num + "/" + project.assembly.fps.den),
+    );
+    // Notas de transição ("atualizando…") também viram chips.
     const noteEl = document.getElementById("previewNote");
+    const note = (visible, ...chips) => {
+      if (!noteEl) return;
+      noteEl.hidden = !visible;
+      noteEl.replaceChildren(...chips);
+    };
+    const current = project.previewRevision != null && project.previewRevision === project.revision;
     if (project.previewRevision != null) {
       const src = "/project/output/" + project.previewRevision + "/mp4";
       if (previewPlayer.getAttribute("data-rev") !== String(project.previewRevision)) {
@@ -142,41 +155,31 @@ export function mountContexto({ state, api, player }) {
         lastTime = Number.isFinite(time) ? time : 0;
       }
       lastPreviewRev = project.previewRevision;
-      if (noteEl) {
-        if (!current) {
-          noteEl.hidden = false;
-          noteEl.textContent = "Prévia anterior (revisão " + project.previewRevision
-            + ") — atualizando para a revisão " + project.revision + "…";
-        } else {
-          noteEl.hidden = true;
-          noteEl.textContent = "";
-        }
+      if (!current) {
+        note(true,
+          chip("prévia " + project.previewRevision),
+          chip("atualizando → " + project.revision));
+      } else {
+        note(false);
       }
     } else if (previewPlayer.hasAttribute("src")) {
       // Mantém o último vídeo válido como prévia anterior enquanto renderiza (V4).
-      if (noteEl) {
-        const label = lastPreviewRev != null ? "revisão " + lastPreviewRev : "anterior";
-        noteEl.hidden = false;
-        noteEl.textContent = "Prévia " + label + " — atualizando para a revisão " + project.revision + "…";
-      }
+      note(true,
+        chip(lastPreviewRev != null ? "prévia " + lastPreviewRev : "prévia anterior"),
+        chip("atualizando → " + project.revision));
     } else if (project.revision > 0) {
       // Recarregou com prévia invalidada: tenta a revisão anterior do disco.
       const prev = project.revision - 1;
       previewPlayer.src = "/project/output/" + prev + "/mp4";
       previewPlayer.setAttribute("data-prev", String(prev));
       lastPreviewRev = prev;
-      if (noteEl) {
-        noteEl.hidden = false;
-        noteEl.textContent = "Prévia anterior (revisão " + prev + ") — atualizando para a revisão "
-          + project.revision + "…";
-      }
+      note(true,
+        chip("prévia " + prev),
+        chip("atualizando → " + project.revision));
     } else {
       previewPlayer.removeAttribute("src");
       previewPlayer.removeAttribute("data-rev");
-      if (noteEl) {
-        noteEl.hidden = false;
-        noteEl.textContent = "Sem prévia ainda.";
-      }
+      note(true, chip("sem prévia"));
     }
     renderFreshness(project);
     // Atualizar prévia renderiza no servidor: bloqueia o segundo clique.

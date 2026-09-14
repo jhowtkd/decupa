@@ -4,6 +4,9 @@
 const ROLES = { speech: "Fala", support: "Apoio", both: "Fala+apoio" };
 const STAGE_LABEL = { pending: "pendente", running: "rodando", ready: "pronta", error: "erro" };
 
+/** Chip mono (.chip da Task 3): estado curto e legível ao lado do nome. */
+const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
+
 function sourceName(project, id) {
   const found = project && project.assembly.sources.find((item) => item.id === id);
   return found ? found.name : id;
@@ -49,8 +52,9 @@ export function mountRail({ state, api, player }) {
   materials.innerHTML = "<h1>Materiais</h1>"
     + '<p class="muted">Arquivos locais. O original não é enviado a terceiros nesta tela.</p>'
     + '<p class="muted" id="invite" hidden>Solte mídias no centro ou escolha arquivos para começar.</p>'
-    + '<div class="row"><button type="button" id="select">Escolher arquivos</button>'
-    + '<button type="button" id="batchSupport" disabled>Categorizar seleção como apoio</button>'
+    + '<div class="row"><button type="button" id="select">Escolher arquivos</button></div>'
+    // Ações em lote só existem enquanto há seleção (Task 4: #rail.has-selection).
+    + '<div class="rail-actions"><button type="button" id="batchSupport" disabled>Categorizar seleção como apoio</button>'
     + '<button type="button" id="batchInclude" disabled>Incluir seleção</button>'
     + '<button type="button" id="batchExclude" disabled>Excluir seleção</button></div>'
     + '<ul id="sources" class="plain"></ul>';
@@ -58,11 +62,13 @@ export function mountRail({ state, api, player }) {
 
   const briefing = document.createElement("section");
   briefing.setAttribute("aria-label", "Briefing");
-  briefing.innerHTML = "<h1>Briefing</h1>"
+  briefing.innerHTML = '<details id="briefing-box">'
+    + '<summary class="panel-label">briefing</summary>'
     + '<label>Tipo <select id="kind"><option value="brief">briefing</option><option value="script">roteiro</option></select></label>'
     + '<label>Texto <textarea id="inputText" rows="4"></textarea></label>'
     + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60"></label>'
-    + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button></div>';
+    + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button></div>'
+    + '</details>';
   root.appendChild(briefing);
 
   const preparation = document.createElement("section");
@@ -76,6 +82,7 @@ export function mountRail({ state, api, player }) {
   root.appendChild(preparation);
 
   const delivery = document.createElement("section");
+  delivery.className = "delivery";
   delivery.setAttribute("aria-label", "Entrega");
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
@@ -92,6 +99,8 @@ export function mountRail({ state, api, player }) {
     setDisabled(document.getElementById("batchSupport"), !any);
     setDisabled(document.getElementById("batchInclude"), !any);
     setDisabled(document.getElementById("batchExclude"), !any);
+    // A barra contextual só existe enquanto há seleção (Task 4).
+    document.getElementById("rail").classList.toggle("has-selection", any);
   }
 
   function renderSources(project) {
@@ -114,12 +123,16 @@ export function mountRail({ state, api, player }) {
       thumb.alt = "";
       thumb.src = "/project/thumbnail/" + encodeURIComponent(source.id);
       const meta = document.createElement("div");
-      meta.className = "meta";
+      meta.className = "m-body";
       const name = document.createElement("div");
+      name.className = "m-name";
+      name.textContent = source.name;
       const analysis = project.analyses.find((item) => item.sourceId === source.id);
-      name.textContent = source.name + " · " + Math.round(source.durationSeconds) + "s"
-        + (source.included ? "" : " · excluída")
-        + (analysis ? " · " + analysis.status : "");
+      const chips = document.createElement("div");
+      chips.className = "m-meta";
+      chips.append(chip(Math.round(source.durationSeconds) + "s"));
+      if (!source.included) chips.append(chip("excluída"));
+      if (analysis) chips.append(chip(analysis.status));
       const controls = document.createElement("div");
       controls.className = "controls";
       const role = document.createElement("select");
@@ -147,6 +160,7 @@ export function mountRail({ state, api, player }) {
       }));
       const relink = document.createElement("button");
       relink.type = "button";
+      relink.className = "quiet";
       relink.textContent = "Relink";
       relink.addEventListener("click", () => api.call("/project/relink", {
         method: "POST",
@@ -155,10 +169,11 @@ export function mountRail({ state, api, player }) {
       }));
       const watch = document.createElement("button");
       watch.type = "button";
+      watch.className = "quiet";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
       controls.append(role, toggle, relink, watch);
-      meta.append(name, controls);
+      meta.append(name, chips, controls);
       li.append(box, thumb, meta);
       list.appendChild(li);
     }
@@ -235,14 +250,16 @@ export function mountRail({ state, api, player }) {
     if (approved) {
       const rev = project.finalApprovedRevision;
       const otio = document.createElement("a");
+      otio.className = "data";
       otio.href = "/project/output/" + rev + "/otio";
       otio.textContent = "Baixar timeline.otio";
       otio.setAttribute("download", "timeline.otio");
       const mp4 = document.createElement("a");
+      mp4.className = "data";
       mp4.href = "/project/output/" + rev + "/mp4";
       mp4.textContent = "Baixar reference.mp4";
       mp4.setAttribute("download", "reference.mp4");
-      downloads.append(otio, document.createTextNode(" · "), mp4);
+      downloads.append(otio, mp4);
     }
   }
 
@@ -296,6 +313,10 @@ export function mountRail({ state, api, player }) {
     document.getElementById("inputText").value = project.input.text;
     document.getElementById("target").value = String(project.input.targetSeconds);
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
+    // Projeto sem fontes abre o briefing sozinho: o primeiro gesto é colar
+    // o roteiro e arrastar mídia (Task 4).
+    const box = document.getElementById("briefing-box");
+    if (box) box.open = project.assembly.sources.length === 0;
     renderSources(project);
     // A seção fica visível desde o vazio: o botão Preparar montagem é o
     // ponto de entrada do percurso (Task 10). Só o Retomar depende de percurso.
