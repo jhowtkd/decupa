@@ -1,6 +1,6 @@
 # Instalar o Decupa em outro computador
 
-Referência: branch `feat/setup-simplificado`, commit `029bd6e`, conferido em 14/09/2026. Repositório: https://github.com/jhowtkd/decupa.
+Referência: branch `feat/setup-simplificado`, commit `5c9bd89`, conferido em 14/09/2026. Repositório: https://github.com/jhowtkd/decupa.
 Este guia instala o código existente; não é um instalador nem uma certificação de compatibilidade.
 O prompt para entregar ao agente está em [PROMPT-AGENTE.md](PROMPT-AGENTE.md).
 O resultado do aceite real por plataforma está na [evidência de 14/09/2026](../superpowers/evidence/2026-09-14-setup-simplificado.md).
@@ -55,10 +55,10 @@ Não é preciso instalar pnpm global: o setup instala pnpm 10.32.1 dentro do clo
 
 O setup **não** baixa modelos de IA; eles chegam no primeiro uso real:
 
-- Fala (primeira transcrição/limpeza): modelo WhisperX `small` e o modelo de alinhamento forçado de PT, baixados pelo WhisperX na primeira execução (CPU, int8).
-- Visão (primeiro índice visual): modelos MediaPipe Face Landmarker e Hand Landmarker (`.task`) para `services/vision/.models/`.
+- Fala (primeira transcrição/limpeza): modelo WhisperX `small` (`Systran/faster-whisper-small`, ~464 MB) e o modelo de alinhamento forçado de PT (`jonatasgrosman/wav2vec2-large-xlsr-53-portuguese`, ~2,4 GB), baixados pelo WhisperX na primeira execução (CPU, int8) para o cache do HuggingFace (`~/.cache/huggingface`).
+- Visão (primeiro índice visual): modelos MediaPipe Face Landmarker e Hand Landmarker (`.task`, ~11 MB) para `services/vision/.models/`.
 
-A duração desses downloads depende da conexão e da máquina; **registre a duração observada no seu relatório por máquina**. No aceite de 14/09/2026 ela não foi medida, porque o setup completo falhou antes (ver seção 6 e a evidência). Importar os pacotes (o que o doctor prova) não comprova que os modelos funcionam.
+A duração desses downloads depende da conexão e da máquina; **registre a duração observada no seu relatório por máquina**. Durações observadas no aceite de 14/09/2026 (macOS arm64): ingestão completa de um vídeo de 107 s levou **158 s**, sendo ~142 s na etapa de fala — já incluindo o download do `faster-whisper-small` (o modelo de alinhamento PT estava em cache de uso anterior; numa máquina fria some o download de ~2,4 GB) — e ~10 s na etapa de visão, incluindo o download dos `.task` do MediaPipe. Download frio integral (todos os modelos + dependências): **não medido nesta máquina**; com caches uv/HF quentes, o setup completo levou 44 s. Importar os pacotes (o que o doctor prova) não comprova que os modelos funcionam.
 
 ## 4. Onde fica cada coisa
 
@@ -89,7 +89,7 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 
 | Sistema | Situação nesta referência |
 |---|---|
-| macOS arm64 | Aceite real em 14/09/2026: instalação/proteção do motor e recusa WIP aprovadas; o **setup completo falhou** com o Node 26.7.0 do Homebrew (a localização do npm pelo setup não cobre o layout do Homebrew) e as etapas que dependem dos ambientes não foram executadas. Detalhes e erro exato na [evidência](../superpowers/evidence/2026-09-14-setup-simplificado.md). |
+| macOS arm64 | Aceite real em 14/09/2026 (commit `5c9bd89`): **aprovados** setup novo (44 s com caches quentes) e repetido (4 s, idempotente), proteção do motor com recusa WIP, caminhos com espaços, servidor de montagem (GET 200, SIGINT/Ctrl+C com porta fechada, porta ocupada com erro claro, reabertura), fala local PT-BR (ingestão de vídeo de 107 s em 158 s, sem chamada remota) e MP4 baseline do `assembly-proof`. Pendências: a asserção do `assembly-proof` em 29,97 fps falha por 1 frame (achado preexistente, código não mudado nesta branch) e a suíte completa/CI remota não rodaram no clone de aceite. Na 1ª rodada (`029bd6e`) o setup falhava ao localizar o npm do Node Homebrew — corrigido em `5c9bd89`. Detalhes na [evidência](../superpowers/evidence/2026-09-14-setup-simplificado.md). |
 | Windows x64 nativo | Código portátil nesta referência (abertura de navegador, Python do motor e encerramento de árvore por plataforma em `apps/cli/src/runtime.ts`; suíte sem `say`; matriz CI macOS+Windows configurada). **Não homologado**: sem aceite em máquina Windows real, e a execução remota da CI depende de push autorizado. |
 | Windows com WSL2/Linux | Possível caminho de avaliação, ainda sem validação deste produto. Não misture Python/Node do Windows com ambientes Linux nem copie `.venv` entre eles; no DaVinci/Resolve do Windows, religue a mídia se o OTIO conter caminhos Linux. [Instalação oficial do WSL](https://learn.microsoft.com/en-us/windows/wsl/install). |
 
