@@ -217,16 +217,24 @@ function renderProse(p, selection) {
     const sceneStart = cursor;
     for (const take of scene.takes) cursor += retainedDuration(take);
     const [up, down] = sceneHeaderActions(index, p.scenes.length);
+    // Tempos do cabeçalho: primeiro start e último end dos takes da cena
+    // (os mesmos segundos que hoje aparecem nos rótulos de fonte).
+    const range = scene.takes.length
+      ? '<span class="chip">' + Math.min(...scene.takes.map((take) => take.start)).toFixed(1)
+        + "-" + Math.max(...scene.takes.map((take) => take.end)).toFixed(1) + "s</span>"
+      : "";
     html += '<section class="scene" data-scene-section="' + esc(scene.id) + '">';
-    html += '<p class="scene-head"><span>Cena ' + (index + 1)
-      + (scene.objective ? " · " + esc(scene.objective) : "") + "</span> "
-      + '<button type="button" data-scene-action="up" data-scene="' + esc(scene.id) + '"'
+    html += '<p class="scene-head" data-scene="' + esc(scene.id) + '">'
+      + '<span class="num">cena ' + (index + 1) + "</span>"
+      + '<span class="title">' + esc(scene.objective || "") + "</span>"
+      + '<span class="spacer"></span>' + range
+      + '<button type="button" class="quiet" data-scene-action="up" data-scene="' + esc(scene.id) + '"'
       + (up.disabled ? " disabled" : "")
       + ' aria-label="Mover cena ' + (index + 1) + ' para cima">↥</button>'
-      + '<button type="button" data-scene-action="down" data-scene="' + esc(scene.id) + '"'
+      + '<button type="button" class="quiet" data-scene-action="down" data-scene="' + esc(scene.id) + '"'
       + (down.disabled ? " disabled" : "")
       + ' aria-label="Mover cena ' + (index + 1) + ' para baixo">↧</button>'
-      + '<button type="button" data-scene-action="delete" data-scene="' + esc(scene.id) + '"'
+      + '<button type="button" class="quiet" data-scene-action="delete" data-scene="' + esc(scene.id) + '"'
       + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button></p>';
     if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
     if (scene.gaps.length) {
@@ -255,26 +263,28 @@ function renderProse(p, selection) {
     let pos = 0;
     for (const take of scene.takes) {
       const source = p.assembly.sources.find((item) => item.id === take.sourceId);
-      html += '<div class="take"><div class="src">' + esc(source ? source.name : take.sourceId)
-        + " · " + take.start.toFixed(1) + "s–" + take.end.toFixed(1) + "s</div><p class=\"prose\">";
+      html += '<div class="take"><p class="prose">';
       for (const word of takeWords(p, scene, take)) {
         html += chipAt(pos) + wordButton(scene, take.id, word, selection) + " ";
         pos += 1;
       }
-      html += "</p></div>";
+      // Chip de fonte no fim do bloco (os tempos subiram para o cabeçalho).
+      html += '</p><span class="src-chip">'
+        + esc(source ? source.name : take.sourceId) + "</span></div>";
     }
     html += chipAt(pos);
-    // Zonas omitidas (fora da montagem): takeId "" → menu ouvir/incluir.
+    // Zonas omitidas (fora da montagem): takeId "" → menu ouvir/incluir,
+    // como inset apagado com contador de palavras e atalho "incluir trecho".
     for (const source of p.assembly.sources) {
       const missing = omittedWords(p, scene, source.id);
       if (!missing.length) continue;
-      html += '<div class="omit"><div class="src">' + esc(source.name)
-        + " · fora da montagem</div><p class=\"prose\">";
+      html += '<div class="unused"><span>não usado (' + missing.length + ' palavras)</span> '
+        + '<span class="chip">incluir trecho</span><p class="prose">';
       for (const word of missing) {
         html += wordButton(scene, "", word, selection, " omit",
           ' data-source="' + esc(source.id) + '"') + " ";
       }
-      html += "</p></div>";
+      html += '</p><span class="src-chip">' + esc(source.name) + "</span></div>";
     }
     html += "</section>";
   });

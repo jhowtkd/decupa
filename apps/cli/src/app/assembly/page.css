@@ -112,7 +112,7 @@ summary { cursor: pointer; color: var(--muted); }
 .word.riscado { text-decoration: line-through; color: var(--muted); background: var(--removed); }
 .riscado { text-decoration: line-through; opacity: .55; }
 .word.protected { border-bottom: 2px solid var(--protected); }
-.word.corrected { font-style: italic; }
+.word.corrected { font-style: italic; border-bottom: 2px dotted var(--accent); }
 
 /* Estados de loading: spinner no status do rail. */
 #status.busy::before {
@@ -153,3 +153,25 @@ summary { cursor: pointer; color: var(--muted); }
 .delivery a { display: inline-flex; margin-right: 10px; }
 #downloads .data, .delivery .data { font-family: var(--mono); font-size: 12px; }
 .preview-meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+
+/* Task 5: Montar — texto com cenas hierárquicas e prosa material. */
+#texto { padding: 28px 48px 140px; }
+#texto .measure { max-width: 620px; margin: 0 auto; }
+.prose { font-family: var(--serif); font-size: 20px; line-height: 1.65; }
+.scene-head {
+  display: flex; align-items: baseline; gap: 10px;
+  border-bottom: 1px solid var(--line); padding-bottom: 8px; margin: 30px 0 14px;
+}
+.scene-head .num { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.scene-head .title { font: 600 15px var(--sans-ui); color: var(--ink); }
+.scene-head .spacer { flex: 1; }
+.take .src, .src-chip {
+  display: inline-flex; margin-top: 10px; padding: 2px 8px;
+  border-radius: 6px; background: var(--bg-1); border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+}
+.unused {
+  margin-top: 12px; border: 1px dashed var(--line-strong); border-radius: 10px;
+  padding: 10px 12px; color: var(--faint); font-size: 12.5px;
+}
+.unused .prose { font-size: 15px; color: var(--muted); }
