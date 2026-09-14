@@ -4,7 +4,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { access, mkdir, mkdtemp, realpath, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function run(command, args, cwd) {
@@ -80,6 +80,41 @@ export async function installEngine(root, { pin = PIN, remote = REMOTE } = {}) {
 
 const step = name => console.log(`\n== ${name} ==`);
 
+/**
+ * Localiza o npm-cli.js do Node ativo sem shell e sem baixar nada.
+ *
+ * Deriva dois diretórios a partir do executável do Node — o realpath (resolve
+ * instalações vinculadas, ex.: Homebrew Cellar) e o caminho como dado (ex.:
+ * /opt/homebrew/bin) — e procura, nesta ordem, os layouts conhecidos:
+ *   1. node_modules/npm/bin/npm-cli.js               (Windows)
+ *   2. ../lib/node_modules/npm/bin/npm-cli.js        (Unix nodejs.org / Homebrew global)
+ *   3. ../libexec/lib/node_modules/npm/bin/npm-cli.js (Homebrew Cellar)
+ * Por fim, tenta o `npm` irmão do binário: se for arquivo/symlink cujo realpath
+ * é um `npm-cli.js`, usa esse alvo (nunca um shell script/.cmd).
+ *
+ * @param {string} [nodeExe] Caminho do executável do Node.
+ * @returns {Promise<string|null>} Caminho do npm-cli.js, ou null se não localizado. Não lança.
+ */
+export async function findNpmCli(nodeExe = process.execPath) {
+  const realDir = dirname(await realpath(nodeExe).catch(() => resolve(nodeExe)));
+  const givenDir = dirname(resolve(nodeExe));
+  const dirs = realDir === givenDir ? [realDir] : [realDir, givenDir];
+  for (const dir of dirs) {
+    for (const candidate of [
+      join(dir, 'node_modules/npm/bin/npm-cli.js'),
+      resolve(dir, '../lib/node_modules/npm/bin/npm-cli.js'),
+      resolve(dir, '../libexec/lib/node_modules/npm/bin/npm-cli.js'),
+    ]) if (await exists(candidate)) return candidate;
+  }
+  for (const dir of dirs) {
+    const sibling = join(dir, 'npm');
+    if (!(await exists(sibling))) continue;
+    const target = await realpath(sibling).catch(() => null);
+    if (target && basename(target) === 'npm-cli.js') return target;
+  }
+  return null;
+}
+
 export async function setup(root) {
   step('Verificando pré-requisitos');
   const missing = [];
@@ -99,13 +134,7 @@ export async function setup(root) {
   if (missing.length) throw new Error(`Pré-requisitos ausentes:\n${missing.join('\n')}`);
 
   step('Localizando o npm local (nenhuma ferramenta global é alterada)');
-  const nodeDir = dirname(await realpath(process.execPath));
-  const candidates = [
-    join(nodeDir, 'node_modules/npm/bin/npm-cli.js'),
-    resolve(nodeDir, '../lib/node_modules/npm/bin/npm-cli.js'),
-  ];
-  let npmCli;
-  for (const candidate of candidates) if (await exists(candidate)) { npmCli = candidate; break; }
+  const npmCli = await findNpmCli();
   if (!npmCli) throw new Error('Node sem npm localizável: instale Node com npm; nenhuma ferramenta global foi alterada');
 
   step('Instalando pnpm 10.32.1 local em work/setup-tools');
