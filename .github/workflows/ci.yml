@@ -7,16 +7,38 @@ on:
 
 jobs:
   test:
-    # macOS não é preferência: `tests/fixtures/global-setup.ts` gera o fixture
-    # de fala com `say`, que só existe aqui. O motor de condense não é clonado
-    # no CI — os testes de preflight usam motor falso em tmpdir, e o gold do
-    # motor (tests/engine-gold.test.ts) se pula sozinho quando ele falta.
-    runs-on: macos-latest
+    # A suíte básica é portátil: os fixtures saem do FFmpeg (lavfi) e nada mais
+    # chama `say`, então macOS e Windows rodam exatamente os mesmos testes. O
+    # motor de condense não é clonado no CI — os testes de preflight usam motor
+    # falso em tmpdir, e o gold do motor (tests/engine-gold.test.ts) se pula
+    # sozinho quando ele falta. WhisperX/modelos também não são baixados aqui:
+    # os testes do doctor usam dependências fake.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Chaves de IA vazias de propósito: nenhum teste pode depender de credencial
+    # real, e tests/assembly-flow.test.ts exige que elas sejam falsy.
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
 
-      - name: instalar ffmpeg
+      - name: instalar ffmpeg (macOS)
+        if: matrix.os == 'macos-latest'
         run: brew install ffmpeg
+
+      - name: instalar ffmpeg (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y
+          Add-Content $env:GITHUB_PATH 'C:\ProgramData\chocolatey\bin'
 
       - uses: pnpm/action-setup@v4
         with:
