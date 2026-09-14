@@ -122,7 +122,12 @@ function makeFakes(opts: FakeOpts = {}): {
     }
     if (call.command === "ffmpeg") {
       calls.ffmpeg += 1;
-      await writeFile(call.args[call.args.length - 1], `clip-${calls.ffmpeg}`);
+      // Extração de frames: um JPEG por segundo solicitado, no padrão de saída.
+      const pattern = call.args[call.args.length - 1]!;
+      const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+      for (let i = 0; i < seconds; i += 1) {
+        await writeFile(pattern.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+      }
       return { code: 0, stdout: "", stderr: "" };
     }
     if (call.command === "python3") {
@@ -156,7 +161,7 @@ function makeFakes(opts: FakeOpts = {}): {
         calls.describe += 1;
         if (opts.failVisual) throw new Error("visual provider unavailable");
         if (opts.describeImpl) {
-          const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
+          const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
           const start = match ? Number(match[1]) : 0;
           const end = match ? Number(match[2]) : 3;
           const out = opts.describeImpl(start, end);
