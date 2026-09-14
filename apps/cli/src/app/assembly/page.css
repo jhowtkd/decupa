@@ -1,8 +1,15 @@
-/* page.css — casca de 4 regiões (Task 5); o tema vem do css anterior. */
+/* page.css — casca de 4 regiões (Task 5) + tema dark na rampa quente. */
 :root {
-  --bg: #f4f2ec; --panel: #ffffff; --line: #e3ded2; --line-strong: #c8c1ae;
-  --ink: #23282b; --muted: #66707a; --accent: #e3a008;
-  --ok: #1e7e46; --warn: #b3402a; --removed: #f3dcd5; --protected: #d4e4f5;
+  --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
+  --bg: var(--bg-0); --panel: var(--bg-1);   /* aliases: o arquivo usa muito */
+  --line: #2B3038; --line-strong: #3A414B;
+  --ink: #E9E7E2; --muted: #9AA0A9; --faint: #6B7280;
+  --accent: #F2C230; --on-accent: #1B1508;
+  --ok: #63BE97; --warn: #E0765C;
+  --removed: #3a2a26; --protected: #26374a;
+  --serif: Charter, "Iowan Old Style", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans-ui: system-ui, -apple-system, sans-serif;
 }
 * { box-sizing: border-box; }
 body {
@@ -20,31 +27,46 @@ button, label, input, textarea, select { font-family: ui-sans-serif, system-ui, 
 h1 { font-size: 16px; margin: 20px 0 8px; }
 h2 { font-size: 13px; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 button {
-  font-size: 13px; font-weight: 600; background: var(--panel); color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: 5px; padding: 6px 12px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: 6px;
+  font: 600 13px/1 var(--sans-ui, system-ui); color: var(--ink);
+  background: var(--bg-2); border: 1px solid var(--line-strong); cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #23282b; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+button.quiet:hover { color: var(--ink); }
+button.danger { background: transparent; border-color: transparent; color: var(--warn); }
 button:disabled { opacity: .45; cursor: default; }
+button:active:not(:disabled) { transform: translateY(1px); }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible,
 .word:focus-visible {
-  outline: 3px solid #8b6800; outline-offset: 3px;
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
 textarea, input, select {
-  background: #ffffff; color: var(--ink); border: 1px solid var(--line-strong);
+  background: var(--bg-2); color: var(--ink); border: 1px solid var(--line-strong);
   border-radius: 5px; padding: 8px; font: inherit;
 }
 textarea, input[type="text"], input[type="number"] { width: 100%; }
 label { display: block; margin: 8px 0; font-size: 13px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
-.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; background: var(--panel); }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; background: var(--bg-2); }
 .muted { color: var(--muted); font-size: 13px; }
 .warn { color: var(--warn); }
 .ok { color: var(--ok); }
 ul { padding-left: 1.2rem; }
-a { color: #8a6100; }
-video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #111; border-radius: 8px; }
+a { color: var(--accent); }
+video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; border-radius: 10px; }
 [hidden] { display: none !important; }
+
+/* Primitivos compartilhados pelas telas (Tasks 4-6 consomem). */
+.panel-label { font: 600 11px var(--sans-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 6px;
+  background: var(--bg-1); border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--muted);
+}
 
 /* Rail: nome do produto + estado da operação no contexto do que os causa
    (spec: não existe header global). */
@@ -53,7 +75,7 @@ video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; ba
 
 /* Materiais. */
 #dropzone { position: fixed; inset: 0; z-index: 10; display: grid;
-  place-items: center; background: var(--bg, #12171a); }
+  place-items: center; background: var(--bg-0); }
 #dropzone.over { outline: 2px dashed var(--accent); outline-offset: -12px; }
 #dropzone[aria-disabled="true"] { opacity: .55; cursor: progress; }
 .source { display: flex; gap: 10px; align-items: flex-start; }
@@ -85,8 +107,8 @@ summary { cursor: pointer; color: var(--muted); }
   font: inherit; background: none; border: none; border-radius: 3px;
   padding: 0 1px; margin: 0; color: inherit; font-weight: 400; cursor: pointer;
 }
-.word:hover { background: #ece4cf; }
-.word[aria-pressed="true"] { background: var(--accent); color: #23282b; }
+.word:hover { background: var(--bg-2); }
+.word[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .word.riscado { text-decoration: line-through; color: var(--muted); background: var(--removed); }
 .riscado { text-decoration: line-through; opacity: .55; }
 .word.protected { border-bottom: 2px solid var(--protected); }
