@@ -1,3 +1,4 @@
+import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -108,6 +109,7 @@ export async function startApp(opts: {
   projectDir?: string;
   inputs?: string[];
   port?: number;
+  providerConfigDir?: string;
   provider?: string;
   executor?: Executor;
   /** false nos testes: não dispara o pipeline de verdade. */
@@ -171,6 +173,7 @@ export function otioClipsForPlan(
 async function startCleanupApp(opts: {
   input: string;
   port?: number;
+  providerConfigDir?: string;
   provider?: string;
   executor?: Executor;
   autoStart?: boolean;
@@ -266,6 +269,7 @@ async function startCleanupApp(opts: {
     }
   }
 
+  let initialIngestStarted = false;
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -275,6 +279,12 @@ async function startCleanupApp(opts: {
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
+      }
+
+      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir)) return;
+      if (opts.autoStart !== false && !initialIngestStarted) {
+        initialIngestStarted = true;
+        void ingest();
       }
 
       if (url.pathname === "/") {
@@ -535,7 +545,10 @@ async function startCleanupApp(opts: {
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
   boundPort = port;
 
-  if (opts.autoStart !== false) void ingest();
+  if (opts.autoStart !== false && !opts.providerConfigDir) {
+    initialIngestStarted = true;
+    void ingest();
+  }
 
   return {
     port, address: "127.0.0.1", jobId: job.id,
@@ -546,12 +559,13 @@ async function startCleanupApp(opts: {
   };
 }
 
-function lazyPaidSend(projectDir: string): (content: unknown[], signal?: AbortSignal) => Promise<string> {
+function lazyPaidSend(projectDir: string, configDir?: string): (content: unknown[], signal?: AbortSignal) => Promise<string> {
   let client: { send(content: unknown[], signal?: AbortSignal): Promise<string> } | undefined;
   return async (content, signal) => {
     if (!client) {
       const { createAnalysisClient, readCredentials } = await import("@decupa/triage");
-      const stored = await readCredentials(projectDir).catch(() => null);
+      const stored = await readCredentials(projectDir).catch(() => null)
+        ?? (configDir ? await readCredentials(configDir).catch(() => null) : null);
       client = createAnalysisClient({ stored });
     }
     return client.send(content, signal);
@@ -562,6 +576,7 @@ async function startAssemblyApp(opts: {
   projectDir: string;
   inputs?: string[];
   port?: number;
+  providerConfigDir?: string;
   executor?: Executor;
   selectFn?: AssemblyDeps["selectFn"];
   proposeSend?: AssemblyDeps["proposeSend"];
@@ -583,8 +598,8 @@ async function startAssemblyApp(opts: {
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
-    proposeSend: opts.proposeSend ?? (allowPaidModel ? lazyPaidSend(dir) : undefined),
-    describeClient: opts.describeClient ?? (allowPaidVisual ? { send: lazyPaidSend(dir) } : undefined),
+    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir) : undefined),
+    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir) } : undefined),
   });
   const project = await runtime.ensureProject(opts.inputs);
 
@@ -595,6 +610,8 @@ async function startAssemblyApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
+      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir)) return;
+
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(page);

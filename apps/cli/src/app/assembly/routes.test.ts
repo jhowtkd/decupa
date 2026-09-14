@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, unlink, writeFile, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -821,4 +822,45 @@ it("apply com proposta ausente retorna 409 sem quebrar o fluxo de undo seguinte"
   const final = await loadProject(dir);
   expect(final.revision).toBe(2);
   expect(final.scenes).toEqual([cenaOriginal]);
+});
+
+
+it("importação sem conexão informa recuperação, interrompe o lote e libera o seletor", async () => {
+  const js = await readFile(new URL("./page.js", import.meta.url), "utf8");
+  const source = js.slice(js.indexOf("async function importFiles("), js.indexOf("/* ---- Fiação ---- */"));
+  const drop = { setAttribute: vi.fn(), removeAttribute: vi.fn() };
+  const ui = { label: null, error: null };
+  const fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+  const importFiles = runInNewContext(source + "; importFiles", {
+    document: { getElementById: () => drop }, ui, fetch, TypeError,
+    project: () => ({ revision: 0 }), renderStatus: vi.fn(),
+  });
+  await expect(importFiles([{ name: "primeiro.MOV", size: 10 }, { name: "segundo.MOV", size: 10 }])).resolves.toBeUndefined();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(ui.error).toContain("Sem conexão com o Decupa");
+  expect(ui.error).toContain("mesmo projeto");
+  expect(ui.label).toBeNull();
+  expect((ui as typeof ui & { importing: boolean }).importing).toBe(false);
+  expect(drop.removeAttribute).toHaveBeenCalledWith("aria-disabled");
+});
+
+
+it("bloqueia mutações durante importação e sincroniza revisão após conflito sem repetir escrita", async () => {
+  const js = await readFile(new URL("./page.js", import.meta.url), "utf8");
+  const source = js.slice(js.indexOf("async function call("), js.indexOf("const api ="));
+  const ui = { importing: true, error: null };
+  const client = { call: vi.fn() };
+  const state = { set: vi.fn() };
+  const call = runInNewContext(source + "; call", { ui, client, state, renderStatus: vi.fn(), maybeScheduleAutoPreview: vi.fn() });
+  const opts = { method: "POST", body: JSON.stringify({ baseRevision: 1 }) };
+  expect((await call("/project/source-role", opts)).res.ok).toBe(false);
+  expect(client.call).not.toHaveBeenCalled();
+  expect(ui.error).toContain("Aguarde o envio");
+  ui.importing = false;
+  client.call.mockResolvedValueOnce({ res: { ok: false, status: 409 }, body: { error: "revisão desatualizada" } });
+  client.call.mockResolvedValueOnce({ res: { ok: true }, body: { project: { revision: 3 } } });
+  await call("/project/source-role", opts);
+  expect(client.call).toHaveBeenCalledTimes(2);
+  expect(client.call).toHaveBeenLastCalledWith("/project");
+  expect(state.set).toHaveBeenCalledWith("project", { revision: 3 });
 });

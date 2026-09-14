@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -224,7 +225,8 @@ export async function defaultTranscode(src: string, dst: string): Promise<void> 
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
-  const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null);
+  const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null)
+    ?? await readCredentials(homedir()).catch(() => null);
   const provider = resolveProvider(opts.provider, process.env, stored);
   const cfg = presetConfig(provider, process.env, stored);
   const modelName = opts.modelName ?? cfg.model;

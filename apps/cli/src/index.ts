@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
@@ -288,6 +289,7 @@ async function main(argv: string[]): Promise<number> {
     }
     const { startApp } = await import("./app/server.ts");
     const app = await startApp({
+      providerConfigDir: homedir(),
       input: values.input,
       port: values.port ? Number(values.port) : undefined,
       provider: values.provider,
@@ -329,6 +331,7 @@ async function main(argv: string[]): Promise<number> {
     }
     const { startApp } = await import("./app/server.ts");
     const app = await startApp({
+      providerConfigDir: homedir(),
       projectDir: values.project,
       inputs: values.input ? [values.input] : undefined,
       port: values.port ? Number(values.port) : undefined,

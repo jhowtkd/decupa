@@ -9,7 +9,7 @@ import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
 
 const state = createState({ project: null, operation: null, selection: new Set(), playhead: null, watched: { revision: null, ended: false } });
-const ui = { busy: false, label: null, error: null };
+const ui = { importing: false, busy: false, label: null, error: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
 let previewInflight = false;
@@ -95,9 +95,21 @@ const client = createApi({
 // Resposta com projeto sincroniza o estado (era o corpo do api() antigo) e
 // dispara a auto-prévia; erro valida ui.error como o lastError de antes.
 async function call(path, opts = {}) {
+  if (ui.importing && (opts.method || "GET").toUpperCase() !== "GET") {
+    ui.error = "Aguarde o envio dos arquivos terminar antes de alterar o projeto.";
+    renderStatus();
+    return { res: { ok: false, status: 409 }, body: { error: ui.error } };
+  }
   if (opts.label != null) ui.error = null;
   try {
     const { res, body } = await client.call(path, opts);
+    if (res.status === 409) {
+      const latest = await client.call("/project");
+      if (latest.res.ok && latest.body.project) {
+        state.set("project", latest.body.project);
+        state.set("operation", latest.body.operation || null);
+      }
+    }
     if (!res.ok) ui.error = body.error || ("erro " + res.status);
     else ui.error = null;
     if (body.project) {
@@ -257,6 +269,12 @@ function watchPreparation() {
 }
 
 async function importFiles(files) {
+  if (ui.importing || ui.busy) {
+    ui.error = "Aguarde a operação atual terminar antes de enviar mais arquivos.";
+    renderStatus();
+    return;
+  }
+  ui.importing = true;
   const drop = document.getElementById("dropzone");
   drop.setAttribute("aria-disabled", "true");
   try {
@@ -284,6 +302,11 @@ async function importFiles(files) {
           state.set("project", body.project);
           state.set("operation", body.operation || null);
         }
+      } catch (err) {
+        ui.error = err instanceof TypeError
+          ? "Sem conexão com o Decupa. Confira o terminal do aplicativo, reabra o mesmo projeto e recarregue esta página antes de tentar importar novamente."
+          : (err && err.message) || String(err);
+        return;
       } finally {
         ui.label = null;
         renderStatus();
@@ -291,6 +314,7 @@ async function importFiles(files) {
     }
     // Os renders correm pela assinatura de "project" (era render() aqui).
   } finally {
+    ui.importing = false;
     drop.removeAttribute("aria-disabled");
   }
 }

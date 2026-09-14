@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurar IA · Decupa</title>
+<style>body{font:16px system-ui;background:#f6f5f1;color:#222;margin:0;padding:32px}main{max-width:520px;margin:5vh auto;background:white;padding:32px;border-radius:12px}label{display:block;margin:20px 0 6px}input,select,button{box-sizing:border-box;width:100%;font:inherit;padding:12px}button{margin-top:24px;cursor:pointer}p{line-height:1.5}#error{color:#a21d1d}</style>
+<main><h1>Configure a IA do Decupa</h1><p>Esta etapa é obrigatória antes de usar o app. A configuração fica protegida neste usuário do computador e vale para os próximos projetos.</p>
+<form id="setup"><label for="preset">Provedor</label><select id="preset" required><option value="">Escolha…</option value="zai">Z.ai</option><option value="gemini">Gemini</option><option value="minimax">MiniMax</option><option value="custom">Outro (compatível com OpenAI)</option></select>
+<label for="key">Chave de API</label><input id="key" type="password" required autocomplete="off" spellcheck="false">
+<label for="model">Modelo</label><input id="model" placeholder="Padrão do provedor" autocomplete="off">
+<label for="endpoint">Endpoint completo (HTTPS)</label><input id="endpoint" type="url" placeholder="Padrão do provedor" autocomplete="off">
+<p>Para “Outro”, informe modelo e endpoint. Para analisar vídeos, escolha um modelo que aceite imagens.</p>
+<p>Salvar não faz chamadas à IA nem verifica saldo ou validade remota da chave. Você autoriza o processamento pago ao iniciar cada operação que o solicita.</p>
+<p id="error" role="alert"></p><button>Salvar e abrir o Decupa</button></form></main>
+<script>
+const form=document.getElementById('setup');
+document.getElementById('preset').onchange=(event)=>{for(const id of ['model','endpoint'])document.getElementById(id).required=event.target.value==='custom';};
+form.onsubmit=async(event)=>{event.preventDefault();const button=form.querySelector('button');button.disabled=true;document.getElementById('error').textContent='';
+try{const res=await fetch('/provider',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({preset:document.getElementById('preset').value,apiKey:document.getElementById('key').value,model:document.getElementById('model').value,baseUrl:document.getElementById('endpoint').value})});const body=await res.json();if(!res.ok)throw new Error(body.error);document.getElementById('key').value='';location.reload();}
+catch(error){document.getElementById('error').textContent=error.message||'Não foi possível conectar ao Decupa.';button.disabled=false;}};
+</script></html>
