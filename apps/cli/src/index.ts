@@ -9,7 +9,10 @@ import { openBrowser } from "./runtime.ts";
 
 const USAGE = `decupa — bancada de medição
 
-  decupa doctor — checa o ambiente (binários, sidecars, motor, patch, chave) e diz o que consertar
+  decupa doctor [--local] — checa o ambiente (binários, sidecars, motor, patch, chave) e diz o que consertar
+      --local dispensa a chave de IA e prova só a prontidão local (imports de
+      fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
+      apenas o provedor falta.
 
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
@@ -65,8 +68,9 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === "doctor") {
+    const { values } = parseArgs({ args: rest, options: { local: { type: "boolean" } } });
     const { runDoctor, renderDoctor } = await import("./doctor.ts");
-    const lines = await runDoctor();
+    const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
   }
