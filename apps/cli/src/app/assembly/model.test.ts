@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp } from "node:fs/promises";
+import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -19,11 +19,14 @@ async function speechSource(dir: string, durationSeconds = 3) {
   };
 }
 
-const copyProxy: Executor = {
+/** Escreve um JPEG por segundo solicitado, no padrão de saída do FFmpeg. */
+const frameExecutor: Executor = {
   async run(call) {
-    const out = call.args[call.args.length - 1]!;
-    const input = call.args[call.args.indexOf("-i") + 1]!;
-    await copyFile(input, out);
+    const pattern = call.args[call.args.length - 1]!;
+    const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+    for (let i = 0; i < seconds; i += 1) {
+      await writeFile(pattern.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+    }
     return { code: 0, stdout: "", stderr: "" };
   },
 };
@@ -41,11 +44,36 @@ it("usa o prompt visual e não o de triagem", async () => {
       });
     },
   };
-  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: copyProxy });
+  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
   expect(spans[0]?.text).toBe("fundo vermelho");
   expect(prompts.join("\n")).toContain("Não identifique pessoas por nome");
   expect(prompts.join("\n")).not.toMatch(/preroll|unit_ids/);
   expect(VISUAL_PROMPT).not.toMatch(/preroll/);
+});
+
+it("envia frames JPEG timestampados, nunca video_url", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir);
+  const captured: unknown[][] = [];
+  const client = {
+    async send(content: unknown[]) {
+      captured.push(content);
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 1, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const spans = await describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+  });
+
+  expect(spans[0]?.text).toBe("mesa");
+  const parts = captured[0]!;
+  expect(parts.some((part: any) => part.type === "video_url")).toBe(false);
+  expect(parts.filter((part: any) => part.type === "image_url").length).toBeGreaterThan(0);
+  expect((parts.find((part: any) => part.type === "text") as any).text)
+    .toMatch(/frame.*fonte.*0s/i);
 });
 
 it("janela roteirizada devolve spans na origem da fonte", async () => {
@@ -58,7 +86,7 @@ it("janela roteirizada devolve spans na origem da fonte", async () => {
       });
     },
   };
-  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: copyProxy });
+  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
   expect(spans[0]?.text).toBe("mesa");
   expect(spans[0]?.start).toBe(0);
   expect(spans[0]?.sourceId).toBe("a");
@@ -79,7 +107,7 @@ it("cancelar após a primeira janela estoura em vez de devolver parcial", async 
       return payload;
     },
   };
-  await expect(describeSource(source, dir, ac.signal, { client, exec: copyProxy })).rejects.toThrow();
+  await expect(describeSource(source, dir, ac.signal, { client, exec: frameExecutor })).rejects.toThrow();
   expect(calls).toBe(1);
 });
 
@@ -90,7 +118,7 @@ it("sinal já abortado nem começa", async () => {
   ac.abort();
   let calls = 0;
   const client = { async send() { calls += 1; return '{"spans":[]}'; } };
-  await expect(describeSource(source, dir, ac.signal, { client, exec: copyProxy })).rejects.toThrow(/cancelada/);
+  await expect(describeSource(source, dir, ac.signal, { client, exec: frameExecutor })).rejects.toThrow(/cancelada/);
   expect(calls).toBe(0);
 });
 
@@ -98,11 +126,12 @@ function windowMarkerExec(seen: { args: string[][] }): Executor {
   return {
     async run(call) {
       seen.args.push(call.args);
-      const out = call.args[call.args.length - 1]!;
+      const pattern = call.args[call.args.length - 1]!;
       const ss = call.args[call.args.indexOf("-ss") + 1] ?? "?";
       const t = call.args[call.args.indexOf("-t") + 1] ?? "?";
-      const { writeFile } = await import("node:fs/promises");
-      await writeFile(out, `clip-from-${ss}-dur-${t}`);
+      for (let i = 0; i < Number(t); i += 1) {
+        await writeFile(pattern.replace("%03d", String(i).padStart(3, "0")), `clip-from-${ss}-dur-${t}-${i}`);
+      }
       return { code: 0, stdout: "", stderr: "" };
     },
   };
@@ -113,11 +142,11 @@ function localSpanClient(captured: { payloads: string[]; prompts: string[] }) {
   return {
     async send(content: unknown[]) {
       n += 1;
-      const video = content.find((part) => (part as { type?: string }).type === "video_url") as {
-        video_url: { url: string };
-      };
+      const urls = content
+        .filter((part) => (part as { type?: string }).type === "image_url")
+        .map((part) => (part as { image_url: { url: string } }).image_url.url);
       const text = content.find((part) => (part as { type?: string }).type === "text") as { text: string };
-      captured.payloads.push(video.video_url.url);
+      captured.payloads.push(urls.join("|"));
       captured.prompts.push(text.text);
       // Janela 1 não tem contexto; as demais têm 1s: o conteúdo começa em 1 local.
       const start = n === 1 ? 0 : 1;
@@ -128,7 +157,7 @@ function localSpanClient(captured: { payloads: string[]; prompts: string[] }) {
   };
 }
 
-it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", async () => {
+it("segunda janela recebe frames distintos e soma a origem uma vez", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir, 45);
   const seen: { args: string[][] } = { args: [] };
@@ -139,7 +168,7 @@ it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", a
     client,
     exec: windowMarkerExec(seen),
   });
-  // 3 janelas, cada uma com seu recorte — nunca o proxy inteiro.
+  // 3 janelas, cada uma com seus frames — nunca o proxy inteiro.
   expect(seen.args).toHaveLength(3);
   expect(new Set(payloads).size).toBe(3);
   expect(spans).toHaveLength(3);
@@ -161,7 +190,7 @@ function fullWindowClient(counter: { calls: number }, failOn: { n: number }) {
       counter.calls += 1;
       if (counter.calls === failOn.n) throw new Error("provedor falhou");
       const text = (content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text;
-      const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(text);
+      const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(text);
       const start = match ? Number(match[1]) : 0;
       const end = match ? Number(match[2]) : 0;
       const fetchStart = start === 0 ? 0 : start - 1;
@@ -220,7 +249,7 @@ it("respostas complementares conservam ambos os trechos", async () => {
       });
     },
   };
-  const deps = { client, exec: copyProxy };
+  const deps = { client, exec: frameExecutor };
   const first = await describeSource(source, dir, new AbortController().signal, deps);
   expect(first.map((span) => [span.start, span.end])).toEqual([[0, 2]]);
   mode = "missing";

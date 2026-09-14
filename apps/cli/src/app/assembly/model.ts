@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createAnalysisClient, readCredentials, ZAI_DEFAULT_MODEL } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
@@ -6,8 +6,11 @@ import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
 import { analysisCacheDir } from "./analysis.ts";
 import { mergeAdjacent, validateVisual, visualWindows } from "./visual.ts";
+import { extractVisualFrames } from "./frames.ts";
+import type { VisualFrame, VisualWindow } from "./frames.ts";
 
-export const VISUAL_PROMPT = `Você recebe um trecho de vídeo (proxy, 1 fps, proporção preservada).
+export const VISUAL_PROMPT = `Você recebe frames JPEG timestampados (amostrados a 1 fps), não um vídeo contínuo.
+Cada frame é rotulado como FRAME fonte=0s local=0s: fonte é o segundo absoluto da fonte e local é o segundo deste trecho.
 Descreva o que é observável por segundo: ações, objetos, enquadramento e incerteza.
 Não identifique pessoas por nome sem essa informação no pedido.
 Responda só sobre a mídia recebida, em JSON:
@@ -18,21 +21,21 @@ start/end são segundos locais deste trecho (origem 0). confidence é observed, 
 Não invente o que não aparece. Se um segundo não for observável, confidence unavailable.`;
 
 /** Versão do prompt (invalida o cache) e do envelope de cache em disco. */
-export const VISUAL_PROMPT_VERSION = 1;
-export const VISUAL_CACHE_VERSION = "visual-v2";
+export const VISUAL_PROMPT_VERSION = 2;
+export const VISUAL_CACHE_VERSION = "visual-v3-frames";
 
 export type DescribeDeps = {
   client: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
   exec?: Executor;
 };
 
-type VisualWindow = { start: number; end: number; fetchStart: number };
-
 type VisualWindowCache = {
   version: string;
   sha256: string;
   promptVersion: number;
   model: string;
+  inputMode: string;
+  sampleFps: number;
   window: VisualWindow;
   spans: VisualSpan[];
 };
@@ -48,6 +51,8 @@ function parseWindowCache(raw: unknown, source: Source, window: VisualWindow): V
   if (cache.sha256 !== source.sha256) return null;
   if (cache.promptVersion !== VISUAL_PROMPT_VERSION) return null;
   if (cache.model !== ZAI_DEFAULT_MODEL) return null;
+  // Envelope antigo (vídeo mp4 ou outro fps) não vale como cache de frames.
+  if (cache.inputMode !== "frames" || cache.sampleFps !== 1) return null;
   const bounds = cache.window;
   if (!bounds || bounds.start !== window.start || bounds.end !== window.end
     || bounds.fetchStart !== window.fetchStart) {
@@ -65,42 +70,29 @@ function parseWindowCache(raw: unknown, source: Source, window: VisualWindow): V
 }
 
 /**
- * Recorta o vídeo da janela [fetchStart, end) e envia SÓ esses bytes,
- * pedindo tempos locais [0, end-fetchStart). O recorte usa seek de saída
- * (frame-accurate, mais lento) em vez de seek de entrada (rápido mas preso
- * ao keyframe): evidência precisa corresponder ao intervalo enviado.
+ * Monta a mensagem visual: prompt + rótulos por frame. Cada JPEG vem
+ * etiquetado com o segundo da fonte e o local da janela, para que o
+ * modelo responda em segundos locais sem somar a origem duas vezes.
  */
-async function windowClip(
-  source: Source,
-  window: VisualWindow,
-  cacheDir: string,
-  exec: Executor,
-): Promise<string> {
-  const clip = join(cacheDir, `w-${window.start}-${window.end}.mp4`);
-  try {
-    const { size } = await stat(clip);
-    if (size > 0) return clip;
-    await unlink(clip).catch(() => {});
-  } catch {
-    // Gera abaixo.
-  }
-  const tmp = join(cacheDir, `w-${window.start}-${window.end}.${process.pid}.tmp.mp4`);
-  const made = await exec.run({
-    command: "ffmpeg",
-    args: ["-n", "-i", source.path,
-      "-ss", String(window.fetchStart),
-      "-t", String(window.end - window.fetchStart),
-      "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
-      "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", tmp],
-  });
-  if (made.code !== 0) {
-    await unlink(tmp).catch(() => {});
-    throw new Error(
-      `recorte visual [${window.fetchStart}, ${window.end}) falhou (código ${made.code})`,
-    );
-  }
-  await rename(tmp, clip);
-  return clip;
+function frameMessage(frames: VisualFrame[], window: VisualWindow): unknown[] {
+  return [
+    {
+      type: "text",
+      text: VISUAL_PROMPT + "\n\n" +
+        "intervalo solicitado na fonte: [" + window.start + ", " + window.end + ")\n" +
+        "cada imagem abaixo está rotulada pelo segundo da fonte; " +
+        "responda usando segundos locais da janela, de 0 a " +
+        (window.end - window.fetchStart) + ".",
+    },
+    ...frames.flatMap((frame) => [
+      {
+        type: "text",
+        text: "FRAME fonte=" + frame.sourceSecond +
+          "s local=" + (frame.sourceSecond - window.fetchStart) + "s",
+      },
+      { type: "image_url", image_url: { url: frame.dataUrl } },
+    ]),
+  ];
 }
 
 /**
@@ -142,7 +134,8 @@ function parseLocalSpans(text: string, source: Source, window: VisualWindow): Vi
   const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const payload = JSON.parse(unfenced) as { spans?: unknown };
   const rawSpans = Array.isArray(payload.spans) ? payload.spans : [];
-  // Valida os limites locais ANTES de somar fetchStart — uma única soma.
+  // Spans são inferidos de frames timestampados: valida os limites locais
+  // ANTES de somar fetchStart — uma única soma.
   const local = validateVisual(
     rawSpans.map((span) => {
       const rec = (span && typeof span === "object") ? span as Record<string, unknown> : {};
@@ -197,20 +190,9 @@ export async function describeSource(
       // cache miss ou inválido: processa a janela
     }
     try {
-      const clip = await windowClip(source, window, cacheDir, exec);
+      const frames = await extractVisualFrames(source, window, cacheDir, exec);
       if (signal.aborted) throw new Error("descrição visual cancelada");
-      const bytes = await readFile(clip);
-      const dataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
-      const localDuration = window.end - window.fetchStart;
-      const text = await client.send([
-        { type: "video_url", video_url: { url: dataUrl } },
-        {
-          type: "text",
-          text: `${VISUAL_PROMPT}\n\njanela local: 0s → ${localDuration}s `
-            + `(segundos locais deste trecho; origem 0). `
-            + `descreva o intervalo da fonte [${window.start}, ${window.end}).`,
-        },
-      ], signal);
+      const text = await client.send(frameMessage(frames, window), signal);
       const fresh = parseLocalSpans(text, source, window);
       // Une sem perda: o novo substitui só o anterior que ele redescreve
       // por inteiro; intervalos complementares são conservados. Ids
@@ -229,6 +211,8 @@ export async function describeSource(
         sha256: source.sha256,
         promptVersion: VISUAL_PROMPT_VERSION,
         model: ZAI_DEFAULT_MODEL,
+        inputMode: "frames",
+        sampleFps: 1,
         window,
         spans: merged,
       };
