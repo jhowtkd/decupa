@@ -40,6 +40,21 @@ export function seekFromRatio(project, ratio) {
   return clamped * duration;
 }
 
+/**
+ * Marca da régua da faixa (puro): crescente a partir de 0 com passo "nice"
+ * (1/2/5×10^n) que aproxima `durationSeconds/targetCount`; a última marca
+ * fica dentro da duração.
+ */
+export function rulerTicks(durationSeconds, targetCount = 6) {
+  if (!(durationSeconds > 0)) return [0];
+  const raw = durationSeconds / targetCount;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? 10 * pow;
+  const ticks = [];
+  for (let s = 0; s <= durationSeconds + 1e-9; s += step) ticks.push(s);
+  return ticks;
+}
+
 /** Intervalo entre seeks de scrub durante o arraste. */
 export const SCRUB_THROTTLE_MS = 60;
 
@@ -96,6 +111,24 @@ export function mountSequencia({ state, api, player }) {
     }
     const blocks = timelineBlocks(p);
     const duration = montageDuration(p);
+    // Cabeçalho da faixa: rótulo do painel + total da montagem em mono.
+    const head = document.createElement("div");
+    head.className = "faixa-head";
+    const label = document.createElement("span");
+    label.className = "panel-label";
+    label.textContent = "Sequência";
+    const total = document.createElement("span");
+    total.className = "data total";
+    total.textContent = duration.toFixed(1).replace(".", ",") + "s";
+    head.append(label, total);
+    // Régua: marcas nice (rulerTicks) distribuídas pela largura da faixa.
+    const ruler = document.createElement("div");
+    ruler.className = "ruler";
+    for (const t of rulerTicks(duration)) {
+      const s = document.createElement("span");
+      s.textContent = t === 0 ? "0s" : String(t);
+      ruler.append(s);
+    }
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     // Layout crítico inline (o tema segue em page.css, fora desta tarefa).
@@ -117,10 +150,13 @@ export function mountSequencia({ state, api, player }) {
         + ' data-scene="' + esc(block.sceneId) + '" data-kind="' + esc(block.kind) + '"'
         + ' data-start="' + block.start + '" data-end="' + block.end + '"'
         + ' title="' + esc(title) + '"'
-        + ' style="width:' + width.toFixed(3) + '%;' + pos + '">' + wave + "</div>";
+        + ' style="width:' + width.toFixed(3) + '%;' + pos + '">'
+        + wave
+        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + "s</span>"
+        + "</div>";
     }).join("")
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
-    el.replaceChildren(strip, transportRow(p));
+    el.replaceChildren(head, ruler, strip, transportRow(p));
     paint(state.get("playhead"));
     void hydrateWaves(p);
   }
@@ -184,6 +220,9 @@ export function mountSequencia({ state, api, player }) {
    * timelineBlocks (o canvas ocupa exatamente o bloco da cena).
    */
   function drawSceneWave(canvas, inBlock, bySource, blockStart, sceneDur) {
+    // Revela antes de medir: o atributo hidden é display:none, e canvas
+    // escondido tem clientWidth/Height 0 (nunca desenharía).
+    canvas.hidden = false;
     const width = canvas.clientWidth || 0;
     const height = canvas.clientHeight || 0;
     if (width <= 0 || height <= 0 || inBlock.length === 0) return;
@@ -215,7 +254,6 @@ export function mountSequencia({ state, api, player }) {
       const top = Math.min(yMin, yMax);
       ctx.fillRect(x, top, 1, Math.max(1, Math.abs(yMax - yMin)));
     }
-    canvas.hidden = false;
   }
 
   /** Linha do playhead + bloco aceso, sem re-render. */
@@ -235,6 +273,10 @@ export function mountSequencia({ state, api, player }) {
     } else {
       strip.removeAttribute("aria-valuenow");
     }
+    // Chip de timecode acima da linha (recriado a cada render da faixa).
+    let chip = line.querySelector(".t");
+    if (!chip) { chip = document.createElement("span"); chip.className = "t"; line.append(chip); }
+    if (valid) chip.textContent = playhead.toFixed(1).replace(".", ",") + "s";
     const hit = valid ? blocksAt(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-bloco")) {
       const on = !!hit && node.dataset.scene === hit.sceneId && node.dataset.kind === hit.kind;

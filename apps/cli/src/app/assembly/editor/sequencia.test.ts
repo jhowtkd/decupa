@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "../fixture.ts";
 import type { Project, Word } from "../types.ts";
-import { activeScene, blocksAt, seekFromRatio } from "./sequencia.js";
+import { activeScene, blocksAt, rulerTicks, seekFromRatio } from "./sequencia.js";
 
 function word(id: string, text: string, start: number, end: number): Word {
   return { id, sourceId: "a", text, confidence: null, start, end };
@@ -112,4 +112,11 @@ it("activeScene devolve a cena sob o playhead, ignorando a camada de apoio", () 
   expect(activeScene(p, 1)).toBe("s1");
   expect(activeScene(p, 3)).toBe("s2");
   expect(activeScene(p, 99)).toBeNull();
+});
+
+it("rulerTicks gera passos nice de 0 até a duração", () => {
+  expect(rulerTicks(73.1, 6)).toEqual([0, 20, 40, 60]);
+  expect(rulerTicks(95.4, 6)).toEqual([0, 20, 40, 60, 80]);
+  expect(rulerTicks(9, 6)).toEqual([0, 2, 4, 6, 8]);
+  expect(rulerTicks(0, 6)).toEqual([0]);
 });
