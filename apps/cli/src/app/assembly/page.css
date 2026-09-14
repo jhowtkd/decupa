@@ -60,7 +60,7 @@ video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; ba
 [hidden] { display: none !important; }
 
 /* Primitivos compartilhados pelas telas (Tasks 4-6 consomem). */
-.panel-label { font: 600 11px var(--sans-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.panel-label { font: 600 11px var(--sans-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px; border-radius: 6px;
