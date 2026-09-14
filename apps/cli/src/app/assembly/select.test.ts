@@ -1,6 +1,6 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { expect, it } from "vitest";
 import { SELECT_SCRIPT, selectLocalFiles } from "./select.ts";
 
@@ -25,5 +25,5 @@ it("devolve paths reais só depois de stat", async () => {
   expect("cancelled" in result).toBe(false);
   if ("cancelled" in result) return;
   expect(result.paths).toHaveLength(1);
-  expect(result.paths[0]!.startsWith("/")).toBe(true);
+  expect(isAbsolute(result.paths[0]!)).toBe(true);
 });
