@@ -252,3 +252,48 @@ it("remove a primeira palavra do take clamba o corte acústico ao início do tak
   });
   expect(removed.scenes[0]!.takes[0]!.removed).toEqual([{ start: 0.1, end: 0.4 }]);
 });
+
+// ICE3-07: cena só com w4 retida, para incluir w1..w3 sem colisão.
+function projectComW4(): Project {
+  const p = project();
+  return {
+    ...p,
+    scenes: p.scenes.map((s) => s.id !== "s1" ? s : {
+      ...s,
+      takes: [{ id: "t1", sourceId: "a", speechId: "a:u001", start: 1.0, end: 1.3, removed: [], protected: [] }],
+    }),
+  };
+}
+
+it("include de palavras não-contíguas cria um take por run", () => {
+  const next = applyTextEdit(projectComW4(), {
+    type: "include", sceneId: "s1", sourceId: "a", wordIds: ["w1", "w3"],
+  });
+  const novos = next.scenes[0]!.takes.filter((t) => t.id !== "t1");
+  expect(novos).toHaveLength(2);
+  const ordenados = [...novos].sort((a, b) => a.start - b.start);
+  expect(ordenados[0]).toMatchObject({ start: 0.1, end: 0.4 });
+  expect(ordenados[1]).toMatchObject({ start: 0.72, end: 0.8 });
+  for (const take of novos) {
+    for (const range of retainedRanges(take)) {
+      // Nenhum take novo cobre w2 [0.42, 0.7].
+      expect(range.start >= 0.7 || range.end <= 0.42).toBe(true);
+    }
+  }
+});
+
+it("include contíguo segue criando take único", () => {
+  const next = applyTextEdit(projectComW4(), {
+    type: "include", sceneId: "s1", sourceId: "a", wordIds: ["w1", "w2"],
+  });
+  const novos = next.scenes[0]!.takes.filter((t) => t.id !== "t1");
+  expect(novos).toHaveLength(1);
+  expect(novos[0]).toMatchObject({ start: 0.1, end: 0.7 });
+});
+
+it("include rejeita se qualquer palavra já retida, sem incluir parcialmente", () => {
+  const antes = projectComW4();
+  expect(() => applyTextEdit(antes, {
+    type: "include", sceneId: "s1", sourceId: "a", wordIds: ["w1", "w4"],
+  })).toThrow(/já está na montagem/);
+});

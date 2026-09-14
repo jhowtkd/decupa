@@ -136,6 +136,38 @@ export async function startApp(opts: {
   return startCleanupApp({ ...opts, input: opts.input });
 }
 
+/** Clipes OTIO a partir do plano: recusa o que passa da fonte e descarta
+ *  cauda 100% sub-frame no EOF em vez de emitir 1 frame inválido. */
+export function otioClipsForPlan(
+  clips: { start: number; end: number }[],
+  fps: number,
+  durationSeconds: number,
+): Assembly["tracks"][number]["clips"] {
+  const overflow = clips.find((clip) => clip.end > durationSeconds + 1e-9);
+  if (overflow) {
+    throw new Error(
+      `clipe [${overflow.start}, ${overflow.end}) ultrapassa a fonte (${durationSeconds}s)`,
+    );
+  }
+  const videoClips: Assembly["tracks"][number]["clips"] = [];
+  let cursor = 0;
+  clips.forEach((clip, i) => {
+    const maxFrames = Math.max(0, Math.floor((durationSeconds - clip.start) * fps));
+    if (maxFrames === 0) return;
+    const durationFrames = Math.min(Math.max(1, Math.round((clip.end - clip.start) * fps)), maxFrames);
+    videoClips.push({
+      id: `v_c${i + 1}`,
+      sceneId: `scene_${i + 1}`,
+      sourceId: "src1",
+      sourceStartSeconds: clip.start,
+      durationFrames,
+      startFrame: cursor,
+    });
+    cursor += durationFrames;
+  });
+  return videoClips;
+}
+
 async function startCleanupApp(opts: {
   input: string;
   port?: number;
@@ -377,34 +409,13 @@ async function startCleanupApp(opts: {
             const fps = rate.num / rate.den;
             const durationSeconds = Math.max(info.durationMs / 1000, 0.001);
             const clips = plan.clips as { start: number; end: number }[];
-            const overflow = clips.find((clip) => clip.end > durationSeconds + 1e-9);
-            if (overflow) {
-              throw new Error(
-                `clipe [${overflow.start}, ${overflow.end}) ultrapassa a fonte (${durationSeconds}s)`,
-              );
-            }
+            const videoClips = otioClipsForPlan(clips, fps, durationSeconds);
             const width = info.width;
             const height = info.height;
             if (!width || !height || width % 2 !== 0 || height % 2 !== 0) {
               throw new Error("fonte com canvas inválido para exportar OTIO");
             }
             const sha256 = await hashFile(input);
-            const videoClips = clips.map((clip, i) => {
-              const durationFrames = Math.max(1, Math.round((clip.end - clip.start) * fps));
-              return {
-                id: `v_c${i + 1}`,
-                sceneId: `scene_${i + 1}`,
-                sourceId: "src1",
-                sourceStartSeconds: clip.start,
-                durationFrames,
-                startFrame: 0,
-              };
-            });
-            let cursor = 0;
-            for (const clip of videoClips) {
-              clip.startFrame = cursor;
-              cursor += clip.durationFrames;
-            }
             const audioClips = videoClips.map((clip, i) => ({ ...clip, id: `a_c${i + 1}` }));
             const assembly: Assembly = {
               version: 1,

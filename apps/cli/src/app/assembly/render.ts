@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { verifySourceIdentity } from "./media.ts";
+import { pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 
@@ -163,6 +164,9 @@ export async function renderAssembly(
       throw err;
     }
     await rename(tmp, dest);
+    // Poda best-effort de derivados antigos (retention.ts): nunca falha o
+    // render — erro é silenciosamente ignorado (retorno descartado).
+    await pruneProject(outDir).catch(() => {});
     return dest;
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});

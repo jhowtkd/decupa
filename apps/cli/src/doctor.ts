@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveProvider } from "@decupa/triage";
 import { DEFAULT_ENGINE, enginePatchError, SPEECH_SCRIPT, SpawnExecutor } from "./app/pipeline.ts";
 
 export interface DoctorLine {
@@ -75,12 +76,17 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
       : { ok: false, name: "patch PT-BR do motor", detail: patchError, fix: "bash scripts/setup-engine.sh" });
   }
 
-  lines.push(env.ZAI_API_KEY
-    ? { ok: true, name: "ZAI_API_KEY", detail: "setada" }
-    : {
-        ok: false, name: "ZAI_API_KEY", detail: "não setada",
-        fix: "exporte ZAI_API_KEY no ambiente — sem ela a triagem não roda; ou monte o keep-list na mão (SKILL)",
-      });
+  try {
+    const provider = resolveProvider(undefined, env);
+    lines.push({ ok: true, name: "chave de análise", detail: `setada (provedor ${provider})` });
+  } catch {
+    lines.push({
+      ok: false, name: "chave de análise", detail: "nenhuma chave setada",
+      fix: "exporte uma de ZAI_API_KEY, GEMINI_API_KEY, MINIMAX_API_KEY ou DECUPA_API_KEY no ambiente "
+        + "(ou configure_provider para gravar a credencial em .decupa/) — sem ela a triagem não roda; "
+        + "ou monte o keep-list na mão (SKILL)",
+    });
+  }
 
   // Reportar, não testar: chamada de rede em doctor quebraria a promessa de
   // efeito colateral zero. O que dá sem rede é avisar qual endpoint seria

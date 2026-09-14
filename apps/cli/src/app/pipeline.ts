@@ -225,7 +225,7 @@ async function runVisualIndex(
       command: "ffmpeg",
       args: [
         "-i", job.videoPath,
-        "-vf", "fps=4,scale=540:960",
+        "-vf", "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
         "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
         "-an", "-y", proxy,
       ],
@@ -289,7 +289,7 @@ export async function makeTriageProxy(
     command: "ffmpeg",
     args: [
       "-i", job.videoPath,
-      "-vf", "fps=1,scale=270:480",
+      "-vf", "fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
       "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
       "-c:a", "aac", "-b:a", "24k", "-ac", "1",
       "-y", out,
@@ -436,8 +436,8 @@ export async function probeFps(
       return fps;
     }
     throw new Error(
-      `o vídeo tem ${fps.toFixed(2)} fps, e o EDL do v1 só gera non-drop-frame com ` +
-      "fps inteiro. Exporte MP4, ou converta a fonte para fps inteiro antes.",
+      `o vídeo tem ${fps.toFixed(2)} fps, e o EDL só gera non-drop-frame com fps inteiro ou 29,97 drop-frame. ` +
+      `Para este fps, exporte OTIO (kind "otio"), MP4, ou converta a fonte para fps inteiro antes.`,
     );
   }
   return fps;

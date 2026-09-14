@@ -335,18 +335,42 @@ function applyInclude(
       throw new Error("trecho já está na montagem: use remover/restaurar");
     }
   }
-  const start = Math.min(...intervals.map((item) => item.start));
-  const end = Math.max(...intervals.map((item) => item.end));
+  // Agrupa por runs contíguos no catálogo ordenado (mesmo critério de
+  // wordIntervalsInTake): um take por run, sem engolir fala não selecionada.
+  const byId = new Map(ordered.map((item, i) => [item.id, i]));
+  const indices = words.map((w) => byId.get(w.id)!).sort((a, b) => a - b);
+  const groups: number[][] = [];
+  for (const idx of indices) {
+    const last = groups[groups.length - 1];
+    if (last && idx === last[last.length - 1]! + 1) {
+      last.push(idx);
+    } else {
+      groups.push([idx]);
+    }
+  }
+  const ranges = groups.map((group) => {
+    const items = group.map((idx) =>
+      wordCutInterval(ordered[idx]!, ordered[idx - 1], ordered[idx + 1])
+    );
+    return {
+      start: Math.min(...items.map((item) => item.start)),
+      end: Math.max(...items.map((item) => item.end)),
+    };
+  }).sort((a, b) => a.start - b.start);
   const taken = new Set(scene.takes.map((item) => item.id));
   let n = scene.takes.length + 1;
-  let id = `${scene.id}-t${n}`;
-  while (taken.has(id)) { n += 1; id = `${scene.id}-t${n}`; }
-  const take: SpeechTake = { id, sourceId: action.sourceId, speechId: null, start, end, removed: [], protected: [] };
+  const takes: SpeechTake[] = ranges.map((range) => {
+    let id = `${scene.id}-t${n}`;
+    while (taken.has(id)) { n += 1; id = `${scene.id}-t${n}`; }
+    taken.add(id);
+    n += 1;
+    return { id, sourceId: action.sourceId, speechId: null, start: range.start, end: range.end, removed: [], protected: [] };
+  });
   return invalidatePreview({
     ...project,
     scenes: project.scenes.map((item) => item.id !== scene.id ? item : {
       ...item,
-      takes: [...item.takes, take],
+      takes: [...item.takes, ...takes],
     }),
   });
 }

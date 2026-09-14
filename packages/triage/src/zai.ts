@@ -111,7 +111,7 @@ export class ZaiTriageModel implements TriageModel {
     } catch (err) {
       const hint = payloadMb > 5
         ? ` (o vídeo virou ${payloadMb.toFixed(1)} MB em base64 — corpo grande já causou erro genérico aqui; ` +
-          "gere um proxy mais leve com `-vf fps=1,scale=270:480 -crf 32`)"
+          "gere um proxy mais leve com `-vf fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease -crf 32`)"
         : "";
       throw new Error(`${err instanceof Error ? err.message : String(err)}${hint}`);
     }

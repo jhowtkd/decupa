@@ -93,7 +93,7 @@ describe("runIngest", () => {
     expect(vis!.cwd!.endsWith(join("services", "vision"))).toBe(true);
     expect(vis!.args).toContain("--fps");
     expect(vis!.args).toContain("4");
-    const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale=540:960"));
+    const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease"));
     expect(proxy).toBeDefined();
   });
 
@@ -118,7 +118,7 @@ describe("runIngest", () => {
   it("não falha o job se o sidecar de visão recusar", async () => {
     const exec: Executor = {
       async run(call: ExecCall) {
-        if (call.args.includes("visual_index.py") || call.args.includes("fps=4,scale=540:960")) {
+        if (call.args.includes("visual_index.py") || call.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease")) {
           return { code: 1, stdout: "", stderr: "MediaPipe não está instalado" };
         }
         return { code: 0, stdout: "", stderr: "" };
@@ -183,7 +183,7 @@ describe("makeTriageProxy", () => {
     const out = await makeTriageProxy(job, exec);
     const { command, args } = exec.calls.at(-1)!;
     expect(command).toBe("ffmpeg");
-    expect(args.join(" ")).toContain("fps=1,scale=270:480");
+    expect(args.join(" ")).toContain("fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease");
     expect(out).toContain("triage-proxy.mp4");
   });
 
@@ -340,5 +340,19 @@ describe("enginePatchError", () => {
     // soft filler, e o passe mecânico fica sem o sinal que ele consome.
     const engine = await writeFakeEngine("。．！？!?….", { lexicon: false });
     expect(await enginePatchError(engine)).toMatch(/léxico PT-BR/);
+  });
+});
+
+describe("probeFps orienta para OTIO (ICE3-04)", () => {
+  it("fracionário não-EDL sugere OTIO", async () => {
+    // 24000/1001 ≈ 23,98: o EDL não gera, mas o OTIO aceita qualquer taxa
+    // racional — o erro precisa nomear essa saída.
+    const exec = new FakeExecutor({ stdout: "24000/1001\n" });
+    await expect(probeFps(job, exec)).rejects.toThrow(/otio/i);
+  });
+
+  it("29.97 com allowDropFrame continua passando", async () => {
+    const exec = new FakeExecutor({ stdout: "30000/1001\n" });
+    await expect(probeFps(job, exec, { allowDropFrame: true })).resolves.toBeCloseTo(29.97, 2);
   });
 });

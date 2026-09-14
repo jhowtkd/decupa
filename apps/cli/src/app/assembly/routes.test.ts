@@ -1,14 +1,16 @@
 import { copyFile, mkdir, mkdtemp, readdir, readFile, unlink, writeFile, appendFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
-import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection } from "./routes.ts";
+import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import type { Source } from "./types.ts";
-import { createProject, loadProject, saveProject } from "./store.ts";
+import { applyHistorySnapshot } from "./revisions.ts";
+import type { Project, Source } from "./types.ts";
+import { createProject, loadProject, readHistorySnapshot, saveProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -694,3 +696,129 @@ it("canvas vem do primeiro vídeo mesmo com áudio já cadastrado", () => {
   expect(afterSecond.assembly.fps).toEqual({ num: 30000, den: 1001 });
 });
 
+// --- ICE3-01: snapshot de histórico no /apply (chamada direta, sem listen) ---
+
+type RespostaDireta = { status: number; corpo: Record<string, unknown> };
+
+async function chamadaDireta(
+  dir: string,
+  caminho: string,
+  corpo: unknown,
+): Promise<RespostaDireta> {
+  const runtime = createAssemblyRuntime(dir, {
+    exec: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+    port: () => 0,
+  });
+  const carga = Buffer.from(JSON.stringify(corpo));
+  const req = {
+    method: "POST",
+    url: caminho,
+    headers: {},
+    async *[Symbol.asyncIterator]() {
+      yield carga;
+    },
+  };
+  let status = 0;
+  let texto = "";
+  const res = {
+    writeHead(codigo: number) { status = codigo; },
+    end(parte?: unknown) { if (typeof parte === "string") texto = parte; },
+  };
+  await runtime.handleAssembly(
+    req as unknown as IncomingMessage,
+    res as unknown as ServerResponse,
+    dir,
+  );
+  return { status, corpo: JSON.parse(texto) as Record<string, unknown> };
+}
+
+function projetoComCorte(): { projeto: Project; cenaOriginal: Project["scenes"][number] } {
+  const projeto = blankProject("p1");
+  projeto.assembly.sources.push({ ...fixtureAssembly().sources[0]!, id: "src1", durationSeconds: 10 });
+  projeto.analyses.push({
+    sourceId: "src1",
+    key: "k",
+    speech: [
+      { id: "src1:u001", sourceId: "src1", start: 0, end: 2, text: "fala um" },
+      { id: "src1:u002", sourceId: "src1", start: 2, end: 4, text: "fala dois" },
+    ],
+    visual: [],
+    status: "ready",
+    words: [
+      { id: "w1", sourceId: "src1", start: 0, end: 1, text: "fala", confidence: 0.9 },
+      { id: "w2", sourceId: "src1", start: 1, end: 2, text: "um", confidence: 0.9 },
+    ],
+    wordsStatus: "ready",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  const cenaOriginal: Project["scenes"][number] = {
+    id: "s1",
+    objective: "abrir",
+    rationale: "tema",
+    speechIds: ["src1:u001"],
+    takes: [{
+      id: "t1", sourceId: "src1", speechId: "src1:u001",
+      start: 0, end: 2, removed: [{ start: 0, end: 0.5 }], protected: [],
+    }],
+    visualEvidenceIds: [],
+    support: [],
+    gaps: [],
+  };
+  projeto.scenes.push(cenaOriginal);
+  return { projeto, cenaOriginal };
+}
+
+it("apply fotografa o histórico: undo restaura takes/cortes anteriores", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-apply-snap-"));
+  const { projeto, cenaOriginal } = projetoComCorte();
+  projeto.proposal = {
+    id: "prop-1",
+    baseRevision: 0,
+    changedSceneIds: ["s1"],
+    explanation: "troca a fala da cena",
+    scenes: [{
+      id: "s1", objective: "abrir de novo", rationale: "tema",
+      selections: [{ speechId: "src1:u002" }], support: [], gaps: [],
+    }],
+  } as unknown as Project["proposal"];
+  await createProject(dir, projeto);
+
+  const resposta = await chamadaDireta(dir, "/project/apply", { baseRevision: 0, proposalId: "prop-1" });
+  expect(resposta.status).toBe(200);
+
+  const atual = await loadProject(dir);
+  expect(atual.revision).toBe(1);
+  expect(atual.scenes[0]!.takes.map((take) => take.id)).toEqual(["s1:src1:u002"]);
+
+  const snap = await readHistorySnapshot(dir, 0);
+  expect(snap.scenes).toEqual([cenaOriginal]);
+
+  const desfeito = applyHistorySnapshot(atual, snap);
+  expect(desfeito.scenes).toEqual([cenaOriginal]);
+  expect(desfeito.scenes[0]!.takes[0]!.removed).toEqual([{ start: 0, end: 0.5 }]);
+});
+
+it("apply com proposta ausente retorna 409 sem quebrar o fluxo de undo seguinte", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-apply-409-"));
+  const { projeto, cenaOriginal } = projetoComCorte();
+  await createProject(dir, projeto);
+
+  const falha = await chamadaDireta(dir, "/project/apply", { baseRevision: 0, proposalId: "prop-fantasma" });
+  expect(falha.status).toBe(409);
+
+  const intacto = await loadProject(dir);
+  expect(intacto.revision).toBe(0);
+  expect(intacto.scenes).toEqual([cenaOriginal]);
+
+  const editado = await chamadaDireta(dir, "/project/edit", {
+    baseRevision: 0,
+    action: { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1"] },
+  });
+  expect(editado.status).toBe(200);
+
+  const desfeito = await chamadaDireta(dir, "/project/undo", { baseRevision: 1, revision: 0 });
+  expect(desfeito.status).toBe(200);
+  const final = await loadProject(dir);
+  expect(final.revision).toBe(2);
+  expect(final.scenes).toEqual([cenaOriginal]);
+});

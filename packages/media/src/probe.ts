@@ -27,11 +27,27 @@ export function parseRate(value: string | undefined): Rate | null {
   return { num, den };
 }
 
-/** "25/1" -> 25 · "30000/1001" -> 29.97 · "0/0" -> null */
-function parseFrameRate(value: string | undefined): number | null {
-  const rate = parseRate(value);
-  if (!rate) return null;
+/** "25/1" -> 25 · "30000/1001" -> 29.97 */
+function rateToFps(rate: Rate): number {
   return Math.round((rate.num / rate.den) * 100) / 100;
+}
+
+function isSane(rate: Rate | null): rate is Rate {
+  if (!rate) return false;
+  const fps = rate.num / rate.den;
+  return Number.isFinite(fps) && fps > 0 && fps <= 120;
+}
+
+/** Prefere `r_frame_rate`; cai para `avg_frame_rate` se r ausente/absurdo. */
+export function selectFrameRate(
+  rFrameRate: string | undefined,
+  avgFrameRate: string | undefined,
+): Rate | null {
+  const r = parseRate(rFrameRate);
+  const avg = parseRate(avgFrameRate);
+  if (isSane(r)) return r;
+  if (isSane(avg)) return avg;
+  return null;
 }
 
 export async function probe(path: string): Promise<MediaInfo> {
@@ -54,6 +70,8 @@ export async function probe(path: string): Promise<MediaInfo> {
   const audio = streams.find((s) => s.codec_type === "audio");
   const durationSeconds = Number(parsed.format?.duration ?? 0);
 
+  const frameRate = selectFrameRate(video?.r_frame_rate, video?.avg_frame_rate);
+
   return {
     path,
     durationMs: Math.round(durationSeconds * 1000),
@@ -61,8 +79,8 @@ export async function probe(path: string): Promise<MediaInfo> {
     hasAudio: audio !== undefined,
     width: video?.width ?? null,
     height: video?.height ?? null,
-    fps: parseFrameRate(video?.r_frame_rate),
-    frameRate: parseRate(video?.r_frame_rate),
+    fps: frameRate ? rateToFps(frameRate) : null,
+    frameRate,
     averageFrameRate: parseRate(video?.avg_frame_rate),
     videoCodec: video?.codec_name ?? null,
     audioCodec: audio?.codec_name ?? null,

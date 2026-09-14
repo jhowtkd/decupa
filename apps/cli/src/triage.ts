@@ -206,13 +206,13 @@ export async function ensureLightVideo(
   return proxy;
 }
 
-async function defaultTranscode(src: string, dst: string): Promise<void> {
+export async function defaultTranscode(src: string, dst: string): Promise<void> {
   // Os mesmos parâmetros de pipeline.makeTriageProxy: o vídeo entra pro
   // modelo dar contexto visual, não detalhe.
   const code = await new Promise<number>((resolve) => {
     const child = spawn("ffmpeg", [
       "-i", src,
-      "-vf", "fps=1,scale=270:480",
+      "-vf", "fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
       "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
       "-c:a", "aac", "-b:a", "24k", "-ac", "1",
       "-y", dst,

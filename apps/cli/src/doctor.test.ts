@@ -54,11 +54,32 @@ describe("runDoctor", () => {
     expect(ffmpeg.fix).toMatch(/brew install ffmpeg/);
   });
 
-  it("sem ZAI_API_KEY, nomeia a variável", async () => {
+  it("sem nenhuma chave, lista as 4 variáveis", async () => {
     const lines = await runDoctor({ run: fakeRun, env: {} });
-    const chave = lines.find((l) => l.name === "ZAI_API_KEY")!;
+    const chave = lines.find((l) => l.name === "chave de análise")!;
     expect(chave.ok).toBe(false);
     expect(chave.fix).toMatch(/ZAI_API_KEY/);
+    expect(chave.fix).toMatch(/GEMINI_API_KEY/);
+    expect(chave.fix).toMatch(/MINIMAX_API_KEY/);
+    expect(chave.fix).toMatch(/DECUPA_API_KEY/);
+    expect(chave.fix).toMatch(/configure_provider/);
+  });
+
+  it("com GEMINI_API_KEY, chave de análise passa", async () => {
+    const lines = await runDoctor({ run: fakeRun, env: { GEMINI_API_KEY: "k" } });
+    const chave = lines.find((l) => l.name === "chave de análise")!;
+    expect(chave.ok).toBe(true);
+    expect(chave.detail).toMatch(/gemini/);
+  });
+
+  it("precedência segue o resolver", async () => {
+    const lines = await runDoctor({
+      run: fakeRun,
+      env: { ZAI_API_KEY: "k", GEMINI_API_KEY: "k2" },
+    });
+    const chave = lines.find((l) => l.name === "chave de análise")!;
+    expect(chave.ok).toBe(true);
+    expect(chave.detail).toMatch(/zai/);
   });
 
   it("endpoint default vira nota sobre a armadilha 1113", async () => {

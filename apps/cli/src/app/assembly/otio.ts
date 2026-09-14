@@ -15,6 +15,12 @@ function fpsNumber(assembly: Assembly): number {
   return assembly.fps.num / assembly.fps.den;
 }
 
+// Rótulo curto e estável para metadata do Resolve (ex.: "29.97", "25").
+// A matemática de frames continua usando o float exato num/den.
+function fpsLabel(fps: number): string {
+  return String(Math.round(fps * 100) / 100);
+}
+
 function imageBounds(width: number, height: number) {
   return {
     OTIO_SCHEMA: "Box2d.1",
@@ -107,7 +113,7 @@ export function timelineDurationFrames(assembly: Assembly): number {
 export function davinciImportSettings(assembly: Assembly) {
   const fps = fpsNumber(assembly);
   return {
-    timelineFrameRate: String(fps),
+    timelineFrameRate: fpsLabel(fps),
     timelineResolutionWidth: String(assembly.width),
     timelineResolutionHeight: String(assembly.height),
     procedure: [
@@ -134,7 +140,7 @@ export function buildOtio(assembly: Assembly): string {
   return JSON.stringify({
     OTIO_SCHEMA: "Timeline.1",
     name: valid.name,
-    global_start_time: time(fps * 3600, fps),
+    global_start_time: time(Math.round(fps * 3600), fps),
     metadata: {
       decupa: {
         width: valid.width,
@@ -143,7 +149,7 @@ export function buildOtio(assembly: Assembly): string {
         revision: valid.revision,
       },
       Resolve: {
-        timelineFrameRate: String(fps),
+        timelineFrameRate: fpsLabel(fps),
         timelineResolutionWidth: String(valid.width),
         timelineResolutionHeight: String(valid.height),
       },

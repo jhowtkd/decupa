@@ -948,10 +948,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (parts[1] === "apply" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const proposalId = String(body.proposalId ?? "");
-        const project = await mutate(baseRevision, (project) => {
+        const project = await mutate(baseRevision, async (project) => {
           if (!project.proposal || project.proposal.id !== proposalId) {
             throw new HttpError(409, "proposta ausente ou desatualizada");
           }
+          await writeHistorySnapshot(dir, project);
           return applyProposal(project, project.proposal);
         });
         sendJson(res, { project, ...snapshot() });

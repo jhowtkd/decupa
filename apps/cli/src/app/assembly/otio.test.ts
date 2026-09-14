@@ -72,7 +72,25 @@ it("exporta início fracionário da fonte com mesma taxa e frames inteiros no st
   expect(clip.source_range.duration.rate).not.toBe(29.97);
   expect(doc.global_start_time.rate).toBe(fps);
   expect(doc.global_start_time.rate).not.toBe(29.97);
-  expect(doc.global_start_time.value).toBe(fps * 3600);
+  expect(Number.isInteger(doc.global_start_time.value)).toBe(true);
+  expect(doc.global_start_time.value).toBe(Math.round(fps * 3600));
+});
+
+it("metadata Resolve usa frame rate legível", () => {
+  const a = fixtureAssembly();
+  a.fps = { num: 30000, den: 1001 };
+  const valid = validateAssembly(a);
+  const doc = JSON.parse(buildOtio(valid));
+  expect(doc.metadata.Resolve.timelineFrameRate).toBe("29.97");
+  expect(davinciImportSettings(valid).timelineFrameRate).toBe("29.97");
+  const docInteiro = JSON.parse(buildOtio(fixtureAssembly()));
+  expect(docInteiro.metadata.Resolve.timelineFrameRate).toBe("25");
+});
+
+it("timeline inteira mantém origem global em frame inteiro inalterada", () => {
+  const doc = JSON.parse(buildOtio(fixtureAssembly()));
+  expect(doc.global_start_time.value).toBe(90000);
+  expect(Number.isInteger(doc.global_start_time.value)).toBe(true);
 });
 
 it("available_range do media_reference usa a mesma rate do source_range do clipe", () => {
