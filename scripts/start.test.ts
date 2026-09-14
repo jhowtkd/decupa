@@ -61,7 +61,7 @@ it("sem runtime local, falha orientando executar o setup", async () => {
   }
 });
 
-it("abre o Decupa com um comando, responde GET /project e encerra no sinal", async () => {
+it("abre o Decupa com um comando, exige provedor antes de GET /project e encerra no sinal", async () => {
   const port = await ephemeralPort();
   const projectDir = await mkdtemp(join(tmpdir(), "decupa start ")); // caminho com espaços
   // PATH vazio: o CLI tenta openBrowser e o `open`/`xdg-open` não é
@@ -70,6 +70,8 @@ it("abre o Decupa com um comando, responde GET /project e encerra no sinal", asy
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
   env.PATH = pathVazio;
+  env.HOME = pathVazio;
+  env.USERPROFILE = pathVazio;
 
   // O launcher só confere access() no Python do venv; o CLI não o executa no
   // boot do montar. Se não houver venv real, cria um placeholder e remove no
@@ -94,17 +96,18 @@ it("abre o Decupa com um comando, responde GET /project e encerra no sinal", asy
     // Prazo total do teste: 10 s; o boot fica em 8 s para o término e a
     // checagem de porta fechada caberem no orçamento.
     const limite = Date.now() + 8_000;
-    let corpo: { project?: { revision?: number } } | null = null;
+    let corpo: { error?: string } | null = null;
     while (Date.now() < limite) {
       if (child.exitCode !== null) break; // morreu no caminho; falha com a saída abaixo
       try {
         const res = await fetch(`${base}/project`, { signal: AbortSignal.timeout(1_000) });
-        if (res.ok) { corpo = (await res.json()) as typeof corpo; break; }
+        if (res.status === 428) { corpo = (await res.json()) as typeof corpo; break; }
       } catch { /* ainda subindo */ }
       await new Promise((r) => setTimeout(r, 250));
     }
     expect(corpo, `o servidor não subiu; saída:\n${saida.join("")}`).not.toBeNull();
-    expect(corpo!.project!.revision).toBe(0);
+    expect(corpo!.error).toContain("Configure o provedor");
+    expect(await (await fetch(base)).text()).toContain("Configure a IA do Decupa");
 
     const saiu = new Promise<number | null>((r) => child!.once("exit", (code) => r(code)));
     child.kill("SIGTERM");

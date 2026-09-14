@@ -38,7 +38,7 @@ Caminhos absolutos e com espaços funcionam — os scripts não passam por shell
 - Acesso do usuário aos repositórios `jhowtkd/decupa` e `jhowtkd/video-agent-kit-plugin`.
 - Pasta de instalação e pasta separada para projetos.
 - Um vídeo curto de fala PT-BR autorizado para validação local.
-- Se for usar análise por IA: provedor, modelo/endpoint quando necessário e credencial inserida localmente pelo usuário. Não enviar a chave no prompt.
+- Provedor de IA obrigatório na primeira abertura: escolha provedor, modelo/endpoint quando necessário e informe a chave no formulário local. Não envie a chave no prompt.
 - Internet para baixar dependências e modelos. Transcrição local usa CPU por padrão; GPU não é requisito do código atual. Não há mínimo de RAM/disco homologado: medir no computador antes de prometer desempenho.
 
 O agente deve instalar os pré-requisitos ausentes antes de executar o setup, conforme o prompt. Pré-requisitos de sistema — o script confere todos e **não instala nenhum deles** (sem ferramentas globais, sem administrador):
@@ -61,7 +61,7 @@ O setup baixa e carrega os modelos antes de declarar a instalação concluída, 
 
 Aguarde essas etapas: conexão indisponível, download incompleto ou falha ao carregar um modelo fazem o setup terminar com erro. Corrija a causa e repita `node scripts/setup.mjs`; os caches existentes são reutilizados, sem apagar dados.
 
-O primeiro vídeo com os modelos padrão usa esse cache, desde que rode com o mesmo usuário e configuração. Trocar idioma/modelo ou remover o cache pode exigir novos downloads. Transcrição continua local (CPU); downloads de arquivos não são chamadas a um provedor de IA. Configurar um provedor é opcional.
+O primeiro vídeo com os modelos padrão usa esse cache, desde que rode com o mesmo usuário e configuração. Trocar idioma/modelo ou remover o cache pode exigir novos downloads. Transcrição continua local (CPU); downloads de arquivos não são chamadas a um provedor de IA. A configuração do provedor é obrigatória na primeira abertura do app, mesmo que a transcrição em si rode localmente.
 
 Registre o tempo de instalação dos modelos separado do processamento do vídeo. As medições anteriores de setup (44 s/4 s) e ingestão (158 s para vídeo de 107 s) ocorreram antes desta etapa obrigatória e não estimam uma instalação fria atual. Carregar os modelos comprova sua disponibilidade, mas o teste com vídeo continua necessário para validar transcrição e render.
 
@@ -100,7 +100,14 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 
 Se encontrar um bloqueio de plataforma, registre o erro concreto e peça a decisão necessária antes de instalar WSL, reiniciar ou portar código. Não crie executáveis falsos `open`/`say` para ocultar falhas.
 
-## 7. Provedor e credenciais
+## 7. Provedor obrigatório na primeira abertura
+
+Antes de liberar limpeza ou montagem, o app mostra o formulário de provedor e chave. Não há opção de pular. Configurações incompletas mantêm o app bloqueado. A chave é salva em `~/.decupa/credentials` para o usuário do sistema e reutilizada em novos projetos, sem aparecer nas respostas HTTP. macOS/Linux usam `0600`; Windows usa ACL restrita ao usuário.
+
+Salvar valida os campos e o endpoint HTTPS, sem chamada remota: não comprova validade da chave, saldo nem suporte a imagens. A autorização de processamento pago permanece nos controles de cada fluxo. Para montagem com vídeo, selecione um modelo com suporte visual. O launcher disponibiliza o provedor configurado para esses controles sem exigir flags no terminal.
+
+Credenciais específicas do projeto têm precedência sobre a configuração do usuário. Configurar a primeira abertura não sobrescreve essas credenciais.
+
 
 O código oferece presets `zai`, `gemini`, `minimax` e `custom`. Isso não comprova acesso, saldo ou suporte visual de cada modelo. Para custom, são necessários endpoint compatível com chat/completions e nome do modelo.
 
