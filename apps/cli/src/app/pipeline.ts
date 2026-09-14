@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 // Import direto da biblioteca de triagem: mesmo repo, sem subprocesso — o
 // contrato é a assinatura TypeScript, não uma regex sobre stdout.
 import { runTriage as runTriageLibrary } from "../triage.ts";
+import { enginePython, terminateTree } from "../runtime.ts";
 
 export interface ExecResult {
   code: number;
@@ -40,12 +41,16 @@ export class SpawnExecutor implements Executor {
 
   run(call: ExecCall): Promise<ExecResult> {
     return new Promise((resolvePromise) => {
-      // detached: o filho vira líder do grupo; killAll manda SIGTERM no grupo
-      // inteiro (pnpm → WhisperX), não só no processo direto.
-      const child = spawn(call.command, call.args, {
+      // O motor Python é resolvido aqui, num lugar só: quem chama declara
+      // "python3" como intenção e o runtime decide (DECUPA_ENGINE_PYTHON ou o
+      // binário da plataforma). detached só no POSIX: lá o filho vira líder do
+      // grupo e terminateTree manda SIGTERM no grupo inteiro (wrapper →
+      // WhisperX); no Windows o taskkill /T cuida da árvore.
+      const command = call.command === "python3" ? enginePython() : call.command;
+      const child = spawn(command, call.args, {
         env: { ...process.env, ...call.env },
         cwd: call.cwd,
-        detached: true,
+        detached: process.platform !== "win32",
       });
       this.running.add(child);
       let stdout = "";
@@ -89,10 +94,9 @@ export class SpawnExecutor implements Executor {
 
   killAll(): void {
     for (const child of this.running) {
-      if (child.pid) {
-        try { process.kill(-child.pid, "SIGTERM"); } catch { /* já saiu */ }
-      }
-      child.kill("SIGTERM");
+      // terminateTree conhece a plataforma: grupo POSIX ou taskkill /PID /T
+      // no Windows — sem shell e sem /IM (que mataria homônimos inocentes).
+      if (child.pid) terminateTree(child.pid);
     }
     this.running.clear();
   }
@@ -184,9 +188,17 @@ export async function runIngest(
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
     onStage("transcribing");
+    // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
+    // processo a menos na árvore para o cancelamento alcançar.
     await must(exec, {
-      command: "pnpm",
-      args: ["decupa", "condense-prep", "--input", job.videoPath, "--out", transcriptPath(job)],
+      command: process.execPath,
+      args: [
+        "--experimental-strip-types",
+        join(REPO_ROOT, "apps", "cli", "src", "index.ts"),
+        "condense-prep",
+        "--input", job.videoPath,
+        "--out", transcriptPath(job),
+      ],
       env: envFor(job),
       cwd: REPO_ROOT,
       onLine,

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
 import { runMarkWeb } from "./mark-web/server.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
 import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
+import { openBrowser } from "./runtime.ts";
 
 const USAGE = `decupa — bancada de medição
 
@@ -292,7 +292,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
-    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    openBrowser(url);
     await new Promise<void>((resolve) => {
       let closing = false;
       const shutdown = async () => {
@@ -334,7 +334,7 @@ async function main(argv: string[]): Promise<number> {
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
-    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    openBrowser(url);
     await new Promise<void>((resolve) => {
       let closing = false;
       const shutdown = async () => {
