@@ -308,7 +308,12 @@ function renderCenter(p, selection) {
   }
   dropzone.hidden = true;
   texto.hidden = false;
-  texto.innerHTML = p.scenes.length === 0 ? renderTranscript(p) : renderProse(p, selection);
+  // Coluna de leitura: o documento (transcrição ou prosa) inteiro dentro do
+  // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
+  // não afeta a delegação.
+  texto.innerHTML = '<div class="measure">'
+    + (p.scenes.length === 0 ? renderTranscript(p) : renderProse(p, selection))
+    + "</div>";
   if (focusedKey) {
     texto.querySelector(
       `[data-scene="${CSS.escape(focusedKey.scene)}"][data-take="${CSS.escape(focusedKey.take)}"]`
