@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>decupa · jornada do usuário</title>
+<style>
+  :root {
+    --bg: #12171a; --panel: #1a2125; --line: #2a3439; --ink: #e4e9e5; --muted: #94a0a5; --accent: #f2c230;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 ui-sans-serif, system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 14px;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header strong { font-size: 16px; }
+  header span { color: var(--muted); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 22px 80px; }
+  h1 { font-size: 15px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 34px 0 14px; }
+  h1:first-of-type { margin-top: 8px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin: 10px 0 26px; overflow-x: auto;
+  }
+  .card p { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .mermaid { display: flex; justify-content: center; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  code {
+    font-family: ui-monospace, Menlo, monospace; font-size: .9em; color: var(--ink);
+    background: #232c31; border: 1px solid var(--line-strong, #3c484e); border-radius: 4px; padding: 1px 6px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <strong>decupa</strong>
+  <span>jornada do usuário · fluxogramas por tela (derivados do código, 2026-09-14)</span>
+</header>
+<main>
+  <h1>Jornada macro</h1>
+  <div class="card">
+    <p>Do vídeo bruto à entrega; <code>marcar</code> é ferramenta de medição, fora do fluxo de produto.</p>
+    <pre class="mermaid">
+flowchart LR
+  bruto["Vídeo(s) brutos"] --> limpar["TELA LIMPAR<br/>transcrever · triar · revisar texto"]
+  limpar -->|"EDL · MP4 · SRT · TXT"| corte["Corte de fala limpo"]
+  bruto --> montar["TELA MONTAR<br/>edição texto-centrado por cenas"]
+  montar -->|"timeline.otio · reference.mp4"| davinci["DaVinci / finalização"]
+  mark["TELA MARCAR --web<br/>medição às cegas"] -.->|"truth.json"| ouro["Medida-ouro do alinhador"]
+    </pre>
+  </div>
+
+  <h1>1 · Limpar fala — <code>decupa limpar --input vídeo.mp4</code></h1>
+  <div class="card">
+    <p>Tudo que a tela de revisão oferece: tirar/trazer de volta, prévia da triagem, ouvir trecho e junção, quatro exportações (que sempre replanificam antes).</p>
+    <pre class="mermaid">
+flowchart TD
+  start(["decupa limpar --input"]) --> open["Servidor sobe + navegador abre"]
+  open --> ingest["Ingestão (etapas listadas na tela)<br/>preflight → proxy → transcrição → índice de unidades"]
+  ingest --> plan["Planejamento local do motor<br/>(keep-list inicial = tudo)"]
+  plan --> review["REVISÃO: prosa clicável<br/>N/N trechos · Ns de Ns"]
+  review -->|"clica no trecho"| tirar["Tira o trecho (colapsa em chip)"]
+  review -->|"clica no chip"| voltar["Traz de volta"]
+  tirar --> debounce["debounce 250ms → replanifica"]
+  voltar --> debounce
+  debounce --> review
+  review -->|"sugerir cortes"| previa["PRÉVIA DA TRIAGEM<br/>vai cair (motivo) · olhe isto · stats"]
+  previa -->|"aplicar"| aplicado["Keep-list da triagem vira o corte"]
+  previa -->|"descartar"| review
+  aplicado --> review
+  review -->|"ouvir trecho / ouvir junção"| ouvir["Toca ±0,7s dos dois lados na fonte"]
+  review --> exp{"Exportar<br/>(sempre replanifica antes)"}
+  exp -->|"exportar EDL"| f1["decupa.edl"]
+  exp -->|"exportar MP4"| f2["corte final .mp4"]
+  exp -->|"legendas"| f3[".srt"]
+  exp -->|"transcrição"| f4[".txt"]
+  review -->|"cancelar"| fim(["job encerrado"])
+    </pre>
+  </div>
+
+  <h1>2 · Montagem — <code>decupa montar --project dir</code></h1>
+  <div class="card">
+    <p>Editor texto-centrado: materiais e briefing no rail, edição por palavra no centro, prévia/aprovação no contexto, sequência na faixa. Entrega travada até assistir e aprovar a prévia.</p>
+    <pre class="mermaid">
+flowchart TD
+  start(["decupa montar --project"]) --> editor["EDITOR aberto<br/>rail · texto (centro) · contexto · faixa"]
+  editor --> materiais["RAIL · Materiais<br/>importar (arraste/picker) · categorizar Fala/Apoio<br/>incluir/excluir seleção · relink · ver original"]
+  materiais --> briefing["RAIL · Briefing<br/>tipo (briefing/roteiro) + texto + duração alvo"]
+  briefing --> guardar["Guardar briefing"]
+  guardar --> prep["PREPARAÇÃO por fonte:<br/>mídia → áudio → visual"]
+  prep --> ajuste{"Propor mudanças?<br/>(modelo pago · pedido escrito)"}
+  ajuste -->|"sim"| cenas["Proposta de cenas:<br/>takes · evidência visual · lacunas"]
+  ajuste -->|"não"| editar
+  cenas --> editar["EDITAR PELO TEXTO<br/>tirar/restaurar · preservar/liberar<br/>corrigir grafia (overlay alinhado)<br/>incluir zona omitida · mover ↥↧ · excluir cena · desfazer"]
+  editar --> faixa["FAIXA · sequência da montagem<br/>blocos por cena · playhead · seek · waveforms"]
+  faixa --> previa["ATUALIZAR PRÉVIA<br/>(render no servidor, trava 2º clique)"]
+  previa -->|"assistir até o fim"| aprovou{"Aprovar prévia assistida?"}
+  previa -->|"pedir ajuste"| editar
+  aprovou -->|"sim"| entrega["ENTREGA LIBERADA<br/>Baixar timeline.otio · reference.mp4"]
+  aprovou -->|"não"| editar
+    </pre>
+  </div>
+
+  <h1>3 · Marcar fronteiras — <code>decupa mark --web --input áudio --out truth.json</code></h1>
+  <div class="card">
+    <p>Medição às cegas: sem transcrição nem predição na tela — só vídeo e onda. Salvar grava o truth-file e fecha o terminal.</p>
+    <pre class="mermaid">
+flowchart TD
+  start(["decupa mark --web"]) --> calc["Proxy + peaks calculados antes de abrir"]
+  calc --> page["TELA: vídeo + forma de onda<br/>cursor · zoom · lista de marcas"]
+  page -->|"espaço"| ouvir["Ouve em loop a partir do cursor"]
+  page -->|"← → ±10ms · shift ±50ms · [ ] ±1s"| mover["Ajusta cursor às cegas"]
+  mover -->|"enter"| marcar["Marca fronteira"]
+  page -->|"⌫"| apagar["Apaga marca mais próxima"]
+  marcar --> page
+  apagar --> page
+  page -->|"⌘S salvar"| salvar["POST /truth → grava truth.json<br/>terminal fecha sozinho"]
+    </pre>
+  </div>
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "dark", fontFamily: "ui-sans-serif, system-ui, sans-serif" });
+</script>
+</body>
+</html>

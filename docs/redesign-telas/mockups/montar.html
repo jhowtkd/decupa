@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>decupa · montagem (mockup de redesign)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<style>
+  /* tokens "sala de corte" */
+  :root {
+    --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
+    --line: #2B3038; --line-strong: #3A414B;
+    --ink: #E9E7E2; --muted: #9AA0A9; --faint: #6B7280;
+    --accent: #F2C230; --on-accent: #1B1508;
+    --warn: #E0765C; --ok: #63BE97;
+    --serif: Charter, "Iowan Old Style", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg-0); color: var(--ink);
+    font: 13px/1.5 var(--sans);
+    display: flex; flex-direction: column;
+    min-height: 100dvh;
+  }
+
+  /* papéis de tipo */
+  .material { font-family: var(--serif); font-size: 19px; line-height: 1.65; }
+  .data { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  /* botões: um sistema */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px; border-radius: 6px;
+    font: 600 13px var(--sans); color: var(--ink);
+    background: var(--bg-1); border: 1px solid var(--line-strong);
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.quiet:hover { color: var(--ink); }
+  .btn.locked { opacity: .55; }
+  .btn i { font-size: 15px; }
+
+  /* topo */
+  header {
+    height: 48px; flex: none;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 16px; background: var(--bg-1); border-bottom: 1px solid var(--line);
+  }
+  .brand { font: 600 14px var(--sans); letter-spacing: .01em; }
+  .crumb { color: var(--muted); }
+  .divider { width: 1px; height: 18px; background: var(--line-strong); }
+  .proj { color: var(--ink); }
+  header .spacer { flex: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 8px; border-radius: 6px;
+    background: var(--bg-2); border: 1px solid var(--line);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+
+  /* grade */
+  main {
+    flex: 1; display: grid; min-height: 0;
+    grid-template-columns: 264px 1fr 328px;
+    grid-template-rows: 1fr 96px;
+  }
+
+  /* rail */
+  .rail {
+    background: var(--bg-1); border-right: 1px solid var(--line);
+    padding: 14px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .panel-label { font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .card {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px;
+  }
+  .material-row { display: flex; gap: 10px; align-items: center; }
+  .thumb {
+    width: 60px; height: 34px; border-radius: 6px; flex: none;
+    background: linear-gradient(120deg, #C33 0 25%, #2A6 25% 50%, #E6C84A 50% 75%, #35B 75%);
+  }
+  .thumb.support { background: linear-gradient(120deg, #3E5F46, #57805F); }
+  .m-name { font: 600 13px var(--sans); }
+  .m-meta { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+  .seg {
+    display: inline-flex; margin-top: 8px; border: 1px solid var(--line-strong);
+    border-radius: 6px; overflow: hidden;
+  }
+  .seg span { padding: 4px 12px; font: 600 12px var(--sans); color: var(--muted); }
+  .seg .on { background: var(--bg-0); color: var(--ink); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; }
+  .prep { display: flex; flex-direction: column; gap: 6px; }
+  .prep-row { display: flex; justify-content: space-between; align-items: center; }
+  .state-ok { color: var(--ok); }
+  .state-run { color: var(--accent); }
+  .rail-foot {
+    margin-top: auto; border: 1px dashed var(--line-strong); border-radius: 10px;
+    padding: 10px; color: var(--muted); display: flex; justify-content: space-between; align-items: center;
+  }
+
+  /* texto */
+  .texto { overflow-y: auto; padding: 26px 48px 48px; }
+  .measure { max-width: 620px; margin: 0 auto; }
+  .scene { margin-bottom: 34px; }
+  .scene-head {
+    display: flex; align-items: baseline; gap: 10px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 14px;
+  }
+  .scene-num { font-family: var(--mono); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .scene-title { font: 600 15px var(--sans); }
+  .scene-head .spacer { flex: 1; }
+  .scene-head .btn-kebab { border: none; background: none; color: var(--faint); cursor: pointer; }
+  .prose { color: var(--ink); }
+  .cut {
+    color: var(--faint); text-decoration: line-through;
+    text-decoration-color: var(--warn); text-decoration-thickness: 1.5px;
+    cursor: pointer;
+  }
+  .cut:hover { color: var(--muted); }
+  .fix { border-bottom: 2px dotted var(--accent); }
+  .broll {
+    display: inline-flex; align-items: center; gap: 5px; vertical-align: 2px;
+    height: 22px; padding: 0 8px; margin: 0 3px;
+    border-radius: 6px; background: var(--bg-2); border: 1px solid var(--line-strong);
+    font: 600 11px var(--sans); color: var(--muted); cursor: pointer;
+  }
+  .broll i { color: var(--accent); font-size: 13px; }
+  .src-chip {
+    display: inline-flex; margin-top: 10px; padding: 2px 8px;
+    border-radius: 6px; background: var(--bg-1); border: 1px solid var(--line);
+  }
+  .unused {
+    margin-top: 12px; border: 1px dashed var(--line-strong); border-radius: 10px;
+    padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;
+    color: var(--faint); font: 400 12.5px var(--sans);
+  }
+
+  /* contexto */
+  .contexto {
+    background: var(--bg-1); border-left: 1px solid var(--line);
+    padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+  }
+  .ctx-title { font: 600 13px var(--sans); margin-bottom: 8px; }
+  .preview-screen {
+    aspect-ratio: 16/9; border-radius: 6px; background:
+      linear-gradient(120deg, #23282f, #2c323b);
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line);
+  }
+  .preview-screen i { font-size: 30px; color: var(--ink); }
+  .preview-meta { display: flex; gap: 6px; margin: 8px 0 10px; }
+  .row { display: flex; gap: 8px; }
+  .row .btn { flex: 1; justify-content: center; }
+  .lock-note { color: var(--faint); font-size: 12px; margin-top: 8px; }
+  .corr { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  .corr + .corr { border-top: 1px solid var(--line); }
+  .corr .fix-sample { font-family: var(--serif); font-size: 15px; }
+  .state { display: inline-flex; align-items: center; gap: 5px; font: 600 11.5px var(--sans); }
+  .state i { font-size: 13px; }
+  textarea {
+    width: 100%; min-height: 54px; resize: vertical;
+    background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 6px;
+    color: var(--ink); font: 400 13px var(--sans); padding: 8px 10px;
+  }
+  textarea::placeholder { color: var(--faint); }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* faixa */
+  .faixa {
+    grid-column: 1 / -1; background: var(--bg-1); border-top: 1px solid var(--line);
+    display: flex; flex-direction: column; padding: 8px 14px 10px; gap: 4px;
+  }
+  .faixa-head { display: flex; justify-content: space-between; align-items: center; }
+  .ruler { display: flex; justify-content: space-between; padding: 0 2px; }
+  .strip { position: relative; flex: 1; display: flex; gap: 3px; align-items: stretch; }
+  .block {
+    position: relative; border-radius: 6px; background: var(--bg-2);
+    border: 1px solid var(--line-strong); overflow: hidden;
+    padding: 5px 8px;
+  }
+  .block .wave {
+    position: absolute; inset: auto 0 0 0; height: 55%;
+    background: repeating-linear-gradient(90deg, var(--line-strong) 0 1px, transparent 1px 4px);
+    opacity: .55;
+  }
+  .block b { font: 600 11px var(--sans); color: var(--muted); }
+  .block .dur { position: absolute; right: 6px; top: 5px; }
+  .playhead {
+    position: absolute; top: -4px; bottom: 0; left: 17%;
+    width: 2px; background: var(--accent);
+  }
+  .playhead .t {
+    position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: var(--on-accent);
+    font: 600 10.5px var(--mono); padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">decupa</span>
+  <span class="crumb">montagem</span>
+  <span class="divider"></span>
+  <span class="proj">mock edição textual</span>
+  <span class="spacer"></span>
+  <span class="chip data"><i class="ph ph-check" style="color: var(--ok); font-size: 12px;"></i> revisão 7</span>
+  <button class="btn quiet"><i class="ph ph-arrow-counter-clockwise"></i> desfazer</button>
+</header>
+
+<main>
+  <aside class="rail">
+    <span class="panel-label">Materiais</span>
+
+    <div class="card">
+      <div class="material-row">
+        <div class="thumb"></div>
+        <div style="flex:1;">
+          <div class="m-name">fala.mp4</div>
+          <div class="m-meta data"><span>96s</span><span>pronto</span></div>
+        </div>
+        <button class="btn-kebab" style="border:none;background:none;color:var(--faint);cursor:pointer;"><i class="ph ph-dots-three-vertical"></i></button>
+      </div>
+      <div class="seg"><span class="on">Fala</span><span>Apoio</span></div>
+    </div>
+
+    <div class="card">
+      <div class="material-row">
+        <div class="thumb support"></div>
+        <div style="flex:1;">
+          <div class="m-name">apoio.mp4</div>
+          <div class="m-meta data"><span>40s</span><span>parcial</span></div>
+        </div>
+        <button class="btn-kebab" style="border:none;background:none;color:var(--faint);cursor:pointer;"><i class="ph ph-dots-three-vertical"></i></button>
+      </div>
+      <div class="seg"><span>Fala</span><span class="on">Apoio</span></div>
+    </div>
+
+    <span class="panel-label" style="margin-top:6px;">Preparação</span>
+    <div class="card prep">
+      <div class="prep-row"><span style="color:var(--muted);">fala.mp4</span><span class="data state-ok">mídia ✓ áudio ✓ visual ✓</span></div>
+      <div class="prep-row"><span style="color:var(--muted);">apoio.mp4</span><span class="data state-run">áudio em andamento</span></div>
+    </div>
+
+    <div class="rail-foot">
+      <span>briefing · alvo 60s</span>
+      <i class="ph ph-caret-down"></i>
+    </div>
+  </aside>
+
+  <section class="texto">
+    <div class="measure">
+
+      <div class="scene">
+        <div class="scene-head">
+          <span class="scene-num">cena 1</span>
+          <span class="scene-title">Gancho e promessa</span>
+          <span class="spacer"></span>
+          <span class="data">0.4-25.2s</span>
+          <button class="btn-kebab"><i class="ph ph-dots-three-vertical"></i></button>
+        </div>
+        <p class="material prose">
+          E aí pessoal, bem-vindos de volta pro canal. Hoje eu vou te mostrar o método
+          que eu <span class="cut">uso pra cortar meus vídeos em</span> metade do tempo.
+          Antes de começar: <span class="fix">deixa</span> o like que ajuda demais o canal a crescer.
+        </p>
+        <span class="src-chip data">fala.mp4 · corte -3.5s</span>
+        <div class="unused">
+          <span>não usado (2 palavras)</span>
+          <span class="data">incluir trecho</span>
+        </div>
+      </div>
+
+      <div class="scene">
+        <div class="scene-head">
+          <span class="scene-num">cena 2</span>
+          <span class="scene-title">Cortar × aparar</span>
+          <span class="spacer"></span>
+          <span class="data">32.1-66.4s</span>
+          <button class="btn-kebab"><i class="ph ph-dots-three-vertical"></i></button>
+        </div>
+        <p class="material prose">
+          A primeira <span class="broll"><i class="ph ph-film-strip"></i> vis-b1 · 4.0s</span>
+          coisa que você precisa entender é a diferença entre cortar e aparar. Aparar é
+          tirar o silêncio das pontas. Cortar é tirar o que não serve do meio.
+        </p>
+        <span class="src-chip data">fala.mp4 · proteção 32.1-34.0s</span>
+      </div>
+
+    </div>
+  </section>
+
+  <aside class="contexto">
+    <div class="card">
+      <div class="ctx-title">Prévia</div>
+      <div class="preview-screen"><i class="ph ph-play"></i></div>
+      <div class="preview-meta">
+        <span class="chip data">prévia 7</span>
+        <span class="chip data">73,1s</span>
+        <span class="chip data">1280×720 · 25/1</span>
+      </div>
+      <div class="row">
+        <button class="btn"><i class="ph ph-arrows-clockwise"></i> atualizar prévia</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn primary locked"><i class="ph ph-lock-simple"></i> aprovar prévia assistida</button>
+      </div>
+      <p class="lock-note">Assista à prévia até o fim para liberar a aprovação.</p>
+    </div>
+
+    <div class="card">
+      <div class="ctx-title">Correções de texto</div>
+      <div class="corr">
+        <span class="fix-sample"><span class="fix">deixa</span> <span class="data">era "deixo"</span></span>
+        <span class="state state-ok"><i class="ph ph-check"></i> alinhada</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ctx-title">Ajuste</div>
+      <textarea placeholder="Ex.: encurtar a abertura"></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn primary"><i class="ph ph-sparkle"></i> propor mudanças</button>
+      </div>
+      <p class="lock-note">Modelo pago autorizado para este projeto.</p>
+    </div>
+  </aside>
+
+  <footer class="faixa">
+    <div class="faixa-head">
+      <span class="panel-label">Sequência</span>
+      <span class="data">73,1s de montagem · 25 fps</span>
+    </div>
+    <div class="ruler data"><span>0s</span><span>15</span><span>30</span><span>45</span><span>60</span><span>75s</span></div>
+    <div class="strip">
+      <div class="block" style="width:29%;">
+        <b>cena 1</b><span class="data dur">21,3s</span><span class="wave"></span>
+      </div>
+      <div class="block" style="width:45%;">
+        <b>cena 2</b><span class="data dur">32,9s</span><span class="wave"></span>
+      </div>
+      <div class="block" style="width:26%;">
+        <b>cena 3</b><span class="data dur">18,9s</span><span class="wave"></span>
+      </div>
+      <div class="playhead"><span class="t">12,4s</span></div>
+    </div>
+  </footer>
+</main>
+
+</body>
+</html>
