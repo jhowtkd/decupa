@@ -167,7 +167,7 @@
   <!-- Sem review, keepList() estoura; nascem desabilitados. -->
   <button id="triar" disabled>sugerir cortes</button>
   <div class="export-wrap">
-    <button id="exportar" class="primary" disabled>exportar</button>
+    <button id="exportar" class="primary" disabled aria-haspopup="true" aria-expanded="false">exportar</button>
     <div id="export-menu" hidden>
       <button data-export="edl">timeline .edl</button>
       <button data-export="mp4">vídeo .mp4</button>
@@ -554,14 +554,21 @@ el("triage-dismiss").onclick = () => {
 };
 
 const exportMenu = el("export-menu");
-el("exportar").onclick = () => { exportMenu.hidden = !exportMenu.hidden; };
+// O estado do menu é anunciado: aria-expanded espelha o hidden em cada via de fechar.
+const syncExportAria = () =>
+  el("exportar").setAttribute("aria-expanded", String(exportMenu.hidden === false));
+el("exportar").onclick = () => { exportMenu.hidden = !exportMenu.hidden; syncExportAria(); };
 document.addEventListener("click", (ev) => {
-  if (!ev.target.closest(".export-wrap")) exportMenu.hidden = true;
+  if (!ev.target.closest(".export-wrap")) { exportMenu.hidden = true; syncExportAria(); }
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") { exportMenu.hidden = true; syncExportAria(); }
 });
 for (const btn of exportMenu.querySelectorAll("[data-export]")) {
   const kind = btn.dataset.export;
   btn.onclick = async () => {
     exportMenu.hidden = true;
+    syncExportAria();
     const label = btn.textContent;
     btn.disabled = true;
     btn.textContent = "exportando…";
