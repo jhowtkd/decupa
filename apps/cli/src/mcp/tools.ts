@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { DoctorLine } from "../doctor.ts";
 import { writeCredentials, type Credentials } from "@decupa/triage";
@@ -15,6 +16,7 @@ export type StartFn = (opts: {
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   autoStart?: boolean;
+  providerConfigDir?: string;
 }) => Promise<AppHandle>;
 
 export type McpDeps = {
@@ -93,7 +95,7 @@ export function createMcpSession(deps: McpDeps) {
     let last: Error | null = null;
     for (let port = first; port <= first + 10 && port <= 7798; port += 1) {
       try {
-        return await deps.startApp({ ...opts, port, autoStart: false });
+        return await deps.startApp({ ...opts, port, autoStart: false, providerConfigDir: homedir() });
       } catch (err) {
         last = err instanceof Error ? err : new Error(String(err));
         if (!/EADDRINUSE|em uso|ocupad/i.test(last.message)) throw last;

@@ -34,9 +34,16 @@ _whisperx_logger.setLevel(logging.INFO)
 _whisperx_logger.propagate = False
 
 
+def load_asr(args):
+    return whisperx.load_model(
+        args.model, args.device, compute_type=args.compute_type, language=args.language
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wav", required=True)
+    parser.add_argument("--wav")
+    parser.add_argument("--prepare-models", action="store_true")
     parser.add_argument("--language", default="pt")
     parser.add_argument("--model", default="small")
     parser.add_argument("--device", default="cpu")
@@ -45,6 +52,16 @@ def main() -> int:
     parser.add_argument("--text-file", default=None)
     args = parser.parse_args()
 
+    if args.prepare_models:
+        print("Preparando Whisper e detector de fala (CPU)...", file=sys.stderr, flush=True)
+        asr = load_asr(args)
+        del asr
+        print("Preparando alinhamento PT-BR...", file=sys.stderr, flush=True)
+        whisperx.load_align_model(language_code=args.language, device=args.device)
+        print("Modelos de fala carregados com sucesso.", file=sys.stderr, flush=True)
+        return 0
+    if not args.wav:
+        parser.error("--wav é obrigatório para transcrever")
     audio = whisperx.load_audio(args.wav)
 
     if args.text_file:
@@ -55,12 +72,7 @@ def main() -> int:
             raise ValueError("texto vazio para alinhamento")
         segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text}]
     else:
-        asr = whisperx.load_model(
-            args.model,
-            args.device,
-            compute_type=args.compute_type,
-            language=args.language,
-        )
+        asr = load_asr(args)
         segments = asr.transcribe(audio, batch_size=args.batch_size)["segments"]
 
     align_model, align_meta = whisperx.load_align_model(

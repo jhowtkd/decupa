@@ -97,10 +97,15 @@ describe("runIngest", () => {
     expect(proxy).toBeDefined();
   });
 
-  it("roda o pnpm na raiz do repo, não no cwd de quem chamou", async () => {
+  it("invoca o condense-prep com o Node do processo na raiz do repo, não no cwd de quem chamou", async () => {
+    // Sem subprocesso pnpm: o CLI é reentrado pelo próprio Node, por caminho
+    // absoluto, e o cwd segue sendo a raiz do repo.
     const exec = new FakeExecutor();
     await runIngest(job, exec, () => {});
     const prep = exec.calls.find((c) => c.args.includes("condense-prep"))!;
+    expect(prep.command).toBe(process.execPath);
+    expect(prep.args[0]).toBe("--experimental-strip-types");
+    expect(isAbsolute(prep.args[1]!)).toBe(true);
     expect(prep.cwd).toBeDefined();
     expect(isAbsolute(prep.cwd!)).toBe(true);
   });

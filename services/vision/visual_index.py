@@ -145,15 +145,9 @@ def mediapipe_missing_message() -> str:
     )
 
 
-def analyze(video: str, fps: int) -> list[dict]:
-    try:
-        import cv2
-        import mediapipe as mp
-        from mediapipe.tasks import python
-        from mediapipe.tasks.python import vision
-    except ImportError:
-        print(mediapipe_missing_message(), file=sys.stderr)
-        raise SystemExit(1)
+def create_landmarkers():
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
 
     face_model = ensure_model(FACE_MODEL_URL, MODELS_DIR / "face_landmarker.task")
     hand_model = ensure_model(HAND_MODEL_URL, MODELS_DIR / "hand_landmarker.task")
@@ -176,6 +170,19 @@ def analyze(video: str, fps: int) -> list[dict]:
             num_hands=2,
         )
     )
+
+    return face_landmarker, hand_landmarker
+
+
+def analyze(video: str, fps: int) -> list[dict]:
+    try:
+        import cv2
+        import mediapipe as mp
+    except ImportError:
+        print(mediapipe_missing_message(), file=sys.stderr)
+        raise SystemExit(1)
+
+    face_landmarker, hand_landmarker = create_landmarkers()
 
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
@@ -270,11 +277,20 @@ def main() -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", required=True)
-    parser.add_argument("--index", required=True)
+    parser.add_argument("--video")
+    parser.add_argument("--prepare-models", action="store_true")
+    parser.add_argument("--index")
     parser.add_argument("--fps", type=int, default=4)
     args = parser.parse_args()
 
+    if args.prepare_models:
+        face, hand = create_landmarkers()
+        face.close()
+        hand.close()
+        print("Modelos de visão carregados com sucesso.", file=sys.stderr, flush=True)
+        return 0
+    if not args.video or not args.index:
+        parser.error("--video e --index são obrigatórios para analisar")
     units = load_units(args.index)
     samples = analyze(args.video, args.fps)
     payload = {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -23,7 +23,7 @@ function importUnderStripTypes(entry: string): Promise<{ code: number; stderr: s
     const child = spawn(process.execPath, [
       "--experimental-strip-types",
       "--input-type=module",
-      "-e", `await import(${JSON.stringify(entry)});`,
+      "-e", `await import(${JSON.stringify(pathToFileURL(entry).href)});`,
     ], { env: { ...process.env, NODE_NO_WARNINGS: "1" } });
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += String(d); });
@@ -47,6 +47,6 @@ describe("compatibilidade com strip-only mode", () => {
   it.each(ENTRIES)("%s importa sob --experimental-strip-types", async (entry) => {
     const { code, stderr } = await importUnderStripTypes(entry);
     expect(stderr).not.toMatch(/not supported in strip-only mode/);
-    expect(code).toBe(0);
+    expect(code, stderr).toBe(0);
   }, 30_000);
 });

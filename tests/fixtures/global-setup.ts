@@ -20,8 +20,6 @@ export const TRUTH = {
     { startMs: 1200, endMs: 2000 },
     { startMs: 3500, endMs: 4100 },
   ],
-  /** speech.wav: frase ditada, para conferir ordem de palavras da transcrição */
-  speechText: "Eu acho que a gente devia mudar isso hoje mesmo.",
 } as const;
 
 const exists = (p: string) => access(p).then(() => true, () => false);
@@ -68,13 +66,5 @@ export default async function setup(): Promise<void> {
       "[a][b][c]concat=n=3:v=0:a=1",
       "-c:a", "pcm_s16le", edited,
     ]);
-  }
-
-  // Fala PT-BR reproduzível via síntese do macOS. Usada pela ponte de transcrição.
-  const speech = join(FIXTURES, "speech.wav");
-  if (!(await exists(speech))) {
-    const aiff = join(FIXTURES, "speech.aiff");
-    await run("say", ["-v", "Luciana", "-o", aiff, TRUTH.speechText]);
-    await ff(["-i", aiff, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", speech]);
   }
 }

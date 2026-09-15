@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
 import { runMarkWeb } from "./mark-web/server.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
 import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
+import { openBrowser } from "./runtime.ts";
 
 const USAGE = `decupa — bancada de medição
 
-  decupa doctor — checa o ambiente (binários, sidecars, motor, patch, chave) e diz o que consertar
+  decupa doctor [--local] — checa o ambiente (binários, sidecars, motor, patch, chave) e diz o que consertar
+      --local dispensa a chave de IA e prova só a prontidão local (imports de
+      fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
+      apenas o provedor falta.
 
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
@@ -65,8 +69,9 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === "doctor") {
+    const { values } = parseArgs({ args: rest, options: { local: { type: "boolean" } } });
     const { runDoctor, renderDoctor } = await import("./doctor.ts");
-    const lines = await runDoctor();
+    const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
   }
@@ -284,6 +289,7 @@ async function main(argv: string[]): Promise<number> {
     }
     const { startApp } = await import("./app/server.ts");
     const app = await startApp({
+      providerConfigDir: homedir(),
       input: values.input,
       port: values.port ? Number(values.port) : undefined,
       provider: values.provider,
@@ -292,7 +298,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
-    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    openBrowser(url);
     await new Promise<void>((resolve) => {
       let closing = false;
       const shutdown = async () => {
@@ -325,6 +331,7 @@ async function main(argv: string[]): Promise<number> {
     }
     const { startApp } = await import("./app/server.ts");
     const app = await startApp({
+      providerConfigDir: homedir(),
       projectDir: values.project,
       inputs: values.input ? [values.input] : undefined,
       port: values.port ? Number(values.port) : undefined,
@@ -334,7 +341,7 @@ async function main(argv: string[]): Promise<number> {
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
-    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    openBrowser(url);
     await new Promise<void>((resolve) => {
       let closing = false;
       const shutdown = async () => {
