@@ -371,7 +371,9 @@ function render() {
         : `restaurar: ${u.text}`;
       if (canPlay(u.start, u.end)) mark.append(playBtn("ouvir", () => playUnit(u)));
       mark.onclick = () => { kept.set(u.id, true); render(); schedule(); };
-      main.append(mark);
+      // O espaço vive no fim do .u mantido; sem este, um corte colado no
+      // texto seguinte lê "[bar]baz". .join é display:block, não duplica.
+      main.append(mark, " ");
     }
   }
   el("kept-count").textContent = review.units.filter((u) => kept.get(u.id)).length;
