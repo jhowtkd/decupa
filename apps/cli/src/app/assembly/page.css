@@ -180,8 +180,8 @@ summary { cursor: pointer; color: var(--muted); }
 #faixa { min-height: 88px; padding: 8px 14px 10px; display: flex; flex-direction: column; gap: 4px; }
 #faixa .faixa-head { display: flex; justify-content: space-between; align-items: center; }
 #faixa .faixa-head .data { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-#faixa .ruler { display: flex; justify-content: space-between; }
-#faixa .ruler span { font: 10.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+#faixa .ruler { position: relative; height: 16px; }
+#faixa .ruler span { position: absolute; transform: translateX(-50%); font: 10.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
 #faixa .seq-strip { gap: 3px; }
 /* Âncora dos cantos: apoios não têm position inline, o .dur precisa do bloco. */
 .seq-bloco { position: relative; }

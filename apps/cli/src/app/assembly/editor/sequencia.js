@@ -121,14 +121,19 @@ export function mountSequencia({ state, api, player }) {
     total.className = "data total";
     total.textContent = duration.toFixed(1).replace(".", ",") + "s";
     head.append(label, total);
-    // Régua: marcas nice (rulerTicks) distribuídas pela largura da faixa.
+    // Régua: marcas nice (rulerTicks) posicionadas por TEMPO, não por
+    // índice — space-between mentiria contra os blocos/playhead, que são
+    // proporcionais. Primeira e última marcas não recuam (não saem da faixa).
     const ruler = document.createElement("div");
     ruler.className = "ruler";
-    for (const t of rulerTicks(duration)) {
+    const ticks = rulerTicks(duration);
+    ticks.forEach((t, i) => {
       const s = document.createElement("span");
       s.textContent = t === 0 ? "0s" : String(t);
+      s.style.left = duration > 0 ? ((t / duration) * 100).toFixed(3) + "%" : "0%";
+      if (i === 0 || i === ticks.length - 1) s.style.transform = "none";
       ruler.append(s);
-    }
+    });
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     // Layout crítico inline (o tema segue em page.css, fora desta tarefa).
