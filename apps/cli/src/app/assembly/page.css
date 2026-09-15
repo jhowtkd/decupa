@@ -3,7 +3,7 @@
   --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
   --bg: var(--bg-0); --panel: var(--bg-1);   /* aliases: o arquivo usa muito */
   --line: #2B3038; --line-strong: #3A414B;
-  --ink: #E9E7E2; --muted: #9AA0A9; --faint: #6B7280;
+  --ink: #E9E7E2; --muted: #9AA0A9; --faint: #7d8590;
   --accent: #F2C230; --on-accent: #1B1508;
   --ok: #63BE97; --warn: #E0765C;
   --removed: #3a2a26; --protected: #5b84b8;
