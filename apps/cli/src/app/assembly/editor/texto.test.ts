@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { menuActionsFor, sceneHeaderActions } from "./texto.js";
+import {
+  acceptedFormatsLabel,
+  emptyGuideHtml,
+  menuActionsFor,
+  needsEmptyGuide,
+  sceneHeaderActions,
+} from "./texto.js";
 
 type Sel = { removed?: boolean; protected?: boolean; takeId?: string };
 
@@ -66,4 +72,27 @@ it("sceneHeaderActions desabilita os extremos e sempre oferece excluir", () => {
     const del = header.find((a: { kind?: string }) => a.kind === "delete");
     expect(del?.disabled).toBe(false);
   }
+});
+
+it("centro vazio pede o guia; com mídia, dá lugar ao conteúdo normal", () => {
+  expect(needsEmptyGuide({ assembly: { sources: [] } })).toBe(true);
+  expect(needsEmptyGuide({ assembly: { sources: [{ id: "s1" }] } })).toBe(false);
+});
+
+it("guia tem 3 passos, formatos do accept e CTA de importação", () => {
+  const html = emptyGuideHtml("video/*,audio/*");
+  expect(html).toContain("data-empty-guide");
+  expect(html.match(/<li>/g)).toHaveLength(3);
+  expect(html).toContain("Importe");
+  expect(html).toContain("Selecione e arrume o texto");
+  expect(html).toContain("Revise e entregue");
+  expect(html).toContain("vídeo e áudio");
+  expect(html).toContain("data-empty-import");
+  expect(html).toContain("Importar mídia");
+});
+
+it("formatos derivam do accept: token desconhecido passa cru, vazio some", () => {
+  expect(acceptedFormatsLabel("video/*")).toBe("vídeo");
+  expect(acceptedFormatsLabel("video/*,audio/*,.srt")).toBe("vídeo, áudio e .srt");
+  expect(acceptedFormatsLabel("")).toBe("");
 });
