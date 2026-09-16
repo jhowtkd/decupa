@@ -19,12 +19,12 @@ describe("protocol frames", () => {
 
 describe("MCP tools", () => {
   function session() {
-    let closed = false;
+    let _closed = false;
     return createMcpSession({
       doctor: async () => [{ ok: true, name: "node", detail: "22" }],
       startApp: async (opts) => ({
         port: opts.port ?? 7788,
-        close: async () => { closed = true; },
+        close: async () => { _closed = true; },
       }),
       writeCredentials,
       cwd: () => process.cwd(),
@@ -73,7 +73,7 @@ describe("MCP tools", () => {
     const init = await dispatch({ jsonrpc: "2.0", id: 1, method: "initialize" }, s);
     expect(init?.result).toMatchObject({ serverInfo: { name: "decupa" } });
     const list = await dispatch({ jsonrpc: "2.0", id: 2, method: "tools/list" }, s);
-    const tools = (list?.result as { tools: { name: string }[] }).tools.map((t) => t.name);
+    const tools = (list!.result as { tools: { name: string }[] }).tools.map((t) => t.name);
     expect(tools).toEqual(["doctor", "configure_provider", "start", "status", "stop"]);
   });
 });

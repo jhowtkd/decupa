@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
-import type { LegacyProject, Project } from "./types.ts";
+import type { LegacyProject } from "./types.ts";
 import { createProject, loadProject, missingMedia, readHistorySnapshot, saveProject, validateProject, validateWord, writeHistorySnapshot } from "./store.ts";
 
 function projectAt(revision: number): LegacyProject {

@@ -23,7 +23,7 @@ export function createApi({ onStatus } = {}) {
     try {
       const res = await fetch(path, {
         ...fetchOpts,
-        headers: { "content-type": "application/json", ...(fetchOpts.headers || {}) },
+        headers: { "content-type": "application/json", ...fetchOpts.headers },
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) emit({ error: body.error || "erro " + res.status });

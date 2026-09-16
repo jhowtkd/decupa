@@ -1,4 +1,4 @@
-import type { Assembly, EditAction, Project, Proposal } from "./types.ts";
+import type { EditAction, Project, Proposal } from "./types.ts";
 import type { EditorialSnapshot } from "./store.ts";
 import { compileScenes, validateProposal } from "./scenes.ts";
 import { applyTextEdit } from "./words.ts";

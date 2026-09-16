@@ -24,7 +24,6 @@ import {
   unitsById,
   verifyClaims,
   writeCache,
-  ZAI_DEFAULT_MODEL,
   ZaiTriageModel,
   type DensityCandidate,
   type InspectFlag,

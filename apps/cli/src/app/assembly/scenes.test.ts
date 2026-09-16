@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import { compileScenes, proposeScenes, validateProposal } from "./scenes.ts";
-import type { Project, Proposal } from "./types.ts";
+import type { Project } from "./types.ts";
 
 function project(): Project {
   const assembly = fixtureAssembly();
