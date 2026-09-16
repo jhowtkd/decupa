@@ -466,7 +466,7 @@ it("falha de proxy não publica parcial e nomeia a fonte", async () => {
 
 it("mídia ausente e substituída viram erro com ID, sem render", async () => {
   const calls: { args: string[] }[] = [];
-  const { base, dir, clip } = await boot([], {
+  const { base, clip } = await boot([], {
     executor: { async run(call: { args: string[] }) { calls.push(call); return { code: 0, stdout: "", stderr: "" }; } },
   });
   const selected = await selectClip(base);

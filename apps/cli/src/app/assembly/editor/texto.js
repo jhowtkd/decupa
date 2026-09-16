@@ -214,7 +214,6 @@ function renderProse(p, selection) {
   let html = "";
   let cursor = 0;
   p.scenes.forEach((scene, index) => {
-    const sceneStart = cursor;
     for (const take of scene.takes) cursor += retainedDuration(take);
     const [up, down] = sceneHeaderActions(index, p.scenes.length);
     // Tempos do cabeçalho: primeiro start e último end dos takes da cena

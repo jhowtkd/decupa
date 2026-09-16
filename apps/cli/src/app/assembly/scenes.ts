@@ -435,7 +435,7 @@ export async function proposeScenes(
   input: string,
   signal: AbortSignal,
   deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string },
-  exec?: Executor,
+  _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
     send: (content: unknown[], signal?: AbortSignal) => createAnalysisClient().send(content, signal),
