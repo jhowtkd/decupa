@@ -153,6 +153,53 @@ export function supportMontageStart(project, scene, support) {
   return sceneMontageStart(project, scene.id) + support.offsetFrames / fps;
 }
 
+/**
+ * Centro sem mídia: o guia de 3 passos ocupa o #texto no lugar do
+ * conteúdo normal (puro; o render condicional já troca os ramos).
+ * @param {{ assembly: { sources: unknown[] } }} p
+ */
+export function needsEmptyGuide(p) {
+  return p.assembly.sources.length === 0;
+}
+
+/** Rótulo pt-BR de um token do accept do filePicker (puro). */
+export function acceptLabel(token) {
+  const map = { "video/*": "vídeo", "audio/*": "áudio", "image/*": "imagem" };
+  return map[token] || token;
+}
+
+/**
+ * Formatos aceitos em linguagem humana a partir do accept do filePicker
+ * (puro): "video/*,audio/*" vira "vídeo e áudio".
+ * @param {string} accept
+ */
+export function acceptedFormatsLabel(accept) {
+  const labels = String(accept || "").split(",")
+    .map((token) => token.trim()).filter(Boolean).map(acceptLabel);
+  if (labels.length <= 1) return labels[0] || "";
+  return labels.slice(0, -1).join(", ") + " e " + labels[labels.length - 1];
+}
+
+/**
+ * Guia de primeiro uso do centro (puro): 3 passos + formatos aceitos
+ * derivados do accept + CTA que dispara o fluxo de importação existente
+ * (o clique chama filePicker.click(), como a dropzone antiga).
+ * @param {string} accept
+ */
+export function emptyGuideHtml(accept) {
+  return '<section data-empty-guide aria-label="Como começar">'
+    + "<h1>Monte seu vídeo em 3 passos</h1>"
+    + "<ol>"
+    + "<li><strong>Importe</strong> seus vídeos e áudios.</li>"
+    + "<li><strong>Selecione e arrume o texto</strong> para montar as cenas.</li>"
+    + "<li><strong>Revise e entregue</strong>: confira a prévia e exporte o resultado.</li>"
+    + "</ol>"
+    + '<p class="muted">Formatos aceitos: ' + esc(acceptedFormatsLabel(accept)) + ".</p>"
+    + '<p><button type="button" class="primary" data-empty-import>Importar mídia</button></p>'
+    + '<p class="muted">Ou arraste os arquivos para esta área.</p>'
+    + "</section>";
+}
+
 /* ---- Render (os dois documentos do spec, portados do bootstrap) ---- */
 
 function esc(text) {
@@ -299,10 +346,12 @@ function renderCenter(p, selection) {
   const focusedKey = focused && focused.wordId !== undefined
     ? { scene: focused.scene || "", take: focused.take || "", word: focused.wordId }
     : null;
-  if (p.assembly.sources.length === 0) {
-    dropzone.hidden = false;
-    texto.hidden = true;
-    texto.replaceChildren();
+  if (needsEmptyGuide(p)) {
+    dropzone.hidden = true;
+    texto.hidden = false;
+    const picker = document.getElementById("filePicker");
+    const accept = picker?.getAttribute("accept") || "video/*,audio/*";
+    texto.innerHTML = '<div class="measure">' + emptyGuideHtml(accept) + "</div>";
     return;
   }
   dropzone.hidden = true;
@@ -638,6 +687,11 @@ export function mountTexto({ state, api, player }) {
     }
     const el = root();
     if (!el) return;
+    const importCta = ev.target.closest("[data-empty-import]");
+    if (importCta && el.contains(importCta)) {
+      document.getElementById("filePicker")?.click();
+      return;
+    }
     const sceneBtn = ev.target.closest("[data-scene-action]");
     if (sceneBtn && el.contains(sceneBtn)) {
       void sceneEdit(sceneBtn);

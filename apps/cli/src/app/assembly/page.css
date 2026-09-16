@@ -176,6 +176,11 @@ summary { cursor: pointer; color: var(--muted); }
 }
 .unused .prose { font-size: 15px; color: var(--muted); }
 
+/* Guia vazio do centro: 3 passos + CTA de importação. */
+[data-empty-guide] ol { padding-left: 1.4rem; }
+[data-empty-guide] li { margin: 8px 0; }
+[data-empty-guide] h1 { font-size: 20px; }
+
 /* Task 6: Montar — a faixa como timeline (régua + blocos + playhead). */
 #faixa { min-height: 88px; padding: 8px 14px 10px; display: flex; flex-direction: column; gap: 4px; }
 #faixa .faixa-head { display: flex; justify-content: space-between; align-items: center; }
