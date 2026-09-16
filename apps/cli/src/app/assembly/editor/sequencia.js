@@ -55,6 +55,84 @@ export function rulerTicks(durationSeconds, targetCount = 6) {
   return ticks;
 }
 
+/**
+ * Coluna → segmento retido (puro): bucketiza `inBlock` por pixel com uma
+ * varredura de ponteiro único — O(largura + segmentos) em vez do
+ * O(largura × segmentos) da busca por pixel. `inBlock` chega ordenado por
+ * montageStart e sem sobreposição (ordem de retainedSegments); cada coluna
+ * recebe exatamente o segmento que `find(start <= t && t < end)` devolveria
+ * para o instante do centro do pixel, ou null no vão entre segmentos.
+ */
+export function bucketizeSegments(inBlock, blockStart, sceneDur, width) {
+  const buckets = [];
+  if (!Array.isArray(inBlock) || inBlock.length === 0 || !(width > 0)) return buckets;
+  let i = 0;
+  for (let x = 0; x < width; x++) {
+    const montageT = blockStart + ((x + 0.5) / width) * sceneDur;
+    while (i < inBlock.length && montageT >= inBlock[i].montageEnd) i++;
+    const seg = i < inBlock.length ? inBlock[i] : null;
+    buckets.push(seg && montageT >= seg.montageStart ? seg : null);
+  }
+  return buckets;
+}
+
+/**
+ * Passada de desenho da waveform (pura): devolve as operações fillRect
+ * `{x, top, h}` em ordem de x, pixel-idênticas ao loop antigo. Os segmentos
+ * chegam bucketizados por pixel (bucketizeSegments) e as métricas por fonte
+ * (perBucket) são resolvidas UMA vez por fonte antes do loop — dentro do
+ * loop só há aritmética, sem Map.get externo, sem divisão repetida e sem
+ * leitura de layout.
+ */
+export function planSceneWave(inBlock, bySource, blockStart, sceneDur, width, height) {
+  const ops = [];
+  if (!(width > 0) || !(height > 0) || !Array.isArray(inBlock) || inBlock.length === 0) return ops;
+  // Cache por fonte fora do loop: cada fonte distinta resolve uma vez.
+  const cached = new Map();
+  for (const seg of inBlock) {
+    if (!seg || cached.has(seg.sourceId)) continue;
+    const peaks = bySource ? bySource.get(seg.sourceId) : undefined;
+    const perBucket = peaks ? peaks.count / peaks.peaks.length : NaN;
+    cached.set(seg.sourceId, {
+      peaks,
+      perBucket,
+      ok: !!peaks && Number.isFinite(peaks.sampleRate) && peaks.sampleRate > 0 && perBucket > 0,
+    });
+  }
+  const halfH = height / 2;
+  const buckets = bucketizeSegments(inBlock, blockStart, sceneDur, width);
+  let curSeg = null;
+  let cur = null;
+  for (let x = 0; x < buckets.length; x++) {
+    const seg = buckets[x];
+    if (!seg) {
+      curSeg = null;
+      cur = null;
+      continue;
+    }
+    // A fonte só é (re)resolvida na troca de segmento, nunca por pixel.
+    if (seg !== curSeg) {
+      curSeg = seg;
+      cur = cached.get(seg.sourceId);
+    }
+    if (!cur || !cur.ok) continue;
+    const peaks = cur.peaks;
+    const span = seg.montageEnd - seg.montageStart;
+    const montageT = blockStart + ((x + 0.5) / width) * sceneDur;
+    const frac = span > 0 ? (montageT - seg.montageStart) / span : 0;
+    const srcT = seg.srcStart + frac * (seg.srcEnd - seg.srcStart);
+    const bucket = peaks.peaks[
+      Math.min(peaks.peaks.length - 1, Math.max(0, Math.floor((srcT * peaks.sampleRate) / cur.perBucket)))
+    ];
+    if (!bucket) continue;
+    const yMax = halfH - (bucket.max / 32768) * halfH;
+    const yMin = halfH - (bucket.min / 32768) * halfH;
+    const top = Math.min(yMin, yMax);
+    ops.push({ x, top, h: Math.max(1, Math.abs(yMax - yMin)) });
+  }
+  return ops;
+}
+
 /** Intervalo entre seeks de scrub durante o arraste. */
 export const SCRUB_THROTTLE_MS = 60;
 
@@ -222,7 +300,9 @@ export function mountSequencia({ state, api, player }) {
    * Desenha os segmentos retidos no canvas do bloco: cada coluna x mapeia
    * para um instante da montagem → trecho retido → bucket de peaks da
    * fonte. O comprimento de cada segmento segue a proporção do
-   * timelineBlocks (o canvas ocupa exatamente o bloco da cena).
+   * timelineBlocks (o canvas ocupa exatamente o bloco da cena). A passada é
+   * planejada por planSceneWave (segmentos bucketizados por pixel, métricas
+   * por fonte em cache fora do loop); aqui só executa os fillRect.
    */
   function drawSceneWave(canvas, inBlock, bySource, blockStart, sceneDur) {
     // Revela antes de medir: o atributo hidden é display:none, e canvas
@@ -237,27 +317,8 @@ export function mountSequencia({ state, api, player }) {
     if (!ctx) return;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = (typeof getComputedStyle === "function" && getComputedStyle(canvas).color) || "#888";
-    for (let x = 0; x < width; x++) {
-      const montageT = blockStart + ((x + 0.5) / width) * sceneDur;
-      const seg = inBlock.find(
-        (s) => s.montageStart <= montageT && montageT < s.montageEnd,
-      );
-      if (!seg) continue;
-      const peaks = bySource.get(seg.sourceId);
-      if (!peaks || !Number.isFinite(peaks.sampleRate) || peaks.sampleRate <= 0) continue;
-      const span = seg.montageEnd - seg.montageStart;
-      const frac = span > 0 ? (montageT - seg.montageStart) / span : 0;
-      const srcT = seg.srcStart + frac * (seg.srcEnd - seg.srcStart);
-      const perBucket = peaks.count / peaks.peaks.length;
-      if (!(perBucket > 0)) continue;
-      const bucket = peaks.peaks[
-        Math.min(peaks.peaks.length - 1, Math.max(0, Math.floor((srcT * peaks.sampleRate) / perBucket)))
-      ];
-      if (!bucket) continue;
-      const yMax = height / 2 - (bucket.max / 32768) * (height / 2);
-      const yMin = height / 2 - (bucket.min / 32768) * (height / 2);
-      const top = Math.min(yMin, yMax);
-      ctx.fillRect(x, top, 1, Math.max(1, Math.abs(yMax - yMin)));
+    for (const op of planSceneWave(inBlock, bySource, blockStart, sceneDur, width, height)) {
+      ctx.fillRect(op.x, op.top, 1, op.h);
     }
   }
 
