@@ -1,4 +1,4 @@
-import { access, mkdir, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";

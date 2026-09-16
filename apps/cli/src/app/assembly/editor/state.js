@@ -7,6 +7,7 @@ export function createState(initial = {}) {
   const listeners = new Map();
   function notify(key, value) {
     const subs = listeners.get(key);
+    // oxlint-disable-next-line no-useless-spread -- cópia intencional: um ouvinte pode se remover durante o notify.
     if (subs) for (const fn of [...subs]) fn(value);
   }
   return {

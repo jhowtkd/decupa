@@ -7,11 +7,6 @@ const STAGE_LABEL = { pending: "pendente", running: "rodando", ready: "pronta", 
 /** Chip mono (.chip da Task 3): estado curto e legível ao lado do nome. */
 const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
 
-function sourceName(project, id) {
-  const found = project && project.assembly.sources.find((item) => item.id === id);
-  return found ? found.name : id;
-}
-
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
 function setDisabled(el, value) {
   if (!el) return;
