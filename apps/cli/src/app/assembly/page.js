@@ -372,6 +372,21 @@ filePicker.addEventListener("change", () => {
   filePicker.value = "";
 });
 
+// Com o guia vazio no centro, a dropzone some: o #texto recebe os
+// arrastes no estado sem mídia, pelo mesmo importFiles (sem upload novo).
+const textoEl = document.getElementById("texto");
+textoEl.addEventListener("dragover", (ev) => {
+  const p = project();
+  if (p && p.assembly.sources.length === 0) ev.preventDefault();
+});
+textoEl.addEventListener("drop", (ev) => {
+  const p = project();
+  if (p && p.assembly.sources.length === 0 && ev.dataTransfer.files.length) {
+    ev.preventDefault();
+    void importFiles([...ev.dataTransfer.files]);
+  }
+});
+
 renderStatus();
 call("/project", { label: "Carregando…" }).then(() => {
   scheduleAutoPreview();

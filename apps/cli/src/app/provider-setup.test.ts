@@ -14,6 +14,7 @@ it("valida configuração sem chamar o provedor", () => {
   expect(() => validateProvider({ preset: "gemini", apiKey: " " })).toThrow();
   expect(() => validateProvider({ preset: "custom", apiKey: "x", model: "m", baseUrl: "http://example.com" })).toThrow();
   expect(validateProvider({ preset: "gemini", apiKey: " x " })).toEqual({ preset: "gemini", apiKey: "x" });
+  expect(validateProvider({ preset: "zai", apiKey: "x" })).toEqual({ preset: "zai", apiKey: "x" });
 });
 
 it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reutiliza em novo projeto", async (mode) => {
@@ -37,4 +38,18 @@ it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reu
   const next = await startApp({ projectDir: join(dir, "next"), port: 0, providerConfigDir: dir });
   cleanup.push(() => next.close());
   expect(await (await fetch(`http://127.0.0.1:${next.port}`)).text()).not.toContain("Configure a IA do Decupa");
+});
+
+it("onboarding com Z.ai lista a opção e conclui a configuração", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-onboarding-zai-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await startApp({ projectDir: join(dir, "project"), port: 0, providerConfigDir: dir });
+  cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  expect(await (await fetch(base)).text()).toContain('<option value="zai">Z.ai</option>');
+  const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "zai", apiKey: "test-zai-secret" }) });
+  expect(saved.status).toBe(200);
+  expect(await saved.text()).not.toContain("test-zai-secret");
+  expect(await readCredentials(dir)).toEqual({ preset: "zai", apiKey: "test-zai-secret" });
+  expect(await (await fetch(base)).text()).not.toContain("Configure a IA do Decupa");
 });

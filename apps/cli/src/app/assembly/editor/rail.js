@@ -17,6 +17,50 @@ function setDisabled(el, value) {
   el.disabled = !!value;
 }
 
+/**
+ * Checklist da entrega: derivado do estado real do projeto (mídia
+ * presente, seleção feita, revisão pronta). Pura para teste sem DOM;
+ * o render aplica a cada projeto recebido.
+ */
+export function deliveryChecklist(project) {
+  const sources = project.assembly?.sources ?? [];
+  return [
+    { id: "media", label: "Mídia presente", done: sources.length > 0 },
+    { id: "selection", label: "Seleção feita", done: sources.some((s) => s.included) },
+    { id: "review", label: "Revisão pronta", done: project.finalApprovedRevision != null },
+  ];
+}
+
+/**
+ * Visão do botão/fluxo de export: estados distinguíveis (ocioso, em
+ * progresso, concluído, erro). Pura para teste sem DOM.
+ */
+export function exportView(ui, approved) {
+  if (ui.status === "running") {
+    return {
+      disabled: true, loading: true, tone: "running",
+      buttonLabel: "Exportando…", statusText: "Exportando…",
+    };
+  }
+  if (ui.status === "error") {
+    return {
+      disabled: !approved, loading: false, tone: "error",
+      buttonLabel: "Exportar revisão",
+      statusText: "Erro no export: " + (ui.error || "falha desconhecida"),
+    };
+  }
+  if (ui.status === "done") {
+    return {
+      disabled: !approved, loading: false, tone: "done",
+      buttonLabel: "Exportado ✓", statusText: "Exportado ✓ — links abaixo.",
+    };
+  }
+  return {
+    disabled: !approved, loading: false, tone: "idle",
+    buttonLabel: "Exportar revisão", statusText: "",
+  };
+}
+
 /** Sem checkboxes: o consentimento pago é por lote no disparo; aqui só ecoa o já concedido. */
 function paidFlags(project) {
   return {
@@ -80,10 +124,16 @@ export function mountRail({ state, api, player }) {
   delivery.className = "delivery";
   delivery.setAttribute("aria-label", "Entrega");
   delivery.innerHTML = "<h1>Entrega</h1>"
+    + '<ul id="deliveryChecklist" class="plain"></ul>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
     + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
+    + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>';
   root.appendChild(delivery);
+
+  // Estado transitório do fluxo de export (ocioso, progresso, concluído,
+  // erro): só o checklist e o cadeado derivam do projeto servido.
+  const exportUi = { status: "idle", error: null, revision: null };
 
   function checkedSourceIds() {
     return [...document.querySelectorAll("#sources input[type=checkbox]:checked")].map((el) => el.value);
@@ -230,6 +280,20 @@ export function mountRail({ state, api, player }) {
   }
 
   function renderDelivery(project) {
+    // Checklist derivado do estado real: atualiza a cada render de projeto.
+    const checklist = document.getElementById("deliveryChecklist");
+    checklist.replaceChildren();
+    for (const item of deliveryChecklist(project)) {
+      const li = document.createElement("li");
+      li.append(chip((item.done ? "✓ " : "○ ") + item.label));
+      checklist.appendChild(li);
+    }
+    // Export de outra revisão não conta: edição nova volta ao ocioso.
+    if (exportUi.status === "done" && exportUi.revision !== project.revision) {
+      exportUi.status = "idle";
+      exportUi.error = null;
+      exportUi.revision = null;
+    }
     const downloads = document.getElementById("downloads");
     downloads.replaceChildren();
     // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
@@ -241,7 +305,14 @@ export function mountRail({ state, api, player }) {
         ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
         : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
     }
-    setDisabled(document.getElementById("export"), !approved);
+    const view = exportView(exportUi, approved);
+    const exportButton = document.getElementById("export");
+    exportButton.textContent = view.buttonLabel;
+    exportButton.classList.toggle("is-loading", view.loading);
+    setDisabled(exportButton, view.disabled);
+    const exportStatus = document.getElementById("exportStatus");
+    exportStatus.textContent = view.statusText;
+    exportStatus.className = "muted export-" + view.tone;
     if (approved) {
       const rev = project.finalApprovedRevision;
       const otio = document.createElement("a");
@@ -327,9 +398,9 @@ export function mountRail({ state, api, player }) {
       document.getElementById("prepareConfirm").hidden = true;
     }
     renderPreparation(project);
-    // Sem cenas, o cartão equivale à revisão oculta da tela antiga.
-    const hasScenes = project.scenes.length > 0;
-    delivery.hidden = !hasScenes;
+    // O cartão fica visível durante todo o fluxo: o checklist diz o que
+    // falta em vez de esconder a entrega até haver cenas.
+    delivery.hidden = false;
     renderDelivery(project);
   }
 
@@ -372,10 +443,30 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Retomando preparação…",
   });
-  document.getElementById("export").onclick = () => api.call("/project/export", {
-    method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
-    label: "Exportando…",
-  });
+  document.getElementById("export").onclick = async () => {
+    const project = state.get("project");
+    exportUi.status = "running";
+    exportUi.error = null;
+    exportUi.revision = null;
+    renderDelivery(project);
+    try {
+      const { res, body } = await api.call("/project/export", {
+        method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+        label: "Exportando…",
+      });
+      if (res.ok) {
+        exportUi.status = "done";
+        exportUi.revision = project.revision;
+      } else {
+        exportUi.status = "error";
+        exportUi.error = body.error || "erro " + res.status;
+      }
+    } catch (err) {
+      exportUi.status = "error";
+      exportUi.error = (err && err.message) || String(err);
+    }
+    renderDelivery(state.get("project"));
+  };
 
   state.subscribe("project", render);
   render(state.get("project"));
