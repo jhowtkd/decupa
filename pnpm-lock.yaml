@@ -44,6 +44,9 @@ importers:
       '@decupa/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@decupa/trace':
+        specifier: workspace:*
+        version: link:../../packages/trace
       '@decupa/transcript':
         specifier: workspace:*
         version: link:../../packages/transcript
@@ -91,6 +94,8 @@ importers:
 
   packages/queue: {}
 
+  packages/trace: {}
+
   packages/transcript:
     dependencies:
       '@decupa/core':
@@ -108,6 +113,9 @@ importers:
       '@decupa/core':
         specifier: workspace:*
         version: link:../core
+      '@decupa/trace':
+        specifier: workspace:*
+        version: link:../trace
       '@google/genai':
         specifier: ^2.21.0
         version: 2.21.0
