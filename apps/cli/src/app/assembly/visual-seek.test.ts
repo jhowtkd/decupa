@@ -51,12 +51,16 @@ async function makeFixture(dir: string, kind: "cfr" | "vfr" | "offset" | "gop" |
       "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "25", out,
     ]);
   } else if (kind === "vfr") {
-    await ff([
+    const encode = ["-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out];
+    const input = [
       "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=8",
       "-vf", "setpts=N/(25*TB)+0.04*sin(N/8)",
-      "-vsync", "vfr",
-      "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out,
-    ]);
+    ];
+    try {
+      await ff([...input, "-fps_mode", "vfr", ...encode]);
+    } catch {
+      await ff([...input, "-vsync", "vfr", ...encode]);
+    }
   } else if (kind === "offset") {
     await ff([
       "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=10",
