@@ -29,12 +29,38 @@ export async function inspectArtifact(path: string): Promise<ArtifactInspection>
   }
 }
 
+function replaceBusy(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EPERM" || code === "EEXIST" || code === "EACCES" || code === "EBUSY";
+}
+
 export async function publishAtomic(path: string, payload: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   try {
     await writeFile(tmp, payload, "utf8");
-    await rename(tmp, path);
+    let last: unknown;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      try {
+        await rename(tmp, path);
+        return;
+      } catch (error) {
+        last = error;
+        if (!replaceBusy(error)) throw error;
+        // Windows cannot rename-over a destination that is open (antivirus
+        // or a concurrent reader). Overwrite in place, then retry rename.
+        try {
+          await writeFile(path, payload, "utf8");
+          await unlink(tmp).catch(() => undefined);
+          return;
+        } catch (writeError) {
+          last = writeError;
+          if (!replaceBusy(writeError)) throw writeError;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
+      }
+    }
+    throw last;
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
     throw error;
