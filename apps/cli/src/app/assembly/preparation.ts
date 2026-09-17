@@ -362,6 +362,7 @@ export async function runPreparation(
             const spans = await describeSource(source, dir, signal, {
               client: deps.describeClient,
               exec: deps.exec,
+              isCurrent: control.isCurrent,
             });
             checkAlive();
             const coverage = visualCoverage(spans, source.durationSeconds);

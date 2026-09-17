@@ -5,6 +5,7 @@ import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
 import { analysisCacheDir } from "./analysis.ts";
+import { createVisualPools } from "./visual-pool.ts";
 import { mergeAdjacent, validateVisual, visualWindows } from "./visual.ts";
 
 export const VISUAL_PROMPT = `Você recebe um trecho de vídeo (proxy, 1 fps, proporção preservada).
@@ -24,6 +25,9 @@ export const VISUAL_CACHE_VERSION = "visual-v2";
 export type DescribeDeps = {
   client: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
   exec?: Executor;
+  ffmpegLimit?: number;
+  networkLimit?: number;
+  isCurrent?: () => boolean;
 };
 
 type VisualWindow = { start: number; end: number; fetchStart: number };
@@ -75,6 +79,7 @@ async function windowClip(
   window: VisualWindow,
   cacheDir: string,
   exec: Executor,
+  signal?: AbortSignal,
 ): Promise<string> {
   const clip = join(cacheDir, `w-${window.start}-${window.end}.mp4`);
   try {
@@ -92,6 +97,7 @@ async function windowClip(
       "-t", String(window.end - window.fetchStart),
       "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
       "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", tmp],
+    signal,
   });
   if (made.code !== 0) {
     await unlink(tmp).catch(() => {});
@@ -180,66 +186,75 @@ export async function describeSource(
   const cacheDir = join(analysisCacheDir(dir, source.sha256), VISUAL_CACHE_VERSION);
   await mkdir(cacheDir, { recursive: true });
 
-  const collected: VisualSpan[] = [];
-  for (const window of visualWindows(source.durationSeconds)) {
+  if (signal.aborted) throw new Error("descrição visual cancelada");
+  const pool = createVisualPools({
+    ffmpegLimit: deps?.ffmpegLimit ?? 2,
+    networkLimit: deps?.networkLimit ?? 2,
+  });
+  const windows = visualWindows(source.durationSeconds);
+  const collected: VisualSpan[][] = Array.from({ length: windows.length }, () => []);
+  let firstError: unknown;
+  await pool.mapWindows(windows, async (window, index) => {
+    try {
+      collected[index] = await describeWindow(window);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }, { signal });
+  if (firstError) throw firstError instanceof Error ? firstError : new Error(String(firstError));
+  return mergeAdjacent(collected.flat());
+
+  async function describeWindow(window: ReturnType<typeof visualWindows>[number]): Promise<VisualSpan[]> {
     if (signal.aborted) throw new Error("descrição visual cancelada");
     const file = cacheFile(cacheDir, window);
     let previous: VisualSpan[] = [];
     try {
       const cached = parseWindowCache(JSON.parse(await readFile(file, "utf8")), source, window);
       if (cached && windowCovered(cached, window)) {
-        collected.push(...cached);
-        continue;
+        return cached;
       }
-      // Janela incompleta: solicita de novo e conserva o válido abaixo.
       previous = cached ?? [];
     } catch {
       // cache miss ou inválido: processa a janela
     }
-    try {
-      const clip = await windowClip(source, window, cacheDir, exec);
-      if (signal.aborted) throw new Error("descrição visual cancelada");
-      const bytes = await readFile(clip);
-      const dataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
-      const localDuration = window.end - window.fetchStart;
-      const text = await client.send([
-        { type: "video_url", video_url: { url: dataUrl } },
-        {
-          type: "text",
-          text: `${VISUAL_PROMPT}\n\njanela local: 0s → ${localDuration}s `
-            + `(segundos locais deste trecho; origem 0). `
-            + `descreva o intervalo da fonte [${window.start}, ${window.end}).`,
-        },
-      ], signal);
-      const fresh = parseLocalSpans(text, source, window);
-      // Une sem perda: o novo substitui só o anterior que ele redescreve
-      // por inteiro; intervalos complementares são conservados. Ids
-      // posicionais podem repetir entre respostas — colisão com intervalo
-      // distinto ganha sufixo único em vez de apagar o trecho antigo.
-      const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
-      const taken = new Set(kept.map((span) => span.id));
-      const placed = fresh.map((span) => {
-        const id = uniqueSpanId(span.id, taken);
-        taken.add(id);
-        return id === span.id ? span : { ...span, id };
-      });
-      const merged = mergeAdjacent([...kept, ...placed]);
-      const envelope: VisualWindowCache = {
-        version: VISUAL_CACHE_VERSION,
-        sha256: source.sha256,
-        promptVersion: VISUAL_PROMPT_VERSION,
-        model: ZAI_DEFAULT_MODEL,
-        window,
-        spans: merged,
-      };
-      const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
-      await rename(tmp, file);
-      collected.push(...merged);
-    } catch (err) {
-      // Cancelamento propaga como erro: lista parcial não é sucesso.
-      throw err instanceof Error ? err : new Error(String(err));
+    const clip = await pool.encode(() => windowClip(source, window, cacheDir, exec, signal), { signal });
+    if (signal.aborted) throw new Error("descrição visual cancelada");
+    const bytes = await readFile(clip);
+    const dataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
+    const localDuration = window.end - window.fetchStart;
+    const text = await pool.request(() => client.send([
+      { type: "video_url", video_url: { url: dataUrl } },
+      {
+        type: "text",
+        text: `${VISUAL_PROMPT}\n\njanela local: 0s → ${localDuration}s `
+          + `(segundos locais deste trecho; origem 0). `
+          + `descreva o intervalo da fonte [${window.start}, ${window.end}).`,
+      },
+    ], signal), { signal });
+    if (signal.aborted) throw new Error("descrição visual cancelada");
+    if (deps?.isCurrent && !deps.isCurrent()) {
+      throw new Error("descrição visual obsoleta");
     }
+    const fresh = parseLocalSpans(text, source, window);
+    const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
+    const taken = new Set(kept.map((span) => span.id));
+    const placed = fresh.map((span) => {
+      const id = uniqueSpanId(span.id, taken);
+      taken.add(id);
+      return id === span.id ? span : { ...span, id };
+    });
+    const merged = mergeAdjacent([...kept, ...placed]);
+    const envelope: VisualWindowCache = {
+      version: VISUAL_CACHE_VERSION,
+      sha256: source.sha256,
+      promptVersion: VISUAL_PROMPT_VERSION,
+      model: ZAI_DEFAULT_MODEL,
+      window,
+      spans: merged,
+    };
+    const tmp = `${file}.${process.pid}.tmp`;
+    await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
+    await rename(tmp, file);
+    return merged;
   }
-  return mergeAdjacent(collected);
 }
