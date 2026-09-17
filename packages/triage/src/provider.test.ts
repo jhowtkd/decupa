@@ -27,6 +27,12 @@ describe("resolveProvider", () => {
     expect(() => resolveProvider(undefined, {})).toThrow(/ZAI_API_KEY/);
     expect(() => resolveProvider(undefined, {})).toThrow(/na mão/);
   });
+
+  it("TYPESAFE_API_KEY não troca os presets atuais", () => {
+    expect(Object.keys(PRESETS).sort()).toEqual(["custom", "gemini", "minimax", "zai"]);
+    expect(resolveProvider(undefined, { ZAI_API_KEY: "z", TYPESAFE_API_KEY: "t" })).toBe("zai");
+    expect(() => resolveProvider("typesafe", {})).toThrow(/zai|custom/);
+  });
 });
 
 describe("PRESETS", () => {
