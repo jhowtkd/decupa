@@ -125,9 +125,15 @@ importers:
       '@decupa/core':
         specifier: workspace:*
         version: link:../core
+      '@decupa/queue':
+        specifier: workspace:*
+        version: link:../queue
       '@decupa/trace':
         specifier: workspace:*
         version: link:../trace
+      '@decupa/typesafe':
+        specifier: workspace:*
+        version: link:../typesafe
       '@google/genai':
         specifier: ^2.21.0
         version: 2.21.0
