@@ -77,9 +77,20 @@ export function withGrantedPermissions(
  */
 const prepLocks = new Map<string, Promise<void>>();
 const prepActive = new Map<string, number>();
+const prepHeld = new Map<string, number>();
 
 export function isPreparationActive(dir: string): boolean {
-  return (prepActive.get(dir) ?? 0) > 0;
+  return (prepActive.get(dir) ?? 0) > 0 || (prepHeld.get(dir) ?? 0) > 0;
+}
+
+/** Keeps GET /project from treating an in-flight POST as an orphan restart. */
+export function holdPreparation(dir: string): () => void {
+  prepHeld.set(dir, (prepHeld.get(dir) ?? 0) + 1);
+  return () => {
+    const next = (prepHeld.get(dir) ?? 1) - 1;
+    if (next <= 0) prepHeld.delete(dir);
+    else prepHeld.set(dir, next);
+  };
 }
 
 async function withPreparationLock<T>(dir: string, fn: (contended: boolean) => Promise<T>): Promise<T> {
