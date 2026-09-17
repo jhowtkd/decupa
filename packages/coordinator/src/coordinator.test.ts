@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,15 @@ function delay(ms: number): Promise<void> {
 
 function dir(): string {
   return join(tmpdir(), `coord-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+}
+
+async function waitUntil(label: string, probe: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (await probe()) return;
+    await delay(10);
+  }
+  throw new Error(`timeout waiting for ${label}`);
 }
 
 describe("createFileCoordinator", () => {
@@ -50,7 +59,7 @@ describe("createFileCoordinator", () => {
         return { from: "stale", n: builds };
       },
     });
-    await delay(15);
+    await waitUntil("stale build started", async () => builds === 1);
     clock.t += 200;
     const second = createFileCoordinator(root, { limit: 1, leaseMs: 50, pollMs: 5, now: () => clock.t });
     const resumed = await second.run({
@@ -86,12 +95,12 @@ describe("createFileCoordinator", () => {
       stage: "encode",
       build: async () => {
         clock.t += 100;
-        await delay(30);
+        await delay(80);
         published = "stale-result";
         return { leaked: true };
       },
     });
-    await delay(10);
+    await waitUntil("stale advanced the lease clock", async () => clock.t >= 100);
     const fresh = createFileCoordinator(root, { limit: 1, leaseMs: 20, pollMs: 5, now: () => clock.t });
     const result = await fresh.run({
       id: "clip",
@@ -124,7 +133,14 @@ describe("createFileCoordinator", () => {
         return "blocker";
       },
     });
-    await delay(15);
+    await waitUntil("blocker holds the slot", async () => {
+      try {
+        const raw = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return Array.isArray(raw) && raw.length === 0;
+      } catch {
+        return false;
+      }
+    });
     const batch = coord.run({
       id: "batch",
       stage: "ingest",
@@ -134,7 +150,6 @@ describe("createFileCoordinator", () => {
         return "batch";
       },
     });
-    await delay(10);
     const interactive = coord.run({
       id: "edit",
       stage: "ingest",
@@ -144,7 +159,14 @@ describe("createFileCoordinator", () => {
         return "edit";
       },
     });
-    await delay(10);
+    await waitUntil("batch and interactive are queued", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as { priority: string }[];
+        return waiters.some((w) => w.priority === "batch") && waiters.some((w) => w.priority === "interactive");
+      } catch {
+        return false;
+      }
+    });
     release();
     expect(await Promise.all([blocker, batch, interactive])).toEqual(["blocker", "batch", "edit"]);
     expect(order).toEqual(["interactive", "batch"]);

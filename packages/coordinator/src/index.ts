@@ -1,4 +1,4 @@
-import { mkdir, readFile, rmdir, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { CancelledError, isCancelledError } from "@decupa/queue";
 import { inspectArtifact, publishAtomic } from "@decupa/cache";
@@ -50,9 +50,18 @@ type Waiter = {
 
 type Slot = { leaseId: string; until: number };
 
+type Claim =
+  | { kind: "done"; result: unknown }
+  | { kind: "slot"; index: number; leaseId: string };
+
 const DEFAULT_LIMIT = 1;
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_POLL_MS = 25;
+
+function lockBusy(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EEXIST" || code === "EPERM" || code === "EACCES" || code === "EBUSY" || code === "ENOTEMPTY";
+}
 
 export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions = {}): FileCoordinator {
   const limit = opts.limit ?? DEFAULT_LIMIT;
@@ -88,17 +97,18 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     await mkdir(dir, { recursive: true });
     for (;;) {
       try {
-        await mkdir(paths.lock);
+        const handle = await open(paths.lock, "wx");
+        await handle.close();
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (!lockBusy(error)) throw error;
         await sleep(pollMs);
       }
     }
     try {
       return await fn();
     } finally {
-      await rmdir(paths.lock).catch(() => undefined);
+      await unlink(paths.lock).catch(() => undefined);
     }
   };
 
@@ -153,8 +163,19 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     return ordered[0]?.waiterId === waiterId;
   };
 
-  const claimSlot = async (waiterId: string): Promise<{ index: number; leaseId: string } | null> => {
+  const claimWork = async (
+    waiterId: string,
+    taskId: string,
+    stage: string,
+    priority: TaskPriority,
+  ): Promise<Claim | null> => {
     return withLock(async () => {
+      const existing = await readTask(taskId);
+      if (existing?.status === "completed") {
+        const waiters = await readWaiters();
+        await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
+        return { kind: "done", result: existing.result };
+      }
       const waiters = await readWaiters();
       if (!isHead(waiters, waiterId)) return null;
       const t = now();
@@ -164,7 +185,15 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         const leaseId = crypto.randomUUID();
         await writeSlot(i, { leaseId, until: t + leaseMs });
         await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
-        return { index: i, leaseId };
+        await writeTask({
+          id: taskId,
+          stage,
+          status: "running",
+          priority,
+          leaseId,
+          leaseUntil: t + leaseMs,
+        });
+        return { kind: "slot", index: i, leaseId };
       }
       return null;
     });
@@ -200,24 +229,16 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
             await dequeue(waiterId);
             return existing.result as T;
           }
-          slot = await claimSlot(waiterId);
-          if (slot) break;
+          const claimed = await claimWork(waiterId, runOpts.id, runOpts.stage, priority);
+          if (claimed?.kind === "done") return claimed.result as T;
+          if (claimed?.kind === "slot") {
+            slot = { index: claimed.index, leaseId: claimed.leaseId };
+            break;
+          }
           await sleep(pollMs, runOpts.signal);
         }
 
-        const stillDone = await readTask(runOpts.id);
-        if (stillDone?.status === "completed") return stillDone.result as T;
-
         const leaseId = slot.leaseId;
-        const record: TaskRecord = {
-          id: runOpts.id,
-          stage: runOpts.stage,
-          status: "running",
-          priority,
-          leaseId,
-          leaseUntil: now() + leaseMs,
-        };
-        await writeTask(record);
 
         if (liveClock) {
           beat = setInterval(() => {
@@ -238,14 +259,16 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
           throw error;
         }
 
-        const current = await readTask(runOpts.id);
-        if (current?.leaseId !== leaseId) throw new AbandonedError();
-        await writeTask({
-          ...current,
-          status: "completed",
-          leaseId: null,
-          leaseUntil: 0,
-          result: value,
+        await withLock(async () => {
+          const current = await readTask(runOpts.id);
+          if (current?.leaseId !== leaseId) throw new AbandonedError();
+          await writeTask({
+            ...current,
+            status: "completed",
+            leaseId: null,
+            leaseUntil: 0,
+            result: value,
+          });
         });
         return value;
       } finally {
