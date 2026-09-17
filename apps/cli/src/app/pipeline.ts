@@ -20,6 +20,7 @@ export interface ExecCall {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  signal?: AbortSignal;
   /** Chamada a cada linha de stdout/stderr, enquanto o processo roda. É o
    *  único sinal de vida que WhisperX e ffmpeg dão de uma etapa de minutos. */
   onLine?: (line: string) => void;
@@ -54,6 +55,11 @@ export class SpawnExecutor implements Executor {
         detached: process.platform !== "win32",
       });
       this.running.add(child);
+      const onAbort = (): void => {
+        if (child.pid) terminateTree(child.pid);
+      };
+      if (call.signal?.aborted) onAbort();
+      else call.signal?.addEventListener("abort", onAbort, { once: true });
       let stdout = "";
       let stderr = "";
       let settled = false;
@@ -61,6 +67,7 @@ export class SpawnExecutor implements Executor {
         if (settled) return;
         settled = true;
         this.running.delete(child);
+        call.signal?.removeEventListener("abort", onAbort);
         resolvePromise(result);
       };
       // Buffer por stream: uma linha pode chegar partida em dois chunks, e
