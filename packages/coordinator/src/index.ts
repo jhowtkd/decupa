@@ -247,7 +247,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
               if (current?.leaseId !== leaseId) return;
               await writeTask({ ...current, leaseUntil: now() + leaseMs });
               await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
-            });
+            }).catch(() => undefined);
           }, Math.max(10, Math.floor(leaseMs / 3)));
         }
 
