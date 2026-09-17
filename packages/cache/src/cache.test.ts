@@ -29,6 +29,20 @@ describe("publishAtomic / inspectArtifact", () => {
     expect(ready.status).toBe("ready");
     expect(ready.value).toEqual({ ok: true });
   });
+
+  it("substitui o destino mesmo com leitores concorrentes", async () => {
+    const dir = join(tmpdir(), `cache-replace-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const path = join(dir, "waiters.json");
+    await publishAtomic(path, `${JSON.stringify({ n: 0 })}\n`);
+    await Promise.all(Array.from({ length: 40 }, async (_, i) => {
+      if (i % 2 === 0) {
+        await publishAtomic(path, `${JSON.stringify({ n: i })}\n`);
+      } else {
+        await inspectArtifact(path);
+      }
+    }));
+    expect((await inspectArtifact(path)).status).toBe("ready");
+  });
 });
 
 describe("createArtifactCache", () => {
