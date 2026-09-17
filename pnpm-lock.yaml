@@ -29,6 +29,9 @@ importers:
       '@decupa/cache':
         specifier: workspace:*
         version: link:../../packages/cache
+      '@decupa/coordinator':
+        specifier: workspace:*
+        version: link:../../packages/coordinator
       '@decupa/core':
         specifier: workspace:*
         version: link:../../packages/core

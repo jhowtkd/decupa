@@ -328,3 +328,83 @@ it("falha registrada não é reaproveitada como ready", async () => {
   expect(recovered.status).toBe("ready");
   expect(recovered.speech).toHaveLength(1);
 });
+
+it("segundo projeto autorizado reusa ASR da mesma mídia", async () => {
+  const store = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  const projA = await mkdtemp(join(tmpdir(), "assembly-a-"));
+  const projB = await mkdtemp(join(tmpdir(), "assembly-b-"));
+  const aPath = join(projA, "fala.mp4");
+  const bPath = join(projB, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), aPath);
+  await copyFile(join(FIXTURES, "clip.mp4"), bPath);
+  const a = await sourceFrom(aPath, "a", "speech");
+  const b = await sourceFrom(bPath, "b", "speech");
+  expect(a.sha256).toBe(b.sha256);
+  await analyzeSource(a, projA, indexingExec(), { storeDir: store });
+  const spy = new FakeExecutor({ code: 1, stderr: "não deveria transcrever" });
+  const reused = await analyzeSource(b, projB, spy, { storeDir: store });
+  expect(spy.calls).toHaveLength(0);
+  expect(reused.status).toBe("ready");
+  expect(reused.speech[0]?.id).toBe("b:u001");
+});
+
+it("fonte trocada refaz uma ASR e edição só de metadado não chama", async () => {
+  const store = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  const dir = await mkdtemp(join(tmpdir(), "assembly-meta-"));
+  const speechPath = join(dir, "fala.mp4");
+  const otherPath = join(dir, "outra.wav");
+  await copyFile(join(FIXTURES, "clip.mp4"), speechPath);
+  await copyFile(join(FIXTURES, "edited.wav"), otherPath);
+  const speech = await sourceFrom(speechPath, "a", "speech");
+  await analyzeSource(speech, dir, indexingExec(), { storeDir: store });
+  const metaSpy = new FakeExecutor({ code: 1, stderr: "metadado" });
+  await analyzeSource({ ...speech, id: "renamed", role: "support" }, dir, metaSpy, { storeDir: store });
+  expect(metaSpy.calls).toHaveLength(0);
+  const other = await sourceFrom(otherPath, "c", "speech");
+  let indexes = 0;
+  const counting: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("index")) indexes += 1;
+      return indexingExec().run(call);
+    },
+  };
+  await analyzeSource(other, dir, counting, { storeDir: store });
+  expect(indexes).toBe(1);
+});
+
+it("perfis 1 fps e 4 fps não compartilham cache", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-fps-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  expect(analysisKey(source.sha256, "visual-1fps")).not.toBe(analysisKey(source.sha256, "visual-4fps"));
+  expect(analysisKey(source.sha256, "asr")).toBe(analysisKey(source.sha256));
+});
+
+it("TTL expira artefato ocioso e preserva referência em uso", async () => {
+  const store = await mkdtemp(join(tmpdir(), "assembly-ttl-"));
+  const dir = await mkdtemp(join(tmpdir(), "assembly-ttl-proj-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  const clock = { t: 1_000 };
+  const opts = { storeDir: store, now: () => clock.t, ttlMs: 50 };
+  await analyzeSource(source, dir, indexingExec(), opts);
+  const { pruneAnalysisStore, unpinAnalysis } = await import("./analysis.ts");
+  clock.t += 100;
+  await pruneAnalysisStore(store, opts);
+  const spy = new FakeExecutor();
+  await analyzeSource(source, dir, spy, opts);
+  expect(spy.calls).toHaveLength(0);
+  await unpinAnalysis(store, dir, source);
+  await pruneAnalysisStore(store, opts);
+  let indexes = 0;
+  const counting: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("index")) indexes += 1;
+      return indexingExec().run(call);
+    },
+  };
+  await analyzeSource(source, dir, counting, opts);
+  expect(indexes).toBe(1);
+});
