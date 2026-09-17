@@ -133,10 +133,10 @@ export function createLimitedQueue(limit: number): LimitedQueue {
         const key = opts.key;
         let pending = shared.get(key) as Promise<T> | undefined;
         if (!pending) {
-          pending = runUnkeyed();
-          shared.set(key, pending.finally(() => {
+          pending = runUnkeyed().finally(() => {
             shared.delete(key);
-          }));
+          });
+          shared.set(key, pending);
         }
         return follow(pending, opts.signal);
       }
