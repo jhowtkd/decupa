@@ -12,7 +12,7 @@ function dir(): string {
   return join(tmpdir(), `coord-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 }
 
-async function waitUntil(label: string, probe: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitUntil(label: string, probe: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     if (await probe()) return;

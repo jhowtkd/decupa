@@ -11,7 +11,7 @@ import { originAllowed } from "../../http/origin.ts";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
-import { isPreparationActive, runPreparation } from "./preparation.ts";
+import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
 import { describeSource } from "./model.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
@@ -902,13 +902,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         // Um novo início cancela o anterior (mesma semântica de analyze e
         // propose): o percurso abortado registra cancelled sem escrever mais.
         const { gen, signal } = begin("preparing");
+        const releaseHold = holdPreparation(dir);
         void runPreparation(
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
           { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient },
           { signal, isCurrent: () => stillCurrent(gen) },
-        ).then(
+        ).finally(releaseHold).then(
           () => {
             if (stillCurrent(gen)) operation = { stage: "ready" };
           },
