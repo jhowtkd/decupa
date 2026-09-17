@@ -132,6 +132,8 @@ export type Preparation = {
   stage: "media" | "audio" | "visual" | "proposal" | "preview";
   sources: Record<string, { media: StageState; audio: StageState; visual: StageState; error?: string }>;
   error?: string;
+  /** Estado visível pontual, ex. áudio pronto enquanto a imagem ainda analisa. */
+  note?: string;
 };
 
 export type VisualCoverage = {

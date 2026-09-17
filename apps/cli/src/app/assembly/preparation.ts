@@ -37,6 +37,7 @@ export type PreparationControl = {
   isCurrent: () => boolean;
 };
 
+const IMAGE_PENDING_NOTE = "áudio pronto, imagem em análise";
 const TERMINAL = new Set(["ready", "attention", "interrupted", "cancelled"]);
 
 class CancelledExit extends Error {
@@ -296,6 +297,7 @@ export async function runPreparation(
       };
 
       if (req.mode !== "preview") {
+        const imageJobs: Promise<void>[] = [];
         for (const source of targets) {
           checkAlive();
           try {
@@ -308,19 +310,22 @@ export async function runPreparation(
             });
           }
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
-          // Peaks de waveform (Task 8): após o proxy existir, best-effort —
-          // nunca marca erro na fonte nem entra no caminho crítico.
-          try {
-            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
-            await buildPeaks(deps.exec, {
-              proxyPath: videoPath,
-              sha256: source.sha256,
-              outPath: peaksPath(dir, source.sha256),
-              durationSeconds: source.durationSeconds,
-            });
-          } catch {
-            // Sem waveform a faixa segue só com os blocos.
-          }
+          // Waveform e miniatura não bloqueiam o áudio: a identidade já
+          // autorizou a transcrição. Promessa sempre observada.
+          const image = Promise.resolve().then(async () => {
+            try {
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+              await buildPeaks(deps.exec, {
+                proxyPath: videoPath,
+                sha256: source.sha256,
+                outPath: peaksPath(dir, source.sha256),
+                durationSeconds: source.durationSeconds,
+              });
+            } catch {
+              // Sem waveform a faixa segue só com os blocos.
+            }
+          });
+          imageJobs.push(image);
         }
 
         await atStage("audio");
@@ -348,6 +353,27 @@ export async function runPreparation(
             });
           }
         }
+
+        const imagesDone = Promise.all(imageJobs);
+        let imageFinished = false;
+        void imagesDone.then(() => {
+          imageFinished = true;
+        });
+        if (!imageFinished) {
+          await save((p) => ({
+            ...p,
+            preparation: p.preparation
+              ? { ...p.preparation, note: IMAGE_PENDING_NOTE }
+              : p.preparation,
+          }));
+        }
+        await imagesDone;
+        await save((p) => ({
+          ...p,
+          preparation: p.preparation
+            ? { ...p.preparation, note: undefined }
+            : p.preparation,
+        }));
 
         await atStage("visual");
         for (const source of targets) {
