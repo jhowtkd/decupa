@@ -709,14 +709,19 @@ export async function saveProject(
       const rawText = await readFile(projectPath(dir), "utf8");
       const raw = JSON.parse(rawText) as { version?: unknown };
       const current = validateProject(raw);
-      if (current.revision !== expectedRevision) {
-        throw new Error(
-          `revisão desatualizada: base ${expectedRevision}, atual ${current.revision}`,
-        );
+      let next: Project;
+      if (typeof nextOrFn === "function") {
+        // Functional updates run inside the single writer: apply to the latest
+        // bytes instead of 409'ing on a stale expectedRevision captured outside.
+        next = validateProject(nextOrFn(current));
+      } else {
+        if (current.revision !== expectedRevision) {
+          throw new Error(
+            `revisão desatualizada: base ${expectedRevision}, atual ${current.revision}`,
+          );
+        }
+        next = validateProject(mergeProjectCommit(current, validateProject(nextOrFn), base));
       }
-      const next = typeof nextOrFn === "function"
-        ? validateProject(nextOrFn(current))
-        : validateProject(mergeProjectCommit(current, validateProject(nextOrFn), base));
       if (raw.version === 1) {
         // Primeira gravação v2: preserva o v1 exato uma única vez.
         try {

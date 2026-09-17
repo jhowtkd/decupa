@@ -146,6 +146,19 @@ it("primeira gravação v2 preserva backup exclusivo do v1", async () => {
   expect((await loadProject(dir)).revision).toBe(3);
 });
 
+it("gravação funcional aplica no estado mais recente sem 409 de revisão", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  await saveProject(dir, 1, projectAt(2));
+  await saveProject(dir, 1, (current) => ({
+    ...current,
+    input: { ...current.input, text: "atualizado após rebase" },
+  }));
+  const loaded = await loadProject(dir);
+  expect(loaded.revision).toBe(2);
+  expect(loaded.input.text).toBe("atualizado após rebase");
+});
+
 it("erro de escrita não corrompe o estado", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
   await createProject(dir, projectAt(1));
