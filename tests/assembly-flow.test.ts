@@ -243,12 +243,14 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
       project: {
         revision: number;
         scenes: unknown[];
-        preparation: { status: string } | null;
+        preparation: { status: string; error?: string } | null;
         previewArtifact: { revision: number } | null;
         finalApprovedRevision: number | null;
       };
     };
-    expect(body.project.preparation?.status).toBe("ready");
+    expect(body.project.preparation, JSON.stringify(body.project.preparation)).toMatchObject({
+      status: "ready",
+    });
     expect(body.project.scenes).toHaveLength(1);
     expect(body.project.previewArtifact?.revision).toBe(body.project.revision);
     expect(body.project.finalApprovedRevision).toBeNull();
