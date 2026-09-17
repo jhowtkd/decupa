@@ -57,6 +57,11 @@ describe("parseSpeechIndex", () => {
     expect(() => parseSpeechIndex({ topic_runs: [] })).toThrow(/units/);
   });
 
+  it("aceita índice explicitamente vazio para fonte sem fala", () => {
+    expect(parseSpeechIndex({ units: [], topic_runs: [], budget: {}, source_duration: 3 }).units)
+      .toEqual([]);
+  });
+
   it("recusa start que não é número, nomeando o campo", () => {
     const clone = JSON.parse(JSON.stringify(raw)); // clone do fixture: JSON.parse/JSON.stringify
     clone.units[0].start = "abc";

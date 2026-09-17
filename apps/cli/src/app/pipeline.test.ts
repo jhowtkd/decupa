@@ -83,6 +83,17 @@ describe("runIngest", () => {
     expect(exec.calls.some((c) => c.args.includes("visual_index.py"))).toBe(true);
   });
 
+  it("aceita transcript sem segmentos e grava índice vazio sem chamar o motor", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-"));
+    await writeFile(join(dir, "transcript.json"), JSON.stringify({ segments: [] }), "utf8");
+    const exec = new FakeExecutor();
+    const stages: string[] = [];
+    await runIngest({ id: "j1", videoPath: "/vid/apoio.mp4", workDir: dir }, exec, (s) => stages.push(s));
+    expect(stages).toEqual(["indexing", "visual"]);
+    expect(exec.calls).toHaveLength(0);
+    expect(JSON.parse(await readFile(join(dir, "out", "speech_index.json"), "utf8"))).toMatchObject({ units: [] });
+  });
+
   it("tenta o sidecar de visão com cwd em services/vision", async () => {
     const exec = new FakeExecutor();
     await runIngest(job, exec, () => {});

@@ -163,6 +163,26 @@ export const indexPath = (job: PipelineJob) => join(job.workDir, "out", "speech_
 export const visualIndexPath = (job: PipelineJob) => join(job.workDir, "out", "visual_index.json");
 export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-proxy.mp4");
 
+async function transcriptHasNoSegments(job: PipelineJob): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await readFile(transcriptPath(job), "utf8")) as { segments?: unknown };
+    return Array.isArray(raw.segments) && raw.segments.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function writeEmptySpeechIndex(job: PipelineJob): Promise<void> {
+  await mkdir(join(job.workDir, "out"), { recursive: true });
+  await writeFile(indexPath(job), `${JSON.stringify({
+    units: [],
+    topic_runs: [],
+    trim_candidates: [],
+    budget: { lossless_floor_seconds: 0 },
+    source_duration: 0,
+  })}\n`, "utf8");
+}
+
 /**
  * apps/cli/src/app -> raiz do repo. O motor, o wrapper e os sidecars são
  * invocados por caminho absoluto porque o cwd do processo não é nosso: o SKILL
@@ -206,6 +226,13 @@ export async function runIngest(
   }
 
   onStage("indexing");
+  if (await transcriptHasNoSegments(job)) {
+    // Fonte de apoio sem fala é válida: o índice vazio permite que a montagem
+    // continue usando apenas os trechos de fala de outras fontes.
+    await writeEmptySpeechIndex(job);
+    onStage("visual");
+    return {};
+  }
   await must(exec, {
     command: "python3",
     args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],

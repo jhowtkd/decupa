@@ -61,7 +61,7 @@ function num(value: unknown, field: string): number {
 export function parseSpeechIndex(raw: unknown): SpeechIndex {
   const root = raw as Record<string, unknown>;
   const rawUnits = root?.units;
-  if (!Array.isArray(rawUnits) || rawUnits.length === 0) {
+  if (!Array.isArray(rawUnits)) {
     throw new Error("speech_index.json sem `units` — rode `condense.py index` antes da triagem");
   }
   const units: IndexUnit[] = rawUnits

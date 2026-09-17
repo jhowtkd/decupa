@@ -121,6 +121,31 @@ it("vídeo sem áudio não transcreve", async () => {
   expect(result.status).toBe("ready");
 });
 
+it("fonte com áudio mas sem fala vira análise pronta e vazia", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
+  const path = join(dir, "apoio.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "b", "support");
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      const work = call.env?.CLAUDE_PROJECT_DIR;
+      if (work && call.args.includes("index")) {
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), JSON.stringify({
+          units: [], topic_runs: [], budget: {}, source_duration: source.durationSeconds,
+        }));
+        await writeFile(join(work, "transcript.json"), JSON.stringify({ segments: [] }));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+
+  const result = await analyzeSource(source, dir, exec);
+  expect(result.status).toBe("ready");
+  expect(result.speech).toEqual([]);
+  expect(result.words).toEqual([]);
+});
+
 it("preserva palavras e confiança do transcript sem inventar tempos", () => {
   const source = fixtureAssembly().sources[0]!;
   const raw = { segments: [{ words: [
