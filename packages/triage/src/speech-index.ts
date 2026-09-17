@@ -22,6 +22,8 @@ export interface IndexUnit {
   wordCount: number;
   cps: number;
   leadGap: number;
+  /** Locutor já rotulado no índice, quando o motor fornece. */
+  speaker: string | null;
   disfluency: { hard: unknown[]; soft: unknown[]; stutter: unknown[] };
 }
 
@@ -81,6 +83,7 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
       wordCount: num(u.word_count ?? 0, "word_count"),
       cps: num(u.cps ?? 0, "cps"),
       leadGap: num(u.lead_gap ?? 0, "lead_gap"),
+      speaker: u.speaker == null || u.speaker === "" ? null : String(u.speaker),
       disfluency: parseDisfluency(u.disfluency),
     }))
     .sort((a, b) => a.index - b.index);
