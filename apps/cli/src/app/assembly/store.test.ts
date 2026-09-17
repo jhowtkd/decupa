@@ -155,28 +155,25 @@ it("erro de escrita não corrompe o estado", async () => {
   expect((await loadProject(dir)).revision).toBe(1);
 });
 
-it("escritor único serializa gravações concorrentes sem corromper o JSON", async () => {
+it("escritor único serializa gravações funcionais concorrentes sem corromper o JSON", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
   await createProject(dir, projectAt(1));
   const results = await Promise.allSettled([
     saveProject(dir, 1, (current) => ({
       ...current,
-      revision: 2,
-      input: { ...current.input, text: "um" },
+      revision: current.revision + 1,
+      input: { ...current.input, text: `${current.input.text}|a` },
     })),
     saveProject(dir, 1, (current) => ({
       ...current,
-      revision: 2,
-      input: { ...current.input, text: "dois" },
+      revision: current.revision + 1,
+      input: { ...current.input, text: `${current.input.text}|b` },
     })),
   ]);
-  expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-  expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
-  const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-  expect(String(rejected.reason)).toMatch(/revisão/);
+  expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
   const loaded = await loadProject(dir);
-  expect(loaded.revision).toBe(2);
-  expect(["um", "dois"]).toContain(loaded.input.text);
+  expect(loaded.revision).toBe(3);
+  expect(loaded.input.text).toMatch(/\|a\|b$|\|b\|a$/);
   JSON.parse(await readFile(join(dir, "project.json"), "utf8"));
 });
 
