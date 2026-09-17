@@ -43,6 +43,26 @@ export { mechanicalClaims, mechanicalKeepList } from "./mechanical.ts";
 export { buildEditCatalog, groupIndependentQuestions } from "./catalog.ts";
 export type { CandidateKind, CatalogOptions, EditCandidate, EditCatalog, QuestionBatch, QuestionGroup } from "./catalog.ts";
 export {
+  CRITICAL_CORPUS,
+  DECISION_CATEGORIES,
+  defaultCalibrationConfig,
+  evaluateCase,
+  humanLabelFromModels,
+  proposalFromNoul,
+  reportCalibration,
+} from "./calibration.ts";
+export type {
+  CalibrationCase,
+  CalibrationConfig,
+  CalibrationReport,
+  CaseEvaluation,
+  DecisionCategory,
+  HumanLabel,
+  MachineProposal,
+  OutcomeKind,
+  Split,
+} from "./calibration.ts";
+export {
   HAND_ON_FACE_AMBIGUOUS,
   HAND_ON_FACE_BAD,
   LOOKS_AWAY_AMBIGUOUS,
