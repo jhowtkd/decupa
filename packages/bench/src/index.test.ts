@@ -47,7 +47,9 @@ describe("runBatchBenchmark", () => {
       work: async (file) => {
         concurrent += 1;
         max = Math.max(max, concurrent);
-        await delay(8);
+        // Coordinator claims are file-lock + atomic publish. On Windows that
+        // is slower than 8ms, so a tiny job never overlaps a second slot.
+        await delay(100);
         concurrent -= 1;
         if (file.endsWith("19.wav")) throw new Error("falhou clip-19");
       },
