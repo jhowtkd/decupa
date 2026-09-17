@@ -12,6 +12,7 @@
     "@decupa/media": "workspace:*",
     "@decupa/metrics": "workspace:*",
     "@decupa/queue": "workspace:*",
+    "@decupa/trace": "workspace:*",
     "@decupa/transcript": "workspace:*",
     "@decupa/triage": "workspace:*"
   }
