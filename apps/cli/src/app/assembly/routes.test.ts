@@ -597,6 +597,61 @@ it("publishCorrection faz rebase e publica quando a revisão avançou por ediç�
   expect(corr?.words[0]?.text).toBe("certa");
 });
 
+it("GET /project não trata prepare em voo como reinício do servidor", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-inflight-prep-"));
+  const speech = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  let release!: (value: string) => void;
+  const blocked = new Promise<string>((resolve) => {
+    release = resolve;
+  });
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech],
+    port: 0,
+    executor: indexingExec(),
+    proposeSend: () => blocked,
+    describeClient: {
+      async send() {
+        return JSON.stringify({
+          spans: [{ start: 0, end: 1, text: "pessoa falando", confidence: "observed", tags: [] }],
+        });
+      },
+    },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+  const opened = await (await fetch(`${base}/project`)).json() as { project: { revision: number } };
+  const started = await fetch(`${base}/project/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      request: "montar tudo",
+      modelOptIn: true,
+      visualOptIn: true,
+    }),
+  });
+  expect(started.status).toBe(202);
+  let sawRunning = false;
+  for (let i = 0; i < 25; i += 1) {
+    const poll = (await (await fetch(`${base}/project`)).json()) as {
+      project: { preparation: { status: string; error?: string } | null };
+    };
+    if (poll.project.preparation) {
+      expect(poll.project.preparation.error ?? "").not.toContain("servidor reiniciado");
+      if (poll.project.preparation.status === "running") sawRunning = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  expect(sawRunning).toBe(true);
+  release(JSON.stringify({
+    scenes: [{ id: "sc-1", objective: "Abertura", selections: [{ speechId: "x" }] }],
+    changedSceneIds: ["sc-1"],
+    explanation: "ok",
+  }));
+});
+
 it("GET /project reconcilia status running órfão para interrupted após reinício do servidor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "decupa-orphan-run-"));
   const p = blankProject("p1");
