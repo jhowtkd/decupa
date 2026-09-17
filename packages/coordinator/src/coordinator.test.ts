@@ -21,6 +21,19 @@ async function waitUntil(label: string, probe: () => Promise<boolean>, timeoutMs
   throw new Error(`timeout waiting for ${label}`);
 }
 
+/** Attach the rejection handler immediately so Windows cannot surface unhandled AbandonedError. */
+function watchAbandoned(run: Promise<unknown>): Promise<unknown> {
+  return run.then(
+    () => {
+      throw new Error("execução velha deveria ter sido abandonada");
+    },
+    (error: unknown) => {
+      expect(error).toBeInstanceOf(AbandonedError);
+      return error;
+    },
+  );
+}
+
 describe("createFileCoordinator", () => {
   it("dois clientes isolados disputam o mesmo limite", async () => {
     const root = dir();
@@ -50,7 +63,7 @@ describe("createFileCoordinator", () => {
     const clock = { t: 1_000 };
     const first = createFileCoordinator(root, { limit: 1, leaseMs: 50, pollMs: 5, now: () => clock.t });
     let builds = 0;
-    const stale = first.run({
+    const stale = watchAbandoned(first.run({
       id: "asr",
       stage: "transcribe",
       build: async () => {
@@ -58,7 +71,7 @@ describe("createFileCoordinator", () => {
         await delay(80);
         return { from: "stale", n: builds };
       },
-    });
+    }));
     await waitUntil("stale build started", async () => builds === 1);
     clock.t += 200;
     const second = createFileCoordinator(root, { limit: 1, leaseMs: 50, pollMs: 5, now: () => clock.t });
@@ -71,7 +84,7 @@ describe("createFileCoordinator", () => {
       },
     });
     expect(resumed).toEqual({ from: "resume", n: 2 });
-    await expect(stale).rejects.toBeInstanceOf(AbandonedError);
+    await stale;
     const replay = await second.run({
       id: "asr",
       stage: "transcribe",
@@ -90,7 +103,7 @@ describe("createFileCoordinator", () => {
     const clock = { t: 1 };
     const stale = createFileCoordinator(root, { limit: 1, leaseMs: 20, pollMs: 5, now: () => clock.t });
     let published = "";
-    const abandoned = stale.run({
+    const abandoned = watchAbandoned(stale.run({
       id: "clip",
       stage: "encode",
       build: async () => {
@@ -99,7 +112,7 @@ describe("createFileCoordinator", () => {
         published = "stale-result";
         return { leaked: true };
       },
-    });
+    }));
     await waitUntil("stale advanced the lease clock", async () => clock.t >= 100);
     const fresh = createFileCoordinator(root, { limit: 1, leaseMs: 20, pollMs: 5, now: () => clock.t });
     const result = await fresh.run({
@@ -108,7 +121,7 @@ describe("createFileCoordinator", () => {
       build: async () => ({ leaked: false }),
     });
     expect(result).toEqual({ leaked: false });
-    await expect(abandoned).rejects.toBeInstanceOf(AbandonedError);
+    await abandoned;
     expect(published).toBe("stale-result");
     const replay = await createFileCoordinator(root).run({
       id: "clip",
