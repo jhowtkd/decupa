@@ -279,6 +279,15 @@ export async function runPreparation(
         }
         current = await loadProject(dir);
         if (current.preparation?.id !== id) throw new ObsoleteExit();
+        const missing = targets.filter((source) =>
+          !current.assembly.sources.some((item) => item.id === source.id));
+        if (missing.length > 0) {
+          await markTerminal(
+            "interrupted",
+            `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
+          );
+          throw new InterruptedExit();
+        }
       };
       const atStage = async (stage: Preparation["stage"]): Promise<void> => {
         await save((p) => ({
