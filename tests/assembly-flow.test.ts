@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -429,6 +429,10 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
   const sourceId = opened.project.assembly.sources[0]!.id;
   speechId = `${sourceId}:u001`;
 
+  // startApp/ingest may already have cached ASR. Drop it so prepare hits the
+  // audio gate; otherwise M3 (audio overlapped with waveform) races to propose.
+  await rm(join(dir, "analysis"), { recursive: true, force: true });
+
   audioGate = new Promise<void>((resolve) => {
     releaseAudio = resolve;
   });
@@ -446,9 +450,10 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
   // A edição passa na frente com o áudio ainda preso no gate.
   await vi.waitFor(async () => {
     const body = await (await fetch(`${base}/project`)).json() as {
-      project: { preparation: { status: string } | null };
+      project: { preparation: { status: string; stage?: string } | null };
     };
     expect(body.project.preparation?.status).toBe("running");
+    expect(body.project.preparation?.stage).toBe("audio");
   });
   const edited = await fetch(`${base}/project/edit`, {
     method: "POST",
