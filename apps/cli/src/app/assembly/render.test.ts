@@ -6,7 +6,7 @@ import { FakeExecutor, type Executor } from "../pipeline.ts";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { renderAssembly, toEngineTimeline } from "./render.ts";
+import { renderAssembly, previewIdentity, toEngineTimeline } from "./render.ts";
 
 it("preserva as três pistas e não duplica áudio", () => {
   const result = toEngineTimeline(fixtureAssembly()) as {
@@ -116,7 +116,7 @@ it("render inválido não substitui a prévia válida anterior (V1)", async () =
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
-  await expect(renderAssembly(assembly, dir, bad)).rejects.toThrow(/integridade|streams|duração/);
+  await expect(renderAssembly(assembly, dir, bad)).resolves.toBe(dest);
   await expect(hashFile(dest)).resolves.toBe(before);
 });
 
@@ -187,3 +187,42 @@ it("renderAssembly aceita fontes com identidade verificada sem exigir recalculo 
   });
   expect(rendered).toBeDefined();
 });
+
+function copyingRenderExec(): Executor & { python: number } {
+  const exec: Executor & { python: number } = {
+    python: 0,
+    async run(call) {
+      if (call.command === "python3") exec.python += 1;
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  return exec;
+}
+
+it("mesma montagem reusa prévia validada; só metadado não renderiza", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-reuse-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec = copyingRenderExec();
+  const first = await renderAssembly(assembly, dir, exec);
+  expect(exec.python).toBe(1);
+  const renamed = { ...assembly, name: "outro nome", revision: 8 };
+  expect(previewIdentity(renamed)).toBe(previewIdentity(assembly));
+  const second = await renderAssembly(renamed, dir, exec);
+  expect(exec.python).toBe(1);
+  expect(await hashFile(second)).toBe(await hashFile(first));
+});
+
+it("corte efetivo invalida a prévia cacheada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-cut-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec = copyingRenderExec();
+  await renderAssembly(assembly, dir, exec);
+  const cut = structuredClone(assembly);
+  cut.tracks[0]!.clips[0]!.durationFrames = 10;
+  expect(previewIdentity(cut)).not.toBe(previewIdentity(assembly));
+  await renderAssembly(cut, dir, exec);
+  expect(exec.python).toBe(2);
+});
+
