@@ -6,6 +6,7 @@
   "bin": { "decupa": "./src/index.ts" },
   "dependencies": {
     "@decupa/acoustics": "workspace:*",
+    "@decupa/cache": "workspace:*",
     "@decupa/core": "workspace:*",
     "@decupa/goldedit": "workspace:*",
     "@decupa/media": "workspace:*",

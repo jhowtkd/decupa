@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { inspectArtifact, publishAtomic } from "@decupa/cache";
+import { CancelledError, createLimitedQueue, isCancelledError } from "@decupa/queue";
 import { PROMPT_VERSION, ZAI_DEFAULT_MODEL, parseSpeechIndex } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
 import { runIngest, transcriptPath } from "../pipeline.ts";
@@ -28,28 +30,27 @@ function resultPath(projectDir: string, sourceSha: string): string {
 }
 
 const EMPTY_COVERAGE = { requested: [], returned: [], missing: [] } as Analysis["visualCoverage"];
+const analysisBuilds = createLimitedQueue(4);
 
 async function readCached(projectDir: string, source: Source): Promise<Analysis | null> {
-  try {
-    const raw = JSON.parse(await readFile(resultPath(projectDir, source.sha256), "utf8")) as Analysis;
-    if (raw.key !== analysisKey(source.sha256) || raw.status !== "ready") return null;
-    const normalized: Analysis = {
-      ...raw,
-      words: Array.isArray(raw.words) ? raw.words : [],
-      wordsStatus: raw.wordsStatus === "ready" ? "ready" : "missing",
-      visualCoverage: raw.visualCoverage ?? { ...EMPTY_COVERAGE },
-    };
-    const adapted = adaptAnalysis(normalized, source);
-    // Cache antigo (sem palavras) alimenta do transcript válido sem nova ASR.
-    // Somente leitura: o arquivo de cache não é reescrito aqui.
-    if (adapted.wordsStatus === "missing") {
-      const derived = await wordsFromCache(join(analysisCacheDir(projectDir, source.sha256), "work"), source);
-      if (derived) return { ...adapted, words: derived, wordsStatus: "ready" };
-    }
-    return adapted;
-  } catch {
-    return null;
+  const inspection = await inspectArtifact(resultPath(projectDir, source.sha256));
+  if (inspection.status !== "ready") return null;
+  const raw = inspection.value as Analysis;
+  if (!raw || raw.key !== analysisKey(source.sha256) || raw.status !== "ready") return null;
+  const normalized: Analysis = {
+    ...raw,
+    words: Array.isArray(raw.words) ? raw.words : [],
+    wordsStatus: raw.wordsStatus === "ready" ? "ready" : "missing",
+    visualCoverage: raw.visualCoverage ?? { ...EMPTY_COVERAGE },
+  };
+  const adapted = adaptAnalysis(normalized, source);
+  // Cache antigo (sem palavras) alimenta do transcript válido sem nova ASR.
+  // Somente leitura: o arquivo de cache não é reescrito aqui.
+  if (adapted.wordsStatus === "missing") {
+    const derived = await wordsFromCache(join(analysisCacheDir(projectDir, source.sha256), "work"), source);
+    if (derived) return { ...adapted, words: derived, wordsStatus: "ready" };
   }
+  return adapted;
 }
 
 function adaptAnalysis(analysis: Analysis, source: Source): Analysis {
@@ -151,7 +152,7 @@ async function wordsFromCache(workDir: string, source: Source): Promise<Word[] |
 async function saveAnalysis(projectDir: string, sourceSha: string, analysis: Analysis): Promise<void> {
   const dir = analysisCacheDir(projectDir, sourceSha);
   await mkdir(dir, { recursive: true });
-  await writeFile(resultPath(projectDir, sourceSha), `${JSON.stringify(analysis, null, 2)}\n`, "utf8");
+  await publishAtomic(resultPath(projectDir, sourceSha), `${JSON.stringify(analysis, null, 2)}\n`);
 }
 
 function spansFromIndex(source: Source, raw: unknown): Span[] {
@@ -165,14 +166,16 @@ function spansFromIndex(source: Source, raw: unknown): Span[] {
   }));
 }
 
-export async function analyzeSource(
+async function buildAnalysis(
   source: Source,
   dir: string,
   exec: Executor,
+  opts?: { signal?: AbortSignal },
 ): Promise<Analysis> {
   const key = analysisKey(source.sha256);
   const cached = await readCached(dir, source);
   if (cached) return cached;
+  if (opts?.signal?.aborted) throw new CancelledError();
 
   const exists = await access(source.path).then(() => true, () => false);
   if (!exists) {
@@ -202,7 +205,9 @@ export async function analyzeSource(
       exec,
       () => undefined,
     );
+    if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {
+    if (isCancelledError(err) || opts?.signal?.aborted) throw new CancelledError();
     const analysis: Analysis = {
       sourceId: source.id,
       key,
@@ -231,9 +236,11 @@ export async function analyzeSource(
       wordsStatus: words ? "ready" : "missing",
       visualCoverage: { ...EMPTY_COVERAGE },
     };
+    if (opts?.signal?.aborted) throw new CancelledError();
     await saveAnalysis(dir, source.sha256, analysis);
     return analysis;
   } catch (err) {
+    if (isCancelledError(err) || opts?.signal?.aborted) throw new CancelledError();
     const analysis: Analysis = {
       sourceId: source.id,
       key,
@@ -248,6 +255,18 @@ export async function analyzeSource(
     await saveAnalysis(dir, source.sha256, analysis);
     return analysis;
   }
+}
+
+export async function analyzeSource(
+  source: Source,
+  dir: string,
+  exec: Executor,
+  opts?: { signal?: AbortSignal },
+): Promise<Analysis> {
+  return analysisBuilds.run(
+    () => buildAnalysis(source, dir, exec, opts),
+    { key: `${dir}:${analysisKey(source.sha256)}`, signal: opts?.signal },
+  );
 }
 
 export async function loadAnalysis(projectDir: string, source: Source): Promise<Analysis | null> {

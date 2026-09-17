@@ -16,6 +16,7 @@ import {
   parseSpeechIndex,
   parseVisualIndex,
   presetConfig,
+  providerIdentity,
   PROMPT_VERSION,
   readCache,
   renderReport,
@@ -245,8 +246,9 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const cacheDir = join(opts.outDir, "triage_cache");
   await mkdir(cacheDir, { recursive: true });
   const shas = { videoSha: await sha256(videoPath), indexSha: await sha256(opts.indexPath) };
+  const providerId = providerIdentity({ provider, model: modelName, baseUrl: cfg.baseUrl });
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
-    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, pass, budgetSeconds });
+    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
   // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
   const mechanicalVerdicts = verifyClaims(mechanicalClaims(index, visualMap), index);
@@ -289,7 +291,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       }
       const framesSha = await hashFrames(frames);
       const inspectKey = cacheKey({
-        ...shas, promptVersion: PROMPT_VERSION, model: modelName,
+        ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId,
         pass: "inspect", unitId: u.id, framesSha,
       });
       let verdict = await readCache<InspectVerdict>(cacheDir, inspectKey);

@@ -41,6 +41,13 @@ describe("cacheKey", () => {
     expect(cacheKey(inspect)).not.toBe(cacheKey({ ...inspect, framesSha: "bbb" }));
     expect(cacheKey(inspect)).not.toBe(cacheKey(parts));
   });
+
+  it("muda com a identidade efetiva do provedor", () => {
+    const zai = cacheKey({ ...parts, providerId: "zai|glm-5.3-flash|https://api.z.ai" });
+    const gemini = cacheKey({ ...parts, providerId: "gemini|gemini-2.5-flash|https://generativelanguage.googleapis.com" });
+    expect(zai).not.toBe(gemini);
+    expect(zai).not.toBe(cacheKey(parts));
+  });
 });
 
 describe("readCache / writeCache", () => {
