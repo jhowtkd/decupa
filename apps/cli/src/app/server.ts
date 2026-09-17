@@ -1,3 +1,4 @@
+import { collectSink, createTracer } from "@decupa/trace";
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
@@ -197,6 +198,8 @@ async function startCleanupApp(opts: {
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir };
+  const traces = collectSink();
+  const tracer = createTracer(traces);
 
   // Fila de um: `condense_plan` grava sempre no mesmo condense_plan.json, e o
   // debounce de 250 ms não impede que um segundo re-plano comece com o
@@ -215,7 +218,7 @@ async function startCleanupApp(opts: {
       if (pendingKeepList !== keepList) return;
       try {
         store.setStage(job.id, "planning");
-        await runPlan(pipelineJob, keepList, exec);
+        await runPlan(pipelineJob, keepList, exec, tracer);
         const review = buildReview(
           await readJson(planPath(pipelineJob)),
           await readJson(indexPath(pipelineJob)),
@@ -256,6 +259,7 @@ async function startCleanupApp(opts: {
         exec,
         (stage) => store.setStage(job.id, stage),
         (line) => store.setProgress(job.id, line),
+        tracer,
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;

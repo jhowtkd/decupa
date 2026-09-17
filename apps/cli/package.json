@@ -11,7 +11,11 @@
     "@decupa/goldedit": "workspace:*",
     "@decupa/media": "workspace:*",
     "@decupa/metrics": "workspace:*",
+<<<<<<< HEAD
     "@decupa/queue": "workspace:*",
+=======
+    "@decupa/trace": "workspace:*",
+>>>>>>> origin/cursor/b1-traces-76ba
     "@decupa/transcript": "workspace:*",
     "@decupa/triage": "workspace:*"
   }
