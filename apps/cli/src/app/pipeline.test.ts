@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { collectSink, createTracer } from "@decupa/trace";
 import {
   DEFAULT_ENGINE,
   enginePatchError,
@@ -153,6 +154,35 @@ describe("runIngest", () => {
     await runIngest(job, exec, () => {}, (line) => linhas.push(line));
     expect(linhas).toContain("97%|=====> | 58/60");
   });
+
+  it("emite queued/started/finished por estágio e um finished mesmo quando a transcrição falha", async () => {
+    const sink = collectSink();
+    const tracer = createTracer(sink);
+    await runIngest(job, new FakeExecutor(), () => {}, undefined, tracer);
+    const stages = [...new Set(sink.events.map((e) => e.stage))];
+    expect(stages).toEqual(["transcribing", "indexing", "visual"]);
+    for (const stage of stages) {
+      const phases = sink.events.filter((e) => e.stage === stage).map((e) => e.phase);
+      expect(phases).toEqual(["queued", "started", "finished"]);
+      expect(sink.events.filter((e) => e.stage === stage && e.phase === "finished")).toHaveLength(1);
+    }
+    const blob = JSON.stringify(sink.events);
+    expect(blob).not.toMatch(/aula\.mp4/);
+    expect(blob).not.toMatch(/\/vid\//);
+
+    const failSink = collectSink();
+    await expect(runIngest(
+      job,
+      new FakeExecutor({ code: 2, stdout: "[ERROR] transcript inválido" }),
+      () => {},
+      undefined,
+      createTracer(failSink),
+    )).rejects.toThrow(/transcript inválido/);
+    const transcribe = failSink.events.filter((e) => e.stage === "transcribing");
+    expect(transcribe.map((e) => e.phase)).toEqual(["queued", "started", "finished"]);
+    expect(transcribe.at(-1)!.category).toBe("error");
+    expect(failSink.events.some((e) => e.stage === "indexing")).toBe(false);
+  });
 });
 
 describe("runPlan", () => {
@@ -188,6 +218,15 @@ describe("runPlan", () => {
     const script = exec.calls.at(-1)!.args[0]!;
     expect(isAbsolute(script)).toBe(true);
     expect(script.endsWith(join("scripts", "condense.py"))).toBe(true);
+  });
+
+  it("emite um único finished em sucesso e em keep-list inválido não chama o motor", async () => {
+    const sink = collectSink();
+    await runPlan(job, "u001-u003", new FakeExecutor(), createTracer(sink));
+    expect(sink.events.map((e) => e.phase)).toEqual(["queued", "started", "finished"]);
+    expect(sink.events.filter((e) => e.phase === "finished")).toHaveLength(1);
+    expect(sink.events[2]!.category).toBe("ok");
+    expect(JSON.stringify(sink.events)).not.toMatch(/aula\.mp4/);
   });
 });
 
