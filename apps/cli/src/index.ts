@@ -276,7 +276,8 @@ async function main(argv: string[]): Promise<number> {
       modelName: values.model,
       provider,
       maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
-      routeMode,
+      routeMode: values.route === undefined ? undefined : routeMode,
+      projectDir: process.cwd(),
     });
     const rejected = result.verdicts.filter((v) => !v.accepted).length;
     console.log(`keep-list: ${result.keepList}`);

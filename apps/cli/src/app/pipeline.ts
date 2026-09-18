@@ -363,6 +363,7 @@ export async function runTriage(
     videoPath: string;
     outDir: string;
     provider?: string;
+    projectDir?: string;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
 ): Promise<string> {
   // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
@@ -374,6 +375,7 @@ export async function runTriage(
     indexPath: indexPath(job),
     videoPath: proxy,
     outDir: join(job.workDir, "out"),
+    projectDir: process.cwd(),
     // Sem escolha explícita, quem resolve é a biblioteca, pela chave.
     ...(provider ? { provider } : {}),
   });

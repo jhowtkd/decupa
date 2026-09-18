@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { TypeSafeClient } from "@decupa/typesafe";
 import {
   acceptedDropIds,
   applyDensityBudget,
@@ -42,6 +43,7 @@ import {
   type VisualUnitFlags,
   type ZaiUsage,
 } from "@decupa/triage";
+import { bootProjectDecision } from "./app/assembly/decision-boot.ts";
 
 export interface TriageOptions {
   indexPath: string;
@@ -66,6 +68,8 @@ export interface TriageOptions {
   decide?: (catalog: EditCatalog) => FastDecision | null | Promise<FastDecision | null>;
   /** Cliente TypeSafe; hybrid/observe usam o catálogo fechado sem texto privado. */
   typeSafeClient?: TypeSafeDecideClient;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
 }
 
 export interface TriageJson {
@@ -267,7 +271,24 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
-  const routeMode = opts.routeMode ?? "off";
+  const env = opts.env ?? process.env;
+  let routeMode = opts.routeMode;
+  let typeSafeClient = opts.typeSafeClient;
+  if (!typeSafeClient && routeMode !== "off") {
+    const boot = await bootProjectDecision({
+      projectDir: opts.projectDir ?? process.cwd(),
+      env,
+      fetchImpl: opts.fetchImpl,
+    });
+    routeMode = routeMode ?? boot.mode;
+    if (boot.enabled && env.TYPESAFE_API_KEY) {
+      typeSafeClient = new TypeSafeClient({
+        apiKey: env.TYPESAFE_API_KEY,
+        fetchImpl: opts.fetchImpl,
+      });
+    }
+  }
+  routeMode = routeMode ?? "off";
   let dropped: Set<string>;
   let verdicts: Verdict[];
 
@@ -293,8 +314,8 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       model,
       unitsBlock,
       videoPath,
-      decide: opts.decide ?? (opts.typeSafeClient
-        ? (catalog) => decideWithTypeSafe(catalog, opts.typeSafeClient!)
+      decide: opts.decide ?? (typeSafeClient
+        ? (catalog) => decideWithTypeSafe(catalog, typeSafeClient)
         : undefined),
     });
     verdicts = routed.verdicts;
