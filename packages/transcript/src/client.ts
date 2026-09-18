@@ -82,6 +82,14 @@ export function createResidentSpeechClient(opts: {
         if (line) dispatch(line);
       }
     });
+    child.on("error", (error: Error) => {
+      child = null;
+      buffer = "";
+      for (const [id, waiter] of waiters) {
+        waiters.delete(id);
+        waiter.reject(error);
+      }
+    });
     child.on("exit", () => {
       child = null;
       buffer = "";

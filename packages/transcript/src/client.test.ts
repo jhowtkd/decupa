@@ -97,6 +97,33 @@ describe("createResidentSpeechClient", () => {
     }
   });
 
+  it("erro no processo filho rejeita a transcrição pendente", async () => {
+    const { EventEmitter } = await import("node:events");
+    const client = createResidentSpeechClient({
+      spawn: () => {
+        const child = new EventEmitter();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: () => true,
+          end: () => undefined,
+        });
+        Object.assign(child, {
+          stdin,
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+          kill: () => true,
+        });
+        queueMicrotask(() => child.emit("error", new Error("uv: command not found")));
+        return child as unknown as ReturnType<typeof spawn>;
+      },
+    });
+    try {
+      await expect(client.transcribe({ taskId: "a", wav: "a.wav", language: "pt" }))
+        .rejects.toThrow(/uv: command not found/);
+    } finally {
+      await client.close();
+    }
+  }, 4000);
+
   it("cancelamento da tarefa lenta não devolve a resposta da outra", async () => {
     const written: string[] = [];
     const client = createResidentSpeechClient({
