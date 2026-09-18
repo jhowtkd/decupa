@@ -153,15 +153,38 @@ class SpeechWorker:
 
 def serve() -> None:
     worker = SpeechWorker()
+    jobs: list[threading.Thread] = []
+    out_lock = threading.Lock()
+
+    def reply(payload: dict) -> None:
+        with out_lock:
+            sys.stdout.write(json.dumps(payload) + "\n")
+            sys.stdout.flush()
+
+    def run_transcribe(args: dict) -> None:
+        task_id = str(args.get("task_id") or "")
+        try:
+            reply(worker.transcribe(**args))
+        except CancelledError as exc:
+            reply({"error": str(exc), "taskId": exc.task_id or task_id})
+        except Exception as exc:
+            reply({"error": str(exc), "taskId": task_id})
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         req = json.loads(line)
+        cmd = req.get("cmd") or "transcribe"
         args = req.get("args") or {}
-        result = worker.transcribe(**args)
-        sys.stdout.write(json.dumps(result) + "\n")
-        sys.stdout.flush()
+        if cmd == "cancel":
+            worker.cancel(str(args.get("task_id") or ""))
+            continue
+        thread = threading.Thread(target=run_transcribe, args=(args,))
+        jobs.append(thread)
+        thread.start()
+    for job in jobs:
+        job.join()
 
 
 if __name__ == "__main__":

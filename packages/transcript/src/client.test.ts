@@ -5,16 +5,33 @@ import { createResidentSpeechClient } from "./client.ts";
 function fakeServe(): string {
   return `
     const readline = require("node:readline");
+    const pending = new Map();
     const rl = readline.createInterface({ input: process.stdin });
     rl.on("line", (line) => {
       const req = JSON.parse(line);
+      const cmd = req.cmd || "transcribe";
       const args = req.args || {};
-      process.stdout.write(JSON.stringify({
+      if (cmd === "cancel") {
+        const reply = pending.get(args.task_id);
+        if (reply) {
+          pending.delete(args.task_id);
+          reply({ error: "tarefa cancelada: " + args.task_id, taskId: args.task_id });
+        }
+        return;
+      }
+      const payload = {
         language: args.language || "pt",
         words: [{ text: args.task_id, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
         unaligned: [],
         taskId: args.task_id,
-      }) + "\\n");
+      };
+      if (args.task_id === "slow") {
+        pending.set(args.task_id, (out) => {
+          process.stdout.write(JSON.stringify(out) + "\\n");
+        });
+        return;
+      }
+      process.stdout.write(JSON.stringify(payload) + "\\n");
     });
   `;
 }
@@ -46,4 +63,40 @@ describe("createResidentSpeechClient", () => {
       await client.close();
     }
   });
+
+  it("cancelamento da tarefa lenta não devolve a resposta da outra", async () => {
+    const written: string[] = [];
+    const client = createResidentSpeechClient({
+      spawn: (_command, _args, options) => {
+        const child = spawn(process.execPath, ["-e", fakeServe()], {
+          cwd: options?.cwd,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const stdin = child.stdin;
+        if (stdin) {
+          const orig = stdin.write.bind(stdin);
+          stdin.write = ((chunk: string | Buffer, encoding?: BufferEncoding, cb?: (err?: Error | null) => void) => {
+            written.push(String(chunk));
+            return orig(chunk, encoding as BufferEncoding, cb);
+          }) as typeof stdin.write;
+        }
+        return child;
+      },
+    });
+    const ac = new AbortController();
+    try {
+      const slow = client.transcribe({
+        taskId: "slow", wav: "slow.wav", language: "pt", signal: ac.signal,
+      });
+      await expect.poll(() => written.some((line) => line.includes('"slow"'))).toBe(true);
+      ac.abort();
+      await expect(slow).rejects.toThrow(/tarefa cancelada: slow/);
+      expect(written.some((line) => line.includes('"cancel"') && line.includes("slow"))).toBe(true);
+      const fast = await client.transcribe({ taskId: "fast", wav: "fast.wav", language: "pt" });
+      expect(fast.words[0]?.text).toBe("fast");
+    } finally {
+      await client.close();
+    }
+  }, 8000);
 });

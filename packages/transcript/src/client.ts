@@ -21,7 +21,13 @@ export type SpeechSpawner = (
 
 export type ResidentSpeechClient = {
   transcribe: (req: SpeechWorkerRequest) => Promise<SidecarResult>;
+  cancel: (taskId: string) => void;
   close: () => Promise<void>;
+};
+
+type Waiter = {
+  resolve: (value: SidecarResult) => void;
+  reject: (error: Error) => void;
 };
 
 /**
@@ -37,40 +43,97 @@ export function createResidentSpeechClient(opts: {
   let child: ChildProcess | null = null;
   let buffer = "";
   let chain: Promise<unknown> = Promise.resolve();
+  const waiters = new Map<string, Waiter>();
+
+  const dispatch = (line: string): void => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      const waiter = waiters.values().next().value as Waiter | undefined;
+      waiter?.reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    const rec = parsed as { taskId?: string; error?: string };
+    const waiter = (rec.taskId ? waiters.get(rec.taskId) : undefined)
+      ?? waiters.values().next().value as Waiter | undefined;
+    if (!waiter) return;
+    if (rec.taskId) waiters.delete(rec.taskId);
+    else {
+      const first = waiters.keys().next().value;
+      if (typeof first === "string") waiters.delete(first);
+    }
+    if (typeof rec.error === "string" && rec.error.length > 0) {
+      waiter.reject(new Error(rec.error));
+      return;
+    }
+    try {
+      waiter.resolve(parseSidecarOutput(line));
+    } catch (error) {
+      waiter.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
 
   const ensure = (): ChildProcess => {
     if (child) return child;
     child = spawnFn("uv", ["run", "python", "worker.py", "--serve"], { cwd: speechDir });
     child.stderr?.on("data", () => undefined);
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      buffer += String(chunk);
+      while (true) {
+        const nl = buffer.indexOf("\n");
+        if (nl === -1) break;
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) dispatch(line);
+      }
+    });
     child.on("exit", () => {
       child = null;
+      for (const [id, waiter] of waiters) {
+        waiters.delete(id);
+        waiter.reject(new Error("worker de fala encerrou"));
+      }
     });
     return child;
   };
 
+  const cancel = (taskId: string): void => {
+    const proc = ensure();
+    proc.stdin?.write(`${JSON.stringify({
+      cmd: "cancel",
+      args: { task_id: taskId },
+    })}\n`);
+  };
+
   const transcribe = (req: SpeechWorkerRequest): Promise<SidecarResult> => {
     const run = (): Promise<SidecarResult> => new Promise((resolvePromise, reject) => {
+      if (req.signal?.aborted) {
+        reject(new Error(`tarefa cancelada: ${req.taskId}`));
+        return;
+      }
       const proc = ensure();
-      const onData = (chunk: Buffer | string): void => {
-        buffer += String(chunk);
-        const nl = buffer.indexOf("\n");
-        if (nl === -1) return;
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        proc.stdout?.off("data", onData);
-        try {
-          resolvePromise(parseSidecarOutput(line));
-        } catch (error) {
-          reject(error);
-        }
-      };
       if (!proc.stdout || !proc.stdin) {
         reject(new Error("worker de fala sem stdin/stdout"));
         return;
       }
-      proc.stdout.on("data", onData);
-      proc.on("error", reject);
+      const onAbort = (): void => {
+        cancel(req.taskId);
+      };
+      const settle = {
+        resolve: (value: SidecarResult) => {
+          req.signal?.removeEventListener("abort", onAbort);
+          resolvePromise(value);
+        },
+        reject: (error: Error) => {
+          req.signal?.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      };
+      waiters.set(req.taskId, settle);
+      req.signal?.addEventListener("abort", onAbort, { once: true });
       proc.stdin.write(`${JSON.stringify({
+        cmd: "transcribe",
         args: {
           task_id: req.taskId,
           wav: req.wav,
@@ -92,5 +155,5 @@ export function createResidentSpeechClient(opts: {
     proc.kill();
   };
 
-  return { transcribe, close };
+  return { transcribe, cancel, close };
 }

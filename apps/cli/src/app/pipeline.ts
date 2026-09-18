@@ -218,6 +218,7 @@ export async function runIngest(
   onLine?: (line: string) => void,
   tracer?: Tracer,
   speech?: IngestSpeech,
+  signal?: AbortSignal,
 ): Promise<{ warning?: string }> {
   const activeTracer = tracer ?? createTracer();
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
@@ -229,7 +230,7 @@ export async function runIngest(
         await runCondensePrep(
           { input: job.videoPath, out: transcriptPath(job) },
           {
-            transcribe: (opts) => transcribe(opts, {
+            transcribe: (opts) => transcribe({ ...opts, signal }, {
               worker: speech.worker,
               coordinator: speech.coordinator,
               extract: speech.extract,

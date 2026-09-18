@@ -281,6 +281,7 @@ async function buildAnalysis(
       undefined,
       undefined,
       opts.speech,
+      opts.signal,
     );
     if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {

@@ -245,6 +245,61 @@ it("POST /analyze no serviço residente usa o worker e não spawnam transcribe.p
   expect(stored).toBe(await realpath(clip));
 });
 
+it("POST /project/cancel cancela só o worker da fonte em análise", async () => {
+  let resume!: () => void;
+  const started = new Promise<void>((resolve) => { resume = resolve; });
+  const cancelled: string[] = [];
+  const { base } = await boot([], {
+    executor: indexingExec(),
+    speech: {
+      worker: async (req) => {
+        await new Promise<void>((_resolve, reject) => {
+          const fail = (): void => {
+            cancelled.push(req.taskId);
+            reject(new Error(`tarefa cancelada: ${req.taskId}`));
+          };
+          if (req.signal?.aborted) {
+            fail();
+            return;
+          }
+          req.signal?.addEventListener("abort", fail, { once: true });
+          resume();
+        });
+        return {
+          language: "pt",
+          words: [],
+          unaligned: [],
+        };
+      },
+      extract: async () => {},
+      detectSilence: async () => [],
+    },
+  });
+  await fetch(`${base}/project/select`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0 }),
+  });
+  const opened = await (await fetch(`${base}/project`)).json() as {
+    project: { assembly: { sources: { id: string; path: string }[] } };
+  };
+  const stored = opened.project.assembly.sources[0]?.path;
+  const analyze = fetch(`${base}/project/analyze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sourceIds: opened.project.assembly.sources.map((s) => s.id),
+      visual: false,
+    }),
+  });
+  await started;
+  const cancel = await fetch(`${base}/project/cancel`, { method: "POST" });
+  expect(cancel.status).toBe(200);
+  expect((await cancel.json() as { operation: { stage: string } }).operation.stage).toBe("cancelled");
+  await analyze;
+  expect(cancelled).toEqual([stored]);
+});
+
 it("recusa visual pago sem autorização explícita mesmo com cliente", async () => {
   const { base } = await boot([], {
     describeClient: { async send() { throw new Error("não deveria chamar"); } },

@@ -60,6 +60,7 @@ export type SpeechWorkerRequest = {
   wav: string;
   language: string;
   model?: string;
+  signal?: AbortSignal;
 };
 
 export type TranscribeDeps = {
@@ -79,6 +80,7 @@ export async function transcribe(
     input: string;
     language?: string;
     model?: string;
+    signal?: AbortSignal;
   },
   deps: TranscribeDeps = {},
 ): Promise<Transcript> {
@@ -89,12 +91,14 @@ export async function transcribe(
   const wav = join(dir, "audio.wav");
 
   try {
+    if (opts.signal?.aborted) throw new Error(`tarefa cancelada: ${opts.input}`);
     await extract({ input: opts.input, output: wav });
     const parsed = await runSpeechSidecar({
       taskId: opts.input,
       wav,
       language,
       model,
+      signal: opts.signal,
     }, deps);
     return { language: parsed.language, tokens: toTokens(parsed.words), unaligned: parsed.unaligned };
   } finally {
@@ -109,7 +113,7 @@ async function runSpeechSidecar(
   if (deps.worker) {
     const build = () => deps.worker!(req);
     if (deps.coordinator) {
-      return runSpeechJob(deps.coordinator, { id: req.taskId, build });
+      return runSpeechJob(deps.coordinator, { id: req.taskId, signal: req.signal, build });
     }
     return build();
   }

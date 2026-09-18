@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
+import { isCancelledError } from "@decupa/queue";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
@@ -844,36 +845,41 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             sourceId,
             progress: `${done + 1}/${sourceIds.length}`,
           };
-          const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
-          if (wantVisual && deps.describeClient && source.hasVideo && !signal.aborted) {
-            try {
-              analysis.visual = await describeSource(source, dir, signal, {
-                client: deps.describeClient,
-                exec: deps.exec,
-              });
-              analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
-            } catch (err) {
-              analysis.status = "partial";
-              analysis.error = err instanceof Error ? err.message : String(err);
-            }
-          }
           try {
-            await saveProject(dir, project.revision, (current) => {
-              if (current.revision !== project.revision) {
-                throw new HttpError(
-                  409,
-                  `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
-                );
+            const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
+            if (wantVisual && deps.describeClient && source.hasVideo && !signal.aborted) {
+              try {
+                analysis.visual = await describeSource(source, dir, signal, {
+                  client: deps.describeClient,
+                  exec: deps.exec,
+                });
+                analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
+              } catch (err) {
+                analysis.status = "partial";
+                analysis.error = err instanceof Error ? err.message : String(err);
               }
-              return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
-            });
+            }
+            try {
+              await saveProject(dir, project.revision, (current) => {
+                if (current.revision !== project.revision) {
+                  throw new HttpError(
+                    409,
+                    `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
+                  );
+                }
+                return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
+              });
+            } catch (err) {
+              if (err instanceof HttpError) throw err;
+              const message = err instanceof Error ? err.message : String(err);
+              if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+              throw err;
+            }
+            done += 1;
           } catch (err) {
-            if (err instanceof HttpError) throw err;
-            const message = err instanceof Error ? err.message : String(err);
-            if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+            if (isCancelledError(err) || signal.aborted) break;
             throw err;
           }
-          done += 1;
           if (!stillCurrent(gen)) break;
         }
         if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };

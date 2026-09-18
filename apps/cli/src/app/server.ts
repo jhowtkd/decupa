@@ -219,6 +219,7 @@ async function startCleanupApp(opts: {
     speech: opts.speech,
     executorInjected: Boolean(opts.executor),
   });
+  const ingestAbort = new AbortController();
 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
@@ -286,6 +287,7 @@ async function startCleanupApp(opts: {
         (line) => store.setProgress(job.id, line),
         tracer,
         speech,
+        ingestAbort.signal,
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -363,6 +365,7 @@ async function startCleanupApp(opts: {
           store.cancel(current.id);
           // Trocar o enum não para o WhisperX. Sem matar o processo, quem
           // cancelou espera do mesmo jeito — que é o motivo de cancel existir.
+          ingestAbort.abort();
           if (exec instanceof SpawnExecutor) exec.killAll();
           sendJson(res, { ok: true });
           return;

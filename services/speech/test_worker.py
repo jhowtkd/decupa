@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import queue
 import sys
 import threading
 import unittest
@@ -149,7 +151,6 @@ class ResidentWorkerTest(unittest.TestCase):
         whisper.align.return_value = {"segments": []}
         worker_mod = load_worker(whisper)
         import io
-        import json
         stdin = io.StringIO(
             json.dumps({"cmd": "transcribe", "args": {"task_id": "a", "wav": "a.wav"}}) + "\n"
             + json.dumps({"cmd": "transcribe", "args": {"task_id": "b", "wav": "b.wav"}}) + "\n"
@@ -160,6 +161,79 @@ class ResidentWorkerTest(unittest.TestCase):
         lines = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
         self.assertEqual(len(lines), 2)
         self.assertEqual(whisper.load_model.call_count, 1)
+
+    def test_serve_cancel_in_flight_does_not_return_other_task(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": [{"start": 0, "end": 1, "text": "x"}]}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        worker_mod = load_worker(whisper)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_align(*_args, **_kwargs):
+            started.set()
+            self.assertTrue(release.wait(2))
+            return {"segments": [{"words": [{"word": "lento", "start": 0.0, "end": 0.2, "score": 1}]}]}
+
+        def fast_align(*_args, **_kwargs):
+            return {"segments": [{"words": [{"word": "rapido", "start": 0.0, "end": 0.2, "score": 1}]}]}
+
+        whisper.align.side_effect = slow_align
+        incoming: queue.Queue[str | None] = queue.Queue()
+        outgoing: queue.Queue[str] = queue.Queue()
+
+        class Stdin:
+            def __iter__(self):
+                while True:
+                    item = incoming.get()
+                    if item is None:
+                        return
+                    yield item
+
+        class Stdout:
+            def write(self, data: str) -> int:
+                for line in data.splitlines():
+                    if line.strip():
+                        outgoing.put(line)
+                return len(data)
+
+            def flush(self) -> None:
+                return None
+
+        errors: list[BaseException] = []
+
+        def run_serve() -> None:
+            try:
+                with patch.object(worker_mod.sys, "stdin", Stdin()), patch.object(
+                    worker_mod.sys, "stdout", Stdout(),
+                ):
+                    worker_mod.serve()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        thread = threading.Thread(target=run_serve)
+        thread.start()
+        incoming.put(json.dumps({"cmd": "transcribe", "args": {"task_id": "slow", "wav": "slow.wav"}}) + "\n")
+        self.assertTrue(started.wait(1))
+        incoming.put(json.dumps({"cmd": "cancel", "args": {"task_id": "slow"}}) + "\n")
+        release.set()
+        first = json.loads(outgoing.get(timeout=2))
+        self.assertIn("cancel", str(first.get("error", "")).lower())
+        self.assertEqual(first.get("taskId"), "slow")
+        self.assertNotIn("lento", str(first))
+        whisper.align.side_effect = fast_align
+        incoming.put(json.dumps({"cmd": "transcribe", "args": {"task_id": "fast", "wav": "fast.wav"}}) + "\n")
+        second = json.loads(outgoing.get(timeout=2))
+        self.assertEqual(second.get("taskId"), "fast")
+        self.assertEqual(second["words"][0]["text"], "rapido")
+        self.assertNotIn("lento", str(second))
+        incoming.put(None)
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
