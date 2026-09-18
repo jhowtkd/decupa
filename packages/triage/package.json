@@ -10,7 +10,9 @@
   "dependencies": {
     "@decupa/cache": "workspace:*",
     "@decupa/core": "workspace:*",
+    "@decupa/queue": "workspace:*",
     "@decupa/trace": "workspace:*",
+    "@decupa/typesafe": "workspace:*",
     "@google/genai": "^2.21.0"
   }
 }

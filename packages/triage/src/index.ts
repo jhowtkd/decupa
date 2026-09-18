@@ -42,6 +42,10 @@ export { MAX_INDEX_GAP, retakeClaims } from "./retakes.ts";
 export { mechanicalClaims, mechanicalKeepList } from "./mechanical.ts";
 export { buildEditCatalog, groupIndependentQuestions } from "./catalog.ts";
 export type { CandidateKind, CatalogOptions, EditCandidate, EditCatalog, QuestionBatch, QuestionGroup } from "./catalog.ts";
+export { CircuitBreaker, routeTriage } from "./routing.ts";
+export type { FastDecision, RouteMode, RouteOptions, RouteResult } from "./routing.ts";
+export { decideWithTypeSafe } from "./typesafe-decide.ts";
+export type { TypeSafeDecideClient } from "./typesafe-decide.ts";
 export {
   HAND_ON_FACE_AMBIGUOUS,
   HAND_ON_FACE_BAD,

@@ -23,20 +23,27 @@ import {
   renderReport,
   readCredentials,
   resolveProvider,
+  decideWithTypeSafe,
+  routeTriage,
   unitsById,
   verifyClaims,
   writeCache,
   ZaiTriageModel,
   type DensityCandidate,
+  type EditCatalog,
+  type FastDecision,
   type InspectFlag,
   type InspectVerdict,
   type ReportInput,
+  type RouteMode,
   type StructureClaim,
   type TriageModel,
+  type TypeSafeDecideClient,
   type Verdict,
   type VisualUnitFlags,
   type ZaiUsage,
 } from "@decupa/triage";
+import { TypeSafeClient } from "@decupa/typesafe";
 import { sharedVisualPools, type VisualPools } from "./app/assembly/visual-pool.ts";
 
 export interface TriageOptions {
@@ -63,6 +70,13 @@ export interface TriageOptions {
   signal?: AbortSignal;
   /** Injetável: testes não dependem do ffmpeg real. */
   spawn?: ExtractFramesDeps["spawn"];
+  /** `off` (padrão) reproduz o passe structure legado. */
+  routeMode?: RouteMode;
+  decide?: (catalog: EditCatalog) => FastDecision | null | Promise<FastDecision | null>;
+  /** Cliente TypeSafe; hybrid/observe usam o catálogo fechado sem texto privado. */
+  typeSafeClient?: TypeSafeDecideClient;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
 }
 
 export interface TriageJson {
@@ -78,6 +92,12 @@ export interface TriageResult {
   reportPath: string;
   drop: TriageJson["drop"];
   reviewFlags: InspectFlag[];
+}
+
+export function parseRouteMode(raw?: string): RouteMode {
+  const mode = raw ?? "off";
+  if (mode === "off" || mode === "observe" || mode === "hybrid") return mode;
+  throw new Error(`rota inválida: ${mode}`);
 }
 
 async function sha256(path: string): Promise<string> {
@@ -266,20 +286,52 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
-  // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
-  const mechanicalVerdicts = verifyClaims(mechanicalClaims(index, visualMap), index);
-  const dropped = acceptedDropIds(mechanicalVerdicts);
-
-  // Passe 1 — estrutura
-  const structureKey = keyOf("structure");
-  let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
-  if (claims === null) {
-    claims = await model.structure({ unitsBlock, videoPath });
-    await writeCache(cacheDir, structureKey, claims);
+  const env = opts.env ?? process.env;
+  const routeMode = opts.routeMode ?? "off";
+  let typeSafeClient = opts.typeSafeClient;
+  if (
+    !typeSafeClient
+    && (routeMode === "hybrid" || routeMode === "observe")
+    && env.DECUPA_TYPESAFE === "1"
+    && env.TYPESAFE_API_KEY
+  ) {
+    typeSafeClient = new TypeSafeClient({
+      apiKey: env.TYPESAFE_API_KEY,
+      fetchImpl: opts.fetchImpl,
+    });
   }
-  const modelVerdicts = verifyClaims(claims, index, dropped);
-  for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
-  const verdicts: Verdict[] = [...mechanicalVerdicts, ...modelVerdicts];
+  let dropped: Set<string>;
+  let verdicts: Verdict[];
+
+  if (routeMode === "off") {
+    // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
+    const mechanicalVerdicts = verifyClaims(mechanicalClaims(index, visualMap), index);
+    dropped = acceptedDropIds(mechanicalVerdicts);
+
+    // Passe 1 — estrutura (legado: cache + uma chamada)
+    const structureKey = keyOf("structure");
+    let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
+    if (claims === null) {
+      claims = await model.structure({ unitsBlock, videoPath });
+      await writeCache(cacheDir, structureKey, claims);
+    }
+    const modelVerdicts = verifyClaims(claims, index, dropped);
+    for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
+    verdicts = [...mechanicalVerdicts, ...modelVerdicts];
+  } else {
+    const routed = await routeTriage({
+      mode: routeMode,
+      index,
+      model,
+      unitsBlock,
+      videoPath,
+      decide: opts.decide ?? (typeSafeClient
+        ? (catalog) => decideWithTypeSafe(catalog, typeSafeClient)
+        : undefined),
+    });
+    verdicts = routed.verdicts;
+    dropped = acceptedDropIds(verdicts);
+  }
 
   // Inspect: só faixa ambígua, só unidades que ainda ficam.
   const inspectVerdicts: InspectVerdict[] = [];

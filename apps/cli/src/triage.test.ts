@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureLightVideo, resolveInspectVideoPath, runTriage } from "./triage.ts";
+import { ensureLightVideo, parseRouteMode, resolveInspectVideoPath, runTriage } from "./triage.ts";
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "triage-cli-"));
@@ -205,6 +205,195 @@ describe("runTriage", () => {
     expect(out.verdicts.some((v) => v.accepted && v.claim.source === "mechanical")).toBe(true);
   });
 
+  it("hybrid resolvido substitui o passe structure e não chama o modelo", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      decide: () => ({ applyIds: [] }),
+    });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+    expect(out.keepList).toBe("u001-u005");
+  });
+
+  it("hybrid com TypeSafe decide pelo catálogo e não manda texto privado", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-typesafe-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+
+    let payload: Record<string, unknown> = {};
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      typeSafeClient: {
+        decide: async (req) => {
+          payload = req as unknown as Record<string, unknown>;
+          return {
+            model: "jev-latest",
+            answers: {
+              "prefix:u001": { type: "noul", noul: 0.92 },
+              "suffix:u003": { type: "noul", noul: 0.51 },
+            },
+          };
+        },
+      },
+    });
+    expect(JSON.stringify(payload.state)).not.toMatch(/Tá gravando|gancho|Ficou bom/);
+    expect(payload.state).toMatchObject({ candidateIds: expect.arrayContaining(["prefix:u001"]) });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
+  it("hybrid na CLI constrói TypeSafe pelo env sem injetar o cliente", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-typesafe-env-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    let calls = 0;
+    let payload: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      payload = JSON.parse(String(init?.body));
+      const questions = (payload.questions ?? {}) as Record<string, unknown>;
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(questions)) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      env: { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" },
+      fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(JSON.stringify(payload)).not.toMatch(/Tá gravando|gancho|Ficou bom/);
+    expect(JSON.stringify(payload)).not.toContain("sk-typesafe-secret-do-not-log");
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
+  it("observe na CLI consulta TypeSafe pelo env mas aplica o legado", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-observe-env-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    let calls = 0;
+    let payload: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      payload = JSON.parse(String(init?.body));
+      const questions = (payload.questions ?? {}) as Record<string, unknown>;
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(questions)) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const env = { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" };
+    const observeModel = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "legado", source: "model" },
+    ]);
+    const observe = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: join(dir, "observe"),
+      model: observeModel,
+      routeMode: "observe",
+      env,
+      fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(JSON.stringify(payload)).not.toMatch(/Tá gravando|gancho|Ficou bom/);
+    expect(JSON.stringify(payload)).not.toContain("sk-typesafe-secret-do-not-log");
+    expect(observeModel.calls.filter((c) => c.kind === "structure")).toHaveLength(1);
+
+    const offModel = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "legado", source: "model" },
+    ]);
+    const off = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: join(dir, "off"),
+      model: offModel,
+      routeMode: "off",
+      env,
+      fetchImpl,
+    });
+    expect(observe.keepList).toBe(off.keepList);
+  });
+
+  it("off na CLI ainda chama structure uma vez, como o legado", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    const model = new FakeTriageModel([]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model, routeMode: "off" });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(1);
+  });
+
+  it("parseRouteMode rejeita valor desconhecido e default é off", () => {
+    expect(parseRouteMode()).toBe("off");
+    expect(parseRouteMode("hybrid")).toBe("hybrid");
+    expect(parseRouteMode("observe")).toBe("observe");
+    expect(() => parseRouteMode("full")).toThrow(/inválida/);
+  });
+
   it("não deixa o modelo dropar o take que o mecânico deixou", async () => {
     const dir = await mkdtemp(join(tmpdir(), "triage-occupy-"));
     const indexPath = join(dir, "speech_index.json");
@@ -313,6 +502,21 @@ describe("runTriage — inspect", () => {
       extractFrames: frames,
     });
     expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+  });
+
+  it("hybrid ainda inspeciona faixa ambígua no provedor atual", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "olhando para o operador" },
+    ]);
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model, visual, extractFrames: frames,
+      routeMode: "hybrid",
+      decide: () => ({ applyIds: [] }),
+    });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+    expect(out.reviewFlags.some((f) => f.unitId === "u004" && f.code === "looks_away")).toBe(true);
   });
 
   it("reusa cache do inspect na segunda corrida", async () => {
