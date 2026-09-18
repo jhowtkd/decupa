@@ -69,6 +69,15 @@ importers:
         specifier: workspace:*
         version: link:../queue
 
+  packages/coordinator:
+    dependencies:
+      '@decupa/cache':
+        specifier: workspace:*
+        version: link:../cache
+      '@decupa/queue':
+        specifier: workspace:*
+        version: link:../queue
+
   packages/core: {}
 
   packages/goldedit:
