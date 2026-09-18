@@ -7,6 +7,13 @@ Sidecar de transcrição e alinhamento forçado. Python 3.11 fixado via uv, porq
     uv run python transcribe.py --prepare-models
     uv run python transcribe.py --wav caminho.wav --language pt
 
+O CLI acima continua sendo o processo único por arquivo. O worker residente
+(`worker.py`) carrega Whisper e o alinhador uma vez por chave
+(modelo/idioma/compute) e reutiliza entre arquivos, com CPU por padrão
+(sem GPU automática). Cancelar uma tarefa não derruba as outras.
+
+    uv run python -c "from worker import SpeechWorker; SpeechWorker().preload()"
+
 Escreve JSON em stdout. Tempo sempre em milissegundo inteiro — o lado
 TypeScript nunca vê segundo fracionário.
 

@@ -107,6 +107,9 @@ importers:
 
   packages/transcript:
     dependencies:
+      '@decupa/coordinator':
+        specifier: workspace:*
+        version: link:../coordinator
       '@decupa/core':
         specifier: workspace:*
         version: link:../core
