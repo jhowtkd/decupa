@@ -104,7 +104,7 @@ Se encontrar um bloqueio de plataforma, registre o erro concreto e peça a decis
 
 Antes de liberar limpeza ou montagem, o app mostra o formulário de provedor e chave. Não há opção de pular. Configurações incompletas mantêm o app bloqueado. A chave é salva em `~/.decupa/credentials` para o usuário do sistema e reutilizada em novos projetos, sem aparecer nas respostas HTTP. macOS/Linux usam `0600`; Windows usa ACL restrita ao usuário.
 
-Salvar valida os campos e o endpoint HTTPS, sem chamada remota: não comprova validade da chave, saldo nem suporte a imagens. A autorização de processamento pago permanece nos controles de cada fluxo. Para montagem com vídeo, selecione um modelo com suporte visual. O launcher disponibiliza o provedor configurado para esses controles sem exigir flags no terminal.
+Salvar valida os campos e o endpoint HTTPS, sem chamada remota: não comprova validade da chave, saldo nem suporte a imagens. A autorização de processamento pago permanece nos controles de cada fluxo. Para montagem com vídeo, selecione um modelo com suporte visual: a análise extrai localmente frames JPEG a 1 FPS e os envia via `image_url`, de modo que o endpoint custom precisa ser compatível com chat/completions e o modelo precisa aceitar imagens. Ações mais curtas que um segundo podem ficar incertas ou indisponíveis. O launcher disponibiliza o provedor configurado para esses controles sem exigir flags no terminal.
 
 Credenciais específicas do projeto têm precedência sobre a configuração do usuário. Configurar a primeira abertura não sobrescreve essas credenciais.
 

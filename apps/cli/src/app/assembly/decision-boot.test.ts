@@ -116,9 +116,16 @@ describe("bootProjectDecision", () => {
     const visualExec: Executor = {
       async run(call) {
         ffmpegArgs.push(call.args);
-        const out = call.args[call.args.length - 1]!;
-        const input = call.args[call.args.indexOf("-i") + 1]!;
-        await copyFile(input, out);
+        const dest = call.args[call.args.length - 1]!;
+        if (dest.includes("%03d")) {
+          const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+          for (let i = 0; i < seconds; i += 1) {
+            await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+          }
+        } else {
+          const input = call.args[call.args.indexOf("-i") + 1]!;
+          await copyFile(input, dest);
+        }
         return { code: 0, stdout: "", stderr: "" };
       },
     };
@@ -132,10 +139,11 @@ describe("bootProjectDecision", () => {
       },
       exec: visualExec,
     });
-    const clipArgs = ffmpegArgs.find((args) => args.includes("-ss") && args.includes("-i"));
-    expect(clipArgs).toBeDefined();
-    expect(clipArgs!.indexOf("-ss")).toBeLessThan(clipArgs!.indexOf("-i"));
-    expect(clipArgs!.join(" ")).not.toMatch(/\bcopy\b/);
+    const frameArgs = ffmpegArgs.find((args) => args.includes("-ss") && args.includes("-i"));
+    expect(frameArgs).toBeDefined();
+    expect(frameArgs![frameArgs!.length - 1]).toContain("frame-%03d.jpg");
+    expect(frameArgs!.join(" ")).toContain("fps=1");
+    expect(frameArgs!.join(" ")).not.toMatch(/\bcopy\b/);
     expect(visualWindows(source.durationSeconds)[0]?.fetchStart).toBe(0);
 
     await analyzeSource(source, dir, indexingExec());

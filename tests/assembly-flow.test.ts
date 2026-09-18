@@ -189,7 +189,16 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
       if (call.command === "ffmpeg") {
-        await writeFile(call.args[call.args.length - 1], "clip");
+        const dest = call.args[call.args.length - 1]!;
+        if (dest.includes("%03d")) {
+          // Extração de frames: um JPEG por segundo solicitado, no padrão de saída.
+          const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+          for (let i = 0; i < seconds; i += 1) {
+            await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+          }
+        } else {
+          await writeFile(dest, "clip");
+        }
       }
       if (call.command === "python3" && call.args.includes("--out")) {
         await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
@@ -210,10 +219,12 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
       }),
     describeClient: {
       async send(content: unknown[]) {
-        const match = /janela local: 0s → ([\d.]+)s/.exec(JSON.stringify(content));
-        const end = match ? Number(match[1]) : 1;
+        const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
+        const start = match ? Number(match[1]) : 0;
+        const end = match ? Number(match[2]) : 3;
+        const fetchStart = start === 0 ? 0 : start - 1;
         return JSON.stringify({
-          spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
+          spans: [{ start: 0, end: end - fetchStart, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
       },
     },
@@ -392,7 +403,16 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
       if (call.command === "ffmpeg") {
-        await writeFile(call.args[call.args.length - 1], "clip");
+        const dest = call.args[call.args.length - 1]!;
+        if (dest.includes("%03d")) {
+          // Extração de frames: um JPEG por segundo solicitado, no padrão de saída.
+          const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+          for (let i = 0; i < seconds; i += 1) {
+            await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+          }
+        } else {
+          await writeFile(dest, "clip");
+        }
       }
       if (call.command === "python3" && call.args.includes("--out")) {
         await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
@@ -413,10 +433,12 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
       }),
     describeClient: {
       async send(content: unknown[]) {
-        const match = /janela local: 0s → ([\d.]+)s/.exec(JSON.stringify(content));
-        const end = match ? Number(match[1]) : 1;
+        const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
+        const start = match ? Number(match[1]) : 0;
+        const end = match ? Number(match[2]) : 3;
+        const fetchStart = start === 0 ? 0 : start - 1;
         return JSON.stringify({
-          spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
+          spans: [{ start: 0, end: end - fetchStart, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
       },
     },

@@ -127,11 +127,19 @@ function makeFakes(opts: FakeOpts = {}): {
       if (call.args.includes("-encoders")) {
         return { code: 0, stdout: " V..... libx264            libx264 H.264\n", stderr: "" };
       }
+      const dest = call.args[call.args.length - 1];
+      // Extração de frames: um JPEG por segundo solicitado, no padrão de saída.
+      if (dest && dest.includes("%03d")) {
+        const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+        for (let i = 0; i < seconds; i += 1) {
+          await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      }
       const playback = call.args.includes("scale='min(960,iw)':-2")
         || call.args.includes("-vframes")
         || call.args.includes("pcm_s16le");
       if (playback && ffmpegGate) await ffmpegGate;
-      const dest = call.args[call.args.length - 1];
       if (dest && !dest.startsWith("-")) {
         await writeFile(dest, `clip-${calls.ffmpeg}`);
       }
@@ -168,7 +176,7 @@ function makeFakes(opts: FakeOpts = {}): {
         calls.describe += 1;
         if (opts.failVisual) throw new Error("visual provider unavailable");
         if (opts.describeImpl) {
-          const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
+          const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
           const start = match ? Number(match[1]) : 0;
           const end = match ? Number(match[2]) : 3;
           const out = opts.describeImpl(start, end);
