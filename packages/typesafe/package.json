@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts"
+  },
   "dependencies": {
     "@decupa/trace": "workspace:*"
   }

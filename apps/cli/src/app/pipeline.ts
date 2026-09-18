@@ -401,6 +401,7 @@ export async function runTriage(
     videoPath: string;
     outDir: string;
     provider?: string;
+    projectDir?: string;
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
 ): Promise<string> {
@@ -413,6 +414,7 @@ export async function runTriage(
     indexPath: indexPath(job),
     videoPath: proxy,
     outDir: join(job.workDir, "out"),
+    projectDir: process.cwd(),
     // Sem escolha explícita, quem resolve é a biblioteca, pela chave.
     ...(provider ? { provider } : {}),
     ...(job.signal ? { signal: job.signal } : {}),

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -221,6 +221,160 @@ describe("runTriage", () => {
     expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
     expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
     expect(out.keepList).toBe("u001-u005");
+  });
+
+  it("hybrid do projeto liga o TypeSafe sem --route e sem texto privado", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-decision-"));
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "hybrid" }), "utf8");
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+
+    let payload: Record<string, unknown> = {};
+    let calls = 0;
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      payload = JSON.parse(String(init?.body));
+      const questions = (payload.questions ?? {}) as Record<string, unknown>;
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(questions)) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      projectDir: dir,
+      env: { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" },
+      fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(JSON.stringify(payload)).not.toMatch(/Tá gravando|gancho|Ficou bom/);
+    expect(JSON.stringify(payload)).not.toContain("sk-typesafe-secret-do-not-log");
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
+  it("--route hybrid força a rota mesmo com decision.json inválido", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-route-force-"));
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "bogus" }), "utf8");
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    let calls = 0;
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      const payload = JSON.parse(String(init?.body)) as { questions?: Record<string, unknown> };
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(payload.questions ?? {})) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      projectDir: dir,
+      env: { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" },
+      fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
+  it("desligar o Jev no mesmo projeto volta ao legado e não chama TypeSafe", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-jev-off-"));
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "hybrid" }), "utf8");
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    let calls = 0;
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      const payload = JSON.parse(String(init?.body)) as { questions?: Record<string, unknown> };
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(payload.questions ?? {})) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const env = { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" };
+    const hybridModel = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const hybrid = await runTriage({
+      indexPath, videoPath, outDir: join(dir, "hybrid"), model: hybridModel, projectDir: dir, env, fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(hybridModel.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(hybrid.keepList).toBe("u002");
+
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "off" }), "utf8");
+    const after = calls;
+    const offModel = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "legado", source: "model" },
+    ]);
+    const off = await runTriage({
+      indexPath, videoPath, outDir: join(dir, "off"), model: offModel, projectDir: dir, env, fetchImpl,
+    });
+    expect(calls).toBe(after);
+    expect(offModel.calls.filter((c) => c.kind === "structure")).toHaveLength(1);
+    expect(off.keepList).toBe("u002");
   });
 
   it("hybrid com TypeSafe decide pelo catálogo e não manda texto privado", async () => {

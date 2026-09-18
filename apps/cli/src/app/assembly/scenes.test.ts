@@ -118,26 +118,24 @@ it("proposta do modelo só entra por ID de fala existente", async () => {
 });
 
 it("hybrid TypeSafe não intercepta a geração de cenas no provedor atual", async () => {
-  const { TypeSafeClient } = await import("@decupa/typesafe");
+  const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { bootProjectDecision } = await import("./decision-boot.ts");
+  const dir = await mkdtemp(join(tmpdir(), "scenes-typesafe-"));
+  await mkdir(join(dir, ".decupa"), { recursive: true });
+  await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "hybrid" }), "utf8");
   let typeSafeCalls = 0;
-  const client = new TypeSafeClient({
-    apiKey: "sk-secret",
-    fetchImpl: (async () => {
-      typeSafeCalls += 1;
-      return new Response(JSON.stringify({
-        model: "jev-latest",
-        answers: { "prefix:u001": { type: "noul", noul: 0.92 } },
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
-    }) as typeof fetch,
+  const fetchImpl = (async () => {
+    typeSafeCalls += 1;
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  await bootProjectDecision({
+    projectDir: dir,
+    env: { TYPESAFE_API_KEY: "sk-secret", DECUPA_TYPESAFE: "1" },
+    fetchImpl,
   });
-  await client.decide({
-    state: { candidateIds: ["prefix:u001"] },
-    questions: {
-      "prefix:u001": { type: "noul", instructions: "Apply prefix cut" },
-    },
-  });
-  const afterDecide = typeSafeCalls;
-  expect(afterDecide).toBeGreaterThan(0);
+  const afterBoot = typeSafeCalls;
   const p = project();
   let providerCalls = 0;
   const proposal = await proposeScenes(p, "abrir", new AbortController().signal, {
@@ -160,7 +158,7 @@ it("hybrid TypeSafe não intercepta a geração de cenas no provedor atual", asy
     },
   });
   expect(providerCalls).toBe(1);
-  expect(typeSafeCalls).toBe(afterDecide);
+  expect(typeSafeCalls).toBe(afterBoot);
   expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
 });
 

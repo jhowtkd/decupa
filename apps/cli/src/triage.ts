@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { TypeSafeClient } from "@decupa/typesafe";
 import {
   acceptedDropIds,
   applyDensityBudget,
@@ -43,7 +44,7 @@ import {
   type VisualUnitFlags,
   type ZaiUsage,
 } from "@decupa/triage";
-import { TypeSafeClient } from "@decupa/typesafe";
+import { bootProjectDecision } from "./app/assembly/decision-boot.ts";
 import { sharedVisualPools, type VisualPools } from "./app/assembly/visual-pool.ts";
 
 export interface TriageOptions {
@@ -287,8 +288,24 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
   const env = opts.env ?? process.env;
-  const routeMode = opts.routeMode ?? "off";
+  let routeMode = opts.routeMode;
   let typeSafeClient = opts.typeSafeClient;
+  if (!typeSafeClient && opts.routeMode == null) {
+    const boot = await bootProjectDecision({
+      projectDir: opts.projectDir ?? process.cwd(),
+      env,
+      fetchImpl: opts.fetchImpl,
+      log: (line) => console.log(line),
+    });
+    routeMode = boot.mode;
+    if (boot.enabled && env.TYPESAFE_API_KEY) {
+      typeSafeClient = new TypeSafeClient({
+        apiKey: env.TYPESAFE_API_KEY,
+        fetchImpl: opts.fetchImpl,
+      });
+    }
+  }
+  routeMode = routeMode ?? "off";
   if (
     !typeSafeClient
     && (routeMode === "hybrid" || routeMode === "observe")

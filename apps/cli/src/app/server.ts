@@ -24,6 +24,7 @@ import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
+import { bootProjectDecision } from "./assembly/decision-boot.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -151,6 +152,9 @@ export async function startApp(opts: {
   allowPaidVisual?: boolean;
   /** Worker residente injetável; em produção o serviço cria um `worker.py --serve`. */
   speech?: IngestSpeech;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+  decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
@@ -620,8 +624,17 @@ async function startAssemblyApp(opts: {
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+  decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
   const dir = resolve(opts.projectDir);
+  await bootProjectDecision({
+    projectDir: dir,
+    env: opts.env,
+    fetchImpl: opts.fetchImpl,
+    log: opts.decisionLog,
+  });
   const exec = opts.executor ?? new SpawnExecutor();
   const { speech, closeSpeech } = attachResidentSpeech({
     dir,
