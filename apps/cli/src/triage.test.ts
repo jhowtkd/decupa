@@ -68,6 +68,60 @@ describe("runTriage", () => {
     expect(catalog.candidates.some((c) => c.kind === "negation" && c.unitIds.includes("u003"))).toBe(true);
   });
 
+  it("grava no catalog.json a matriz de casos do catálogo fechado", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-catalog-matrix-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 40,
+      budget: { lossless_floor_seconds: 8 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002", "u003", "u004", "u005", "u006", "u007", "u008", "u009"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", speaker: "a", word_count: 2, lead_gap: 0.2 },
+        { id: "u002", index: 1, start: 2, end: 4, duration: 2, text: "O gancho do vídeo começa aqui.", speaker: "a", word_count: 6, lead_gap: 0.2 },
+        { id: "u003", index: 2, start: 4, end: 6, duration: 2, text: "Agora vai.", speaker: "a", word_count: 2, lead_gap: 0.2 },
+        {
+          id: "u004", index: 3, start: 6, end: 8, duration: 2, text: "Agora vai.", speaker: "a", word_count: 2,
+          lead_gap: 0.2, near_duplicate_of: "u003", similarity: 0.99,
+        },
+        { id: "u005", index: 4, start: 8, end: 10, duration: 2, text: "Isso não vale para quem já pagou.", speaker: "a", word_count: 7, lead_gap: 0.2 },
+        { id: "u006", index: 5, start: 10, end: 12, duration: 2, text: "Foram 15 minutos de espera.", speaker: "a", word_count: 5, lead_gap: 0.2 },
+        { id: "u007", index: 6, start: 12, end: 14, duration: 2, text: "Funciona, mas só depois do login.", speaker: "a", word_count: 6, lead_gap: 0.2 },
+        {
+          id: "u008", index: 7, start: 14, end: 16, duration: 2, text: "Por que isso importa?", speaker: "a",
+          word_count: 4, lead_gap: 0.2, is_question: true, has_terminal_punct: true,
+        },
+        { id: "u009", index: 8, start: 16, end: 18, duration: 2, text: "Eu respondo depois.", speaker: "b", word_count: 3, lead_gap: 4.5 },
+        { id: "u010", index: 9, start: 18, end: 20, duration: 2, text: "Ficou bom?", speaker: "b", word_count: 2, lead_gap: 0.2 },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fixture", "utf8");
+    await runTriage({ indexPath, videoPath, outDir: dir, model: new FakeTriageModel([]) });
+    const catalog = JSON.parse(await readFile(join(dir, "catalog.json"), "utf8")) as {
+      sourceClean: boolean;
+      candidates: { id: string; kind: string; unitIds: string[]; replacement: string | null; protected?: boolean }[];
+    };
+    expect(catalog.sourceClean).toBe(false);
+    const kinds = new Set(catalog.candidates.map((c) => c.kind));
+    expect([...kinds].sort()).toEqual(expect.arrayContaining([
+      "prefix", "suffix", "retake", "negation", "number", "caveat", "protection", "speaker_change", "gap",
+    ]));
+    expect(catalog.candidates.some((c) => c.kind === "prefix" && c.unitIds.includes("u001"))).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "suffix" && c.unitIds.includes("u010"))).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "retake" && c.unitIds.includes("u003") && c.replacement === "u004")).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "negation" && c.unitIds.includes("u005") && c.protected)).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "number" && c.unitIds.includes("u006") && c.protected)).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "caveat" && c.unitIds.includes("u007") && c.protected)).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "protection" && c.unitIds.includes("u008"))).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "speaker_change" && c.unitIds.join("+") === "u008+u009")).toBe(true);
+    expect(catalog.candidates.some((c) => c.kind === "gap" && c.unitIds.includes("u009"))).toBe(true);
+    const known = new Set(["u001", "u002", "u003", "u004", "u005", "u006", "u007", "u008", "u009", "u010"]);
+    for (const candidate of catalog.candidates) {
+      expect(candidate.unitIds.every((id) => known.has(id))).toBe(true);
+      if (candidate.replacement) expect(known.has(candidate.replacement)).toBe(true);
+    }
+  });
+
   it("não aplica alegação que não confere, e mantém as unidades", async () => {
     const { dir, indexPath, videoPath } = await fixture();
     const model = new FakeTriageModel([
