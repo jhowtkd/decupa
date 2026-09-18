@@ -6,7 +6,7 @@ import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
 import { analysisCacheDir } from "./analysis.ts";
-import { createVisualPools } from "./visual-pool.ts";
+import { createVisualPools, sharedVisualPools, type VisualPools } from "./visual-pool.ts";
 import { mergeAdjacent, validateVisual, visualWindows } from "./visual.ts";
 
 export const VISUAL_PROMPT = `Você recebe um trecho de vídeo (proxy, 1 fps, proporção preservada).
@@ -28,6 +28,7 @@ export type DescribeDeps = {
   exec?: Executor;
   ffmpegLimit?: number;
   networkLimit?: number;
+  pools?: VisualPools;
   isCurrent?: () => boolean;
 };
 
@@ -206,10 +207,12 @@ export async function describeSource(
   await mkdir(cacheDir, { recursive: true });
 
   if (signal.aborted) throw new Error("descrição visual cancelada");
-  const pool = createVisualPools({
-    ffmpegLimit: deps?.ffmpegLimit ?? 2,
-    networkLimit: deps?.networkLimit ?? 2,
-  });
+  const pool = deps?.pools ?? (deps?.ffmpegLimit != null || deps?.networkLimit != null
+    ? createVisualPools({
+      ffmpegLimit: deps.ffmpegLimit ?? 2,
+      networkLimit: deps.networkLimit ?? 2,
+    })
+    : sharedVisualPools());
   const windows = visualWindows(source.durationSeconds);
   const collected: VisualSpan[][] = Array.from({ length: windows.length }, () => []);
   let firstError: unknown;

@@ -38,6 +38,20 @@ function backoffMs(attempt: number, random: () => number): number {
   return BACKOFF_INITIAL_MS * 2 ** attempt * (1 - random() * BACKOFF_JITTER);
 }
 
+const DEFAULT_FFMPEG_LIMIT = 2;
+const DEFAULT_NETWORK_LIMIT = 2;
+
+let shared: VisualPools | undefined;
+
+/** Orçamento de processo compartilhado entre janelas visuais e inspect. */
+export function sharedVisualPools(): VisualPools {
+  shared ??= createVisualPools({
+    ffmpegLimit: DEFAULT_FFMPEG_LIMIT,
+    networkLimit: DEFAULT_NETWORK_LIMIT,
+  });
+  return shared;
+}
+
 export function createVisualPools(opts: VisualPoolOptions): VisualPools {
   const ffmpeg: LimitedQueue = createLimitedQueue(opts.ffmpegLimit);
   const network: LimitedQueue = createLimitedQueue(opts.networkLimit);
