@@ -1,5 +1,5 @@
 import { runInNewContext } from "node:vm";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, unlink, writeFile, appendFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, unlink, writeFile, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,8 +236,13 @@ it("POST /analyze no serviço residente usa o worker e não spawnam transcribe.p
     }),
   });
   expect(res.status).toBe(200);
-  expect(workerCalls).toEqual([clip]);
-  expect(opened.project.assembly.sources[0]?.path).toBe(clip);
+  const stored = opened.project.assembly.sources[0]?.path;
+  expect(stored).toBeTruthy();
+  // sourceFromFile canonicaliza com realpath: no macOS /var vs /private/var,
+  // no Windows 8.3 (RUNNER~1) vs o caminho longo. O taskId do worker é esse
+  // path gravado, não a grafia do mkdtemp que o boot() devolve.
+  expect(workerCalls).toEqual([stored]);
+  expect(stored).toBe(await realpath(clip));
 });
 
 it("recusa visual pago sem autorização explícita mesmo com cliente", async () => {
