@@ -34,6 +34,7 @@ export interface PipelineJob {
   id: string;
   videoPath: string;
   workDir: string;
+  signal?: AbortSignal;
 }
 
 export class SpawnExecutor implements Executor {
@@ -370,6 +371,7 @@ export async function runTriage(
     videoPath: string;
     outDir: string;
     provider?: string;
+    signal?: AbortSignal;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
 ): Promise<string> {
   // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
@@ -383,6 +385,7 @@ export async function runTriage(
     outDir: join(job.workDir, "out"),
     // Sem escolha explícita, quem resolve é a biblioteca, pela chave.
     ...(provider ? { provider } : {}),
+    ...(job.signal ? { signal: job.signal } : {}),
   });
   return result.keepList;
 }

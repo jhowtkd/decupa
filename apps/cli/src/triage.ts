@@ -58,6 +58,10 @@ export interface TriageOptions {
   visual?: VisualUnitFlags[];
   /** Orçamento compartilhado com janelas visuais (FFmpeg + rede). */
   visualPools?: VisualPools;
+  /** Cancelamento da triagem: mata o ffmpeg do inspect e libera a vaga. */
+  signal?: AbortSignal;
+  /** Injetável: testes não dependem do ffmpeg real. */
+  spawn?: ExtractFramesDeps["spawn"];
 }
 
 export interface TriageJson {
@@ -154,6 +158,7 @@ export async function extractUnitFrames(
   const span = Math.max(unit.end - unit.start, 0.25);
   const out: string[] = [];
   for (let i = 0; i < n; i += 1) {
+    if (deps.signal?.aborted) break;
     const t = unit.start + (span * (i + 0.5)) / n;
     const path = join(destDir, `${unit.id}_${i}.jpg`);
     const code = await pool.encode(() => new Promise<number>((resolve) => {
@@ -290,7 +295,11 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     const inspectVideo = await resolveInspectVideoPath(videoPath, opts.outDir);
     const pools = opts.visualPools ?? sharedVisualPools();
     const extract = opts.extractFrames ?? ((unit: { id: string; start: number; end: number }) =>
-      extractUnitFrames(inspectVideo, unit, framesDir, { pool: pools }));
+      extractUnitFrames(inspectVideo, unit, framesDir, {
+        pool: pools,
+        signal: opts.signal,
+        spawn: opts.spawn,
+      }));
 
     for (const u of visual) {
       if (!u.ambiguous || dropped.has(u.id)) continue;
@@ -314,7 +323,9 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       let verdict = await readCache<InspectVerdict>(cacheDir, inspectKey);
       if (verdict === null) {
         try {
-          verdict = await pools.request(() => model.inspect({ unitId: u.id, frames }));
+          verdict = await pools.request(() => model.inspect({ unitId: u.id, frames }), {
+            signal: opts.signal,
+          });
         } catch {
           inspectFlags.push({
             unitId: u.id,

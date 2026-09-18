@@ -27,6 +27,7 @@ async function bootComPlano(
     videoPath: string;
     outDir: string;
     provider?: string;
+    signal?: AbortSignal;
   }) => Promise<{ keepList: string }>,
 ) {
   const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
@@ -107,6 +108,24 @@ describe("startApp", () => {
     await fetch(`${base}/jobs/${app.jobId}/cancel`, { method: "POST" });
     const body = await (await fetch(`${base}/jobs/${app.jobId}`)).json() as { stage: string };
     expect(body.stage).toBe("cancelled");
+  });
+
+  it("cancelar aborta o signal da triagem em andamento", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let seen: AbortSignal | undefined;
+    const { base, app } = await bootComPlano(new FakeExecutor(), async (opts) => {
+      seen = opts.signal;
+      await gate;
+      return { keepList: "u001" };
+    });
+    const pending = fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+    await expect.poll(() => seen).toBeTruthy();
+    expect(seen?.aborted).toBe(false);
+    await fetch(`${base}/jobs/${app.jobId}/cancel`, { method: "POST" });
+    expect(seen?.aborted).toBe(true);
+    release();
+    await pending;
   });
 
   it("keep devolve o review novo — o caminho que a tela usa a cada clique", async () => {

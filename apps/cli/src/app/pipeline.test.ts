@@ -272,6 +272,21 @@ describe("runTriage", () => {
     });
     expect(seen[0]).toMatchObject({ provider: "zai" });
   });
+
+  it("encaminha o signal do job para o inspect da biblioteca", async () => {
+    const ac = new AbortController();
+    const seen: { signal?: AbortSignal }[] = [];
+    await runTriage(
+      { ...job, signal: ac.signal },
+      new FakeExecutor(),
+      undefined,
+      async (opts) => {
+        seen.push(opts);
+        return { keepList: "u001" };
+      },
+    );
+    expect(seen[0]?.signal).toBe(ac.signal);
+  });
 });
 
 describe("probeFps", () => {

@@ -72,6 +72,15 @@ describe("JobStore", () => {
     expect(store.get(id)!.stage).toBe("cancelled");
   });
 
+  it("cancelar aborta o signal do job", () => {
+    const store = new JobStore();
+    const { id } = store.create({ videoPath: "/v.mp4", workDir: "/w" });
+    const signal = store.signal(id);
+    expect(signal?.aborted).toBe(false);
+    store.cancel(id);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("erro depois de cancelar não vira `error` na tela", () => {
     // Matar o processo faz a etapa em andamento falhar. Se esse erro
     // sobrescrevesse o cancelamento, a pessoa cancelaria, esperaria, e a tela
