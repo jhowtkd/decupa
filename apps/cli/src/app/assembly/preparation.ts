@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { hashFile } from "@decupa/media";
-import type { Executor } from "../pipeline.ts";
+import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource } from "./model.ts";
@@ -30,6 +30,7 @@ export type PreparationDeps = {
   exec: Executor;
   proposeSend?: ModelTransport["send"];
   describeClient?: ModelTransport;
+  speech?: IngestSpeech;
 };
 
 export type PreparationControl = {
@@ -353,7 +354,10 @@ export async function runPreparation(
           checkAlive();
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
           try {
-            const analysis = await analyzeSource(source, dir, deps.exec);
+            const analysis = await analyzeSource(source, dir, deps.exec, {
+              signal,
+              speech: deps.speech,
+            });
             checkAlive();
             await save((p) => ({
               ...p,

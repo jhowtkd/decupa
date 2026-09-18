@@ -183,6 +183,34 @@ describe("runIngest", () => {
     expect(transcribe.at(-1)!.category).toBe("error");
     expect(failSink.events.some((e) => e.stage === "indexing")).toBe(false);
   });
+
+  it("dois arquivos no serviço residente compartilham o worker e não spawnam transcribe.py", async () => {
+    const dirA = await mkdtemp(join(tmpdir(), "decupa-ingest-a-"));
+    const dirB = await mkdtemp(join(tmpdir(), "decupa-ingest-b-"));
+    const workerCalls: string[] = [];
+    const speech = {
+      worker: async (req: { taskId: string; language: string }) => {
+        workerCalls.push(req.taskId);
+        return {
+          language: req.language,
+          words: [{ text: "oi", startMs: 0, endMs: 80, confidence: 1, sentenceIndex: 0 }],
+          unaligned: [],
+        };
+      },
+      extract: async () => {},
+      detectSilence: async () => [],
+    };
+    const exec = new FakeExecutor();
+    await Promise.all([
+      runIngest({ id: "a", videoPath: "/vid/cam-a.mp4", workDir: dirA }, exec, () => {}, undefined, createTracer(), speech),
+      runIngest({ id: "b", videoPath: "/vid/cam-b.mp4", workDir: dirB }, exec, () => {}, undefined, createTracer(), speech),
+    ]);
+    expect(workerCalls.sort()).toEqual(["/vid/cam-a.mp4", "/vid/cam-b.mp4"]);
+    expect(exec.calls.some((c) => c.args.includes("condense-prep"))).toBe(false);
+    expect(exec.calls.some((c) => c.args.includes("transcribe.py"))).toBe(false);
+    expect(JSON.parse(await readFile(join(dirA, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
+    expect(JSON.parse(await readFile(join(dirB, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
+  });
 });
 
 describe("runPlan", () => {

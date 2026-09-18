@@ -5,7 +5,7 @@ import { inspectArtifact, publishAtomic } from "@decupa/cache";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { CancelledError, createLimitedQueue, isCancelledError } from "@decupa/queue";
 import { PROMPT_VERSION, ZAI_DEFAULT_MODEL, parseSpeechIndex } from "@decupa/triage";
-import type { Executor } from "../pipeline.ts";
+import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { runIngest, transcriptPath } from "../pipeline.ts";
 import type { Analysis, Source, Span, Word } from "./types.ts";
 
@@ -20,6 +20,7 @@ export type AnalyzeOptions = {
   now?: () => number;
   ttlMs?: number;
   coordinator?: FileCoordinator;
+  speech?: IngestSpeech;
 };
 
 export function analysisKey(sourceSha: string, purpose: AnalysisPurpose = "asr"): string {
@@ -277,6 +278,10 @@ async function buildAnalysis(
       { id: source.id, videoPath: source.path, workDir },
       exec,
       () => undefined,
+      undefined,
+      undefined,
+      opts.speech,
+      opts.signal,
     );
     if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {
