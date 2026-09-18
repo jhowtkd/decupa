@@ -1,0 +1,26 @@
+import { copyFile, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it } from "vitest";
+import { probe } from "@decupa/media";
+import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { SpawnExecutor } from "../pipeline.ts";
+import { proveHardwareEncode } from "./hardware.ts";
+
+it("prova encode em fixture real e cai para software se o hardware falhar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-hw-"));
+  const input = join(dir, "clip.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), input);
+  const source = await probe(input);
+  const proof = await proveHardwareEncode(input, dir, new SpawnExecutor());
+  expect(proof.fallback === true || proof.profile !== "software").toBe(true);
+  const out = await probe(proof.output);
+  expect(out.hasVideo).toBe(true);
+  expect(out.width).toBe(source.width);
+  expect(out.height).toBe(source.height);
+  expect(out.durationMs).toBeGreaterThan(0);
+  expect(Math.abs((out.durationMs ?? 0) - (source.durationMs ?? 0))).toBeLessThan(1500);
+  expect(proof.compared.orientation).toBe("landscape");
+  expect(proof.encoders.length).toBeGreaterThan(0);
+  expect(proof.attempted).not.toEqual([]);
+}, 60_000);
