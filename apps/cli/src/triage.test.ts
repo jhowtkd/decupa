@@ -337,6 +337,36 @@ describe("runTriage — inspect", () => {
     expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
   });
 
+  it("hybrid ainda inspeciona faixa ambígua no provedor atual", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "olhando para o operador" },
+    ]);
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model, visual, extractFrames: frames,
+      routeMode: "hybrid",
+      decide: () => ({ applyIds: [] }),
+    });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+    expect(out.reviewFlags.some((f) => f.unitId === "u004" && f.code === "looks_away")).toBe(true);
+  });
+
+  it("hybrid ainda inspeciona faixa ambígua no provedor atual", async () => {
+    const { dir, indexPath, videoPath, visual, frames } = await withVisual();
+    const model = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "olhando para o operador" },
+    ]);
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, model, visual, extractFrames: frames,
+      routeMode: "hybrid",
+      decide: () => ({ applyIds: [] }),
+    });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+    expect(out.reviewFlags.some((f) => f.unitId === "u004" && f.code === "looks_away")).toBe(true);
+  });
+
   it("reusa cache do inspect na segunda corrida", async () => {
     const { dir, indexPath, videoPath, visual, frames } = await withVisual();
     const model1 = new FakeTriageModel([], [], [
