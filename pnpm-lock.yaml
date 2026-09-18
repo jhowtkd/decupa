@@ -38,6 +38,9 @@ importers:
       '@decupa/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
+      '@decupa/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
       '@decupa/trace':
         specifier: workspace:*
         version: link:../../packages/trace
@@ -79,6 +82,8 @@ importers:
       '@decupa/core':
         specifier: workspace:*
         version: link:../core
+
+  packages/queue: {}
 
   packages/trace: {}
 

@@ -155,6 +155,28 @@ it("erro de escrita não corrompe o estado", async () => {
   expect((await loadProject(dir)).revision).toBe(1);
 });
 
+it("escritor único serializa gravações funcionais concorrentes sem corromper o JSON", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
+  await createProject(dir, projectAt(1));
+  const results = await Promise.allSettled([
+    saveProject(dir, 1, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      input: { ...current.input, text: `${current.input.text}|a` },
+    })),
+    saveProject(dir, 1, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      input: { ...current.input, text: `${current.input.text}|b` },
+    })),
+  ]);
+  expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+  const loaded = await loadProject(dir);
+  expect(loaded.revision).toBe(3);
+  expect(loaded.input.text).toMatch(/\|a\|b$|\|b\|a$/);
+  JSON.parse(await readFile(join(dir, "project.json"), "utf8"));
+});
+
 it("rejeita palavras com ID duplicado, tempo inválido ou fonte ausente", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-store-"));
   await createProject(dir, projectAt(1));

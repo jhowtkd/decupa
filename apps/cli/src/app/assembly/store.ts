@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { access } from "node:fs/promises";
+import { createLimitedQueue, type LimitedQueue } from "@decupa/queue";
 import type {
   Analysis,
   Assembly,
@@ -15,7 +16,7 @@ import type {
 } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 
-const queues = new Map<string, Promise<unknown>>();
+const writers = new Map<string, LimitedQueue>();
 
 function projectPath(dir: string): string {
   return join(dir, "project.json");
@@ -34,11 +35,16 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+function writerFor(dir: string): LimitedQueue {
+  const existing = writers.get(dir);
+  if (existing) return existing;
+  const created = createLimitedQueue(1);
+  writers.set(dir, created);
+  return created;
+}
+
 function enqueue<T>(dir: string, work: () => Promise<T>): Promise<T> {
-  const prev = queues.get(dir) ?? Promise.resolve();
-  const next = prev.then(work, work);
-  queues.set(dir, next.then(() => undefined, () => undefined));
-  return next;
+  return writerFor(dir).run(work);
 }
 
 async function acquireLock(dir: string): Promise<void> {
@@ -709,14 +715,19 @@ export async function saveProject(
       const rawText = await readFile(projectPath(dir), "utf8");
       const raw = JSON.parse(rawText) as { version?: unknown };
       const current = validateProject(raw);
-      if (current.revision !== expectedRevision) {
-        throw new Error(
-          `revisão desatualizada: base ${expectedRevision}, atual ${current.revision}`,
-        );
+      let next: Project;
+      if (typeof nextOrFn === "function") {
+        // Functional updates run inside the single writer: apply to the latest
+        // bytes instead of 409'ing on a stale expectedRevision captured outside.
+        next = validateProject(nextOrFn(current));
+      } else {
+        if (current.revision !== expectedRevision) {
+          throw new Error(
+            `revisão desatualizada: base ${expectedRevision}, atual ${current.revision}`,
+          );
+        }
+        next = validateProject(mergeProjectCommit(current, validateProject(nextOrFn), base));
       }
-      const next = typeof nextOrFn === "function"
-        ? validateProject(nextOrFn(current))
-        : validateProject(mergeProjectCommit(current, validateProject(nextOrFn), base));
       if (raw.version === 1) {
         // Primeira gravação v2: preserva o v1 exato uma única vez.
         try {
