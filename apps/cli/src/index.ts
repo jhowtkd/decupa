@@ -15,6 +15,10 @@ const USAGE = `decupa — bancada de medição
       fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
       apenas o provedor falta.
 
+  decupa bench [--scenario cold-start|resident-models|cached-artifacts] [--count 20] [--limit 2]
+      Benchmark reproduzível de lote. Relata vazão, p50/p95, RAM e falhas.
+      Nenhum comando fictício é apresentado como medição.
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -74,6 +78,39 @@ async function main(argv: string[]): Promise<number> {
     const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
+  }
+
+  if (command === "bench") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        scenario: { type: "string" },
+        count: { type: "string" },
+        limit: { type: "string" },
+      },
+    });
+    const scenario = values.scenario ?? "cold-start";
+    if (scenario !== "cold-start" && scenario !== "resident-models" && scenario !== "cached-artifacts") {
+      console.error("scenario precisa ser cold-start, resident-models ou cached-artifacts");
+      return 1;
+    }
+    const count = Number(values.count ?? "20");
+    const limit = Number(values.limit ?? "2");
+    if (!Number.isFinite(count) || count < 1 || !Number.isFinite(limit) || limit < 1) {
+      console.error("count e limit precisam ser inteiros >= 1");
+      return 1;
+    }
+    const { renderBenchmark, runBatchBenchmark } = await import("@decupa/bench");
+    const files = Array.from({ length: count }, (_, i) => `job-${String(i + 1).padStart(2, "0")}`);
+    const manifest = await runBatchBenchmark({
+      caseId: `cli-${scenario}-${count}`,
+      scenario,
+      files,
+      limit,
+      work: async () => {},
+    });
+    console.log(renderBenchmark(manifest));
+    return manifest.failures === 0 ? 0 : 1;
   }
 
   if (command === "gold") {
