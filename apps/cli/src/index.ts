@@ -15,9 +15,9 @@ const USAGE = `decupa — bancada de medição
       fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
       apenas o provedor falta.
 
-  decupa bench [--scenario cold-start|resident-models|cached-artifacts] [--count 20] [--limit 2]
+  decupa bench --input <arquivo> [--input <arquivo> ...] [--scenario cold-start|resident-models|cached-artifacts] [--limit 2]
       Benchmark reproduzível de lote. Relata vazão, p50/p95, RAM e falhas.
-      Nenhum comando fictício é apresentado como medição.
+      Recusa inventar arquivos: cada --input precisa existir.
 
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
@@ -85,8 +85,8 @@ async function main(argv: string[]): Promise<number> {
       args: rest,
       options: {
         scenario: { type: "string" },
-        count: { type: "string" },
         limit: { type: "string" },
+        input: { type: "string", multiple: true },
       },
     });
     const scenario = values.scenario ?? "cold-start";
@@ -94,23 +94,19 @@ async function main(argv: string[]): Promise<number> {
       console.error("scenario precisa ser cold-start, resident-models ou cached-artifacts");
       return 1;
     }
-    const count = Number(values.count ?? "20");
     const limit = Number(values.limit ?? "2");
-    if (!Number.isFinite(count) || count < 1 || !Number.isFinite(limit) || limit < 1) {
-      console.error("count e limit precisam ser inteiros >= 1");
+    if (!Number.isFinite(limit) || limit < 1) {
+      console.error("limit precisa ser um inteiro >= 1");
       return 1;
     }
-    const { renderBenchmark, runBatchBenchmark } = await import("@decupa/bench");
-    const files = Array.from({ length: count }, (_, i) => `job-${String(i + 1).padStart(2, "0")}`);
-    const manifest = await runBatchBenchmark({
-      caseId: `cli-${scenario}-${count}`,
+    const { runCliBench } = await import("./bench.ts");
+    const result = await runCliBench({
       scenario,
-      files,
       limit,
-      work: async () => {},
+      inputs: values.input ?? [],
     });
-    console.log(renderBenchmark(manifest));
-    return manifest.failures === 0 ? 0 : 1;
+    console.log(result.output);
+    return result.code;
   }
 
   if (command === "gold") {

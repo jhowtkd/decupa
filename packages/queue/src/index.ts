@@ -26,6 +26,8 @@ export interface QueueRunOptions {
 export interface LimitedQueue {
   readonly inFlight: number;
   readonly maxInFlight: number;
+  readonly waiting: number;
+  readonly maxWaiting: number;
   run<T>(work: () => Promise<T> | T, opts?: QueueRunOptions): Promise<T>;
   map<T, R>(
     items: readonly T[],
@@ -48,6 +50,7 @@ export function createLimitedQueue(limit: number): LimitedQueue {
 
   let inFlight = 0;
   let maxInFlight = 0;
+  let maxWaiting = 0;
   const waiters: Waiter[] = [];
   const shared = new Map<string, Promise<unknown>>();
 
@@ -90,6 +93,7 @@ export function createLimitedQueue(limit: number): LimitedQueue {
       waiter.onAbort = onAbort;
       signal?.addEventListener("abort", onAbort, { once: true });
       waiters.push(waiter);
+      maxWaiting = Math.max(maxWaiting, waiters.length);
     });
   };
 
@@ -118,6 +122,12 @@ export function createLimitedQueue(limit: number): LimitedQueue {
     },
     get maxInFlight() {
       return maxInFlight;
+    },
+    get waiting() {
+      return waiters.length;
+    },
+    get maxWaiting() {
+      return maxWaiting;
     },
     async run<T>(work: () => Promise<T> | T, opts?: QueueRunOptions): Promise<T> {
       if (opts?.signal?.aborted) throw cancelled(opts.signal.reason);

@@ -70,33 +70,35 @@ export async function runBatchBenchmark(opts: BatchBenchmarkOptions): Promise<Be
   const limit = opts.limit;
   const queue = createLimitedQueue(limit);
   const coordinator = opts.coordinator;
-  let inFlight = 0;
-  let peak = 0;
+  let peakRssMb = 0;
   const durations: number[] = [];
   const failed: string[] = [];
   const started = now();
+  const sampleRam = (): void => {
+    peakRssMb = Math.max(peakRssMb, Math.round(process.memoryUsage().rss / (1024 * 1024)));
+  };
 
   return tracer.run("batch", async () => {
     await Promise.all(opts.files.map(async (file) => {
       const run = async (): Promise<void> => {
-        inFlight += 1;
-        peak = Math.max(peak, inFlight);
+        sampleRam();
         const t0 = now();
         try {
           await opts.work(file);
           durations.push(Math.max(0, now() - t0));
         } catch {
           failed.push(file);
-        } finally {
-          inFlight -= 1;
         }
       };
-      if (coordinator) {
-        await coordinator.run({ id: file, stage: "batch", build: run });
-        return;
-      }
-      await queue.run(run, { key: file });
+      await queue.run(async () => {
+        if (coordinator) {
+          await coordinator.run({ id: file, stage: "batch", build: run });
+          return;
+        }
+        await run();
+      }, { key: file });
     }));
+    sampleRam();
 
     const elapsedSec = Math.max(0.001, (now() - started) / 1000);
     const completed = opts.files.length - failed.length;
@@ -118,8 +120,8 @@ export async function runBatchBenchmark(opts: BatchBenchmarkOptions): Promise<Be
         p50Ms: percentile(durations, 0.5),
         p95Ms: percentile(durations, 0.95),
       },
-      ram: { peakMb: hardware.ramMb },
-      queue: { limit, peak },
+      ram: { peakMb: peakRssMb },
+      queue: { limit, peak: queue.maxWaiting },
       processes: { peak: 1 },
     };
   });
@@ -135,6 +137,7 @@ export function renderBenchmark(manifest: BenchmarkManifest): string {
     `throughput: ${manifest.throughput.toFixed(3)} /s`,
     `latency p50: ${manifest.latency.p50Ms} ms · p95: ${manifest.latency.p95Ms} ms (n=${manifest.latency.n})`,
     `queue limit ${manifest.queue.limit} peak ${manifest.queue.peak} · processes peak ${manifest.processes.peak}`,
+    `ram peak ${manifest.ram.peakMb} MiB`,
     `completed ${manifest.completed} · failures ${manifest.failures}${manifest.failed.length ? ` (${manifest.failed.join(", ")})` : ""}`,
   ].join("\n");
 }
