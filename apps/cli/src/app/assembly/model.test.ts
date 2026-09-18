@@ -266,6 +266,35 @@ it("respostas complementares conservam ambos os trechos", async () => {
   ]);
 });
 
+it("replay com artefato aquecido faz 0 chamadas de encode e de API", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir);
+  let api = 0;
+  let encodes = 0;
+  const client = {
+    async send() {
+      api += 1;
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const exec: Executor = {
+    async run(call) {
+      encodes += 1;
+      return copyProxy.run(call);
+    },
+  };
+  await describeSource(source, dir, new AbortController().signal, { client, exec });
+  expect(api).toBeGreaterThan(0);
+  expect(encodes).toBeGreaterThan(0);
+  const beforeApi = api;
+  const beforeEnc = encodes;
+  await describeSource(source, dir, new AbortController().signal, { client, exec });
+  expect(api).toBe(beforeApi);
+  expect(encodes).toBe(beforeEnc);
+});
+
 it("resposta atrasada não altera revisão nova", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir, 3);
