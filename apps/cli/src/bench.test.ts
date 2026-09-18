@@ -29,6 +29,9 @@ describe("runCliBench", () => {
     });
     expect(result.code).toBe(0);
     expect(result.output).toMatch(/batch: 3/);
+    expect(result.output).toMatch(/sample: 3/);
+    expect(result.output).toMatch(/\(n=3\)/);
+    expect(result.output).toMatch(/ram peak \d+ MiB/);
     expect(result.output).toMatch(/queue limit 1 peak /);
     expect(result.output).toMatch(/processes peak 1/);
     expect(result.output).toMatch(/loads: models /);

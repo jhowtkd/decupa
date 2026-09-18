@@ -63,6 +63,11 @@ describe("runBatchBenchmark", () => {
     expect(result.sampleSize).toBe(result.latency.n);
     expect(result.latency.p95Ms).toBeGreaterThanOrEqual(result.latency.p50Ms);
     expect(result.failed).toEqual(["clip-19.wav"]);
+    expect(result.ram.peakMb).toBeGreaterThan(0);
+    expect(result.sampleSize).toBe(19);
+    expect(renderBenchmark(result)).toMatch(/ram peak \d+ MiB/);
+    expect(renderBenchmark(result)).toMatch(/sample: 19/);
+    expect(renderBenchmark(result)).toMatch(/\(n=19\)/);
   });
 
   it("saturação cresce a fila visível, não processos", async () => {
