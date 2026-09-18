@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@decupa/core": "workspace:*",
+    "@decupa/trace": "workspace:*",
     "@google/genai": "^2.21.0"
   }
 }
