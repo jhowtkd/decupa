@@ -60,7 +60,7 @@ function renderStatus() {
     return;
   }
   if (p && p.preparation && p.preparation.status === "running") {
-    setStatus("Preparando… etapa " + p.preparation.stage, true);
+    setStatus(p.preparation.note || ("Preparando… etapa " + p.preparation.stage), true);
     return;
   }
   if (previewInflight || previewPending) {

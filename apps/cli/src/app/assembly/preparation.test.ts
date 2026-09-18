@@ -63,11 +63,13 @@ function makeFakes(opts: FakeOpts = {}): {
   failNextPropose: () => void;
   blockPropose: () => { release: (json: string) => void; gate: Promise<string> };
   blockAudio: () => { release: () => void };
+  blockFfmpeg: () => { release: () => void };
 } {
   const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
   let nextFail = false;
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
   let audioGate: Promise<void> | null = null;
+  let ffmpegGate: Promise<void> | null = null;
   const proposalJson = JSON.stringify({
     scenes: [
       {
@@ -122,6 +124,10 @@ function makeFakes(opts: FakeOpts = {}): {
     }
     if (call.command === "ffmpeg") {
       calls.ffmpeg += 1;
+      const playback = call.args.includes("scale='min(960,iw)':-2")
+        || call.args.includes("-vframes")
+        || call.args.includes("pcm_s16le");
+      if (playback && ffmpegGate) await ffmpegGate;
       await writeFile(call.args[call.args.length - 1], `clip-${calls.ffmpeg}`);
       return { code: 0, stdout: "", stderr: "" };
     }
@@ -198,6 +204,13 @@ function makeFakes(opts: FakeOpts = {}): {
     blockAudio: () => {
       let release!: () => void;
       audioGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { release };
+    },
+    blockFfmpeg: () => {
+      let release!: () => void;
+      ffmpegGate = new Promise<void>((resolve) => {
         release = resolve;
       });
       return { release };
@@ -729,5 +742,31 @@ describe("runPreparation", () => {
         ctrl(),
       ),
     ).rejects.toThrow("nada a ajustar");
+  });
+
+  it("análise de áudio começa com waveform pendente e registra o estado", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, calls, blockFfmpeg } = makeFakes();
+    const { release } = blockFfmpeg();
+    const running = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    await vi.waitFor(() => {
+      expect(calls.ingest).toBeGreaterThan(0);
+    });
+    await vi.waitFor(async () => {
+      const mid = await loadProject(dir);
+      expect(mid.preparation?.note).toBe("áudio pronto, imagem em análise");
+      expect(mid.preparation?.sources.fala?.audio).toBe("ready");
+    }, { timeout: 5000 });
+    release();
+    const done = await running;
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.preparation?.note).toBeUndefined();
+    expect(done.previewArtifact).toBeTruthy();
   });
 });

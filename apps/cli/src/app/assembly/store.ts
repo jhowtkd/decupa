@@ -274,6 +274,7 @@ export function validatePreparation(value: unknown): Preparation {
     stage: stage as Preparation["stage"],
     sources,
     error: optionalString(value.error, "preparação.error"),
+    note: optionalString(value.note, "preparação.note"),
   };
 }
 

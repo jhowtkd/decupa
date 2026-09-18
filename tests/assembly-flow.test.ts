@@ -432,7 +432,7 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
   speechId = `${sourceId}:u001`;
 
   // startApp/ingest may already have cached ASR. Drop it so prepare hits the
-  // audio gate; otherwise overlapping media work races to propose.
+  // audio gate; otherwise M3 (audio overlapped with waveform) races to propose.
   await rm(join(dir, "analysis"), { recursive: true, force: true });
 
   audioGate = new Promise<void>((resolve) => {
