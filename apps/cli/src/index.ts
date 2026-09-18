@@ -19,6 +19,10 @@ const USAGE = `decupa — bancada de medição
       Benchmark reproduzível de lote. Relata vazão, p50/p95, RAM e falhas.
       Recusa inventar arquivos: cada --input precisa existir.
 
+  decupa calibrate
+      Relatório offline do corpus editorial. Sem categorias liberadas, tudo
+      vira trabalho humano. Concordância entre modelos não conta como verdade.
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -109,6 +113,13 @@ async function main(argv: string[]): Promise<number> {
     });
     console.log(result.output);
     return result.code;
+  }
+
+  if (command === "calibrate") {
+    const { runOfflineCalibration } = await import("@decupa/triage");
+    const report = await runOfflineCalibration();
+    console.log(JSON.stringify(report, null, 2));
+    return 0;
   }
 
   if (command === "gold") {

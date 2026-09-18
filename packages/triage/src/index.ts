@@ -47,6 +47,28 @@ export type { FastDecision, RouteMode, RouteOptions, RouteResult } from "./routi
 export { decideWithTypeSafe } from "./typesafe-decide.ts";
 export type { TypeSafeDecideClient } from "./typesafe-decide.ts";
 export {
+  CRITICAL_CORPUS,
+  DECISION_CATEGORIES,
+  defaultCalibrationConfig,
+  evaluateCase,
+  humanLabelFromModels,
+  proposalFromNoul,
+  reportCalibration,
+  runOfflineCalibration,
+  routeCorpusCase,
+} from "./calibration.ts";
+export type {
+  CalibrationCase,
+  CalibrationConfig,
+  CalibrationReport,
+  CaseEvaluation,
+  DecisionCategory,
+  HumanLabel,
+  MachineProposal,
+  OutcomeKind,
+  Split,
+} from "./calibration.ts";
+export {
   HAND_ON_FACE_AMBIGUOUS,
   HAND_ON_FACE_BAD,
   LOOKS_AWAY_AMBIGUOUS,
