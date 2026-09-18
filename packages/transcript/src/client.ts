@@ -37,9 +37,13 @@ type Waiter = {
 export function createResidentSpeechClient(opts: {
   spawn?: SpeechSpawner;
   speechDir?: string;
+  onStderr?: (chunk: string) => void;
 } = {}): ResidentSpeechClient {
   const spawnFn = opts.spawn ?? spawn;
   const speechDir = opts.speechDir ?? SPEECH_DIR;
+  const onStderr = opts.onStderr ?? ((chunk: string) => {
+    process.stderr.write(chunk);
+  });
   let child: ChildProcess | null = null;
   let buffer = "";
   let chain: Promise<unknown> = Promise.resolve();
@@ -71,7 +75,9 @@ export function createResidentSpeechClient(opts: {
   const ensure = (): ChildProcess => {
     if (child) return child;
     child = spawnFn("uv", ["run", "python", "worker.py", "--serve"], { cwd: speechDir });
-    child.stderr?.on("data", () => undefined);
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      onStderr(String(chunk));
+    });
     child.stdout?.on("data", (chunk: Buffer | string) => {
       buffer += String(chunk);
       while (true) {
