@@ -117,6 +117,53 @@ it("proposta do modelo só entra por ID de fala existente", async () => {
   expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
 });
 
+it("hybrid TypeSafe não intercepta a geração de cenas no provedor atual", async () => {
+  const { TypeSafeClient } = await import("@decupa/typesafe");
+  let typeSafeCalls = 0;
+  const client = new TypeSafeClient({
+    apiKey: "sk-secret",
+    fetchImpl: (async () => {
+      typeSafeCalls += 1;
+      return new Response(JSON.stringify({
+        model: "jev-latest",
+        answers: { "prefix:u001": { type: "noul", noul: 0.92 } },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch,
+  });
+  await client.decide({
+    state: { candidateIds: ["prefix:u001"] },
+    questions: {
+      "prefix:u001": { type: "noul", instructions: "Apply prefix cut" },
+    },
+  });
+  const afterDecide = typeSafeCalls;
+  expect(afterDecide).toBeGreaterThan(0);
+  const p = project();
+  let providerCalls = 0;
+  const proposal = await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async () => {
+      providerCalls += 1;
+      return JSON.stringify({
+        id: "p1",
+        baseRevision: 1,
+        changedSceneIds: ["s1"],
+        explanation: "abertura",
+        scenes: [{
+          id: "s1",
+          objective: "abrir",
+          rationale: "tema",
+          speechIds: ["a:u001"],
+          support: [],
+          gaps: [],
+        }],
+      });
+    },
+  });
+  expect(providerCalls).toBe(1);
+  expect(typeSafeCalls).toBe(afterDecide);
+  expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
+});
+
 it.each([undefined, 999, "1"])("vincula metadados do modelo ao snapshot: %s", async (modelRevision) => {
   const p = project();
   const result = await proposeScenes(p, "abrir", new AbortController().signal, {
