@@ -82,7 +82,7 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === "calibrate") {
     const { runOfflineCalibration } = await import("@decupa/triage");
-    const report = runOfflineCalibration();
+    const report = await runOfflineCalibration();
     console.log(JSON.stringify(report, null, 2));
     return 0;
   }

@@ -1,4 +1,5 @@
 import { authorizesCut } from "@decupa/typesafe";
+import { buildEditCatalog, type EditCatalog } from "./catalog.ts";
 import { parseSpeechIndex, type SpeechIndex } from "./speech-index.ts";
 
 export const DECISION_CATEGORIES = [
@@ -113,13 +114,32 @@ function percentile(values: number[], fraction: number): number {
   return sorted[index]!;
 }
 
-export function runOfflineCalibration(
+export async function routeCorpusCase(
+  cse: CalibrationCase,
+  config: CalibrationConfig,
+  decide?: (cse: CalibrationCase, catalog: EditCatalog) => MachineProposal | Promise<MachineProposal>,
+): Promise<CaseEvaluation> {
+  const started = Date.now();
+  const catalog = await buildEditCatalog(cse.index);
+  const hit = catalog.candidates.find((candidate) => candidate.id === cse.candidateId);
+  if (!hit) {
+    throw new Error(`caso ${cse.caseId} sem candidato ${cse.candidateId} no catálogo`);
+  }
+  const latencyMs = Math.max(0, Date.now() - started);
+  const proposal = decide
+    ? await decide(cse, catalog)
+    : { source: "typesafe" as const, apply: false, latencyMs };
+  return evaluateCase(cse, { ...proposal, latencyMs: proposal.latencyMs ?? latencyMs }, config);
+}
+
+export async function runOfflineCalibration(
   config: CalibrationConfig = defaultCalibrationConfig(),
-): CalibrationReport {
-  return reportCalibration(
-    CRITICAL_CORPUS.map((cse) =>
-      evaluateCase(cse, { source: "other-model", apply: false, latencyMs: 0 }, config)),
-  );
+): Promise<CalibrationReport> {
+  const evals: CaseEvaluation[] = [];
+  for (const cse of CRITICAL_CORPUS) {
+    evals.push(await routeCorpusCase(cse, config));
+  }
+  return reportCalibration(evals);
 }
 
 export function reportCalibration(evals: CaseEvaluation[]): CalibrationReport {
@@ -139,7 +159,7 @@ export function reportCalibration(evals: CaseEvaluation[]): CalibrationReport {
   for (const category of DECISION_CATEGORIES) {
     const of = rows.filter((item) => item.category === category);
     if (of.length === 0) continue;
-    if (of.some((item) => item.outcome === "incorrect_removal")) continue;
+    if (of.some((item) => item.outcome !== "correct")) continue;
     unlocked.add(category);
   }
   return {

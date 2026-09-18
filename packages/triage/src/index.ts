@@ -51,6 +51,7 @@ export {
   proposalFromNoul,
   reportCalibration,
   runOfflineCalibration,
+  routeCorpusCase,
 } from "./calibration.ts";
 export type {
   CalibrationCase,

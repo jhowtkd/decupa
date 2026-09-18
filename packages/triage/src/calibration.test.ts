@@ -9,6 +9,7 @@ import {
   humanLabelFromModels,
   proposalFromNoul,
   reportCalibration,
+  routeCorpusCase,
   runOfflineCalibration,
   type CalibrationCase,
   type DecisionCategory,
@@ -58,13 +59,14 @@ describe("corpus crítico", () => {
 });
 
 describe("calibração", () => {
-  it("enabledCategories começa vazio e vira trabalho humano", () => {
+  it("enabledCategories começa vazio e vira trabalho humano", async () => {
     expect(defaultCalibrationConfig().enabledCategories).toEqual([]);
     const cse = byCategory("negation");
     const evaled = evaluateCase(cse, { source: "typesafe", apply: true, latencyMs: 12 }, defaultCalibrationConfig());
     expect(evaled.outcome).toBe("human_work");
-    const report = runOfflineCalibration();
+    const report = await runOfflineCalibration();
     expect(report.counts.human_work).toBe(report.sampleSize);
+    expect(report.unlockedCategories).toEqual([]);
     expect(defaultCalibrationConfig().enabledCategories).toEqual([]);
   });
 
@@ -131,5 +133,14 @@ describe("calibração", () => {
       ),
     ]);
     expect(withError.unlockedCategories).not.toContain("negation");
+  });
+
+  it("calibração percorre o catálogo fechado e recusa candidato fantasma", async () => {
+    const report = await runOfflineCalibration();
+    expect(report.sampleSize).toBe(CRITICAL_CORPUS.filter((c) => c.split === "eval").length);
+    await expect(routeCorpusCase(
+      { ...byCategory("negation"), candidateId: "ghost:u002" },
+      defaultCalibrationConfig(),
+    )).rejects.toThrow(/catálogo/);
   });
 });
