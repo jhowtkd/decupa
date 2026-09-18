@@ -16,9 +16,9 @@ import {
   type MachineProposal,
 } from "./calibration.ts";
 
-function byCategory(category: DecisionCategory): CalibrationCase {
-  const found = CRITICAL_CORPUS.find((c) => c.category === category);
-  if (!found) throw new Error(`corpus sem ${category}`);
+function byCategory(category: DecisionCategory, split: CalibrationCase["split"] = "eval"): CalibrationCase {
+  const found = CRITICAL_CORPUS.find((c) => c.category === category && c.split === split);
+  if (!found) throw new Error(`corpus sem ${split} ${category}`);
   return found;
 }
 
@@ -40,6 +40,11 @@ describe("corpus crítico", () => {
   it("o conjunto de avaliação cobre as sete categorias", () => {
     const evalCats = new Set(CRITICAL_CORPUS.filter((c) => c.split === "eval").map((c) => c.category));
     expect(evalCats).toEqual(new Set(DECISION_CATEGORIES));
+  });
+
+  it("o conjunto de desenvolvimento cobre as sete categorias", () => {
+    const devCats = new Set(CRITICAL_CORPUS.filter((c) => c.split === "dev").map((c) => c.category));
+    expect(devCats).toEqual(new Set(DECISION_CATEGORIES));
   });
 
   it("separa dev e avaliação por vídeo e por projeto", () => {
@@ -136,6 +141,16 @@ describe("calibração", () => {
       ),
     ]);
     expect(withError.unlockedCategories).not.toContain("negation");
+
+    const withDevError = reportCalibration([
+      ...results,
+      evaluateCase(
+        byCategory("negation", "dev"),
+        { source: "typesafe", apply: true, latencyMs: 11 },
+        { enabledCategories: ["negation"] },
+      ),
+    ]);
+    expect(withDevError.unlockedCategories).toContain("negation");
   });
 
   it("calibração percorre o catálogo fechado e recusa candidato fantasma", async () => {
