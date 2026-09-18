@@ -20,6 +20,7 @@ export interface ExecCall {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  signal?: AbortSignal;
   /** Chamada a cada linha de stdout/stderr, enquanto o processo roda. É o
    *  único sinal de vida que WhisperX e ffmpeg dão de uma etapa de minutos. */
   onLine?: (line: string) => void;
@@ -33,6 +34,7 @@ export interface PipelineJob {
   id: string;
   videoPath: string;
   workDir: string;
+  signal?: AbortSignal;
 }
 
 export class SpawnExecutor implements Executor {
@@ -54,6 +56,11 @@ export class SpawnExecutor implements Executor {
         detached: process.platform !== "win32",
       });
       this.running.add(child);
+      const onAbort = (): void => {
+        if (child.pid) terminateTree(child.pid);
+      };
+      if (call.signal?.aborted) onAbort();
+      else call.signal?.addEventListener("abort", onAbort, { once: true });
       let stdout = "";
       let stderr = "";
       let settled = false;
@@ -61,6 +68,7 @@ export class SpawnExecutor implements Executor {
         if (settled) return;
         settled = true;
         this.running.delete(child);
+        call.signal?.removeEventListener("abort", onAbort);
         resolvePromise(result);
       };
       // Buffer por stream: uma linha pode chegar partida em dois chunks, e
@@ -364,6 +372,7 @@ export async function runTriage(
     outDir: string;
     provider?: string;
     projectDir?: string;
+    signal?: AbortSignal;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
 ): Promise<string> {
   // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
@@ -378,6 +387,7 @@ export async function runTriage(
     projectDir: process.cwd(),
     // Sem escolha explícita, quem resolve é a biblioteca, pela chave.
     ...(provider ? { provider } : {}),
+    ...(job.signal ? { signal: job.signal } : {}),
   });
   return result.keepList;
 }

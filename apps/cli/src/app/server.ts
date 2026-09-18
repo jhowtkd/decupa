@@ -125,6 +125,7 @@ export async function startApp(opts: {
     videoPath: string;
     outDir: string;
     provider?: string;
+    signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
   selectFn?: AssemblyDeps["selectFn"];
   proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
@@ -188,6 +189,7 @@ async function startCleanupApp(opts: {
     videoPath: string;
     outDir: string;
     provider?: string;
+    signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
   const input = resolve(opts.input);
@@ -201,7 +203,7 @@ async function startCleanupApp(opts: {
 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
-  const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir };
+  const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir, signal: store.signal(job.id) };
   const traces = collectSink();
   const tracer = createTracer(traces);
 

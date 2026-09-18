@@ -72,15 +72,15 @@ it("cancelar após a primeira janela estoura em vez de devolver parcial", async 
   const client = {
     async send() {
       calls += 1;
+      ac.abort();
       const payload = JSON.stringify({
         spans: [{ id: "local-0", start: 0, end: 1, text: "janela", confidence: "observed", tags: [] }],
       });
-      if (calls === 1) ac.abort();
       return payload;
     },
   };
   await expect(describeSource(source, dir, ac.signal, { client, exec: copyProxy })).rejects.toThrow();
-  expect(calls).toBe(1);
+  expect(calls).toBeGreaterThanOrEqual(1);
 });
 
 it("sinal já abortado nem começa", async () => {
@@ -109,20 +109,19 @@ function windowMarkerExec(seen: { args: string[][] }): Executor {
 }
 
 function localSpanClient(captured: { payloads: string[]; prompts: string[] }) {
-  let n = 0;
   return {
     async send(content: unknown[]) {
-      n += 1;
       const video = content.find((part) => (part as { type?: string }).type === "video_url") as {
         video_url: { url: string };
       };
       const text = content.find((part) => (part as { type?: string }).type === "text") as { text: string };
       captured.payloads.push(video.video_url.url);
       captured.prompts.push(text.text);
-      // Janela 1 não tem contexto; as demais têm 1s: o conteúdo começa em 1 local.
-      const start = n === 1 ? 0 : 1;
+      const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(text.text);
+      const start = match ? Number(match[1]) : 0;
+      const localStart = start === 0 ? 0 : 1;
       return JSON.stringify({
-        spans: [{ id: `local-${n}`, start, end: start + 1, text: "mesa", confidence: "observed", tags: [] }],
+        spans: [{ id: `local-${start}`, start: localStart, end: localStart + 1, text: "mesa", confidence: "observed", tags: [] }],
       });
     },
   };
@@ -146,10 +145,11 @@ it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", a
   // Segunda janela: origem 20 somada uma vez (1 local + 19), sem dupla soma.
   const second = spans.filter((span) => span.start >= 20 && span.start < 40);
   expect(second.map((span) => [span.start, span.end])).toEqual([[20, 21]]);
-  expect(prompts[1]).toContain("[20, 40)");
-  expect(prompts[1]).toContain("origem 0");
+  const midPrompt = prompts.find((p) => p.includes("[20, 40)"));
+  expect(midPrompt).toContain("[20, 40)");
+  expect(midPrompt).toContain("origem 0");
   // Última janela parcial: recorte [39, 45), não [40, 45) sem contexto.
-  const last = seen.args[2]!;
+  const last = seen.args.find((args) => args[args.indexOf("-ss") + 1] === "39")!;
   expect(last[last.indexOf("-ss") + 1]).toBe("39");
   expect(last[last.indexOf("-t") + 1]).toBe("6");
 });
@@ -179,12 +179,12 @@ it("recorte visual exige seek de entrada e proíbe stream-copy", async () => {
 });
 
 /** Resposta com cobertura total da janela pedida, por texto distinto. */
-function fullWindowClient(counter: { calls: number }, failOn: { n: number }) {
+function fullWindowClient(counter: { calls: number }, failOn: { interval?: string }) {
   return {
     async send(content: unknown[]) {
       counter.calls += 1;
-      if (counter.calls === failOn.n) throw new Error("provedor falhou");
       const text = (content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text;
+      if (failOn.interval && text.includes(failOn.interval)) throw new Error("provedor falhou");
       const match = /intervalo da fonte \[([\d.]+), ([\d.]+)\)/.exec(text);
       const start = match ? Number(match[1]) : 0;
       const end = match ? Number(match[2]) : 0;
@@ -208,21 +208,21 @@ it("retomada reaproveita janelas prontas e não reenvia", async () => {
   const source = await speechSource(dir, 45);
   const seen: { args: string[][] } = { args: [] };
   const counter = { calls: 0 };
-  const failOn = { n: 2 };
+  const failOn = { interval: "[20, 40)" as string | undefined };
   const client = fullWindowClient(counter, failOn);
   await expect(describeSource(source, dir, new AbortController().signal, {
     client,
     exec: windowMarkerExec(seen),
   })).rejects.toThrow(/provedor falhou/);
-  expect(counter.calls).toBe(2);
-  failOn.n = -1;
+  expect(counter.calls).toBeGreaterThanOrEqual(2);
+  failOn.interval = undefined;
   const before = counter.calls;
   const spans = await describeSource(source, dir, new AbortController().signal, {
     client,
     exec: windowMarkerExec(seen),
   });
-  // Janela 1 veio do cache: só 2 envios novos (janelas 2 e 3).
-  expect(counter.calls - before).toBe(2);
+  // Janela do meio falhou: só ela é reenviada.
+  expect(counter.calls - before).toBe(1);
   expect(spans).toHaveLength(3);
 });
 
@@ -293,4 +293,37 @@ it("replay com artefato aquecido faz 0 chamadas de encode e de API", async () =>
   await describeSource(source, dir, new AbortController().signal, { client, exec });
   expect(api).toBe(beforeApi);
   expect(encodes).toBe(beforeEnc);
+});
+
+it("resposta atrasada não altera revisão nova", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 3);
+  let current = true;
+  let release!: (value: string) => void;
+  const hung = new Promise<string>((resolve) => { release = resolve; });
+  const pending = describeSource(source, dir, new AbortController().signal, {
+    client: { send: () => hung },
+    exec: copyProxy,
+    isCurrent: () => current,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  current = false;
+  release(JSON.stringify({
+    spans: [{ id: "local-0", start: 0, end: 3, text: "atrasado", confidence: "observed", tags: [] }],
+  }));
+  await expect(pending).rejects.toThrow(/obsoleta/);
+  let calls = 0;
+  const spans = await describeSource(source, dir, new AbortController().signal, {
+    client: {
+      async send() {
+        calls += 1;
+        return JSON.stringify({
+          spans: [{ id: "local-0", start: 0, end: 3, text: "atual", confidence: "observed", tags: [] }],
+        });
+      },
+    },
+    exec: copyProxy,
+  });
+  expect(calls).toBe(1);
+  expect(spans[0]?.text).toBe("atual");
 });

@@ -27,15 +27,22 @@ export interface Job {
  */
 export class JobStore {
   private readonly jobs = new Map<string, Job>();
+  private readonly controllers = new Map<string, AbortController>();
 
   create(opts: { videoPath: string; workDir: string }): Job {
     const job: Job = { id: randomUUID(), stage: "queued", ...opts };
     this.jobs.set(job.id, job);
+    this.controllers.set(job.id, new AbortController());
     return job;
   }
 
   get(id: string): Job | undefined {
     return this.jobs.get(id);
+  }
+
+  /** Signal abortado por `cancel`. Fora do JSON do job para não vazar no GET. */
+  signal(id: string): AbortSignal | undefined {
+    return this.controllers.get(id)?.signal;
   }
 
   /** Estado terminal não volta atrás: etapa que termina depois de um erro
@@ -78,5 +85,6 @@ export class JobStore {
 
   cancel(id: string): void {
     this.mutate(id, { stage: "cancelled" }, true);
+    this.controllers.get(id)?.abort();
   }
 }
