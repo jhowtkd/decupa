@@ -22,14 +22,18 @@ import {
   renderReport,
   readCredentials,
   resolveProvider,
+  routeTriage,
   unitsById,
   verifyClaims,
   writeCache,
   ZaiTriageModel,
   type DensityCandidate,
+  type EditCatalog,
+  type FastDecision,
   type InspectFlag,
   type InspectVerdict,
   type ReportInput,
+  type RouteMode,
   type StructureClaim,
   type TriageModel,
   type Verdict,
@@ -55,6 +59,9 @@ export interface TriageOptions {
   /** Injetável: testes não dependem de ffmpeg. */
   extractFrames?: (unit: { id: string; start: number; end: number }) => Promise<string[]>;
   visual?: VisualUnitFlags[];
+  /** `off` (padrão) reproduz o passe structure legado. */
+  routeMode?: RouteMode;
+  decide?: (catalog: EditCatalog) => FastDecision | null | Promise<FastDecision | null>;
 }
 
 export interface TriageJson {
@@ -70,6 +77,12 @@ export interface TriageResult {
   reportPath: string;
   drop: TriageJson["drop"];
   reviewFlags: InspectFlag[];
+}
+
+export function parseRouteMode(raw?: string): RouteMode {
+  const mode = raw ?? "off";
+  if (mode === "off" || mode === "observe" || mode === "hybrid") return mode;
+  throw new Error(`rota inválida: ${mode}`);
 }
 
 async function sha256(path: string): Promise<string> {
@@ -250,20 +263,37 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
-  // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
-  const mechanicalVerdicts = verifyClaims(mechanicalClaims(index, visualMap), index);
-  const dropped = acceptedDropIds(mechanicalVerdicts);
+  const routeMode = opts.routeMode ?? "off";
+  let dropped: Set<string>;
+  let verdicts: Verdict[];
 
-  // Passe 1 — estrutura
-  const structureKey = keyOf("structure");
-  let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
-  if (claims === null) {
-    claims = await model.structure({ unitsBlock, videoPath });
-    await writeCache(cacheDir, structureKey, claims);
+  if (routeMode === "off") {
+    // Passe 0 — mecânico (retakes, pré/pós-rolo, ar morto). Sem LLM.
+    const mechanicalVerdicts = verifyClaims(mechanicalClaims(index, visualMap), index);
+    dropped = acceptedDropIds(mechanicalVerdicts);
+
+    // Passe 1 — estrutura (legado: cache + uma chamada)
+    const structureKey = keyOf("structure");
+    let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
+    if (claims === null) {
+      claims = await model.structure({ unitsBlock, videoPath });
+      await writeCache(cacheDir, structureKey, claims);
+    }
+    const modelVerdicts = verifyClaims(claims, index, dropped);
+    for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
+    verdicts = [...mechanicalVerdicts, ...modelVerdicts];
+  } else {
+    const routed = await routeTriage({
+      mode: routeMode,
+      index,
+      model,
+      unitsBlock,
+      videoPath,
+      decide: opts.decide,
+    });
+    verdicts = routed.verdicts;
+    dropped = acceptedDropIds(verdicts);
   }
-  const modelVerdicts = verifyClaims(claims, index, dropped);
-  for (const id of acceptedDropIds(modelVerdicts)) dropped.add(id);
-  const verdicts: Verdict[] = [...mechanicalVerdicts, ...modelVerdicts];
 
   // Inspect: só faixa ambígua, só unidades que ainda ficam.
   const inspectVerdicts: InspectVerdict[] = [];
