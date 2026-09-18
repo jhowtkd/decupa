@@ -26,6 +26,9 @@ importers:
       '@decupa/acoustics':
         specifier: workspace:*
         version: link:../../packages/acoustics
+      '@decupa/bench':
+        specifier: workspace:*
+        version: link:../../packages/bench
       '@decupa/cache':
         specifier: workspace:*
         version: link:../../packages/cache
@@ -65,6 +68,18 @@ importers:
       '@decupa/media':
         specifier: workspace:*
         version: link:../media
+
+  packages/bench:
+    dependencies:
+      '@decupa/coordinator':
+        specifier: workspace:*
+        version: link:../coordinator
+      '@decupa/queue':
+        specifier: workspace:*
+        version: link:../queue
+      '@decupa/trace':
+        specifier: workspace:*
+        version: link:../trace
 
   packages/cache:
     dependencies:

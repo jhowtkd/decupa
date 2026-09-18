@@ -77,4 +77,12 @@ describe("createLimitedQueue", () => {
   it("recusa limite menor que 1", () => {
     expect(() => createLimitedQueue(0)).toThrow(/limite/);
   });
+
+  it("saturação cresce a fila de espera e não o número de processos", async () => {
+    const queue = createLimitedQueue(1);
+    await queue.map([1, 2, 3, 4, 5], async () => delay(20));
+    expect(queue.maxInFlight).toBe(1);
+    expect(queue.maxWaiting).toBeGreaterThanOrEqual(4);
+    expect(queue.waiting).toBe(0);
+  });
 });

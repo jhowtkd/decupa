@@ -553,7 +553,7 @@ describe("runPreparation", () => {
     // a primeira análise já produzida, que o interrupted deve preservar.
     await vi.waitFor(async () => {
       expect(calls.ingest).toBeGreaterThan(0);
-    });
+    }, { timeout: 5000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) => ({
       ...p,
@@ -763,7 +763,7 @@ describe("runPreparation", () => {
     );
     await vi.waitFor(() => {
       expect(calls.ingest).toBeGreaterThan(0);
-    });
+    }, { timeout: 5000 });
     await vi.waitFor(async () => {
       const mid = await loadProject(dir);
       expect(mid.preparation?.note).toBe("áudio pronto, imagem em análise");
