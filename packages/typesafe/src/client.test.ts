@@ -208,8 +208,6 @@ describe("validação das respostas", () => {
       await expect(client(fetchImpl).decide({ state: "x", questions })).rejects.toThrow(/probabilidade/i);
     }
   });
-<<<<<<< HEAD
-=======
 
   it("rejeita probabilidade inválida na escolha sem retry", async () => {
     const cases: { probabilities?: Record<string, number>; confidence?: number }[] = [
@@ -237,7 +235,6 @@ describe("validação das respostas", () => {
       expect(calls).toBe(1);
     }
   });
->>>>>>> origin/cursor/d1-typesafe-main-76ba
 });
 
 describe("authorizesCut", () => {
