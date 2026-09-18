@@ -124,11 +124,17 @@ function makeFakes(opts: FakeOpts = {}): {
     }
     if (call.command === "ffmpeg") {
       calls.ffmpeg += 1;
+      if (call.args.includes("-encoders")) {
+        return { code: 0, stdout: " V..... libx264            libx264 H.264\n", stderr: "" };
+      }
       const playback = call.args.includes("scale='min(960,iw)':-2")
         || call.args.includes("-vframes")
         || call.args.includes("pcm_s16le");
       if (playback && ffmpegGate) await ffmpegGate;
-      await writeFile(call.args[call.args.length - 1], `clip-${calls.ffmpeg}`);
+      const dest = call.args[call.args.length - 1];
+      if (dest && !dest.startsWith("-")) {
+        await writeFile(dest, `clip-${calls.ffmpeg}`);
+      }
       return { code: 0, stdout: "", stderr: "" };
     }
     if (call.command === "python3") {

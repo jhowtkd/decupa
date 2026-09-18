@@ -9,7 +9,7 @@ import { verifySourceIdentity } from "./media.ts";
 import { pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
-import type { HardwareProfile } from "./hardware.ts";
+import { encoderFor, detectHardwareProfile, type HardwareProfile } from "./hardware.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const RENDER_SCRIPT = join(REPO_ROOT, "scripts", "render-assembly.py");
@@ -131,14 +131,20 @@ export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
-  opts: { profile?: HardwareProfile } = {},
+  opts: { profile?: HardwareProfile; detectHardware?: boolean } = {},
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
     absolutePath(source.path, `fonte ${source.id}`);
     await verifySourceIdentity(source);
   }
-  const profile = opts.profile ?? "software";
+  let profile = opts.profile ?? "software";
+  if (opts.detectHardware && opts.profile == null) {
+    const source = valid.sources.find((item) => item.hasVideo) ?? valid.sources[0];
+    if (source) {
+      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec);
+    }
+  }
   const key = previewIdentity(valid, profile);
   const cacheDir = join(outDir, "preview-cache", key);
   const cachedMp4 = join(cacheDir, "reference.mp4");
@@ -164,9 +170,17 @@ export async function renderAssembly(
   await writeFile(timelinePath, `${JSON.stringify(toEngineTimeline(valid), null, 2)}\n`, "utf8");
 
   try {
+    const { encoder, hwaccel } = encoderFor(profile);
     const result = await exec.run({
       command: "python3",
-      args: [RENDER_SCRIPT, "--timeline", timelinePath, "--out", outPath, "--work", work],
+      args: [
+        RENDER_SCRIPT,
+        "--timeline", timelinePath,
+        "--out", outPath,
+        "--work", work,
+        "--encoder", encoder,
+        ...(hwaccel ? ["--hwaccel", hwaccel] : []),
+      ],
       cwd: work,
       env: { CLAUDE_PROJECT_DIR: work },
     });

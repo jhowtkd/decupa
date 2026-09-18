@@ -131,7 +131,7 @@ async function renderPreview(
   project: Project,
   exec: Executor,
 ): Promise<PreviewArtifact> {
-  const reference = await renderAssembly(project.assembly, dir, exec);
+  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true });
   return {
     revision: project.revision,
     assemblySha256: createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),
