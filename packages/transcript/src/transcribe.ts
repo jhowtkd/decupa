@@ -81,6 +81,7 @@ export async function transcribe(
     input: string;
     language?: string;
     model?: string;
+    computeType?: string;
     signal?: AbortSignal;
   },
   deps: TranscribeDeps = {},
@@ -99,6 +100,7 @@ export async function transcribe(
       wav,
       language,
       model,
+      computeType: opts.computeType,
       signal: opts.signal,
     }, deps);
     return { language: parsed.language, tokens: toTokens(parsed.words), unaligned: parsed.unaligned };
@@ -122,6 +124,7 @@ async function runSpeechSidecar(
     "--wav", req.wav,
     "--language", req.language,
     "--model", req.model ?? "small",
+    ...(req.computeType ? ["--compute-type", req.computeType] : []),
   ]);
   return parseSidecarOutput(stdout);
 }

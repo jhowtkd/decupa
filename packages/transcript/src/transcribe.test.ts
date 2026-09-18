@@ -129,4 +129,37 @@ describe("transcribe resident", () => {
     expect(max).toBe(1);
     expect(new Set([a.tokens[0]?.text, b.tokens[0]?.text])).toEqual(new Set(["cam-a.mp4", "cam-b.mp4"]));
   });
+
+  it("encaminha computeType do transcribe para o worker residente", async () => {
+    const seen: Array<{ taskId: string; computeType?: string }> = [];
+    await transcribe(
+      { input: "cam-a.mp4", computeType: "float16" },
+      {
+        extract: async () => {},
+        worker: async (req) => {
+          seen.push({ taskId: req.taskId, computeType: req.computeType });
+          return { language: req.language, words: [], unaligned: [] };
+        },
+      },
+    );
+    expect(seen).toEqual([{ taskId: "cam-a.mp4", computeType: "float16" }]);
+  });
+
+  it("encaminha computeType para o sidecar de processo único", async () => {
+    const argsSeen: string[][] = [];
+    await transcribe(
+      { input: "cam-a.mp4", computeType: "float16", model: "medium" },
+      {
+        extract: async () => {},
+        runSidecar: async (args) => {
+          argsSeen.push(args);
+          return JSON.stringify({ language: "pt", words: [] });
+        },
+      },
+    );
+    expect(argsSeen).toHaveLength(1);
+    expect(argsSeen[0]).toContain("--compute-type");
+    expect(argsSeen[0]?.[argsSeen[0]!.indexOf("--compute-type") + 1]).toBe("float16");
+    expect(argsSeen[0]?.[argsSeen[0]!.indexOf("--model") + 1]).toBe("medium");
+  });
 });
