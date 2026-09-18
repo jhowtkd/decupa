@@ -275,6 +275,54 @@ describe("runTriage", () => {
     expect(out.keepList).toBe("u002");
   });
 
+  it("--route hybrid força a rota mesmo com decision.json inválido", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-route-force-"));
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "bogus" }), "utf8");
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+    let calls = 0;
+    const fetchImpl = (async (_input: string | URL, init?: RequestInit) => {
+      calls += 1;
+      const payload = JSON.parse(String(init?.body)) as { questions?: Record<string, unknown> };
+      const answers: Record<string, { type: "noul"; noul: number }> = {};
+      for (const id of Object.keys(payload.questions ?? {})) {
+        answers[id] = { type: "noul", noul: id === "prefix:u001" ? 0.92 : 0.1 };
+      }
+      return new Response(JSON.stringify({ model: "jev-latest", answers }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      projectDir: dir,
+      env: { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1", ZAI_API_KEY: "test" },
+      fetchImpl,
+    });
+    expect(calls).toBeGreaterThan(0);
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
   it("desligar o Jev no mesmo projeto volta ao legado e não chama TypeSafe", async () => {
     const dir = await mkdtemp(join(tmpdir(), "triage-jev-off-"));
     await mkdir(join(dir, ".decupa"), { recursive: true });

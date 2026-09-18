@@ -290,14 +290,14 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const env = opts.env ?? process.env;
   let routeMode = opts.routeMode;
   let typeSafeClient = opts.typeSafeClient;
-  if (!typeSafeClient && routeMode !== "off") {
+  if (!typeSafeClient && opts.routeMode == null) {
     const boot = await bootProjectDecision({
       projectDir: opts.projectDir ?? process.cwd(),
       env,
       fetchImpl: opts.fetchImpl,
       log: (line) => console.log(line),
     });
-    routeMode = routeMode ?? boot.mode;
+    routeMode = boot.mode;
     if (boot.enabled && env.TYPESAFE_API_KEY) {
       typeSafeClient = new TypeSafeClient({
         apiKey: env.TYPESAFE_API_KEY,
