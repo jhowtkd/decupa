@@ -117,6 +117,51 @@ it("proposta do modelo só entra por ID de fala existente", async () => {
   expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
 });
 
+it("hybrid TypeSafe não intercepta a geração de cenas no provedor atual", async () => {
+  const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { bootProjectDecision } = await import("./decision-boot.ts");
+  const dir = await mkdtemp(join(tmpdir(), "scenes-typesafe-"));
+  await mkdir(join(dir, ".decupa"), { recursive: true });
+  await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "hybrid" }), "utf8");
+  let typeSafeCalls = 0;
+  const fetchImpl = (async () => {
+    typeSafeCalls += 1;
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  await bootProjectDecision({
+    projectDir: dir,
+    env: { TYPESAFE_API_KEY: "sk-secret", DECUPA_TYPESAFE: "1" },
+    fetchImpl,
+  });
+  const afterBoot = typeSafeCalls;
+  const p = project();
+  let providerCalls = 0;
+  const proposal = await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async () => {
+      providerCalls += 1;
+      return JSON.stringify({
+        id: "p1",
+        baseRevision: 1,
+        changedSceneIds: ["s1"],
+        explanation: "abertura",
+        scenes: [{
+          id: "s1",
+          objective: "abrir",
+          rationale: "tema",
+          speechIds: ["a:u001"],
+          support: [],
+          gaps: [],
+        }],
+      });
+    },
+  });
+  expect(providerCalls).toBe(1);
+  expect(typeSafeCalls).toBe(afterBoot);
+  expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
+});
+
 it.each([undefined, 999, "1"])("vincula metadados do modelo ao snapshot: %s", async (modelRevision) => {
   const p = project();
   const result = await proposeScenes(p, "abrir", new AbortController().signal, {
