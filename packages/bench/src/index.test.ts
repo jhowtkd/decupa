@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFileCoordinator } from "@decupa/coordinator";
 import { collectSink } from "@decupa/trace";
-import { renderBenchmark, runBatchBenchmark } from "./index.ts";
+import { createScenarioWork, renderBenchmark, runBatchBenchmark } from "./index.ts";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,5 +80,66 @@ describe("runBatchBenchmark", () => {
     expect(result.processes.peak).toBe(1);
     expect(result.throughput).toBeGreaterThan(0);
     expect(sink.events.some((e) => e.stage === "batch" && e.phase === "queued")).toBe(true);
+  });
+
+  it("cold-start carrega por arquivo e resident-models reutiliza o load", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bench-loads-"));
+    const files = [join(dir, "a.wav"), join(dir, "b.wav"), join(dir, "c.wav")];
+    await Promise.all(files.map((file, i) => writeFile(file, `audio-${i}`)));
+    const cold = createScenarioWork({ scenario: "cold-start", cacheDir: join(dir, "cold") });
+    const coldRun = await runBatchBenchmark({
+      caseId: "loads-cold",
+      scenario: "cold-start",
+      files,
+      limit: 2,
+      work: cold.work,
+      stats: cold.stats,
+    });
+    expect(cold.stats().modelLoads).toBe(3);
+    expect(coldRun.loads.modelLoads).toBe(3);
+    expect(coldRun.loads.cacheHits).toBe(0);
+
+    const resident = createScenarioWork({ scenario: "resident-models", cacheDir: join(dir, "res") });
+    const residentRun = await runBatchBenchmark({
+      caseId: "loads-res",
+      scenario: "resident-models",
+      files,
+      limit: 2,
+      work: resident.work,
+      stats: resident.stats,
+    });
+    expect(resident.stats().modelLoads).toBe(1);
+    expect(residentRun.loads.modelLoads).toBe(1);
+  });
+
+  it("cached-artifacts na segunda passagem não recarrega modelo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bench-cache-"));
+    const cacheDir = join(dir, "cache");
+    const files = [join(dir, "a.wav"), join(dir, "b.wav")];
+    await Promise.all(files.map((file, i) => writeFile(file, `payload-${i}`)));
+    const first = createScenarioWork({ scenario: "cached-artifacts", cacheDir });
+    await runBatchBenchmark({
+      caseId: "cache-1",
+      scenario: "cached-artifacts",
+      files,
+      limit: 1,
+      work: first.work,
+      stats: first.stats,
+    });
+    expect(first.stats().modelLoads).toBe(2);
+    expect(first.stats().cacheHits).toBe(0);
+    const second = createScenarioWork({ scenario: "cached-artifacts", cacheDir });
+    const replay = await runBatchBenchmark({
+      caseId: "cache-2",
+      scenario: "cached-artifacts",
+      files,
+      limit: 1,
+      work: second.work,
+      stats: second.stats,
+    });
+    expect(second.stats().modelLoads).toBe(0);
+    expect(second.stats().cacheHits).toBe(2);
+    expect(replay.loads.cacheHits).toBe(2);
+    expect(renderBenchmark(replay)).toMatch(/cache hits 2/);
   });
 });

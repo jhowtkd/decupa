@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { cpus, platform, totalmem } from "node:os";
+import { join } from "node:path";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { createLimitedQueue } from "@decupa/queue";
 import { createTracer, type TraceSink } from "@decupa/trace";
@@ -10,6 +12,11 @@ export type HardwareInfo = {
   cpus: number;
   ramMb: number;
   platform: string;
+};
+
+export type BenchWorkStats = {
+  modelLoads: number;
+  cacheHits: number;
 };
 
 export type BenchmarkManifest = {
@@ -27,6 +34,7 @@ export type BenchmarkManifest = {
   ram: { peakMb: number };
   queue: { limit: number; peak: number };
   processes: { peak: number };
+  loads: BenchWorkStats;
 };
 
 export type BatchBenchmarkOptions = {
@@ -35,6 +43,7 @@ export type BatchBenchmarkOptions = {
   files: readonly string[];
   limit: number;
   work: (file: string) => Promise<void> | void;
+  stats?: () => BenchWorkStats;
   coordinator?: FileCoordinator;
   hardware?: HardwareInfo;
   hashOf?: (material: string) => string;
@@ -62,6 +71,49 @@ function defaultHardware(): HardwareInfo {
 
 function digest(material: string): string {
   return createHash("sha256").update(material).digest("hex");
+}
+
+function preloadModel(): void {
+  createHash("sha256").update("decupa-bench-model").digest("hex");
+}
+
+export function createScenarioWork(opts: {
+  scenario: BenchmarkScenario;
+  cacheDir: string;
+}): { work: (file: string) => Promise<void>; stats: () => BenchWorkStats } {
+  const stats: BenchWorkStats = { modelLoads: 0, cacheHits: 0 };
+  let resident: Promise<void> | null = null;
+  const work = async (file: string): Promise<void> => {
+    const bytes = await readFile(file);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (opts.scenario === "cached-artifacts") {
+      await mkdir(opts.cacheDir, { recursive: true });
+      const cached = join(opts.cacheDir, hash);
+      const hit = await access(cached).then(() => true, () => false);
+      if (hit) {
+        stats.cacheHits += 1;
+        await readFile(cached);
+        return;
+      }
+      stats.modelLoads += 1;
+      preloadModel();
+      await writeFile(cached, hash, "utf8");
+      return;
+    }
+    if (opts.scenario === "resident-models") {
+      if (!resident) {
+        resident = Promise.resolve().then(() => {
+          stats.modelLoads += 1;
+          preloadModel();
+        });
+      }
+      await resident;
+      return;
+    }
+    stats.modelLoads += 1;
+    preloadModel();
+  };
+  return { work, stats: () => ({ ...stats }) };
 }
 
 export async function runBatchBenchmark(opts: BatchBenchmarkOptions): Promise<BenchmarkManifest> {
@@ -123,6 +175,7 @@ export async function runBatchBenchmark(opts: BatchBenchmarkOptions): Promise<Be
       ram: { peakMb: peakRssMb },
       queue: { limit, peak: queue.maxWaiting },
       processes: { peak: 1 },
+      loads: opts.stats?.() ?? { modelLoads: 0, cacheHits: 0 },
     };
   });
 }
@@ -138,6 +191,7 @@ export function renderBenchmark(manifest: BenchmarkManifest): string {
     `latency p50: ${manifest.latency.p50Ms} ms · p95: ${manifest.latency.p95Ms} ms (n=${manifest.latency.n})`,
     `queue limit ${manifest.queue.limit} peak ${manifest.queue.peak} · processes peak ${manifest.processes.peak}`,
     `ram peak ${manifest.ram.peakMb} MiB`,
+    `loads: models ${manifest.loads.modelLoads} · cache hits ${manifest.loads.cacheHits}`,
     `completed ${manifest.completed} · failures ${manifest.failures}${manifest.failed.length ? ` (${manifest.failed.join(", ")})` : ""}`,
   ].join("\n");
 }
