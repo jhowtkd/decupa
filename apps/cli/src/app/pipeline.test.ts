@@ -272,6 +272,21 @@ describe("runTriage", () => {
     });
     expect(seen[0]).toMatchObject({ provider: "zai" });
   });
+
+  it("encaminha o signal do job para o inspect da biblioteca", async () => {
+    const ac = new AbortController();
+    const seen: { signal?: AbortSignal }[] = [];
+    await runTriage(
+      { ...job, signal: ac.signal },
+      new FakeExecutor(),
+      undefined,
+      async (opts) => {
+        seen.push(opts);
+        return { keepList: "u001" };
+      },
+    );
+    expect(seen[0]?.signal).toBe(ac.signal);
+  });
 });
 
 describe("probeFps", () => {
@@ -319,6 +334,37 @@ describe("SpawnExecutor", () => {
     });
     expect(lines).toContain("último pedaço");
   });
+
+  it("abort mata só o subprocesso daquela chamada", async () => {
+    const exec = new SpawnExecutor();
+    const own = new AbortController();
+    const other = new AbortController();
+    const hang = "console.log('ready'); setInterval(() => {}, 1000)";
+    let ownReady = false;
+    let otherReady = false;
+    const ownRun = exec.run({
+      command: process.execPath,
+      args: ["-e", hang],
+      signal: own.signal,
+      onLine: (line) => { if (line === "ready") ownReady = true; },
+    });
+    const otherRun = exec.run({
+      command: process.execPath,
+      args: ["-e", hang],
+      signal: other.signal,
+      onLine: (line) => { if (line === "ready") otherReady = true; },
+    });
+    for (let i = 0; i < 50 && (!ownReady || !otherReady); i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(ownReady && otherReady).toBe(true);
+    own.abort();
+    expect((await ownRun).code).not.toBe(0);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(otherReady).toBe(true);
+    other.abort();
+    expect((await otherRun).code).not.toBe(0);
+  }, 5000);
 });
 
 describe("preflight", () => {
