@@ -41,6 +41,9 @@ importers:
       '@decupa/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@decupa/trace':
+        specifier: workspace:*
+        version: link:../../packages/trace
       '@decupa/transcript':
         specifier: workspace:*
         version: link:../../packages/transcript
@@ -81,6 +84,8 @@ importers:
         version: link:../core
 
   packages/queue: {}
+
+  packages/trace: {}
 
   packages/transcript:
     dependencies:

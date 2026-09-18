@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createTracer, type Tracer } from "@decupa/trace";
 
 // Import direto da biblioteca de triagem: mesmo repo, sem subprocesso — o
 // contrato é a assinatura TypeScript, não uma regex sobre stdout.
@@ -203,45 +204,53 @@ export async function runIngest(
   exec: Executor,
   onStage: (stage: "transcribing" | "indexing" | "visual") => void,
   onLine?: (line: string) => void,
+  tracer: Tracer = createTracer(),
 ): Promise<{ warning?: string }> {
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
-    onStage("transcribing");
-    // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
-    // processo a menos na árvore para o cancelamento alcançar.
+    await tracer.run("transcribing", async () => {
+      onStage("transcribing");
+      // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
+      // processo a menos na árvore para o cancelamento alcançar.
+      await must(exec, {
+        command: process.execPath,
+        args: [
+          "--experimental-strip-types",
+          join(REPO_ROOT, "apps", "cli", "src", "index.ts"),
+          "condense-prep",
+          "--input", job.videoPath,
+          "--out", transcriptPath(job),
+        ],
+        env: envFor(job),
+        cwd: REPO_ROOT,
+        onLine,
+      }, "a transcrição");
+    });
+  }
+
+  const emptySpeech = await tracer.run("indexing", async () => {
+    onStage("indexing");
+    if (await transcriptHasNoSegments(job)) {
+      // Fonte de apoio sem fala é válida: o índice vazio permite que a montagem
+      // continue usando apenas os trechos de fala de outras fontes.
+      await writeEmptySpeechIndex(job);
+      return true;
+    }
     await must(exec, {
-      command: process.execPath,
-      args: [
-        "--experimental-strip-types",
-        join(REPO_ROOT, "apps", "cli", "src", "index.ts"),
-        "condense-prep",
-        "--input", job.videoPath,
-        "--out", transcriptPath(job),
-      ],
+      command: "python3",
+      args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
       env: envFor(job),
-      cwd: REPO_ROOT,
       onLine,
-    }, "a transcrição");
-  }
+    }, "a medição do índice");
+    return false;
+  });
 
-  onStage("indexing");
-  if (await transcriptHasNoSegments(job)) {
-    // Fonte de apoio sem fala é válida: o índice vazio permite que a montagem
-    // continue usando apenas os trechos de fala de outras fontes.
-    await writeEmptySpeechIndex(job);
+  const warning = await tracer.run("visual", async () => {
     onStage("visual");
-    return {};
-  }
-  await must(exec, {
-    command: "python3",
-    args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
-    env: envFor(job),
-    onLine,
-  }, "a medição do índice");
-
-  onStage("visual");
-  const warning = await runVisualIndex(job, exec, onLine);
+    if (emptySpeech) return undefined;
+    return runVisualIndex(job, exec, onLine);
+  });
   return warning ? { warning } : {};
 }
 
@@ -299,20 +308,27 @@ async function runVisualIndex(
   return undefined;
 }
 
-export async function runPlan(job: PipelineJob, keepList: string, exec: Executor): Promise<void> {
+export async function runPlan(
+  job: PipelineJob,
+  keepList: string,
+  exec: Executor,
+  tracer: Tracer = createTracer(),
+): Promise<void> {
   const ranges = keepList.trim().split(/\s+/).filter(Boolean);
   if (ranges.length === 0) {
     throw new Error("keep-list vazio: nada sobraria no corte");
   }
-  await must(exec, {
-    command: "python3",
-    args: [
-      CONDENSE, "plan", job.videoPath,
-      "--keep", ...ranges,
-      "--drop-fillers", "hard",
-    ],
-    env: envFor(job),
-  }, "o plano");
+  await tracer.run("planning", async () => {
+    await must(exec, {
+      command: "python3",
+      args: [
+        CONDENSE, "plan", job.videoPath,
+        "--keep", ...ranges,
+        "--drop-fillers", "hard",
+      ],
+      env: envFor(job),
+    }, "o plano");
+  });
 }
 
 export async function makeTriageProxy(
