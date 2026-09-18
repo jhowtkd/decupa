@@ -537,6 +537,30 @@ describe("runTriage — inspect", () => {
     expect(out.reviewFlags.some((f) => f.message.includes("não dá"))).toBe(true);
   });
 
+  it("replay aquecido do inspect não extrai frames nem chama a API", async () => {
+    const { dir, indexPath, videoPath, visual } = await withVisual();
+    let extracts = 0;
+    const frames = async (unit: { id: string }) => {
+      extracts += 1;
+      const path = join(dir, `${unit.id}.jpg`);
+      await writeFile(path, "jpeg-fake", "utf8");
+      return [path];
+    };
+    const model1 = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "unsure", note: "não dá" },
+    ]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model1, visual, extractFrames: frames });
+    expect(extracts).toBe(1);
+    expect(model1.calls.filter((c) => c.kind === "inspect")).toHaveLength(1);
+
+    const model2 = new FakeTriageModel([], [], [
+      { unitId: "u004", decision: "drop", note: "não deveria ser chamado" },
+    ]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model: model2, visual, extractFrames: frames });
+    expect(extracts).toBe(1);
+    expect(model2.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+  });
+
   it("fake inspect no ouro ritmo não muda o keep-list gold", async () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const fixtures = join(here, "../../../packages/triage/fixtures");

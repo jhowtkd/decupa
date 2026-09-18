@@ -103,12 +103,6 @@ async function sha256(path: string): Promise<string> {
   });
 }
 
-async function hashFrames(paths: string[]): Promise<string> {
-  const hash = createHash("sha256");
-  for (const p of paths) hash.update(await readFile(p));
-  return hash.digest("hex");
-}
-
 async function loadVisual(opts: TriageOptions): Promise<VisualUnitFlags[] | undefined> {
   if (opts.visual) return opts.visual;
   const candidates = [
@@ -332,23 +326,22 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       if (!u.ambiguous || dropped.has(u.id)) continue;
       const unit = byId.get(u.id);
       if (!unit) continue;
-      const frames = await extract(unit);
-      if (frames.length === 0) {
-        inspectFlags.push({
-          unitId: u.id,
-          code: "looks_away",
-          source: "visual",
-          message: "faixa ambígua: não deu para inspecionar os frames",
-        });
-        continue;
-      }
-      const framesSha = await hashFrames(frames);
       const inspectKey = cacheKey({
         ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId,
-        pass: "inspect", unitId: u.id, framesSha,
+        pass: "inspect", unitId: u.id,
       });
       let verdict = await readCache<InspectVerdict>(cacheDir, inspectKey);
       if (verdict === null) {
+        const frames = await extract(unit);
+        if (frames.length === 0) {
+          inspectFlags.push({
+            unitId: u.id,
+            code: "looks_away",
+            source: "visual",
+            message: "faixa ambígua: não deu para inspecionar os frames",
+          });
+          continue;
+        }
         try {
           verdict = await model.inspect({ unitId: u.id, frames });
         } catch {
