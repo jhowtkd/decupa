@@ -8,6 +8,8 @@ explícito tenta e cai para CPU se falhar.
 
 from __future__ import annotations
 
+import json
+import sys
 import threading
 from pathlib import Path
 
@@ -147,3 +149,21 @@ class SpeechWorker:
             "modelLoads": self.model_loads - before,
             "wavs": list(wavs),
         }
+
+
+def serve() -> None:
+    worker = SpeechWorker()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        req = json.loads(line)
+        args = req.get("args") or {}
+        result = worker.transcribe(**args)
+        sys.stdout.write(json.dumps(result) + "\n")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    if "--serve" in sys.argv:
+        serve()

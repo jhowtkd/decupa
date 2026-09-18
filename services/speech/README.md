@@ -13,6 +13,7 @@ O CLI acima continua sendo o processo único por arquivo. O worker residente
 (sem GPU automática). Cancelar uma tarefa não derruba as outras.
 
     uv run python -c "from worker import SpeechWorker; SpeechWorker().preload()"
+    uv run python worker.py --serve   # JSON por linha em stdin; um processo, vários arquivos
 
 Escreve JSON em stdout. Tempo sempre em milissegundo inteiro — o lado
 TypeScript nunca vê segundo fracionário.

@@ -5,8 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { extractAudio } from "@decupa/media";
+import type { FileCoordinator } from "@decupa/coordinator";
 import { toTokens } from "./tokens.ts";
 import type { RawWord, Transcript } from "./types.ts";
+import { runSpeechJob } from "./resident.ts";
 
 const run = promisify(execFile);
 
@@ -53,35 +55,70 @@ export interface SidecarResult {
   unaligned: string[];
 }
 
+export type SpeechWorkerRequest = {
+  taskId: string;
+  wav: string;
+  language: string;
+  model?: string;
+};
+
+export type TranscribeDeps = {
+  extract?: (opts: { input: string; output: string }) => Promise<void>;
+  coordinator?: FileCoordinator;
+  runSidecar?: (args: string[]) => Promise<string>;
+  worker?: (req: SpeechWorkerRequest) => Promise<SidecarResult>;
+};
+
 /**
  * Extrai o áudio para um WAV temporário e roda o sidecar Python.
+ * Com `worker`, reutiliza o serviço residente sob o coordenador.
  * O WAV temporário é sempre removido, inclusive em erro.
  */
-export async function transcribe(opts: {
-  input: string;
-  language?: string;
-  model?: string;
-}): Promise<Transcript> {
+export async function transcribe(
+  opts: {
+    input: string;
+    language?: string;
+    model?: string;
+  },
+  deps: TranscribeDeps = {},
+): Promise<Transcript> {
   const language = opts.language ?? "pt";
   const model = opts.model ?? "small";
+  const extract = deps.extract ?? extractAudio;
   const dir = await mkdtemp(join(tmpdir(), "decupa-asr-"));
   const wav = join(dir, "audio.wav");
 
   try {
-    await extractAudio({ input: opts.input, output: wav });
-
-    const { stdout } = await run("uv", [
-      "run", "python", "transcribe.py",
-      "--wav", wav,
-      "--language", language,
-      "--model", model,
-    ], { cwd: SPEECH_DIR, maxBuffer: 256 * 1024 * 1024 });
-
-    const parsed = parseSidecarOutput(stdout);
+    await extract({ input: opts.input, output: wav });
+    const parsed = await runSpeechSidecar({
+      taskId: opts.input,
+      wav,
+      language,
+      model,
+    }, deps);
     return { language: parsed.language, tokens: toTokens(parsed.words), unaligned: parsed.unaligned };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+async function runSpeechSidecar(
+  req: SpeechWorkerRequest,
+  deps: TranscribeDeps,
+): Promise<SidecarResult> {
+  if (deps.worker) {
+    const build = () => deps.worker!(req);
+    if (deps.coordinator) {
+      return runSpeechJob(deps.coordinator, { id: req.taskId, build });
+    }
+    return build();
+  }
+  const stdout = await (deps.runSidecar ?? defaultRunSidecar)([
+    "--wav", req.wav,
+    "--language", req.language,
+    "--model", req.model ?? "small",
+  ]);
+  return parseSidecarOutput(stdout);
 }
 
 function normalizeForCoverage(text: string): string {

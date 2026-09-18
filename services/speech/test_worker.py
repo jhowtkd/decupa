@@ -139,5 +139,28 @@ class ResidentWorkerTest(unittest.TestCase):
         self.assertNotEqual(report["wavs"], ["cached"])
 
 
+    def test_serve_two_requests_share_one_load(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": []}
+        worker_mod = load_worker(whisper)
+        import io
+        import json
+        stdin = io.StringIO(
+            json.dumps({"cmd": "transcribe", "args": {"task_id": "a", "wav": "a.wav"}}) + "\n"
+            + json.dumps({"cmd": "transcribe", "args": {"task_id": "b", "wav": "b.wav"}}) + "\n"
+        )
+        stdout = io.StringIO()
+        with patch.object(worker_mod.sys, "stdin", stdin), patch.object(worker_mod.sys, "stdout", stdout):
+            worker_mod.serve()
+        lines = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(whisper.load_model.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
