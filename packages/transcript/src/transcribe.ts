@@ -60,6 +60,7 @@ export type SpeechWorkerRequest = {
   wav: string;
   language: string;
   model?: string;
+  computeType?: string;
   signal?: AbortSignal;
 };
 

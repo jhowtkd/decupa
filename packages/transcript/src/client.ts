@@ -74,11 +74,14 @@ export function createResidentSpeechClient(opts: {
 
   const ensure = (): ChildProcess => {
     if (child) return child;
-    child = spawnFn("uv", ["run", "python", "worker.py", "--serve"], { cwd: speechDir });
-    child.stderr?.on("data", (chunk: Buffer | string) => {
+    const proc = spawnFn("uv", ["run", "python", "worker.py", "--serve"], { cwd: speechDir });
+    child = proc;
+    proc.stderr?.on("data", (chunk: Buffer | string) => {
+      if (child !== proc) return;
       onStderr(String(chunk));
     });
-    child.stdout?.on("data", (chunk: Buffer | string) => {
+    proc.stdout?.on("data", (chunk: Buffer | string) => {
+      if (child !== proc) return;
       buffer += String(chunk);
       while (true) {
         const nl = buffer.indexOf("\n");
@@ -88,7 +91,8 @@ export function createResidentSpeechClient(opts: {
         if (line) dispatch(line);
       }
     });
-    child.on("error", (error: Error) => {
+    proc.on("error", (error: Error) => {
+      if (child !== proc) return;
       child = null;
       buffer = "";
       for (const [id, waiter] of waiters) {
@@ -96,7 +100,8 @@ export function createResidentSpeechClient(opts: {
         waiter.reject(error);
       }
     });
-    child.on("exit", () => {
+    proc.on("exit", () => {
+      if (child !== proc) return;
       child = null;
       buffer = "";
       for (const [id, waiter] of waiters) {
@@ -104,7 +109,7 @@ export function createResidentSpeechClient(opts: {
         waiter.reject(new Error("worker de fala encerrou"));
       }
     });
-    return child;
+    return proc;
   };
 
   const cancel = (taskId: string): void => {
@@ -148,6 +153,7 @@ export function createResidentSpeechClient(opts: {
           wav: req.wav,
           language: req.language,
           model: req.model ?? "small",
+          ...(req.computeType ? { compute_type: req.computeType } : {}),
         },
       })}\n`);
     });

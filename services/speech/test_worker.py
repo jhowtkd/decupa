@@ -111,6 +111,38 @@ class ResidentWorkerTest(unittest.TestCase):
         langs = [call.kwargs["language"] for call in whisper.load_model.call_args_list]
         self.assertEqual(langs, ["pt", "en"])
 
+    def test_compute_type_change_creates_another_entry(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": []}
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        worker.transcribe(task_id="int8", wav="a.wav", compute_type="int8")
+        worker.transcribe(task_id="fp16", wav="b.wav", compute_type="float16")
+        self.assertEqual(whisper.load_model.call_count, 2)
+        types = [call.kwargs["compute_type"] for call in whisper.load_model.call_args_list]
+        self.assertEqual(types, ["int8", "float16"])
+
+    def test_model_change_creates_another_entry(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": []}
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        worker.transcribe(task_id="small", wav="a.wav", model="small")
+        worker.transcribe(task_id="medium", wav="b.wav", model="medium")
+        self.assertEqual(whisper.load_model.call_count, 2)
+        models = [call.args[0] for call in whisper.load_model.call_args_list]
+        self.assertEqual(models, ["small", "medium"])
+
     def test_never_returns_another_task_and_cancel_is_local(self):
         whisper = Mock()
         asr = Mock()

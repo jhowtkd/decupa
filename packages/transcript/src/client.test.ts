@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { createResidentSpeechClient } from "./client.ts";
@@ -194,4 +195,82 @@ describe("createResidentSpeechClient", () => {
       await client.close();
     }
   }, 8000);
+
+  it("encaminha compute_type diferente como outra chave de load", async () => {
+    const written: string[] = [];
+    const client = createResidentSpeechClient({
+      spawn: (_command, _args, options) => {
+        const child = spawn(process.execPath, ["-e", fakeServe()], {
+          cwd: options?.cwd,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const stdin = child.stdin;
+        if (stdin) {
+          const orig = stdin.write.bind(stdin);
+          stdin.write = ((chunk: string | Buffer, encoding?: BufferEncoding, cb?: (err?: Error | null) => void) => {
+            written.push(String(chunk));
+            return orig(chunk, encoding as BufferEncoding, cb);
+          }) as typeof stdin.write;
+        }
+        return child;
+      },
+    });
+    try {
+      await client.transcribe({
+        taskId: "fp16", wav: "a.wav", language: "pt", model: "small", computeType: "float16",
+      });
+      expect(written.some((line) => line.includes('"compute_type":"float16"'))).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("reinício rejeita pendentes e ignora stdout do processo morto", async () => {
+    const children: { child: EventEmitter; stdout: EventEmitter }[] = [];
+    const client = createResidentSpeechClient({
+      spawn: () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: () => true,
+          end: () => undefined,
+        });
+        Object.assign(child, {
+          stdin,
+          stdout,
+          stderr: new EventEmitter(),
+          kill: () => true,
+        });
+        children.push({ child, stdout });
+        return child as unknown as ReturnType<typeof spawn>;
+      },
+    });
+    try {
+      const first = client.transcribe({ taskId: "b", wav: "b.wav", language: "pt" });
+      await expect.poll(() => children.length).toBe(1);
+      children[0]!.child.emit("exit", 1);
+      await expect(first).rejects.toThrow(/encerrou/);
+      const again = client.transcribe({ taskId: "b", wav: "b.wav", language: "pt" });
+      await expect.poll(() => children.length).toBe(2);
+      const stale = JSON.stringify({
+        language: "pt",
+        words: [{ text: "stale-b", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+        unaligned: [],
+        taskId: "b",
+      }) + "\n";
+      children[0]!.stdout.emit("data", stale);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      children[1]!.stdout.emit("data", JSON.stringify({
+        language: "pt",
+        words: [{ text: "fresh-b", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+        unaligned: [],
+        taskId: "b",
+      }) + "\n");
+      const out = await again;
+      expect(out.words[0]?.text).toBe("fresh-b");
+    } finally {
+      await client.close();
+    }
+  });
 });
