@@ -21,6 +21,12 @@ it("prova encode em fixture real e cai para software se o hardware falhar", asyn
   expect(out.durationMs).toBeGreaterThan(0);
   expect(Math.abs((out.durationMs ?? 0) - (source.durationMs ?? 0))).toBeLessThan(1500);
   expect(proof.compared.orientation).toBe("landscape");
+  expect(proof.compared.color).toMatch(/yuv420/);
+  expect(proof.compared.width).toBe(source.width);
+  expect(proof.compared.height).toBe(source.height);
+  expect(proof.compared.cutPrecisionMs).toBeLessThan(250);
+  expect(proof.compared.syncMs).toBeGreaterThanOrEqual(0);
+  expect(proof.compared.syncMs).toBeLessThan(250);
   expect(proof.encoders.length).toBeGreaterThan(0);
   expect(proof.attempted).not.toEqual([]);
 }, 60_000);
