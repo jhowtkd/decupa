@@ -64,6 +64,39 @@ describe("createResidentSpeechClient", () => {
     }
   });
 
+  it("linhas de stdout sem taskId correspondente não roubam a resposta de outra tarefa", async () => {
+    const client = createResidentSpeechClient({
+      spawn: (_command, _args, options) => {
+        return spawn(process.execPath, ["-e", `
+          const readline = require("node:readline");
+          const rl = readline.createInterface({ input: process.stdin });
+          rl.on("line", (line) => {
+            const req = JSON.parse(line);
+            if ((req.cmd || "transcribe") === "cancel") return;
+            process.stdout.write("Loading WhisperX model\\n");
+            process.stdout.write(JSON.stringify({ language: "pt", words: [] }) + "\\n");
+            process.stdout.write(JSON.stringify({
+              language: "pt",
+              words: [{ text: req.args.task_id, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId: req.args.task_id,
+            }) + "\\n");
+          });
+        `], {
+          cwd: options?.cwd,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      },
+    });
+    try {
+      const result = await client.transcribe({ taskId: "cam-a.mp4", wav: "a.wav", language: "pt" });
+      expect(result.words[0]?.text).toBe("cam-a.mp4");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("cancelamento da tarefa lenta não devolve a resposta da outra", async () => {
     const written: string[] = [];
     const client = createResidentSpeechClient({

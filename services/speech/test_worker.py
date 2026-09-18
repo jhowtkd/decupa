@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import queue
 import sys
 import threading
@@ -25,6 +26,17 @@ def load_worker(whisper: Mock):
 
 
 class ResidentWorkerTest(unittest.TestCase):
+    def test_whisperx_logger_does_not_write_to_stdout_after_import(self):
+        whisper = Mock()
+        logger = logging.getLogger("whisperx")
+        logger.handlers.clear()
+        logger.addHandler(logging.StreamHandler(sys.stdout))
+        logger.propagate = True
+        load_worker(whisper)
+        for handler in logging.getLogger("whisperx").handlers:
+            self.assertIsNot(getattr(handler, "stream", None), sys.stdout)
+        self.assertFalse(logging.getLogger("whisperx").propagate)
+
     def test_two_files_share_one_load_per_key(self):
         whisper = Mock()
         asr = Mock()
@@ -44,6 +56,44 @@ class ResidentWorkerTest(unittest.TestCase):
         self.assertEqual(first["words"][0]["text"], "oi")
         self.assertEqual(second["words"][0]["text"], "oi")
         whisper.load_model.assert_called_with("small", "cpu", compute_type="int8", language="pt")
+
+    def test_concurrent_same_key_loads_once(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": []}
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_load(*_args, **_kwargs):
+            started.set()
+            self.assertTrue(release.wait(2))
+            return asr
+
+        whisper.load_model.side_effect = slow_load
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        errors: list[BaseException] = []
+
+        def run(task_id: str) -> None:
+            try:
+                worker.transcribe(task_id=task_id, wav=f"{task_id}.wav")
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        first = threading.Thread(target=run, args=("a",))
+        second = threading.Thread(target=run, args=("b",))
+        first.start()
+        self.assertTrue(started.wait(1))
+        second.start()
+        time.sleep(0.05)
+        release.set()
+        first.join(2)
+        second.join(2)
+        self.assertEqual(errors, [])
+        self.assertEqual(whisper.load_model.call_count, 1)
 
     def test_language_change_creates_another_entry(self):
         whisper = Mock()
@@ -103,6 +153,24 @@ class ResidentWorkerTest(unittest.TestCase):
         other = worker.transcribe(task_id="fast", wav="fast.wav")
         self.assertEqual(other["words"][0]["text"], "rapido")
         self.assertNotIn("lento", str(other))
+
+    def test_cancel_before_transcribe_starts_is_sticky(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {
+            "segments": [{"words": [{"word": "oi", "start": 0.1, "end": 0.4, "score": 0.9}]}],
+        }
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        worker.cancel("soon")
+        with self.assertRaises(worker_mod.CancelledError):
+            worker.transcribe(task_id="soon", wav="a.wav")
+        retry = worker.transcribe(task_id="soon", wav="a.wav")
+        self.assertEqual(retry["words"][0]["text"], "oi")
 
     def test_cpu_fallback_without_automatic_gpu(self):
         whisper = Mock()
@@ -202,6 +270,30 @@ class ResidentWorkerTest(unittest.TestCase):
         lines = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
         self.assertEqual(len(lines), 2)
         self.assertEqual(whisper.load_model.call_count, 1)
+
+    def test_serve_keeps_going_after_malformed_stdin(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {
+            "segments": [{"words": [{"word": "ok", "start": 0.0, "end": 0.2, "score": 1}]}],
+        }
+        worker_mod = load_worker(whisper)
+        import io
+        stdin = io.StringIO(
+            "not-json\n"
+            + json.dumps({"cmd": "transcribe", "args": {"task_id": "a", "wav": "a.wav"}}) + "\n"
+        )
+        stdout = io.StringIO()
+        with patch.object(worker_mod.sys, "stdin", stdin), patch.object(worker_mod.sys, "stdout", stdout):
+            worker_mod.serve()
+        lines = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].get("taskId"), "a")
+        self.assertEqual(lines[0]["words"][0]["text"], "ok")
 
     def test_serve_cancel_in_flight_does_not_return_other_task(self):
         whisper = Mock()

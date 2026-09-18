@@ -9,11 +9,24 @@ explícito tenta e cai para CPU se falhar.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 from pathlib import Path
 
 import whisperx
+
+# O contrato JSON-lines exige stdout puro. O WhisperX configura o logger
+# "whisperx" com StreamHandler(sys.stdout); reapontamos para stderr.
+_whisperx_logger = logging.getLogger("whisperx")
+_whisperx_logger.handlers.clear()
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
+_whisperx_logger.addHandler(_stderr_handler)
+_whisperx_logger.setLevel(logging.INFO)
+_whisperx_logger.propagate = False
 
 
 class CancelledError(Exception):
@@ -50,16 +63,18 @@ class SpeechWorker:
             cached = self._asr.get(key)
             if cached is not None:
                 return cached, wanted
-        tried = wanted
-        try:
-            asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
-        except Exception:
-            if tried == "cpu":
-                raise
-            tried = "cpu"
-            key = (model, language, compute_type, tried)
-            asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
-        with self._lock:
+            tried = wanted
+            try:
+                asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
+            except Exception:
+                if tried == "cpu":
+                    raise
+                tried = "cpu"
+                key = (model, language, compute_type, tried)
+                cached = self._asr.get(key)
+                if cached is not None:
+                    return cached, tried
+                asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
             self.model_loads += 1
             self._asr.setdefault(key, asr)
             return self._asr[key], tried
@@ -70,8 +85,7 @@ class SpeechWorker:
             cached = self._align.get(key)
             if cached is not None:
                 return cached
-        loaded = whisperx.load_align_model(language_code=language, device=device)
-        with self._lock:
+            loaded = whisperx.load_align_model(language_code=language, device=device)
             self._align.setdefault(key, loaded)
             return self._align[key]
 
@@ -97,48 +111,52 @@ class SpeechWorker:
         batch_size: int = 8,
         text_file: str | None = None,
     ) -> dict:
-        self._cancel[task_id] = False
-        asr, device = self._asr_for(model, language, compute_type, device)
-        self._check(task_id)
-        audio = whisperx.load_audio(wav)
-        self._check(task_id)
-        if text_file:
-            text = Path(text_file).read_text(encoding="utf-8").strip()
-            if not text:
-                raise ValueError("texto vazio para alinhamento")
-            segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text}]
-        else:
-            segments = asr.transcribe(audio, batch_size=batch_size)["segments"]
-        self._check(task_id)
-        align_model, align_meta = self._align_for(language, device)
-        aligned = whisperx.align(
-            segments,
-            align_model,
-            align_meta,
-            audio,
-            device,
-            return_char_alignments=False,
-        )
-        self._check(task_id)
-        words = []
-        unaligned: list[str] = []
-        for sentence_index, segment in enumerate(aligned["segments"]):
-            for word in segment.get("words", []):
-                if "start" not in word or "end" not in word:
-                    missing = str(word.get("word", "")).strip()
-                    if missing:
-                        unaligned.append(missing)
-                    continue
-                words.append(
-                    {
-                        "text": word["word"].strip(),
-                        "startMs": int(round(word["start"] * 1000)),
-                        "endMs": int(round(word["end"] * 1000)),
-                        "confidence": float(word.get("score", 0.0)),
-                        "sentenceIndex": sentence_index,
-                    }
-                )
-        return {"language": language, "words": words, "unaligned": unaligned, "taskId": task_id}
+        if self._cancel.pop(task_id, False):
+            raise CancelledError(task_id)
+        try:
+            asr, device = self._asr_for(model, language, compute_type, device)
+            self._check(task_id)
+            audio = whisperx.load_audio(wav)
+            self._check(task_id)
+            if text_file:
+                text = Path(text_file).read_text(encoding="utf-8").strip()
+                if not text:
+                    raise ValueError("texto vazio para alinhamento")
+                segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text}]
+            else:
+                segments = asr.transcribe(audio, batch_size=batch_size)["segments"]
+            self._check(task_id)
+            align_model, align_meta = self._align_for(language, device)
+            aligned = whisperx.align(
+                segments,
+                align_model,
+                align_meta,
+                audio,
+                device,
+                return_char_alignments=False,
+            )
+            self._check(task_id)
+            words = []
+            unaligned: list[str] = []
+            for sentence_index, segment in enumerate(aligned["segments"]):
+                for word in segment.get("words", []):
+                    if "start" not in word or "end" not in word:
+                        missing = str(word.get("word", "")).strip()
+                        if missing:
+                            unaligned.append(missing)
+                        continue
+                    words.append(
+                        {
+                            "text": word["word"].strip(),
+                            "startMs": int(round(word["start"] * 1000)),
+                            "endMs": int(round(word["end"] * 1000)),
+                            "confidence": float(word.get("score", 0.0)),
+                            "sentenceIndex": sentence_index,
+                        }
+                    )
+            return {"language": language, "words": words, "unaligned": unaligned, "taskId": task_id}
+        finally:
+            self._cancel.pop(task_id, None)
 
     def benchmark(self, wavs: list[str]) -> dict:
         before = self.model_loads
@@ -174,7 +192,10 @@ def serve() -> None:
         line = line.strip()
         if not line:
             continue
-        req = json.loads(line)
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         cmd = req.get("cmd") or "transcribe"
         args = req.get("args") or {}
         if cmd == "cancel":

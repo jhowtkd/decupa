@@ -49,20 +49,14 @@ export function createResidentSpeechClient(opts: {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
-    } catch (error) {
-      const waiter = waiters.values().next().value as Waiter | undefined;
-      waiter?.reject(error instanceof Error ? error : new Error(String(error)));
+    } catch {
       return;
     }
     const rec = parsed as { taskId?: string; error?: string };
-    const waiter = (rec.taskId ? waiters.get(rec.taskId) : undefined)
-      ?? waiters.values().next().value as Waiter | undefined;
+    if (typeof rec.taskId !== "string" || rec.taskId.length === 0) return;
+    const waiter = waiters.get(rec.taskId);
     if (!waiter) return;
-    if (rec.taskId) waiters.delete(rec.taskId);
-    else {
-      const first = waiters.keys().next().value;
-      if (typeof first === "string") waiters.delete(first);
-    }
+    waiters.delete(rec.taskId);
     if (typeof rec.error === "string" && rec.error.length > 0) {
       waiter.reject(new Error(rec.error));
       return;
@@ -90,6 +84,7 @@ export function createResidentSpeechClient(opts: {
     });
     child.on("exit", () => {
       child = null;
+      buffer = "";
       for (const [id, waiter] of waiters) {
         waiters.delete(id);
         waiter.reject(new Error("worker de fala encerrou"));
