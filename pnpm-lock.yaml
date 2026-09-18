@@ -63,6 +63,18 @@ importers:
         specifier: workspace:*
         version: link:../media
 
+  packages/bench:
+    dependencies:
+      '@decupa/coordinator':
+        specifier: workspace:*
+        version: link:../coordinator
+      '@decupa/queue':
+        specifier: workspace:*
+        version: link:../queue
+      '@decupa/trace':
+        specifier: workspace:*
+        version: link:../trace
+
   packages/cache:
     dependencies:
       '@decupa/queue':
