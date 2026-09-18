@@ -22,6 +22,7 @@ import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
+import { bootProjectDecision } from "./assembly/decision-boot.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -589,6 +590,7 @@ async function startAssemblyApp(opts: {
   allowPaidVisual?: boolean;
 }): Promise<AppHandle> {
   const dir = resolve(opts.projectDir);
+  await bootProjectDecision({ projectDir: dir });
   const exec = opts.executor ?? new SpawnExecutor();
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");

@@ -15,6 +15,7 @@
     "@decupa/queue": "workspace:*",
     "@decupa/trace": "workspace:*",
     "@decupa/transcript": "workspace:*",
-    "@decupa/triage": "workspace:*"
+    "@decupa/triage": "workspace:*",
+    "@decupa/typesafe": "workspace:*"
   }
 }

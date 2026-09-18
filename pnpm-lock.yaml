@@ -56,6 +56,9 @@ importers:
       '@decupa/triage':
         specifier: workspace:*
         version: link:../../packages/triage
+      '@decupa/typesafe':
+        specifier: workspace:*
+        version: link:../../packages/typesafe
 
   packages/acoustics:
     dependencies:
