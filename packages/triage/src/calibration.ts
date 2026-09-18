@@ -113,6 +113,15 @@ function percentile(values: number[], fraction: number): number {
   return sorted[index]!;
 }
 
+export function runOfflineCalibration(
+  config: CalibrationConfig = defaultCalibrationConfig(),
+): CalibrationReport {
+  return reportCalibration(
+    CRITICAL_CORPUS.map((cse) =>
+      evaluateCase(cse, { source: "other-model", apply: false, latencyMs: 0 }, config)),
+  );
+}
+
 export function reportCalibration(evals: CaseEvaluation[]): CalibrationReport {
   const sample = evals.filter((item) => item.split === "eval");
   const rows = sample.length > 0 ? sample : evals;

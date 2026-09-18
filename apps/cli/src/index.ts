@@ -15,6 +15,10 @@ const USAGE = `decupa — bancada de medição
       fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
       apenas o provedor falta.
 
+  decupa calibrate
+      Relatório offline do corpus editorial. Sem categorias liberadas, tudo
+      vira trabalho humano. Concordância entre modelos não conta como verdade.
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -74,6 +78,13 @@ async function main(argv: string[]): Promise<number> {
     const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
+  }
+
+  if (command === "calibrate") {
+    const { runOfflineCalibration } = await import("@decupa/triage");
+    const report = runOfflineCalibration();
+    console.log(JSON.stringify(report, null, 2));
+    return 0;
   }
 
   if (command === "gold") {

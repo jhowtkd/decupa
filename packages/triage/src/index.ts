@@ -50,6 +50,7 @@ export {
   humanLabelFromModels,
   proposalFromNoul,
   reportCalibration,
+  runOfflineCalibration,
 } from "./calibration.ts";
 export type {
   CalibrationCase,

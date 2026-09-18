@@ -9,6 +9,7 @@ import {
   humanLabelFromModels,
   proposalFromNoul,
   reportCalibration,
+  runOfflineCalibration,
   type CalibrationCase,
   type DecisionCategory,
   type MachineProposal,
@@ -62,6 +63,9 @@ describe("calibração", () => {
     const cse = byCategory("negation");
     const evaled = evaluateCase(cse, { source: "typesafe", apply: true, latencyMs: 12 }, defaultCalibrationConfig());
     expect(evaled.outcome).toBe("human_work");
+    const report = runOfflineCalibration();
+    expect(report.counts.human_work).toBe(report.sampleSize);
+    expect(defaultCalibrationConfig().enabledCategories).toEqual([]);
   });
 
   it("conta remoção incorreta, omissão, abstinência e fallback contra o humano", () => {
