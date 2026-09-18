@@ -48,6 +48,26 @@ describe("runTriage", () => {
     expect(out.keepList).toBe("u003-u005");
   });
 
+  it("grava o catálogo fechado no out, sem texto privado e sem marcar fonte limpa", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    await runTriage({ indexPath, videoPath, outDir: dir, model: new FakeTriageModel([]) });
+    const raw = await readFile(join(dir, "catalog.json"), "utf8");
+    expect(raw).not.toMatch(/argumento principal|não escala|Nossa, que calor/);
+    const catalog = JSON.parse(raw) as {
+      sourceClean: boolean;
+      candidates: { id: string; kind: string; unitIds: string[]; replacement: string | null }[];
+    };
+    expect(catalog.sourceClean).toBe(false);
+    const ids = catalog.candidates.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const known = new Set(["u001", "u002", "u003", "u004", "u005"]);
+    for (const candidate of catalog.candidates) {
+      expect(candidate.unitIds.every((id) => known.has(id))).toBe(true);
+      if (candidate.replacement) expect(known.has(candidate.replacement)).toBe(true);
+    }
+    expect(catalog.candidates.some((c) => c.kind === "negation" && c.unitIds.includes("u003"))).toBe(true);
+  });
+
   it("não aplica alegação que não confere, e mantém as unidades", async () => {
     const { dir, indexPath, videoPath } = await fixture();
     const model = new FakeTriageModel([

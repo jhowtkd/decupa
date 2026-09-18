@@ -8,6 +8,7 @@ import {
   acceptedDropIds,
   applyDensityBudget,
   applyInspect,
+  buildEditCatalog,
   buildUnitsBlock,
   cacheKey,
   flagsWithoutSubstitute,
@@ -361,6 +362,13 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     keepList, model: modelName, verdicts, density, reviewFlags, inspect: inspectVerdicts, usage,
   }), "utf8");
   await writeFile(join(opts.outDir, "triage.json"), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const catalog = await buildEditCatalog(index);
+  await writeFile(join(opts.outDir, "catalog.json"), `${JSON.stringify({
+    sourceClean: catalog.sourceClean,
+    coveredUnitIds: catalog.coveredUnitIds,
+    uncoveredUnitIds: catalog.uncoveredUnitIds,
+    candidates: catalog.candidates,
+  }, null, 2)}\n`, "utf8");
 
   return { keepList, verdicts, reportPath, drop, reviewFlags };
 }
