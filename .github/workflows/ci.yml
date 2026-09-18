@@ -26,6 +26,7 @@ jobs:
       GEMINI_API_KEY: ""
       MINIMAX_API_KEY: ""
       DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
 

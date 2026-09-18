@@ -8,6 +8,7 @@ export default defineConfig({
     env: {
       ZAI_API_KEY: "",
       OPENAI_API_KEY: "",
+      TYPESAFE_API_KEY: "",
     },
   },
 });
