@@ -280,6 +280,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       projectDir: opts.projectDir ?? process.cwd(),
       env,
       fetchImpl: opts.fetchImpl,
+      log: (line) => console.log(line),
     });
     routeMode = routeMode ?? boot.mode;
     if (boot.enabled && env.TYPESAFE_API_KEY) {

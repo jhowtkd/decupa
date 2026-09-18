@@ -1,10 +1,11 @@
 import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { FakeExecutor, type ExecCall, type Executor } from "../pipeline.ts";
+import { startApp } from "../server.ts";
 import { analyzeSource } from "./analysis.ts";
 import { bootProjectDecision } from "./decision-boot.ts";
 import { fixtureAssembly } from "./fixture.ts";
@@ -34,6 +35,9 @@ function indexingExec(): Executor {
 }
 
 describe("bootProjectDecision", () => {
+  let stop: (() => Promise<void>) | null = null;
+  afterEach(async () => { await stop?.(); stop = null; });
+
   it("projeto sem config abre desligado e observe não chama a API", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decision-boot-"));
     let calls = 0;
@@ -59,6 +63,34 @@ describe("bootProjectDecision", () => {
     });
     expect(observe).toMatchObject({ mode: "observe", enabled: false, apiCalls: 0 });
     expect(calls).toBe(0);
+  });
+
+  it("abrir o app em observe não consome API e registra log sem conteúdo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decision-app-"));
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "observe" }), "utf8");
+    let calls = 0;
+    const logs: string[] = [];
+    const app = await startApp({
+      projectDir: dir,
+      port: 0,
+      env: { TYPESAFE_API_KEY: "sk-typesafe-secret-do-not-log", DECUPA_TYPESAFE: "1" },
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+      decisionLog: (line: string) => logs.push(line),
+    });
+    stop = app.close;
+    const opened = await fetch(`http://127.0.0.1:${app.port}/project`);
+    expect(opened.status).toBe(200);
+    expect(calls).toBe(0);
+    expect(logs.join("\n")).toMatch(/provider=typesafe/);
+    expect(logs.join("\n")).toMatch(/model=/);
+    expect(logs.join("\n")).toMatch(/elapsedMs=/);
+    expect(logs.join("\n")).toMatch(/fallback=/);
+    expect(logs.join("\n")).not.toContain("sk-typesafe-secret-do-not-log");
+    expect(logs.join("\n")).not.toContain("u001");
   });
 
   it("desligar o Jev não desfaz seek visual nem cache atômico", async () => {

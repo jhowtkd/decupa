@@ -52,7 +52,7 @@ export function decisionLogLine(opts: {
   provider: string;
   model: string;
   elapsedMs: number;
-  fallback: boolean;
+  fallback: boolean | string;
   apiKey?: string;
   content?: string;
 }): string {

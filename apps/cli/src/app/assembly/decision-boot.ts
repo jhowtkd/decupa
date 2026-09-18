@@ -1,11 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { bootDecision, parseDecisionConfig, type DecisionBoot } from "@decupa/typesafe/config";
+import {
+  bootDecision,
+  decisionLogLine,
+  parseDecisionConfig,
+  type DecisionBoot,
+} from "@decupa/typesafe/config";
 
 export async function bootProjectDecision(opts: {
   projectDir: string;
   env?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
+  log?: (line: string) => void;
 }): Promise<DecisionBoot> {
   const env = opts.env ?? process.env;
   let raw: unknown = null;
@@ -15,9 +21,19 @@ export async function bootProjectDecision(opts: {
     raw = null;
   }
   const config = parseDecisionConfig(raw, env);
-  return bootDecision({
+  const started = Date.now();
+  const boot = await bootDecision({
     config,
     fetchImpl: opts.fetchImpl,
     apiKey: env.TYPESAFE_API_KEY,
   });
+  const line = decisionLogLine({
+    provider: "typesafe",
+    model: config.model,
+    elapsedMs: Math.max(0, Date.now() - started),
+    fallback: boot.fallback ?? false,
+    apiKey: env.TYPESAFE_API_KEY,
+  });
+  (opts.log ?? ((text: string) => console.log(text)))(line);
+  return boot;
 }

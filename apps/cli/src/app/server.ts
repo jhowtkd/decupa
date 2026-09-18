@@ -132,6 +132,9 @@ export async function startApp(opts: {
   /** Autorização explícita; desligada por padrão. Não dispara chamada sozinha. */
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+  decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
@@ -588,9 +591,17 @@ async function startAssemblyApp(opts: {
   describeClient?: AssemblyDeps["describeClient"];
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+  decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
   const dir = resolve(opts.projectDir);
-  await bootProjectDecision({ projectDir: dir });
+  await bootProjectDecision({
+    projectDir: dir,
+    env: opts.env,
+    fetchImpl: opts.fetchImpl,
+    log: opts.decisionLog,
+  });
   const exec = opts.executor ?? new SpawnExecutor();
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
