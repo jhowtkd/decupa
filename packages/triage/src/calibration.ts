@@ -330,4 +330,56 @@ export const CRITICAL_CORPUS: CalibrationCase[] = [
     targetUnitIds: ["u002"],
     human: human(false),
   },
+  {
+    caseId: "eval-condition-removed",
+    split: "eval",
+    videoId: "video-eval-3",
+    projectId: "project-eval-3",
+    category: "condition_removed",
+    index: index({
+      units: [
+        { id: "u001", text: "A promoção está no site." },
+        { id: "u002", text: "O bônus vale, mas só se a inscrição for hoje." },
+        { id: "u003", text: "O comprovante chega por e-mail." },
+      ],
+    }),
+    candidateId: "caveat:u002",
+    targetUnitIds: ["u002"],
+    human: human(false),
+  },
+  {
+    caseId: "eval-pode-vs-e",
+    split: "eval",
+    videoId: "video-eval-3",
+    projectId: "project-eval-3",
+    category: "pode_vs_e",
+    index: index({
+      units: [
+        { id: "u001", text: "Isso pode ser o recorte final da aula." },
+        { id: "u002", text: "Isso é o recorte final da aula.", near_duplicate_of: "u001", similarity: 0.99 },
+        { id: "u003", text: "A gente publica amanhã." },
+      ],
+      topic: ["u003"],
+    }),
+    candidateId: "retake:u001->u002",
+    targetUnitIds: ["u001"],
+    human: human(false),
+  },
+  {
+    caseId: "eval-number",
+    split: "eval",
+    videoId: "video-eval-3",
+    projectId: "project-eval-3",
+    category: "number",
+    index: index({
+      units: [
+        { id: "u001", text: "Vou falar do prazo." },
+        { id: "u002", text: "Foram 40 minutos de espera." },
+        { id: "u003", text: "Aí a reunião começou." },
+      ],
+    }),
+    candidateId: "number:u002",
+    targetUnitIds: ["u002"],
+    human: human(false),
+  },
 ];

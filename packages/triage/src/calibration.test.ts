@@ -37,6 +37,11 @@ describe("corpus crítico", () => {
     expect(CRITICAL_CORPUS.every((c) => c.human.by === "human")).toBe(true);
   });
 
+  it("o conjunto de avaliação cobre as sete categorias", () => {
+    const evalCats = new Set(CRITICAL_CORPUS.filter((c) => c.split === "eval").map((c) => c.category));
+    expect(evalCats).toEqual(new Set(DECISION_CATEGORIES));
+  });
+
   it("separa dev e avaliação por vídeo e por projeto", () => {
     const devVideos = new Set(CRITICAL_CORPUS.filter((c) => c.split === "dev").map((c) => c.videoId));
     const evalVideos = new Set(CRITICAL_CORPUS.filter((c) => c.split === "eval").map((c) => c.videoId));
@@ -120,9 +125,7 @@ describe("calibração", () => {
     expect(report.latency.p95Ms).toBeGreaterThanOrEqual(report.latency.p50Ms);
     expect(report.counts.incorrect_removal).toBe(0);
     expect(report.counts.human_work).toBe(0);
-    expect(report.unlockedCategories.sort()).toEqual(
-      [...new Set(evalCases.map((c) => c.category))].sort(),
-    );
+    expect(report.unlockedCategories.sort()).toEqual([...DECISION_CATEGORIES].sort());
 
     const withError = reportCalibration([
       ...results,
