@@ -6,6 +6,7 @@
   "bin": { "decupa": "./src/index.ts" },
   "dependencies": {
     "@decupa/acoustics": "workspace:*",
+    "@decupa/bench": "workspace:*",
     "@decupa/cache": "workspace:*",
     "@decupa/coordinator": "workspace:*",
     "@decupa/core": "workspace:*",

@@ -15,6 +15,14 @@ const USAGE = `decupa — bancada de medição
       fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
       apenas o provedor falta.
 
+  decupa bench --input <arquivo> [--input <arquivo> ...] [--scenario cold-start|resident-models|cached-artifacts] [--limit 2]
+      Benchmark reproduzível de lote. Relata vazão, p50/p95, RAM e falhas.
+      Recusa inventar arquivos: cada --input precisa existir.
+
+  decupa calibrate
+      Relatório offline do corpus editorial. Sem categorias liberadas, tudo
+      vira trabalho humano. Concordância entre modelos não conta como verdade.
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -76,6 +84,42 @@ async function main(argv: string[]): Promise<number> {
     const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
+  }
+
+  if (command === "bench") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        scenario: { type: "string" },
+        limit: { type: "string" },
+        input: { type: "string", multiple: true },
+      },
+    });
+    const scenario = values.scenario ?? "cold-start";
+    if (scenario !== "cold-start" && scenario !== "resident-models" && scenario !== "cached-artifacts") {
+      console.error("scenario precisa ser cold-start, resident-models ou cached-artifacts");
+      return 1;
+    }
+    const limit = Number(values.limit ?? "2");
+    if (!Number.isFinite(limit) || limit < 1) {
+      console.error("limit precisa ser um inteiro >= 1");
+      return 1;
+    }
+    const { runCliBench } = await import("./bench.ts");
+    const result = await runCliBench({
+      scenario,
+      limit,
+      inputs: values.input ?? [],
+    });
+    console.log(result.output);
+    return result.code;
+  }
+
+  if (command === "calibrate") {
+    const { runOfflineCalibration } = await import("@decupa/triage");
+    const report = await runOfflineCalibration();
+    console.log(JSON.stringify(report, null, 2));
+    return 0;
   }
 
   if (command === "gold") {
