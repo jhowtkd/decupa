@@ -208,6 +208,36 @@ describe("validação das respostas", () => {
       await expect(client(fetchImpl).decide({ state: "x", questions })).rejects.toThrow(/probabilidade/i);
     }
   });
+<<<<<<< HEAD
+=======
+
+  it("rejeita probabilidade inválida na escolha sem retry", async () => {
+    const cases: { probabilities?: Record<string, number>; confidence?: number }[] = [
+      { probabilities: { drop: 0.1, keep: 1.2, review: 0.1 }, confidence: 0.7 },
+      { probabilities: { drop: 0.1, keep: 0.8, review: 0.1 }, confidence: Number.NaN },
+    ];
+    for (const broken of cases) {
+      let calls = 0;
+      const fetchImpl = (async () => {
+        calls += 1;
+        return jsonResponse({
+          model: "jev-latest",
+          answers: {
+            cut: { type: "noul", noul: 0.2 },
+            action: {
+              type: "choice",
+              choice: "keep",
+              probabilities: broken.probabilities ?? { drop: 0.1, keep: 0.8, review: 0.1 },
+              confidence: broken.confidence ?? 0.7,
+            },
+          },
+        });
+      }) as typeof fetch;
+      await expect(client(fetchImpl).decide({ state: "x", questions })).rejects.toThrow(/probabilidade/i);
+      expect(calls).toBe(1);
+    }
+  });
+>>>>>>> origin/cursor/d1-typesafe-main-76ba
 });
 
 describe("authorizesCut", () => {
