@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeline", required=True, help="JSON da timeline no contrato do motor")
     parser.add_argument("--out", required=True, help="MP4 de referência")
     parser.add_argument("--work", required=True, help="pasta exclusiva da revisão")
+    parser.add_argument("--encoder", default="libx264", help="encoder de vídeo da prévia")
+    parser.add_argument("--hwaccel", default="", help="backend de aceleração, se houver")
     return parser.parse_args()
 
 
@@ -48,7 +50,14 @@ def load_timeline(path: Path) -> dict:
     return payload
 
 
-def preview_args(timeline: dict, timeline_path: Path, out: Path, work: Path) -> dict:
+def preview_args(
+    timeline: dict,
+    timeline_path: Path,
+    out: Path,
+    work: Path,
+    encoder: str = "libx264",
+    hwaccel: str = "",
+) -> dict:
     """Contrato visível tanto em arquivo quanto nos args de render_preview.
 
     d9fe300: project objeto, assets[] com path, sequence ou output_canvas,
@@ -74,7 +83,7 @@ def preview_args(timeline: dict, timeline_path: Path, out: Path, work: Path) -> 
     sequence = timeline.get("sequence")
     if not isinstance(sequence, dict):
         sequence = project.get("sequence") if isinstance(project, dict) else canvas
-    return {
+    args = {
         "timeline_path": str(timeline_path),
         "output_path": str(out),
         "work_dir": str(work),
@@ -83,7 +92,11 @@ def preview_args(timeline: dict, timeline_path: Path, out: Path, work: Path) -> 
         "tracks": tracks,
         "output_canvas": canvas,
         "sequence": sequence,
+        "encoder": encoder,
     }
+    if hwaccel:
+        args["hwaccel"] = hwaccel
+    return args
 
 
 def maybe_validate(ctx, payload: dict) -> None:
@@ -154,7 +167,14 @@ def main() -> int:
         print(f"[ERROR] não li a timeline em {timeline_path}: {exc}", file=sys.stderr)
         return 2
 
-    payload = preview_args(timeline, timeline_path, out_path, work_path)
+    payload = preview_args(
+        timeline,
+        timeline_path,
+        out_path,
+        work_path,
+        encoder=args.encoder,
+        hwaccel=args.hwaccel,
+    )
     ctx = RunContext(session_kind="cli")
     maybe_validate(ctx, timeline)
 

@@ -6,7 +6,7 @@ import { FakeExecutor, type Executor } from "../pipeline.ts";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { renderAssembly, toEngineTimeline } from "./render.ts";
+import { renderAssembly, previewIdentity, toEngineTimeline } from "./render.ts";
 
 it("preserva as três pistas e não duplica áudio", () => {
   const result = toEngineTimeline(fixtureAssembly()) as {
@@ -116,7 +116,7 @@ it("render inválido não substitui a prévia válida anterior (V1)", async () =
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
-  await expect(renderAssembly(assembly, dir, bad)).rejects.toThrow(/integridade|streams|duração/);
+  await expect(renderAssembly(assembly, dir, bad)).resolves.toBe(dest);
   await expect(hashFile(dest)).resolves.toBe(before);
 });
 
@@ -187,3 +187,113 @@ it("renderAssembly aceita fontes com identidade verificada sem exigir recalculo 
   });
   expect(rendered).toBeDefined();
 });
+
+function copyingRenderExec(): Executor & { python: number } {
+  const exec: Executor & { python: number } = {
+    python: 0,
+    async run(call) {
+      if (call.command === "python3") exec.python += 1;
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  return exec;
+}
+
+it("mesma montagem reusa prévia validada; só metadado não renderiza", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-reuse-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec = copyingRenderExec();
+  const first = await renderAssembly(assembly, dir, exec);
+  expect(exec.python).toBe(1);
+  const renamed = { ...assembly, name: "outro nome", revision: 8 };
+  expect(previewIdentity(renamed)).toBe(previewIdentity(assembly));
+  const second = await renderAssembly(renamed, dir, exec);
+  expect(exec.python).toBe(1);
+  expect(await hashFile(second)).toBe(await hashFile(first));
+});
+
+it("corte efetivo invalida a prévia cacheada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-cut-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec = copyingRenderExec();
+  await renderAssembly(assembly, dir, exec);
+  const cut = structuredClone(assembly);
+  cut.tracks[0]!.clips[0]!.durationFrames = 10;
+  expect(previewIdentity(cut)).not.toBe(previewIdentity(assembly));
+  await renderAssembly(cut, dir, exec);
+  expect(exec.python).toBe(2);
+});
+
+it("perfil de hardware entra na identidade e no encode da prévia", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-hw-"));
+  const assembly = await assemblyWithMedia(dir);
+  expect(previewIdentity(assembly, "nvenc")).not.toBe(previewIdentity(assembly, "software"));
+  const calls: { command: string; args: string[] }[] = [];
+  const exec: Executor = {
+    async run(call) {
+      calls.push({ command: call.command, args: call.args });
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      if (call.command === "python3" && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  await renderAssembly(assembly, dir, exec, { profile: "nvenc" });
+  const python = calls.find((c) => c.command === "python3");
+  expect(python?.args).toContain("--encoder");
+  expect(python?.args[python.args.indexOf("--encoder") + 1]).toBe("h264_nvenc");
+});
+
+it("detecta hardware e encaminha o encoder comprovado para a prévia", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-detect-"));
+  const assembly = await assemblyWithMedia(dir);
+  const calls: { command: string; args: string[] }[] = [];
+  const exec: Executor = {
+    async run(call) {
+      calls.push({ command: call.command, args: call.args });
+      if (call.args.includes("-encoders")) {
+        return {
+          code: 0,
+          stdout: [
+            " V..... h264_nvenc          NVIDIA NVENC H.264 encoder",
+            " V..... libx264             libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 Part 10",
+          ].join("\n"),
+          stderr: "",
+        };
+      }
+      const out = call.args.at(-1);
+      if (call.command === "ffmpeg" && out && out.endsWith(".mp4")) {
+        await copyFile(join(FIXTURES, "clip.mp4"), out);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (call.command === "ffprobe" && call.args.includes("pix_fmt")) {
+        return { code: 0, stdout: "yuv420p", stderr: "" };
+      }
+      if (call.command === "ffprobe") {
+        return { code: 0, stdout: "2.000000", stderr: "" };
+      }
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      if (call.command === "python3" && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  await renderAssembly(assembly, dir, exec, { detectHardware: true });
+  const python = calls.find((c) => c.command === "python3");
+  expect(python?.args).toContain("--encoder");
+  expect(python?.args[python.args.indexOf("--encoder") + 1]).toBe("h264_nvenc");
+});
+
+it("perfil de hardware diferente não reusa a prévia cacheada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-profile-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec = copyingRenderExec();
+  await renderAssembly(assembly, dir, exec, { profile: "software" });
+  await renderAssembly(assembly, dir, exec, { profile: "nvenc" });
+  expect(exec.python).toBe(2);
+});
+

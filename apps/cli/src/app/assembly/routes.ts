@@ -1050,7 +1050,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const project = await mutate(baseRevision, async (project) => {
           let reference: string;
           try {
-            reference = await renderAssembly(project.assembly, dir, deps.exec);
+            reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true });
           } catch (err) {
             // Sem isso a operação ficava presa em "rendering" e travava
             // a atualização automática mesmo após o erro (R2).

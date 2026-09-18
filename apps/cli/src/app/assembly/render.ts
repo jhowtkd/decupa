@@ -1,13 +1,15 @@
-import { randomBytes } from "node:crypto";
-import { access, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { access, copyFile, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { probe } from "@decupa/media";
+import { inspectArtifact, publishAtomic } from "@decupa/cache";
+import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { verifySourceIdentity } from "./media.ts";
 import { pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
+import { encoderFor, detectHardwareProfile, type HardwareProfile } from "./hardware.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const RENDER_SCRIPT = join(REPO_ROOT, "scripts", "render-assembly.py");
@@ -105,15 +107,57 @@ export function toEngineTimeline(a: Assembly): object {
   return { project, assets, tracks, output_canvas, sequence: output_canvas };
 }
 
+export function previewIdentity(assembly: Assembly, profile: HardwareProfile = "software"): string {
+  const valid = validateAssembly(assembly);
+  return createHash("sha256")
+    .update(JSON.stringify({
+      fps: valid.fps,
+      width: valid.width,
+      height: valid.height,
+      sources: valid.sources.map((source) => ({
+        id: source.id,
+        sha256: source.sha256,
+        included: source.included,
+      })),
+      tracks: valid.tracks,
+      profile,
+    }))
+    .digest("hex");
+}
+
+type PreviewRecord = { sha256: string; profile: HardwareProfile };
+
 export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
+  opts: { profile?: HardwareProfile; detectHardware?: boolean } = {},
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
     absolutePath(source.path, `fonte ${source.id}`);
     await verifySourceIdentity(source);
+  }
+  let profile = opts.profile ?? "software";
+  if (opts.detectHardware && opts.profile == null) {
+    const source = valid.sources.find((item) => item.hasVideo) ?? valid.sources[0];
+    if (source) {
+      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec);
+    }
+  }
+  const key = previewIdentity(valid, profile);
+  const cacheDir = join(outDir, "preview-cache", key);
+  const cachedMp4 = join(cacheDir, "reference.mp4");
+  const sidecar = join(cacheDir, "preview.json");
+  const dest = join(outDir, `rev-${valid.revision}`, "reference.mp4");
+  const cached = await inspectArtifact(sidecar);
+  if (cached.status === "ready") {
+    const info = await probe(cachedMp4).catch(() => null);
+    if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0) {
+      await mkdir(dirname(dest), { recursive: true });
+      await copyFile(cachedMp4, dest);
+      return dest;
+    }
   }
   const published = join(outDir, `rev-${valid.revision}`);
   const work = join(
@@ -126,9 +170,17 @@ export async function renderAssembly(
   await writeFile(timelinePath, `${JSON.stringify(toEngineTimeline(valid), null, 2)}\n`, "utf8");
 
   try {
+    const { encoder, hwaccel } = encoderFor(profile);
     const result = await exec.run({
       command: "python3",
-      args: [RENDER_SCRIPT, "--timeline", timelinePath, "--out", outPath, "--work", work],
+      args: [
+        RENDER_SCRIPT,
+        "--timeline", timelinePath,
+        "--out", outPath,
+        "--work", work,
+        "--encoder", encoder,
+        ...(hwaccel ? ["--hwaccel", hwaccel] : []),
+      ],
       cwd: work,
       env: { CLAUDE_PROJECT_DIR: work },
     });
@@ -141,7 +193,6 @@ export async function renderAssembly(
     if (!exists) {
       throw new Error(`render concluiu sem o mp4 de saída em ${outPath}`);
     }
-    const dest = join(published, "reference.mp4");
     const tmp = join(
       published,
       `.reference-${process.pid}-${randomBytes(4).toString("hex")}.tmp.mp4`,
@@ -164,6 +215,12 @@ export async function renderAssembly(
       throw err;
     }
     await rename(tmp, dest);
+    await mkdir(cacheDir, { recursive: true });
+    await copyFile(dest, cachedMp4);
+    await publishAtomic(sidecar, `${JSON.stringify({
+      sha256: await hashFile(dest),
+      profile,
+    } satisfies PreviewRecord)}\n`);
     // Poda best-effort de derivados antigos (retention.ts): nunca falha o
     // render — erro é silenciosamente ignorado (retorno descartado).
     await pruneProject(outDir).catch(() => {});
