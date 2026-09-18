@@ -180,7 +180,17 @@ def serve() -> None:
         if cmd == "cancel":
             worker.cancel(str(args.get("task_id") or ""))
             continue
-        thread = threading.Thread(target=run_transcribe, args=(args,))
+        if cmd == "preload":
+            worker.preload(**{k: v for k, v in args.items() if k in {"model", "language", "compute_type", "device"}})
+            continue
+        if cmd == "benchmark":
+            wavs = [str(item) for item in (args.get("wavs") or [])]
+            try:
+                reply(worker.benchmark(wavs))
+            except Exception as exc:
+                reply({"error": str(exc)})
+            continue
+        thread = threading.Thread(target=run_transcribe, args=(args,), daemon=True)
         jobs.append(thread)
         thread.start()
     for job in jobs:
