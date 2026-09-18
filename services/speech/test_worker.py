@@ -210,6 +210,30 @@ class ResidentWorkerTest(unittest.TestCase):
         self.assertEqual(whisper.load_audio.call_count, 2)
         self.assertNotEqual(report["wavs"], ["cached"])
 
+    def test_benchmark_reuses_preloaded_language_not_defaults(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": []}
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        worker.preload(language="en")
+        loads = whisper.load_model.call_count
+        self.assertEqual(
+            [call.kwargs["language"] for call in whisper.load_model.call_args_list],
+            ["en"],
+        )
+        report = worker.benchmark(["inedito-en-a.wav", "inedito-en-b.wav"])
+        self.assertEqual(whisper.load_model.call_count, loads)
+        self.assertEqual(report["modelLoads"], 0)
+        self.assertEqual(
+            [call.kwargs.get("language_code") for call in whisper.load_align_model.call_args_list],
+            ["en"],
+        )
+
     def test_serve_benchmark_reads_unpublished_files_after_preload(self):
         whisper = Mock()
         asr = Mock()

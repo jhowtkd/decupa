@@ -48,6 +48,12 @@ class SpeechWorker:
         self._cancel: dict[str, bool] = {}
         self._lock = threading.Lock()
         self.model_loads = 0
+        self._preload = {
+            "model": "small",
+            "language": "pt",
+            "compute_type": "int8",
+            "device": "cpu",
+        }
 
     def _check(self, task_id: str) -> None:
         if self._cancel.get(task_id):
@@ -97,6 +103,12 @@ class SpeechWorker:
         device: str = "cpu",
     ) -> None:
         resolved = resolve_device(device)
+        self._preload = {
+            "model": model,
+            "language": language,
+            "compute_type": compute_type,
+            "device": resolved,
+        }
         self._asr_for(model, language, compute_type, resolved)
         self._align_for(language, resolved)
 
@@ -160,8 +172,16 @@ class SpeechWorker:
 
     def benchmark(self, wavs: list[str]) -> dict:
         before = self.model_loads
+        cfg = self._preload
         for index, wav in enumerate(wavs):
-            self.transcribe(task_id=f"bench-{index}", wav=wav)
+            self.transcribe(
+                task_id=f"bench-{index}",
+                wav=wav,
+                language=str(cfg["language"]),
+                model=str(cfg["model"]),
+                compute_type=str(cfg["compute_type"]),
+                device=str(cfg["device"]),
+            )
         return {
             "files": len(wavs),
             "modelLoads": self.model_loads - before,
