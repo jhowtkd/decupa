@@ -43,6 +43,7 @@ import {
   type VisualUnitFlags,
   type ZaiUsage,
 } from "@decupa/triage";
+import { TypeSafeClient } from "@decupa/typesafe";
 
 export interface TriageOptions {
   indexPath: string;
@@ -67,6 +68,8 @@ export interface TriageOptions {
   decide?: (catalog: EditCatalog) => FastDecision | null | Promise<FastDecision | null>;
   /** Cliente TypeSafe; hybrid/observe usam o catálogo fechado sem texto privado. */
   typeSafeClient?: TypeSafeDecideClient;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
 }
 
 export interface TriageJson {
@@ -268,7 +271,20 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
+  const env = opts.env ?? process.env;
   const routeMode = opts.routeMode ?? "off";
+  let typeSafeClient = opts.typeSafeClient;
+  if (
+    !typeSafeClient
+    && routeMode === "hybrid"
+    && env.DECUPA_TYPESAFE === "1"
+    && env.TYPESAFE_API_KEY
+  ) {
+    typeSafeClient = new TypeSafeClient({
+      apiKey: env.TYPESAFE_API_KEY,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
   let dropped: Set<string>;
   let verdicts: Verdict[];
 
@@ -294,8 +310,8 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       model,
       unitsBlock,
       videoPath,
-      decide: opts.decide ?? (opts.typeSafeClient
-        ? (catalog) => decideWithTypeSafe(catalog, opts.typeSafeClient!)
+      decide: opts.decide ?? (typeSafeClient
+        ? (catalog) => decideWithTypeSafe(catalog, typeSafeClient)
         : undefined),
     });
     verdicts = routed.verdicts;
