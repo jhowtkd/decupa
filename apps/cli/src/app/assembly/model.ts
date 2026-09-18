@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createAnalysisClient, readCredentials, ZAI_DEFAULT_MODEL } from "@decupa/triage";
+import { createTracer } from "@decupa/trace";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
@@ -27,6 +28,25 @@ export type DescribeDeps = {
 };
 
 type VisualWindow = { start: number; end: number; fetchStart: number };
+
+export function visualWindowClipArgs(
+  sourcePath: string,
+  window: VisualWindow,
+  output: string,
+): string[] {
+  const duration = window.end - window.fetchStart;
+  return [
+    "-n",
+    "-ss", String(window.fetchStart),
+    "-i", sourcePath,
+    "-t", String(duration),
+    "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+    "-an",
+    "-c:v", "libx264",
+    "-pix_fmt", "yuv420p",
+    output,
+  ];
+}
 
 type VisualWindowCache = {
   version: string;
@@ -66,9 +86,9 @@ function parseWindowCache(raw: unknown, source: Source, window: VisualWindow): V
 
 /**
  * Recorta o vídeo da janela [fetchStart, end) e envia SÓ esses bytes,
- * pedindo tempos locais [0, end-fetchStart). O recorte usa seek de saída
- * (frame-accurate, mais lento) em vez de seek de entrada (rápido mas preso
- * ao keyframe): evidência precisa corresponder ao intervalo enviado.
+ * pedindo tempos locais [0, end-fetchStart). Seek de entrada (antes de
+ * `-i`) acelera o GOP; reencode (sem stream-copy) mantém o quadro e o
+ * tempo de origem iguais ao recorte preciso, com 1s de contexto.
  */
 async function windowClip(
   source: Source,
@@ -85,22 +105,21 @@ async function windowClip(
     // Gera abaixo.
   }
   const tmp = join(cacheDir, `w-${window.start}-${window.end}.${process.pid}.tmp.mp4`);
-  const made = await exec.run({
-    command: "ffmpeg",
-    args: ["-n", "-i", source.path,
-      "-ss", String(window.fetchStart),
-      "-t", String(window.end - window.fetchStart),
-      "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
-      "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", tmp],
+  const tracer = createTracer();
+  return tracer.run("visual-window", async () => {
+    const made = await exec.run({
+      command: "ffmpeg",
+      args: visualWindowClipArgs(source.path, window, tmp),
+    });
+    if (made.code !== 0) {
+      await unlink(tmp).catch(() => {});
+      throw new Error(
+        `recorte visual [${window.fetchStart}, ${window.end}) falhou (código ${made.code})`,
+      );
+    }
+    await rename(tmp, clip);
+    return clip;
   });
-  if (made.code !== 0) {
-    await unlink(tmp).catch(() => {});
-    throw new Error(
-      `recorte visual [${window.fetchStart}, ${window.end}) falhou (código ${made.code})`,
-    );
-  }
-  await rename(tmp, clip);
-  return clip;
 }
 
 /**
