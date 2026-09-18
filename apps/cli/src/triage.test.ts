@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeTriageModel } from "@decupa/triage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureLightVideo, resolveInspectVideoPath, runTriage } from "./triage.ts";
+import { ensureLightVideo, parseRouteMode, resolveInspectVideoPath, runTriage } from "./triage.ts";
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "triage-cli-"));
@@ -129,6 +129,37 @@ describe("runTriage", () => {
     const out = await runTriage({ indexPath, videoPath, outDir: dir, model: new FakeTriageModel([]) });
     expect(out.keepList).toBe("u003-u005");
     expect(out.verdicts.some((v) => v.accepted && v.claim.source === "mechanical")).toBe(true);
+  });
+
+  it("hybrid resolvido substitui o passe structure e não chama o modelo", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      decide: () => ({ applyIds: [] }),
+    });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(model.calls.filter((c) => c.kind === "inspect")).toHaveLength(0);
+    expect(out.keepList).toBe("u001-u005");
+  });
+
+  it("off na CLI ainda chama structure uma vez, como o legado", async () => {
+    const { dir, indexPath, videoPath } = await fixture();
+    const model = new FakeTriageModel([]);
+    await runTriage({ indexPath, videoPath, outDir: dir, model, routeMode: "off" });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(1);
+  });
+
+  it("parseRouteMode rejeita valor desconhecido e default é off", () => {
+    expect(parseRouteMode()).toBe("off");
+    expect(parseRouteMode("hybrid")).toBe("hybrid");
+    expect(() => parseRouteMode("full")).toThrow(/inválida/);
   });
 
   it("não deixa o modelo dropar o take que o mecânico deixou", async () => {

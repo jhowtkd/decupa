@@ -36,11 +36,13 @@ const USAGE = `decupa — bancada de medição
       condense (video-agent-kit-plugin) espera. Apara o fim de palavra que o
       alinhador esticou sobre o silêncio — use --no-trim para desligar.
 
-  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider zai|gemini|minimax|custom] [--model <id>] [--max-tokens 16000]
+  decupa triage --index <speech_index.json> --video <vídeo> --out <pasta> [--target 90] [--provider zai|gemini|minimax|custom] [--model <id>] [--max-tokens 16000] [--route off|observe|hybrid]
       Decide o que é conteúdo do vídeo e o que não é, e devolve o keep-list
       pronto pro \`condense.py plan\`. Cada alegação do modelo é conferida
       contra o índice antes de virar corte. --target liga o passe de
-      densidade; sem ele, só estrutura. O thinking do GLM consome orçamento
+      densidade; sem ele, só estrutura. --route off (padrão) chama o passe
+      structure legado; hybrid substitui quando o catálogo resolve.
+      O thinking do GLM consome orçamento
       antes da resposta: quando ele come tudo, o orçamento dobra sozinho até
       64k; --max-tokens sobe o ponto de partida.
 
@@ -243,6 +245,7 @@ async function main(argv: string[]): Promise<number> {
         model: { type: "string" },
         provider: { type: "string" },
         "max-tokens": { type: "string" },
+        route: { type: "string" },
       },
     });
     if (!values.index || !values.video || !values.out) {
@@ -257,7 +260,14 @@ async function main(argv: string[]): Promise<number> {
       console.error(error instanceof Error ? error.message : String(error));
       return 1;
     }
-    const { runTriage } = await import("./triage.ts");
+    const { parseRouteMode, runTriage } = await import("./triage.ts");
+    let routeMode;
+    try {
+      routeMode = parseRouteMode(values.route);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
     const result = await runTriage({
       indexPath: values.index,
       videoPath: values.video,
@@ -266,6 +276,7 @@ async function main(argv: string[]): Promise<number> {
       modelName: values.model,
       provider,
       maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
+      routeMode,
     });
     const rejected = result.verdicts.filter((v) => !v.accepted).length;
     console.log(`keep-list: ${result.keepList}`);
