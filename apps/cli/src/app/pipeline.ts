@@ -2,11 +2,15 @@ import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { detectSilence } from "@decupa/acoustics";
+import type { FileCoordinator } from "@decupa/coordinator";
 import { createTracer, type Tracer } from "@decupa/trace";
+import { transcribe, type TranscribeDeps } from "@decupa/transcript";
 
 // Import direto da biblioteca de triagem: mesmo repo, sem subprocesso — o
 // contrato é a assinatura TypeScript, não uma regex sobre stdout.
 import { runTriage as runTriageLibrary } from "../triage.ts";
+import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, terminateTree } from "../runtime.ts";
 
 export interface ExecResult {
@@ -34,6 +38,14 @@ export interface PipelineJob {
   videoPath: string;
   workDir: string;
 }
+
+/** Worker residente no serviço HTTP; sem ele o ingest cai no CLI `condense-prep`. */
+export type IngestSpeech = {
+  worker: NonNullable<TranscribeDeps["worker"]>;
+  coordinator?: FileCoordinator;
+  extract?: TranscribeDeps["extract"];
+  detectSilence?: typeof detectSilence;
+};
 
 export class SpawnExecutor implements Executor {
   /** Processos vivos, para que `cancel` cumpra o que promete. Sem isto o
@@ -204,15 +216,32 @@ export async function runIngest(
   exec: Executor,
   onStage: (stage: "transcribing" | "indexing" | "visual") => void,
   onLine?: (line: string) => void,
-  tracer: Tracer = createTracer(),
+  tracer?: Tracer,
+  speech?: IngestSpeech,
 ): Promise<{ warning?: string }> {
+  const activeTracer = tracer ?? createTracer();
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
-    await tracer.run("transcribing", async () => {
+    await activeTracer.run("transcribing", async () => {
       onStage("transcribing");
+      if (speech?.worker) {
+        await runCondensePrep(
+          { input: job.videoPath, out: transcriptPath(job) },
+          {
+            transcribe: (opts) => transcribe(opts, {
+              worker: speech.worker,
+              coordinator: speech.coordinator,
+              extract: speech.extract,
+            }),
+            detectSilence: speech.detectSilence ?? detectSilence,
+          },
+        );
+        return;
+      }
       // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
-      // processo a menos na árvore para o cancelamento alcançar.
+      // processo a menos na árvore para o cancelamento alcançar. Alternativa
+      // de processo único: `decupa condense-prep` → transcribe.py.
       await must(exec, {
         command: process.execPath,
         args: [
@@ -229,7 +258,7 @@ export async function runIngest(
     });
   }
 
-  const emptySpeech = await tracer.run("indexing", async () => {
+  const emptySpeech = await activeTracer.run("indexing", async () => {
     onStage("indexing");
     if (await transcriptHasNoSegments(job)) {
       // Fonte de apoio sem fala é válida: o índice vazio permite que a montagem
@@ -246,7 +275,7 @@ export async function runIngest(
     return false;
   });
 
-  const warning = await tracer.run("visual", async () => {
+  const warning = await activeTracer.run("visual", async () => {
     onStage("visual");
     if (emptySpeech) return undefined;
     return runVisualIndex(job, exec, onLine);
@@ -439,8 +468,9 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
     if (code !== 0) throw new Error(`${bin} não está no PATH — instale com \`brew install ffmpeg\``);
   }
 
-  // Sidecar de fala = `uv run python transcribe.py` em services/speech — não é daemon.
-  // Visão é opcional: o ingest avisa e segue sem visual_index.
+  // CLI de processo único: `uv run python transcribe.py`. Serviço residente:
+  // `worker.py --serve` no app HTTP. Preflight confirma o CLI; o worker
+  // mora no mesmo diretório.
   const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"] });
   const hasSpeech = await access(SPEECH_SCRIPT).then(() => true, () => false);
   if (uvCode !== 0 || !hasSpeech) {

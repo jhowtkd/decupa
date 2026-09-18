@@ -8,7 +8,7 @@ import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
-import type { Executor } from "../pipeline.ts";
+import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
@@ -61,6 +61,7 @@ export type AssemblyDeps = {
   describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
+  speech?: IngestSpeech;
 };
 
 /**
@@ -843,7 +844,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             sourceId,
             progress: `${done + 1}/${sourceIds.length}`,
           };
-          const analysis = await analyzeSource(source, dir, deps.exec);
+          const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
           if (wantVisual && deps.describeClient && source.hasVideo && !signal.aborted) {
             try {
               analysis.visual = await describeSource(source, dir, signal, {
@@ -907,7 +908,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient },
+          { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(releaseHold).then(
           () => {

@@ -408,3 +408,39 @@ it("TTL expira artefato ocioso e preserva referência em uso", async () => {
   await analyzeSource(source, dir, counting, opts);
   expect(indexes).toBe(1);
 });
+
+it("dois arquivos no serviço usam o worker residente e não spawnam transcribe.py", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-speech-"));
+  const aPath = join(dir, "cam-a.mp4");
+  const bPath = join(dir, "cam-b.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), aPath);
+  await copyFile(join(FIXTURES, "clip.mp4"), bPath);
+  const a = await sourceFrom(aPath, "cam-a", "speech");
+  const b = { ...(await sourceFrom(bPath, "cam-b", "speech")), sha256: "b".repeat(64) };
+  const workerCalls: string[] = [];
+  const speech = {
+    worker: async (req: { taskId: string; language: string }) => {
+      workerCalls.push(req.taskId);
+      return {
+        language: req.language,
+        words: [{ text: "oi", startMs: 0, endMs: 80, confidence: 1, sentenceIndex: 0 }],
+        unaligned: [],
+      };
+    },
+    extract: async () => {},
+    detectSilence: async () => [],
+  };
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("transcribe.py") || call.args.includes("condense-prep")) {
+        throw new Error(`sidecar efêmero: ${call.args.join(" ")}`);
+      }
+      return indexingExec().run(call);
+    },
+  };
+  await Promise.all([
+    analyzeSource(a, dir, exec, { speech }),
+    analyzeSource(b, dir, exec, { speech }),
+  ]);
+  expect(workerCalls.sort()).toEqual([aPath, bPath].sort());
+});

@@ -47,6 +47,7 @@ async function boot(
     allowPaidVisual?: boolean;
     allowPaidModel?: boolean;
     proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
+    speech?: import("../pipeline.ts").IngestSpeech;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "assembly-routes-"));
@@ -199,6 +200,44 @@ it("não chama o provedor visual sem visual=true mesmo com cliente injetado", as
   });
   expect(res.status).toBe(200);
   expect(called).toBe(0);
+});
+
+it("POST /analyze no serviço residente usa o worker e não spawnam transcribe.py", async () => {
+  const workerCalls: string[] = [];
+  const { base, clip } = await boot([], {
+    executor: indexingExec(),
+    speech: {
+      worker: async (req) => {
+        workerCalls.push(req.taskId);
+        return {
+          language: req.language,
+          words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+          unaligned: [],
+        };
+      },
+      extract: async () => {},
+      detectSilence: async () => [],
+    },
+  });
+  await fetch(`${base}/project/select`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0 }),
+  });
+  const opened = await (await fetch(`${base}/project`)).json() as {
+    project: { assembly: { sources: { id: string; path: string }[] } };
+  };
+  const res = await fetch(`${base}/project/analyze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sourceIds: opened.project.assembly.sources.map((s) => s.id),
+      visual: false,
+    }),
+  });
+  expect(res.status).toBe(200);
+  expect(workerCalls).toEqual([clip]);
+  expect(opened.project.assembly.sources[0]?.path).toBe(clip);
 });
 
 it("recusa visual pago sem autorização explícita mesmo com cliente", async () => {

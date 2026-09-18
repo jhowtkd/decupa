@@ -1,4 +1,7 @@
+import { createFileCoordinator } from "@decupa/coordinator";
+import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
+import { createResidentSpeechClient } from "@decupa/transcript";
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
@@ -8,14 +11,13 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
 import { originAllowed } from "../http/origin.ts";
-import { hashFile, probe } from "@decupa/media";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
   indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
-  SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type PipelineJob,
+  SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
@@ -105,6 +107,21 @@ export interface AppHandle {
   close(): Promise<void>;
 }
 
+function attachResidentSpeech(opts: {
+  dir: string;
+  speech?: IngestSpeech;
+  executorInjected: boolean;
+}): { speech?: IngestSpeech; closeSpeech: () => Promise<void> } {
+  if (opts.speech) return { speech: opts.speech, closeSpeech: async () => undefined };
+  if (opts.executorInjected) return { closeSpeech: async () => undefined };
+  const client = createResidentSpeechClient();
+  const coordinator = createFileCoordinator(join(opts.dir, ".decupa", "coordinator"), { limit: 1 });
+  return {
+    speech: { worker: (req) => client.transcribe(req), coordinator },
+    closeSpeech: () => client.close(),
+  };
+}
+
 export async function startApp(opts: {
   input?: string;
   projectDir?: string;
@@ -131,6 +148,8 @@ export async function startApp(opts: {
   /** Autorização explícita; desligada por padrão. Não dispara chamada sozinha. */
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
+  /** Worker residente injetável; em produção o serviço cria um `worker.py --serve`. */
+  speech?: IngestSpeech;
 }): Promise<AppHandle> {
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
@@ -179,6 +198,7 @@ async function startCleanupApp(opts: {
   executor?: Executor;
   autoStart?: boolean;
   workDir?: string;
+  speech?: IngestSpeech;
   triageFn?: (opts: {
     indexPath: string;
     videoPath: string;
@@ -194,6 +214,11 @@ async function startCleanupApp(opts: {
   const workDir = opts.workDir
     ?? join(dirname(input), `.decupa-${basename(input).replace(/\.[^.]+$/, "")}`);
   await mkdir(join(workDir, "out"), { recursive: true });
+  const { speech, closeSpeech } = attachResidentSpeech({
+    dir: workDir,
+    speech: opts.speech,
+    executorInjected: Boolean(opts.executor),
+  });
 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
@@ -260,6 +285,7 @@ async function startCleanupApp(opts: {
         (stage) => store.setStage(job.id, stage),
         (line) => store.setProgress(job.id, line),
         tracer,
+        speech,
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -558,6 +584,7 @@ async function startCleanupApp(opts: {
     port, address: "127.0.0.1", jobId: job.id,
     close: async () => {
       if (exec instanceof SpawnExecutor) exec.killAll();
+      await closeSpeech();
       await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
     },
   };
@@ -587,9 +614,15 @@ async function startAssemblyApp(opts: {
   describeClient?: AssemblyDeps["describeClient"];
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
+  speech?: IngestSpeech;
 }): Promise<AppHandle> {
   const dir = resolve(opts.projectDir);
   const exec = opts.executor ?? new SpawnExecutor();
+  const { speech, closeSpeech } = attachResidentSpeech({
+    dir,
+    speech: opts.speech,
+    executorInjected: Boolean(opts.executor),
+  });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
   const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
@@ -604,6 +637,7 @@ async function startAssemblyApp(opts: {
     allowPaidVisual,
     proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir) : undefined),
     describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir) } : undefined),
+    speech,
   });
   const project = await runtime.ensureProject(opts.inputs);
 
@@ -655,6 +689,7 @@ async function startAssemblyApp(opts: {
     port, address: "127.0.0.1", jobId: project.id,
     close: async () => {
       if (exec instanceof SpawnExecutor) exec.killAll();
+      await closeSpeech();
       await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
     },
   };
