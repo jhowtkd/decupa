@@ -161,4 +161,26 @@ describe("routeTriage", () => {
     const finished = sink.events.find((e) => e.stage === "route" && e.phase === "finished");
     expect(finished?.category).toBe("ok");
   });
+
+  it("observe consulta a rota rápida mas aplica o legado uma vez", async () => {
+    const speech = index();
+    const model = new FakeTriageModel([preroll]);
+    let decideCalls = 0;
+    const result = await routeTriage({
+      mode: "observe",
+      index: speech,
+      model,
+      unitsBlock: buildUnitsBlock(speech),
+      videoPath: "clip.mp4",
+      decide: () => {
+        decideCalls += 1;
+        return { applyIds: ["prefix:u001"] };
+      },
+    });
+    expect(decideCalls).toBe(1);
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(1);
+    expect(result.source).toBe("legacy");
+    expect(result.structureCalls).toBe(1);
+    expect(result.keepList).toBe(mechanicalKeepList(speech));
+  });
 });
