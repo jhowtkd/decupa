@@ -149,6 +149,51 @@ describe("runTriage", () => {
     expect(out.keepList).toBe("u001-u005");
   });
 
+  it("hybrid com TypeSafe decide pelo catálogo e não manda texto privado", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "triage-typesafe-"));
+    const indexPath = join(dir, "speech_index.json");
+    await writeFile(indexPath, JSON.stringify({
+      source_duration: 9,
+      budget: { lossless_floor_seconds: 4 },
+      topic_runs: [{ keyword: "tema", unit_ids: ["u002"] }],
+      units: [
+        { id: "u001", index: 0, start: 0, end: 2, duration: 2, text: "Tá gravando?", has_terminal_punct: true, word_count: 2 },
+        { id: "u002", index: 1, start: 3, end: 5, duration: 2, text: "O gancho do vídeo começa aqui.", has_terminal_punct: true, word_count: 6 },
+        { id: "u003", index: 2, start: 6, end: 8, duration: 2, text: "Ficou bom?", has_terminal_punct: true, word_count: 2, is_question: true },
+      ],
+    }), "utf8");
+    const videoPath = join(dir, "v.mp4");
+    await writeFile(videoPath, "fake", "utf8");
+
+    let payload: Record<string, unknown> = {};
+    const model = new FakeTriageModel([
+      { unit_ids: ["u001"], reason: "preroll", restated_by: null, note: "não deveria", source: "model" },
+    ]);
+    const out = await runTriage({
+      indexPath,
+      videoPath,
+      outDir: dir,
+      model,
+      routeMode: "hybrid",
+      typeSafeClient: {
+        decide: async (req) => {
+          payload = req as unknown as Record<string, unknown>;
+          return {
+            model: "jev-latest",
+            answers: {
+              "prefix:u001": { type: "noul", noul: 0.92 },
+              "suffix:u003": { type: "noul", noul: 0.51 },
+            },
+          };
+        },
+      },
+    });
+    expect(JSON.stringify(payload.state)).not.toMatch(/Tá gravando|gancho|Ficou bom/);
+    expect(payload.state).toMatchObject({ candidateIds: expect.arrayContaining(["prefix:u001"]) });
+    expect(model.calls.filter((c) => c.kind === "structure")).toHaveLength(0);
+    expect(out.keepList).toBe("u002");
+  });
+
   it("off na CLI ainda chama structure uma vez, como o legado", async () => {
     const { dir, indexPath, videoPath } = await fixture();
     const model = new FakeTriageModel([]);

@@ -22,6 +22,7 @@ import {
   renderReport,
   readCredentials,
   resolveProvider,
+  decideWithTypeSafe,
   routeTriage,
   unitsById,
   verifyClaims,
@@ -36,6 +37,7 @@ import {
   type RouteMode,
   type StructureClaim,
   type TriageModel,
+  type TypeSafeDecideClient,
   type Verdict,
   type VisualUnitFlags,
   type ZaiUsage,
@@ -62,6 +64,8 @@ export interface TriageOptions {
   /** `off` (padrão) reproduz o passe structure legado. */
   routeMode?: RouteMode;
   decide?: (catalog: EditCatalog) => FastDecision | null | Promise<FastDecision | null>;
+  /** Cliente TypeSafe; hybrid/observe usam o catálogo fechado sem texto privado. */
+  typeSafeClient?: TypeSafeDecideClient;
 }
 
 export interface TriageJson {
@@ -289,7 +293,9 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
       model,
       unitsBlock,
       videoPath,
-      decide: opts.decide,
+      decide: opts.decide ?? (opts.typeSafeClient
+        ? (catalog) => decideWithTypeSafe(catalog, opts.typeSafeClient!)
+        : undefined),
     });
     verdicts = routed.verdicts;
     dropped = acceptedDropIds(verdicts);
