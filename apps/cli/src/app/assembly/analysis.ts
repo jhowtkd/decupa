@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { inspectArtifact, publishAtomic } from "@decupa/cache";
+import type { FileCoordinator } from "@decupa/coordinator";
+import { CancelledError, createLimitedQueue, isCancelledError } from "@decupa/queue";
 import { PROMPT_VERSION, ZAI_DEFAULT_MODEL, parseSpeechIndex } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
 import { runIngest, transcriptPath } from "../pipeline.ts";
@@ -8,48 +11,101 @@ import type { Analysis, Source, Span, Word } from "./types.ts";
 
 export const TRANSCRIBE_LANGUAGE = "pt";
 
-export function analysisKey(sourceSha: string): string {
+export type AnalysisPurpose = "asr" | "visual-1fps" | "visual-4fps";
+
+export type AnalyzeOptions = {
+  signal?: AbortSignal;
+  storeDir?: string;
+  purpose?: AnalysisPurpose;
+  now?: () => number;
+  ttlMs?: number;
+  coordinator?: FileCoordinator;
+};
+
+export function analysisKey(sourceSha: string, purpose: AnalysisPurpose = "asr"): string {
   return createHash("sha256")
     .update(JSON.stringify({
       sha: sourceSha,
       language: TRANSCRIBE_LANGUAGE,
       promptVersion: PROMPT_VERSION,
       model: ZAI_DEFAULT_MODEL,
+      ...(purpose === "asr" ? {} : { purpose }),
     }))
     .digest("hex");
 }
 
-export function analysisCacheDir(projectDir: string, sourceSha: string): string {
-  return join(projectDir, "analysis", sourceSha, analysisKey(sourceSha));
+export function analysisCacheDir(
+  projectDir: string,
+  sourceSha: string,
+  opts: { storeDir?: string; purpose?: AnalysisPurpose } = {},
+): string {
+  const root = opts.storeDir ?? join(projectDir, "analysis");
+  return join(root, sourceSha, analysisKey(sourceSha, opts.purpose ?? "asr"));
 }
 
-function resultPath(projectDir: string, sourceSha: string): string {
-  return join(analysisCacheDir(projectDir, sourceSha), "analysis.json");
+function resultPath(projectDir: string, sourceSha: string, opts: AnalyzeOptions = {}): string {
+  return join(analysisCacheDir(projectDir, sourceSha, opts), "analysis.json");
 }
 
 const EMPTY_COVERAGE = { requested: [], returned: [], missing: [] } as Analysis["visualCoverage"];
+const analysisBuilds = createLimitedQueue(4);
+const ENVELOPE = "analysis-v2";
 
-async function readCached(projectDir: string, source: Source): Promise<Analysis | null> {
-  try {
-    const raw = JSON.parse(await readFile(resultPath(projectDir, source.sha256), "utf8")) as Analysis;
-    if (raw.key !== analysisKey(source.sha256) || raw.status !== "ready") return null;
-    const normalized: Analysis = {
-      ...raw,
-      words: Array.isArray(raw.words) ? raw.words : [],
-      wordsStatus: raw.wordsStatus === "ready" ? "ready" : "missing",
-      visualCoverage: raw.visualCoverage ?? { ...EMPTY_COVERAGE },
+type StoredAnalysis = {
+  version: string;
+  createdAt: number;
+  refs: string[];
+  analysis: Analysis;
+};
+
+function unwrapStored(raw: unknown): StoredAnalysis | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  if (rec.version === ENVELOPE && rec.analysis && typeof rec.analysis === "object") {
+    return {
+      version: ENVELOPE,
+      createdAt: Number(rec.createdAt) || 0,
+      refs: Array.isArray(rec.refs) ? rec.refs.map(String) : [],
+      analysis: rec.analysis as Analysis,
     };
-    const adapted = adaptAnalysis(normalized, source);
-    // Cache antigo (sem palavras) alimenta do transcript válido sem nova ASR.
-    // Somente leitura: o arquivo de cache não é reescrito aqui.
-    if (adapted.wordsStatus === "missing") {
-      const derived = await wordsFromCache(join(analysisCacheDir(projectDir, source.sha256), "work"), source);
-      if (derived) return { ...adapted, words: derived, wordsStatus: "ready" };
-    }
-    return adapted;
-  } catch {
+  }
+  if (typeof rec.key === "string" && rec.status) {
+    return { version: ENVELOPE, createdAt: 0, refs: [], analysis: rec as unknown as Analysis };
+  }
+  return null;
+}
+
+async function readCached(
+  projectDir: string,
+  source: Source,
+  opts: AnalyzeOptions = {},
+): Promise<Analysis | null> {
+  const purpose = opts.purpose ?? "asr";
+  const inspection = await inspectArtifact(resultPath(projectDir, source.sha256, opts));
+  if (inspection.status !== "ready") return null;
+  const stored = unwrapStored(inspection.value);
+  if (!stored || stored.analysis.key !== analysisKey(source.sha256, purpose) || stored.analysis.status !== "ready") {
     return null;
   }
+  const ttlMs = opts.ttlMs;
+  const stamp = opts.now ?? Date.now;
+  if (ttlMs !== undefined && stored.createdAt > 0 && stamp() - stored.createdAt > ttlMs
+    && !stored.refs.includes(projectDir)) {
+    return null;
+  }
+  const raw = stored.analysis;
+  const normalized: Analysis = {
+    ...raw,
+    words: Array.isArray(raw.words) ? raw.words : [],
+    wordsStatus: raw.wordsStatus === "ready" ? "ready" : "missing",
+    visualCoverage: raw.visualCoverage ?? { ...EMPTY_COVERAGE },
+  };
+  const adapted = adaptAnalysis(normalized, source);
+  if (adapted.wordsStatus === "missing") {
+    const derived = await wordsFromCache(join(analysisCacheDir(projectDir, source.sha256, opts), "work"), source);
+    if (derived) return { ...adapted, words: derived, wordsStatus: "ready" };
+  }
+  return adapted;
 }
 
 function adaptAnalysis(analysis: Analysis, source: Source): Analysis {
@@ -148,10 +204,24 @@ async function wordsFromCache(workDir: string, source: Source): Promise<Word[] |
   }
 }
 
-async function saveAnalysis(projectDir: string, sourceSha: string, analysis: Analysis): Promise<void> {
-  const dir = analysisCacheDir(projectDir, sourceSha);
+async function saveAnalysis(
+  projectDir: string,
+  sourceSha: string,
+  analysis: Analysis,
+  opts: AnalyzeOptions = {},
+): Promise<void> {
+  const dir = analysisCacheDir(projectDir, sourceSha, opts);
   await mkdir(dir, { recursive: true });
-  await writeFile(resultPath(projectDir, sourceSha), `${JSON.stringify(analysis, null, 2)}\n`, "utf8");
+  const path = resultPath(projectDir, sourceSha, opts);
+  const existing = unwrapStored((await inspectArtifact(path)).value);
+  const refs = new Set(existing?.refs ?? []);
+  refs.add(projectDir);
+  await publishAtomic(path, `${JSON.stringify({
+    version: ENVELOPE,
+    createdAt: (opts.now ?? Date.now)(),
+    refs: [...refs],
+    analysis,
+  } satisfies StoredAnalysis, null, 2)}\n`);
 }
 
 function spansFromIndex(source: Source, raw: unknown): Span[] {
@@ -165,14 +235,20 @@ function spansFromIndex(source: Source, raw: unknown): Span[] {
   }));
 }
 
-export async function analyzeSource(
+async function buildAnalysis(
   source: Source,
   dir: string,
   exec: Executor,
+  opts: AnalyzeOptions = {},
 ): Promise<Analysis> {
-  const key = analysisKey(source.sha256);
-  const cached = await readCached(dir, source);
-  if (cached) return cached;
+  const purpose = opts.purpose ?? "asr";
+  const key = analysisKey(source.sha256, purpose);
+  const cached = await readCached(dir, source, opts);
+  if (cached) {
+    await pinAnalysis(dir, source, opts).catch(() => undefined);
+    return cached;
+  }
+  if (opts?.signal?.aborted) throw new CancelledError();
 
   const exists = await access(source.path).then(() => true, () => false);
   if (!exists) {
@@ -190,11 +266,11 @@ export async function analyzeSource(
       wordsStatus: "ready",
       visualCoverage: { ...EMPTY_COVERAGE },
     };
-    await saveAnalysis(dir, source.sha256, analysis);
+    await saveAnalysis(dir, source.sha256, analysis, opts);
     return analysis;
   }
 
-  const workDir = join(analysisCacheDir(dir, source.sha256), "work");
+  const workDir = join(analysisCacheDir(dir, source.sha256, opts), "work");
   await mkdir(join(workDir, "out"), { recursive: true });
   try {
     await runIngest(
@@ -202,7 +278,9 @@ export async function analyzeSource(
       exec,
       () => undefined,
     );
+    if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {
+    if (isCancelledError(err) || opts?.signal?.aborted) throw new CancelledError();
     const analysis: Analysis = {
       sourceId: source.id,
       key,
@@ -214,7 +292,7 @@ export async function analyzeSource(
       wordsStatus: "missing",
       visualCoverage: { ...EMPTY_COVERAGE },
     };
-    await saveAnalysis(dir, source.sha256, analysis);
+    await saveAnalysis(dir, source.sha256, analysis, opts);
     return analysis;
   }
 
@@ -231,9 +309,11 @@ export async function analyzeSource(
       wordsStatus: words ? "ready" : "missing",
       visualCoverage: { ...EMPTY_COVERAGE },
     };
-    await saveAnalysis(dir, source.sha256, analysis);
+    if (opts?.signal?.aborted) throw new CancelledError();
+    await saveAnalysis(dir, source.sha256, analysis, opts);
     return analysis;
   } catch (err) {
+    if (isCancelledError(err) || opts?.signal?.aborted) throw new CancelledError();
     const analysis: Analysis = {
       sourceId: source.id,
       key,
@@ -245,11 +325,101 @@ export async function analyzeSource(
       wordsStatus: "missing",
       visualCoverage: { ...EMPTY_COVERAGE },
     };
-    await saveAnalysis(dir, source.sha256, analysis);
+    await saveAnalysis(dir, source.sha256, analysis, opts);
     return analysis;
   }
 }
 
-export async function loadAnalysis(projectDir: string, source: Source): Promise<Analysis | null> {
-  return readCached(projectDir, source);
+function flightKey(dir: string, sourceSha: string, opts: AnalyzeOptions = {}): string {
+  return `${opts.storeDir ?? dir}:${analysisKey(sourceSha, opts.purpose ?? "asr")}`;
+}
+
+export async function analyzeSource(
+  source: Source,
+  dir: string,
+  exec: Executor,
+  opts: AnalyzeOptions = {},
+): Promise<Analysis> {
+  const run = (): Promise<Analysis> => buildAnalysis(source, dir, exec, opts);
+  if (opts.coordinator) {
+    return opts.coordinator.run({
+      id: flightKey(dir, source.sha256, opts),
+      stage: opts.purpose ?? "asr",
+      signal: opts.signal,
+      build: run,
+    });
+  }
+  return analysisBuilds.run(run, { key: flightKey(dir, source.sha256, opts), signal: opts.signal });
+}
+
+export async function loadAnalysis(
+  projectDir: string,
+  source: Source,
+  opts: AnalyzeOptions = {},
+): Promise<Analysis | null> {
+  return readCached(projectDir, source, opts);
+}
+
+export async function pinAnalysis(
+  projectDir: string,
+  source: Source,
+  opts: AnalyzeOptions = {},
+): Promise<void> {
+  const path = resultPath(projectDir, source.sha256, opts);
+  const stored = unwrapStored((await inspectArtifact(path)).value);
+  if (!stored) return;
+  if (stored.refs.includes(projectDir)) return;
+  await publishAtomic(path, `${JSON.stringify({
+    ...stored,
+    refs: [...stored.refs, projectDir],
+  } satisfies StoredAnalysis, null, 2)}\n`);
+}
+
+export async function unpinAnalysis(
+  storeDir: string,
+  projectDir: string,
+  source: Source,
+  opts: AnalyzeOptions = {},
+): Promise<void> {
+  const path = resultPath(projectDir, source.sha256, { ...opts, storeDir });
+  const stored = unwrapStored((await inspectArtifact(path)).value);
+  if (!stored) return;
+  const refs = stored.refs.filter((ref) => ref !== projectDir);
+  if (refs.length === stored.refs.length) return;
+  await publishAtomic(path, `${JSON.stringify({
+    ...stored,
+    refs,
+  } satisfies StoredAnalysis, null, 2)}\n`);
+}
+
+export async function pruneAnalysisStore(
+  storeDir: string,
+  opts: { now?: () => number; ttlMs?: number } = {},
+): Promise<void> {
+  const ttlMs = opts.ttlMs;
+  if (ttlMs === undefined) return;
+  const stamp = opts.now ?? Date.now;
+  const now = stamp();
+  let shas: string[];
+  try {
+    shas = await readdir(storeDir);
+  } catch {
+    return;
+  }
+  for (const sha of shas) {
+    const shaDir = join(storeDir, sha);
+    let keys: string[];
+    try {
+      keys = await readdir(shaDir);
+    } catch {
+      continue;
+    }
+    for (const key of keys) {
+      const keyDir = join(shaDir, key);
+      const stored = unwrapStored((await inspectArtifact(join(keyDir, "analysis.json"))).value);
+      if (!stored || stored.refs.length > 0) continue;
+      if (stored.createdAt <= 0 || now - stored.createdAt <= ttlMs) continue;
+      await rm(keyDir, { recursive: true, force: true });
+    }
+  }
 }

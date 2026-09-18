@@ -154,6 +154,30 @@ it("segunda janela recebe vídeo recortado diferente e soma a origem uma vez", a
   expect(last[last.indexOf("-t") + 1]).toBe("6");
 });
 
+it("recorte visual exige seek de entrada e proíbe stream-copy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 45);
+  const seen: { args: string[][] } = { args: [] };
+  const captured = { payloads: [] as string[], prompts: [] as string[] };
+  await describeSource(source, dir, new AbortController().signal, {
+    client: localSpanClient(captured),
+    exec: windowMarkerExec(seen),
+  });
+  for (const args of seen.args) {
+    const iAt = args.indexOf("-i");
+    const ssAt = args.indexOf("-ss");
+    expect(ssAt).toBeGreaterThanOrEqual(0);
+    expect(ssAt).toBeLessThan(iAt);
+    expect(args.includes("-c") && args[args.indexOf("-c") + 1] === "copy").toBe(false);
+    expect(args.includes("copy")).toBe(false);
+    expect(args).toContain("-c:v");
+    expect(args[args.indexOf("-c:v") + 1]).not.toBe("copy");
+  }
+  const second = seen.args[1]!;
+  expect(second[second.indexOf("-ss") + 1]).toBe("19");
+  expect(second[second.indexOf("-t") + 1]).toBe("21");
+});
+
 /** Resposta com cobertura total da janela pedida, por texto distinto. */
 function fullWindowClient(counter: { calls: number }, failOn: { n: number }) {
   return {

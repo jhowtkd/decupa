@@ -6,11 +6,14 @@
   "bin": { "decupa": "./src/index.ts" },
   "dependencies": {
     "@decupa/acoustics": "workspace:*",
+    "@decupa/cache": "workspace:*",
+    "@decupa/coordinator": "workspace:*",
     "@decupa/core": "workspace:*",
     "@decupa/goldedit": "workspace:*",
     "@decupa/media": "workspace:*",
     "@decupa/metrics": "workspace:*",
     "@decupa/queue": "workspace:*",
+    "@decupa/trace": "workspace:*",
     "@decupa/transcript": "workspace:*",
     "@decupa/triage": "workspace:*"
   }

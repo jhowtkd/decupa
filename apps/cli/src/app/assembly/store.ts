@@ -1,6 +1,7 @@
-import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { access } from "node:fs/promises";
+import { publishAtomic } from "@decupa/cache";
 import { createLimitedQueue, type LimitedQueue } from "@decupa/queue";
 import type {
   Analysis,
@@ -536,10 +537,7 @@ export function validateProject(value: unknown): Project {
 }
 
 async function writeAtomic(dir: string, project: Project): Promise<void> {
-  const target = projectPath(dir);
-  const tmp = join(dir, `project.json.${process.pid}.tmp`);
-  await writeFile(tmp, `${JSON.stringify(project, null, 2)}\n`, "utf8");
-  await rename(tmp, target);
+  await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`);
 }
 
 export async function loadProject(dir: string): Promise<Project> {

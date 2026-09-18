@@ -8,7 +8,7 @@ import { createProject, loadProject, saveProject } from "./store.ts";
 import { blankProject } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
-import { runPreparation, type PreparationDeps } from "./preparation.ts";
+import { holdPreparation, isPreparationActive, runPreparation, type PreparationDeps } from "./preparation.ts";
 import { applyTextEdit } from "./words.ts";
 import type { ExecCall, ExecResult } from "../pipeline.ts";
 import type { Project, Source } from "./types.ts";
@@ -238,6 +238,18 @@ async function seed(
 function ctrl(signal?: AbortSignal) {
   return { signal: signal ?? new AbortController().signal, isCurrent: () => true };
 }
+
+it("holdPreparation cobre o POST até o percurso assentar", () => {
+  const dir = join(tmpdir(), "prep-hold");
+  expect(isPreparationActive(dir)).toBe(false);
+  const release = holdPreparation(dir);
+  expect(isPreparationActive(dir)).toBe(true);
+  const nested = holdPreparation(dir);
+  nested();
+  expect(isPreparationActive(dir)).toBe(true);
+  release();
+  expect(isPreparationActive(dir)).toBe(false);
+});
 
 describe("runPreparation", () => {
   let dir: string;
