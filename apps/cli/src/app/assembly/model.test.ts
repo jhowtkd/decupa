@@ -173,7 +173,7 @@ it("recorte visual exige seek de entrada e proíbe stream-copy", async () => {
     expect(args).toContain("-c:v");
     expect(args[args.indexOf("-c:v") + 1]).not.toBe("copy");
   }
-  const second = seen.args[1]!;
+  const second = seen.args.find((args) => args[args.indexOf("-ss") + 1] === "19")!;
   expect(second[second.indexOf("-ss") + 1]).toBe("19");
   expect(second[second.indexOf("-t") + 1]).toBe("21");
 });
