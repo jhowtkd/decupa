@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { inspectArtifact, publishAtomic } from "@decupa/cache";
 
 export interface CacheKeyParts {
   videoSha: string;
@@ -11,6 +12,7 @@ export interface CacheKeyParts {
   budgetSeconds?: number;
   unitId?: string;
   framesSha?: string;
+  providerId?: string;
 }
 
 /**
@@ -23,6 +25,7 @@ export interface CacheKeyParts {
  */
 export function cacheKey(parts: CacheKeyParts): string {
   const elements = [parts.videoSha, parts.indexSha, parts.promptVersion, parts.model, parts.pass];
+  if (parts.providerId) elements.push(parts.providerId);
   if (parts.pass === "density" && parts.budgetSeconds !== undefined) {
     elements.push(parts.budgetSeconds.toFixed(1));
   }
@@ -36,16 +39,16 @@ export function cacheKey(parts: CacheKeyParts): string {
 }
 
 export async function readCache<T>(dir: string, key: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(join(dir, `${key}.json`), "utf8")) as T;
-  } catch {
-    // Ausente ou corrompido dão no mesmo: re-perguntar ao modelo é correto e
-    // apenas custa. Estourar aqui transformaria um cache ruim em falha dura.
-    return null;
-  }
+  const inspection = await inspectArtifact(join(dir, `${key}.json`));
+  if (inspection.status !== "ready") return null;
+  return inspection.value as T;
 }
 
 export async function writeCache(dir: string, key: string, value: unknown): Promise<void> {
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, `${key}.json`), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await publishAtomic(join(dir, `${key}.json`), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function providerIdentity(cfg: { provider: string; model: string; baseUrl: string }): string {
+  return `${cfg.provider}|${cfg.model}|${cfg.baseUrl}`;
 }

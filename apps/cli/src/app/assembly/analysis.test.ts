@@ -258,3 +258,73 @@ it("fonte sem áudio recebe palavras vazias prontas", async () => {
   expect(result.words).toEqual([]);
   expect(result.wordsStatus).toBe("ready");
 });
+
+it("dois consumidores simultâneos geram uma construção", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  let indexes = 0;
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("index")) {
+        indexes += 1;
+        const work = call.env?.CLAUDE_PROJECT_DIR;
+        if (work) {
+          await mkdir(join(work, "out"), { recursive: true });
+          await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
+        }
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const [first, second] = await Promise.all([
+    analyzeSource(source, dir, exec),
+    analyzeSource({ ...source }, dir, exec),
+  ]);
+  expect(indexes).toBe(1);
+  expect(first.status).toBe("ready");
+  expect(second.status).toBe("ready");
+});
+
+it("arquivo truncado reconstrói a análise", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  const { analysisCacheDir } = await import("./analysis.ts");
+  const cache = analysisCacheDir(dir, source.sha256);
+  await mkdir(cache, { recursive: true });
+  await writeFile(join(cache, "analysis.json"), "{ truncado", "utf8");
+  const result = await analyzeSource(source, dir, indexingExec());
+  expect(result.status).toBe("ready");
+  expect(result.speech).toHaveLength(1);
+});
+
+it("reordenar fontes não retranscreve", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
+  const aPath = join(dir, "a.mp4");
+  const bPath = join(dir, "b.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), aPath);
+  await copyFile(join(FIXTURES, "clip.mp4"), bPath);
+  const a = await sourceFrom(aPath, "a", "speech");
+  const b = await sourceFrom(bPath, "b", "speech");
+  await analyzeSource(a, dir, indexingExec());
+  await analyzeSource(b, dir, indexingExec());
+  const spy = new FakeExecutor({ code: 1, stderr: "não deveria transcrever" });
+  await analyzeSource(b, dir, spy);
+  await analyzeSource(a, dir, spy);
+  expect(spy.calls).toHaveLength(0);
+});
+
+it("falha registrada não é reaproveitada como ready", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-analysis-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  const failed = await analyzeSource(source, dir, new FakeExecutor({ code: 1, stderr: "index falhou" }));
+  expect(failed.status).toBe("error");
+  const recovered = await analyzeSource(source, dir, indexingExec());
+  expect(recovered.status).toBe("ready");
+  expect(recovered.speech).toHaveLength(1);
+});
