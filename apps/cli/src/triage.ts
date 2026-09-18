@@ -293,7 +293,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   routeMode = routeMode ?? "off";
   if (
     !typeSafeClient
-    && routeMode === "hybrid"
+    && (routeMode === "hybrid" || routeMode === "observe")
     && env.DECUPA_TYPESAFE === "1"
     && env.TYPESAFE_API_KEY
   ) {
