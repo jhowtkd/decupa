@@ -291,6 +291,17 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     }
   }
   routeMode = routeMode ?? "off";
+  if (
+    !typeSafeClient
+    && routeMode === "hybrid"
+    && env.DECUPA_TYPESAFE === "1"
+    && env.TYPESAFE_API_KEY
+  ) {
+    typeSafeClient = new TypeSafeClient({
+      apiKey: env.TYPESAFE_API_KEY,
+      fetchImpl: opts.fetchImpl,
+    });
+  }
   let dropped: Set<string>;
   let verdicts: Verdict[];
 
