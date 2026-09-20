@@ -252,6 +252,14 @@ export function mountContexto({ state, api, player }) {
   inspectorState.setAttribute("aria-live", "polite");
   root.appendChild(inspectorState);
 
+  const closeInspector = document.createElement("button");
+  closeInspector.type = "button";
+  closeInspector.id = "closeInspector";
+  closeInspector.className = "only-narrow";
+  closeInspector.textContent = "Fechar inspetor";
+  closeInspector.addEventListener("click", () => { root.hidden = true; });
+  root.appendChild(closeInspector);
+
   // Só o estado das correções mora aqui; as ações por palavra (incluindo
   // corrigir, com campo inline) moram no menu flutuante do texto.
   const review = document.createElement("section");

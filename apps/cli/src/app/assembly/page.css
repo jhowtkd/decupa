@@ -239,3 +239,6 @@ dialog h1 { margin-top: 0; }
 .seq-cue { position: absolute; top: 2px; height: 18px; overflow: hidden; white-space: nowrap;
   text-overflow: ellipsis; font-size: 11px; color: var(--accent);
   background: rgb(240 202 110 / .12); border-left: 2px solid var(--accent); padding: 0 4px; }
+.only-narrow { display: none; }
+@media (max-width: 1100px) { .only-narrow { display: inline-flex; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

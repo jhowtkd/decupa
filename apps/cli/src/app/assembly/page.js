@@ -334,6 +334,9 @@ document.getElementById("stages").addEventListener("click", (event) => {
   for (const el of document.querySelectorAll("#stages [data-stage]")) el.removeAttribute("aria-current");
   button.setAttribute("aria-current", "true");
   document.getElementById(STAGE_TARGET[button.dataset.stage])?.scrollIntoView({ block: "nearest" });
+  if (window.matchMedia("(max-width: 1100px)").matches && button.dataset.stage === "entrega") {
+    document.getElementById("contexto").hidden = false;
+  }
 });
 const toolTexto = document.querySelector('[data-tool="texto"]');
 toolTexto.addEventListener("click", () => {
@@ -342,6 +345,9 @@ toolTexto.addEventListener("click", () => {
   texto.toggleAttribute("hidden", !show);
   toolTexto.setAttribute("aria-pressed", String(show));
 });
+if (window.matchMedia("(max-width: 1100px)").matches) {
+  document.getElementById("contexto").hidden = true;
+}
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
 // O elemento persiste (só o src troca), então uma fiação basta.
