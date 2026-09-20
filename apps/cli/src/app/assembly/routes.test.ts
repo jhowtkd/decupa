@@ -132,12 +132,13 @@ it("serve a página de montagem, não a de limpeza", async () => {
   const contexto = await (await fetch(`${base}/editor/contexto.js`)).text();
   expect(html).toContain("decupa · montagem");
   expect(html).not.toContain("decupa · limpar fala");
-  // Casca de 4 regiões, sem header global.
+  // Bancada: topbar + 4 mounts (rail/texto/contexto/faixa) preservados.
+  expect(html).toContain('id="topbar"');
+  expect(html).toContain('id="status"');
   expect(html).toContain('id="rail"');
   expect(html).toContain('id="texto"');
   expect(html).toContain('id="contexto"');
   expect(html).toContain('id="faixa"');
-  expect(html).not.toContain("<header");
   expect(css).toContain(".riscado");
   expect(js).toContain("/editor/rail.js");
   expect(js).toContain("scheduleAutoPreview");
