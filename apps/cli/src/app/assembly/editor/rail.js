@@ -73,19 +73,6 @@ export function mountRail({ state, api, player }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
-  const head = document.createElement("div");
-  head.className = "rail-head";
-  const brand = document.createElement("strong");
-  brand.textContent = "decupa";
-  const status = document.createElement("span");
-  status.className = "hint";
-  status.id = "status";
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  status.textContent = "carregando…";
-  head.append(brand, status);
-  root.appendChild(head);
-
   const materials = document.createElement("section");
   materials.setAttribute("aria-label", "Materiais");
   materials.innerHTML = "<h1>Materiais</h1>"

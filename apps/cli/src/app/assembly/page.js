@@ -4,7 +4,7 @@
 import { createState } from "/editor/state.js";
 import { createApi } from "/editor/api.js";
 import { mountRail } from "/editor/rail.js";
-import { mountContexto } from "/editor/contexto.js";
+import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
 
@@ -321,10 +321,27 @@ async function importFiles(files) {
 
 /* ---- Fiação ---- */
 
+mountStage({ state, api, player });
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
 mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
+
+const STAGE_TARGET = { materiais: "rail", edicao: "center", revisao: "stage", entrega: "delivery" };
+document.getElementById("stages").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-stage]");
+  if (!button) return;
+  for (const el of document.querySelectorAll("#stages [data-stage]")) el.removeAttribute("aria-current");
+  button.setAttribute("aria-current", "true");
+  document.getElementById(STAGE_TARGET[button.dataset.stage])?.scrollIntoView({ block: "nearest" });
+});
+const toolTexto = document.querySelector('[data-tool="texto"]');
+toolTexto.addEventListener("click", () => {
+  const texto = document.getElementById("texto");
+  const show = texto.hasAttribute("hidden");
+  texto.toggleAttribute("hidden", !show);
+  toolTexto.setAttribute("aria-pressed", String(show));
+});
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
 // O elemento persiste (só o src troca), então uma fiação basta.

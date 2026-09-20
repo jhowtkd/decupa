@@ -5,6 +5,19 @@
 import { watchedState } from "./watched.js";
 import { montageDuration } from "./montage.js";
 
+/** Prévia central (#stage): nesta task só ancora; a Task 5 move a lógica. */
+export function mountStage() {
+  const stage = document.getElementById("stage");
+  if (!stage) return;
+  if (!document.getElementById("previewPlayer")) {
+    const video = document.createElement("video");
+    video.id = "previewPlayer";
+    video.controls = true;
+    video.preload = "metadata";
+    stage.prepend(video);
+  }
+}
+
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let lastPreviewRev = null;
 
