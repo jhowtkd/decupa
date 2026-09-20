@@ -129,7 +129,7 @@ export function mountRail({ state, api, player }) {
     + '<button type="button" id="closeBriefing">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
   let briefingAutoOpened = false;
-  document.getElementById("openBriefing").onclick = () => briefingDialog.showModal();
+  document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
 
   const preparation = document.createElement("section");
@@ -356,7 +356,7 @@ export function mountRail({ state, api, player }) {
     cancel.addEventListener("click", () => prepDialog.close());
     row.append(go, cancel);
     prepDialog.append(title, note, row);
-    prepDialog.showModal();
+    if (!prepDialog.open) prepDialog.showModal();
   }
 
   function render(project) {
@@ -369,7 +369,7 @@ export function mountRail({ state, api, player }) {
     // é colar o roteiro e arrastar mídia (era o <details> aberto, Task 4).
     if (!briefingAutoOpened && project.assembly.sources.length === 0) {
       briefingAutoOpened = true;
-      briefingDialog.showModal();
+      if (!briefingDialog.open) briefingDialog.showModal();
     }
     renderSources(project);
     // A seção fica visível desde o vazio: o botão Preparar montagem é o

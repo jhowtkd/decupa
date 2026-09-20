@@ -30,7 +30,16 @@ it("fiação shell↔módulos: regiões e ids dinâmicos existem", async () => {
 it("aprovação no front continua condicionada ao assistido real", async () => {
   const contexto = await read(CONTEXTO);
   expect(contexto).toContain("watchedState(project, watched).canApprove");
-  expect(contexto).not.toContain("Simular reprodu");
+});
+
+it("nenhum atalho de simulação nas superfícies servidas", async () => {
+  const files = [HTML, PAGEJS, CSS, RAIL, CONTEXTO, TEXTO, SEQ,
+    "../apps/cli/src/app/page.html",
+    "../apps/cli/src/app/provider-setup.html",
+    "../apps/cli/src/mark-web/page.html"];
+  for (const file of files) {
+    expect(await read(file)).not.toContain("Simular reprodu");
+  }
 });
 
 it("protótipo não vaza para produção", async () => {

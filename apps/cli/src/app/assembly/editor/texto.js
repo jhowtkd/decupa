@@ -171,9 +171,11 @@ export function needsEmptyGuide(p) {
 export function docSignature(p) {
   if (!p || needsEmptyGuide(p)) return "empty";
   if (p.scenes.length === 0) {
-    return "transcript|" + p.assembly.sources.map((source) =>
-      source.id + ":" + effectiveWords(p, source.id).map((word) => word.text).join(" "),
-    ).join("|") + "|" + (p.preparation ? p.preparation.status : "");
+    return "transcript|" + p.assembly.sources.map((source) => {
+      const analysis = (p.analyses || []).find((item) => item.sourceId === source.id);
+      return source.id + ":" + source.name + ":" + (analysis ? analysis.status : "")
+        + ":" + effectiveWords(p, source.id).map((word) => word.text).join(" ");
+    }).join("|") + "|" + (p.preparation ? p.preparation.status : "");
   }
   return "prose|" + p.scenes.map((scene) =>
     scene.id + ":" + scene.takes.map((take) =>

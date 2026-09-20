@@ -134,3 +134,15 @@ it("docSignature vazio/transcrito", () => {
   expect(docSignature({ assembly: { sources: [] } })).toBe("empty");
   expect(docSignature(docProject({ scenes: [] })).startsWith("transcript|")).toBe(true);
 });
+
+it("docSignature no modo transcrito inclui status e nome da fonte", () => {
+  const words = [
+    { id: "w1", text: "ola", start: 0, end: 0.5 },
+    { id: "w2", text: "mundo", start: 0.5, end: 1 },
+  ];
+  const base = docProject({ scenes: [], analyses: [{ sourceId: "a", status: "ready", words }] });
+  const flipped = docProject({ scenes: [], analyses: [{ sourceId: "a", status: "error", words }] });
+  expect(docSignature(flipped)).not.toBe(docSignature(base));
+  const renamed = docProject({ scenes: [], assembly: { sources: [{ id: "a", name: "b.mp4" }] }, analyses: [{ sourceId: "a", status: "ready", words }] });
+  expect(docSignature(renamed)).not.toBe(docSignature(base));
+});
