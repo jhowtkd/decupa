@@ -5,78 +5,41 @@
 import { watchedState } from "./watched.js";
 import { montageDuration } from "./montage.js";
 
-/** Prévia central (#stage): nesta task só ancora; a Task 5 move a lógica. */
-export function mountStage() {
+/**
+ * Palco central da prévia (#stage): player único, frescor, aprovação.
+ * Todo o comportamento veio verbatim do mountContexto — só a raiz mudou.
+ */
+export function mountStage({ state, api, player }) {
   const stage = document.getElementById("stage");
   if (!stage) return;
-  if (!document.getElementById("previewPlayer")) {
-    const video = document.createElement("video");
-    video.id = "previewPlayer";
-    video.controls = true;
-    video.preload = "metadata";
-    stage.prepend(video);
+  let previewPlayer = document.getElementById("previewPlayer");
+  if (!previewPlayer) {
+    previewPlayer = document.createElement("video");
+    previewPlayer.id = "previewPlayer";
+    previewPlayer.controls = true;
+    previewPlayer.preload = "metadata";
+    stage.prepend(previewPlayer);
   }
-}
-
-/** Última revisão com vídeo conhecido no player (prévia anterior). */
-let lastPreviewRev = null;
-
-/** Chip mono (.chip da Task 3): metadados curtos da prévia em linha. */
-const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
-
-/** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
-function setDisabled(el, value) {
-  if (!el) return;
-  if (el.classList && el.classList.contains("is-loading")) {
-    el.disabled = true;
-    return;
-  }
-  el.disabled = !!value;
-}
-
-/** Sem checkboxes: o NL ecoa a permissão já concedida no lote (o contrato segue com as flags). */
-function paidFlags(project) {
-  return {
-    modelOptIn: project.permissions.model === true,
-    visualOptIn: project.permissions.visual === true,
-  };
-}
-
-export function mountContexto({ state, api, player }) {
-  const root = document.getElementById("contexto");
-  root.replaceChildren();
-
-  const preview = document.createElement("section");
-  preview.setAttribute("aria-label", "Prévia");
-  preview.innerHTML = "<h1>Prévia</h1>"
-    + '<video id="previewPlayer" controls preload="metadata"></video>'
-    + '<div class="preview-meta" id="previewNote" hidden aria-live="polite"></div>'
-    + '<div class="preview-meta" id="deliveryMeta"></div>'
-    + '<p class="muted" id="freshChip" aria-live="polite"></p>'
-    + '<p class="muted">Assista à prévia atual antes de aprovar.</p>'
-    + '<div class="row"><button type="button" id="refreshPreview">Atualizar prévia</button>'
-    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
-  root.appendChild(preview);
-
-  // Só o estado das correções mora aqui; as ações por palavra (incluindo
-  // corrigir, com campo inline) moram no menu flutuante do texto.
-  const review = document.createElement("section");
-  review.setAttribute("aria-label", "Correções de texto");
-  review.innerHTML = "<h1>Correções de texto</h1>"
-    + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
-  root.appendChild(review);
-
-  // Pedido em linguagem natural (Task 10): o Preparar montagem mora no rail
-  // com confirmação de lote; aqui só o ajuste, com rótulo de custo honesto.
-  const briefingActions = document.createElement("section");
-  briefingActions.setAttribute("aria-label", "Ajuste");
-  briefingActions.innerHTML = "<h1>Ajuste</h1>"
-    + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
-    + '<div class="row"><button type="button" class="primary" id="adjust">Propor mudanças (modelo pago)</button>'
-    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar</button></div>';
-  root.appendChild(briefingActions);
-
-  const previewPlayer = document.getElementById("previewPlayer");
+  const note = document.createElement("div");
+  note.className = "preview-meta";
+  note.id = "previewNote";
+  note.hidden = true;
+  note.setAttribute("aria-live", "polite");
+  const meta = document.createElement("div");
+  meta.className = "preview-meta";
+  meta.id = "deliveryMeta";
+  const fresh = document.createElement("p");
+  fresh.className = "muted";
+  fresh.id = "freshChip";
+  fresh.setAttribute("aria-live", "polite");
+  const hint = document.createElement("p");
+  hint.className = "muted";
+  hint.textContent = "Assista à prévia atual antes de aprovar.";
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = '<button type="button" id="refreshPreview">Atualizar prévia</button>'
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button>';
+  stage.append(note, meta, fresh, hint, row);
 
   // Rastreio "assistido de verdade" (Task 9): só a prévia atual conta, e só
   // quando vista até o fim (perto do fim ou evento ended). Troca de src,
@@ -116,19 +79,6 @@ export function mountContexto({ state, api, player }) {
     state.set("watched", { revision: null, ended: false });
   });
 
-  function backgroundBusy(project, operation) {
-    const OP_LABEL = {
-      analyzing: "Analisando mídia",
-      preparing: "Preparando montagem",
-      rendering: "Renderizando prévia",
-      proposing: "Propondo cenas",
-    };
-    if (operation && OP_LABEL[operation.stage]) return true;
-    if (project && project.preparation && project.preparation.status === "running") return true;
-    if (player.previewBusy()) return true;
-    return false;
-  }
-
   /** Chip de frescor + gate do botão aprovar (Task 9). */
   function renderFreshness(project) {
     if (!project) return;
@@ -139,7 +89,7 @@ export function mountContexto({ state, api, player }) {
   }
 
   function renderPreview(project) {
-    if (!project.scenes.length) return;
+    if (!project || !project.scenes.length) return;
     // Metadados da prévia em linha de chips mono (Task 4).
     document.getElementById("deliveryMeta").replaceChildren(
       chip("prévia " + project.previewRevision),
@@ -200,66 +150,9 @@ export function mountContexto({ state, api, player }) {
       document.getElementById("refreshPreview"),
       project.scenes.length === 0
       || (current && project.previewArtifact?.revision === project.revision)
-      || backgroundBusy(project, state.get("operation")),
+      || backgroundBusy(project, state.get("operation"), player),
     );
   }
-
-  /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
-  function renderCorrections(project) {
-    const box = document.getElementById("corrections");
-    if (!box) return;
-    box.replaceChildren();
-    for (const correction of project.corrections || []) {
-      if (correction.status === "aligned") continue;
-      const p = document.createElement("p");
-      if (correction.status === "error") {
-        p.className = "warn";
-        p.textContent = "Correção com erro (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s): "
-          + (correction.error || "falha no alinhamento") + ". O texto original segue valendo.";
-      } else {
-        p.className = "muted";
-        p.textContent = "Alinhando correção (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s)… "
-          + "o trecho original segue valendo e os cortes usam o catálogo atual.";
-      }
-      box.appendChild(p);
-    }
-  }
-
-  function render(project) {
-    if (!project) return;
-    const operation = state.get("operation");
-    renderCorrections(project);
-    renderPreview(project);
-    const preparing = project.preparation
-      && project.preparation.status === "running";
-    document.getElementById("cancelPrep").hidden = !(
-      preparing || (operation && operation.stage === "preparing")
-    );
-    // Ajustar dispara trabalho longo no servidor: evita o segundo clique
-    // parecer travado (o servidor cancelaria o anterior).
-    const bg = backgroundBusy(project, operation);
-    setDisabled(document.getElementById("adjust"), bg);
-    // Rótulo de custo honesto (Task 10): pago até conceder, autorizado depois.
-    document.getElementById("adjust").textContent = project.permissions.model === true
-      ? "Propor mudanças (já autorizado)"
-      : "Propor mudanças (modelo pago)";
-  }
-
-  document.getElementById("cancelPrep").onclick = () => api.call(
-    "/project/cancel",
-    { method: "POST", body: "{}", label: "Cancelando…" },
-  );
-  document.getElementById("adjust").onclick = () => api.call("/project/adjust", {
-    method: "POST",
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      request: document.getElementById("request").value,
-      ...paidFlags(state.get("project")),
-    }),
-    label: "Ajustando montagem…",
-  });
 
   document.getElementById("refreshPreview").onclick = () => api.call("/project/preview", {
     method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
@@ -292,8 +185,152 @@ export function mountContexto({ state, api, player }) {
       label: "Aprovando prévia…",
     });
   };
+  state.subscribe("project", (project) => renderPreview(project));
+  state.subscribe("watched", () => renderFreshness(state.get("project")));
+  renderPreview(state.get("project"));
+}
+
+/** Última revisão com vídeo conhecido no player (prévia anterior). */
+let lastPreviewRev = null;
+
+/** Chip mono (.chip da Task 3): metadados curtos da prévia em linha. */
+const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
+
+/** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
+function setDisabled(el, value) {
+  if (!el) return;
+  if (el.classList && el.classList.contains("is-loading")) {
+    el.disabled = true;
+    return;
+  }
+  el.disabled = !!value;
+}
+
+/** Sem checkboxes: o NL ecoa a permissão já concedida no lote (o contrato segue com as flags). */
+function paidFlags(project) {
+  return {
+    modelOptIn: project.permissions.model === true,
+    visualOptIn: project.permissions.visual === true,
+  };
+}
+
+/**
+ * Resumo do inspetor (puro): correções não alinhadas, existência de prévia
+ * e aprovação DA REVISÃO ATUAL (edição invalida — spec §5).
+ */
+export function inspectorSections(project) {
+  if (!project) return { corrections: 0, hasPreview: false, approved: false };
+  return {
+    corrections: (project.corrections || []).filter((item) => item.status !== "aligned").length,
+    hasPreview: project.previewRevision != null,
+    approved: project.finalApprovedRevision === project.revision,
+  };
+}
+
+/** Trabalho de fundo que bloqueia ajuste/atualização (puro, sem DOM). */
+function backgroundBusy(project, operation, player) {
+  const OP_LABEL = {
+    analyzing: "Analisando mídia",
+    preparing: "Preparando montagem",
+    rendering: "Renderizando prévia",
+    proposing: "Propondo cenas",
+  };
+  if (operation && OP_LABEL[operation.stage]) return true;
+  if (project && project.preparation && project.preparation.status === "running") return true;
+  if (player.previewBusy()) return true;
+  return false;
+}
+
+export function mountContexto({ state, api, player }) {
+  const root = document.getElementById("contexto");
+  root.replaceChildren();
+
+  const inspectorState = document.createElement("p");
+  inspectorState.className = "muted";
+  inspectorState.id = "inspectorState";
+  inspectorState.setAttribute("aria-live", "polite");
+  root.appendChild(inspectorState);
+
+  // Só o estado das correções mora aqui; as ações por palavra (incluindo
+  // corrigir, com campo inline) moram no menu flutuante do texto.
+  const review = document.createElement("section");
+  review.setAttribute("aria-label", "Correções de texto");
+  review.innerHTML = "<h1>Correções de texto</h1>"
+    + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
+  root.appendChild(review);
+
+  // Pedido em linguagem natural (Task 10): o Preparar montagem mora no rail
+  // com confirmação de lote; aqui só o ajuste, com rótulo de custo honesto.
+  const briefingActions = document.createElement("section");
+  briefingActions.setAttribute("aria-label", "Ajuste");
+  briefingActions.innerHTML = "<h1>Ajuste</h1>"
+    + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
+    + '<div class="row"><button type="button" class="primary" id="adjust">Propor mudanças (modelo pago)</button>'
+    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar</button></div>';
+  root.appendChild(briefingActions);
+
+  /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
+  function renderCorrections(project) {
+    const box = document.getElementById("corrections");
+    if (!box) return;
+    box.replaceChildren();
+    for (const correction of project.corrections || []) {
+      if (correction.status === "aligned") continue;
+      const p = document.createElement("p");
+      if (correction.status === "error") {
+        p.className = "warn";
+        p.textContent = "Correção com erro (" + correction.sourceId + " "
+          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s): "
+          + (correction.error || "falha no alinhamento") + ". O texto original segue valendo.";
+      } else {
+        p.className = "muted";
+        p.textContent = "Alinhando correção (" + correction.sourceId + " "
+          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s)… "
+          + "o trecho original segue valendo e os cortes usam o catálogo atual.";
+      }
+      box.appendChild(p);
+    }
+  }
+
+  function render(project) {
+    if (!project) return;
+    const operation = state.get("operation");
+    renderCorrections(project);
+    const sections = inspectorSections(project);
+    document.getElementById("inspectorState").textContent =
+      (sections.hasPreview ? "prévia " + project.previewRevision : "sem prévia")
+      + " · " + sections.corrections + " correção(ões) pendente(s)"
+      + (sections.approved ? " · aprovada ✓" : "");
+    const preparing = project.preparation
+      && project.preparation.status === "running";
+    document.getElementById("cancelPrep").hidden = !(
+      preparing || (operation && operation.stage === "preparing")
+    );
+    // Ajustar dispara trabalho longo no servidor: evita o segundo clique
+    // parecer travado (o servidor cancelaria o anterior).
+    const bg = backgroundBusy(project, operation, player);
+    setDisabled(document.getElementById("adjust"), bg);
+    // Rótulo de custo honesto (Task 10): pago até conceder, autorizado depois.
+    document.getElementById("adjust").textContent = project.permissions.model === true
+      ? "Propor mudanças (já autorizado)"
+      : "Propor mudanças (modelo pago)";
+  }
+
+  document.getElementById("cancelPrep").onclick = () => api.call(
+    "/project/cancel",
+    { method: "POST", body: "{}", label: "Cancelando…" },
+  );
+  document.getElementById("adjust").onclick = () => api.call("/project/adjust", {
+    method: "POST",
+    body: JSON.stringify({
+      baseRevision: state.get("project").revision,
+      request: document.getElementById("request").value,
+      ...paidFlags(state.get("project")),
+    }),
+    label: "Ajustando montagem…",
+  });
+
   state.subscribe("project", render);
   state.subscribe("operation", () => render(state.get("project")));
-  state.subscribe("watched", () => renderFreshness(state.get("project")));
   render(state.get("project"));
 }
