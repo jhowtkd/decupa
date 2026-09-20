@@ -235,3 +235,7 @@ dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--li
   border-radius: 10px; padding: 18px 20px; max-width: min(480px, 92vw); }
 dialog::backdrop { background: rgb(0 0 0 / .55); }
 dialog h1 { margin-top: 0; }
+.seq-captions { position: relative; min-height: 22px; border-top: 1px solid var(--line); margin-top: 6px; }
+.seq-cue { position: absolute; top: 2px; height: 18px; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; font-size: 11px; color: var(--accent);
+  background: rgb(240 202 110 / .12); border-left: 2px solid var(--accent); padding: 0 4px; }

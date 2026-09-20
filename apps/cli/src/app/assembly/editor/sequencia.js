@@ -56,6 +56,28 @@ export function rulerTicks(durationSeconds, targetCount = 6) {
 }
 
 /**
+ * Timecode mono tabular MM:SS.mmm (puro). Não-finito/negativo vira zero.
+ */
+export function formatTimecode(seconds) {
+  const ms = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * 1000));
+  return String(Math.floor(ms / 60000)).padStart(2, "0") + ":"
+    + String(Math.floor(ms / 1000) % 60).padStart(2, "0") + "."
+    + String(ms % 1000).padStart(3, "0");
+}
+
+/**
+ * Cues de legenda do projeto (puro): só dado real — quando o backend não
+ * envia `captions`, devolve [] e a UI não desenha a lane.
+ */
+export function captionCues(project) {
+  const cues = project && Array.isArray(project.captions) ? project.captions : [];
+  return cues
+    .filter((cue) => cue && Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start)
+    .map((cue) => ({ start: cue.start, end: cue.end, text: String(cue.text ?? "") }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+/**
  * Coluna → segmento retido (puro): bucketiza `inBlock` por pixel com uma
  * varredura de ponteiro único — O(largura + segmentos) em vez do
  * O(largura × segmentos) da busca por pixel. `inBlock` chega ordenado por
@@ -197,8 +219,14 @@ export function mountSequencia({ state, api, player }) {
     label.textContent = "Sequência";
     const total = document.createElement("span");
     total.className = "data total";
-    total.textContent = duration.toFixed(1).replace(".", ",") + "s";
+    total.textContent = formatTimecode(duration);
     head.append(label, total);
+    for (const source of p.assembly.sources.filter((item) => item.included)) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = source.name + " · " + Math.round(source.durationSeconds) + "s";
+      head.appendChild(chip);
+    }
     // Régua: marcas nice (rulerTicks) posicionadas por TEMPO, não por
     // índice — space-between mentiria contra os blocos/playhead, que são
     // proporcionais. Primeira e última marcas não recuam (não saem da faixa).
@@ -207,7 +235,7 @@ export function mountSequencia({ state, api, player }) {
     const ticks = rulerTicks(duration);
     ticks.forEach((t, i) => {
       const s = document.createElement("span");
-      s.textContent = t === 0 ? "0s" : String(t);
+      s.textContent = formatTimecode(t);
       s.style.left = duration > 0 ? ((t / duration) * 100).toFixed(3) + "%" : "0%";
       if (i === 0 || i === ticks.length - 1) s.style.transform = "none";
       ruler.append(s);
@@ -215,7 +243,7 @@ export function mountSequencia({ state, api, player }) {
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     // Layout crítico inline (o tema segue em page.css, fora desta tarefa).
-    strip.style.cssText = "position:relative;display:flex;width:100%;min-height:28px;cursor:pointer;";
+    strip.style.cssText = "position:relative;display:flex;width:100%;min-height:64px;cursor:pointer;";
     strip.setAttribute("role", "slider");
     strip.setAttribute("aria-label", "Sequência da montagem");
     strip.setAttribute("aria-valuemin", "0");
@@ -223,7 +251,7 @@ export function mountSequencia({ state, api, player }) {
     strip.setAttribute("tabindex", "0");
     strip.innerHTML = blocks.map((block) => {
       const width = duration > 0 ? ((block.end - block.start) / duration) * 100 : 0;
-      const title = block.label + " · " + block.start.toFixed(1) + "s–" + block.end.toFixed(1) + "s";
+      const title = block.label + " · " + formatTimecode(block.start) + "–" + formatTimecode(block.end);
       // Só a cena ganha canvas de waveform; o apoio segue bloco puro.
       const wave = block.kind === "scene"
         ? '<canvas class="seq-wave" hidden style="position:absolute;inset:0;width:100%;height:100%;"></canvas>'
@@ -239,7 +267,24 @@ export function mountSequencia({ state, api, player }) {
         + "</div>";
     }).join("")
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
-    el.replaceChildren(head, ruler, strip, transportRow(p));
+    const cues = captionCues(p);
+    let captions = null;
+    if (cues.length) {
+      captions = document.createElement("div");
+      captions.className = "seq-captions";
+      captions.setAttribute("aria-label", "Legendas");
+      for (const cue of cues) {
+        const cueEl = document.createElement("span");
+        cueEl.className = "seq-cue";
+        cueEl.title = cue.text;
+        cueEl.textContent = cue.text;
+        cueEl.style.left = duration > 0 ? ((cue.start / duration) * 100).toFixed(3) + "%" : "0%";
+        cueEl.style.width = duration > 0
+          ? (Math.max(0, (cue.end - cue.start) / duration) * 100).toFixed(3) + "%" : "0%";
+        captions.appendChild(cueEl);
+      }
+    }
+    el.replaceChildren(head, ruler, strip, ...(captions ? [captions] : []), transportRow(p));
     paint(state.get("playhead"));
     void hydrateWaves(p);
   }
@@ -342,7 +387,7 @@ export function mountSequencia({ state, api, player }) {
     // Chip de timecode acima da linha (recriado a cada render da faixa).
     let chip = line.querySelector(".t");
     if (!chip) { chip = document.createElement("span"); chip.className = "t"; line.append(chip); }
-    if (valid) chip.textContent = playhead.toFixed(1).replace(".", ",") + "s";
+    if (valid) chip.textContent = formatTimecode(playhead);
     const hit = valid ? blocksAt(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-bloco")) {
       const on = !!hit && node.dataset.scene === hit.sceneId && node.dataset.kind === hit.kind;
