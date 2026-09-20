@@ -107,6 +107,8 @@ export function toEngineTimeline(a: Assembly): object {
   return { project, assets, tracks, output_canvas, sequence: output_canvas };
 }
 
+const RENDERER_VERSION = 2;
+
 export function previewIdentity(assembly: Assembly, profile: HardwareProfile = "software"): string {
   const valid = validateAssembly(assembly);
   return createHash("sha256")
@@ -121,8 +123,29 @@ export function previewIdentity(assembly: Assembly, profile: HardwareProfile = "
       })),
       tracks: valid.tracks,
       profile,
+      rendererVersion: RENDERER_VERSION,
     }))
     .digest("hex");
+}
+
+/**
+ * Lê o relatório do motor na saída do adaptador. Quando o hardware falha e o
+ * motor repete em software, o fallback nunca é escondido: o cache passa a ser
+ * identificado como software. Saída sem JSON (fakes, versões antigas) mantém
+ * o perfil pedido.
+ */
+export function motorFellBack(stdout: string): boolean {
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as { data?: { fallback?: unknown } };
+      if (parsed?.data?.fallback === true) return true;
+    } catch {
+      // Linha JSON parcial ou de outro emissor: ignora e segue.
+    }
+  }
+  return false;
 }
 
 type PreviewRecord = { sha256: string; profile: HardwareProfile };
@@ -145,17 +168,17 @@ export async function renderAssembly(
       profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec);
     }
   }
-  const key = previewIdentity(valid, profile);
-  const cacheDir = join(outDir, "preview-cache", key);
-  const cachedMp4 = join(cacheDir, "reference.mp4");
-  const sidecar = join(cacheDir, "preview.json");
+  const requestKey = previewIdentity(valid, profile);
+  const requestCacheDir = join(outDir, "preview-cache", requestKey);
+  const requestCachedMp4 = join(requestCacheDir, "reference.mp4");
+  const requestSidecar = join(requestCacheDir, "preview.json");
   const dest = join(outDir, `rev-${valid.revision}`, "reference.mp4");
-  const cached = await inspectArtifact(sidecar);
+  const cached = await inspectArtifact(requestSidecar);
   if (cached.status === "ready") {
-    const info = await probe(cachedMp4).catch(() => null);
+    const info = await probe(requestCachedMp4).catch(() => null);
     if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0) {
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(cachedMp4, dest);
+      await copyFile(requestCachedMp4, dest);
       return dest;
     }
   }
@@ -215,11 +238,17 @@ export async function renderAssembly(
       throw err;
     }
     await rename(tmp, dest);
+    // Fallback explícito do motor: o cache é identificado como software,
+    // nunca como o perfil de hardware pedido.
+    const effectiveProfile = motorFellBack(result.stdout) ? "software" : profile;
+    const cacheDir = join(outDir, "preview-cache", previewIdentity(valid, effectiveProfile));
+    const cachedMp4 = join(cacheDir, "reference.mp4");
+    const sidecar = join(cacheDir, "preview.json");
     await mkdir(cacheDir, { recursive: true });
     await copyFile(dest, cachedMp4);
     await publishAtomic(sidecar, `${JSON.stringify({
       sha256: await hashFile(dest),
-      profile,
+      profile: effectiveProfile,
     } satisfies PreviewRecord)}\n`);
     // Poda best-effort de derivados antigos (retention.ts): nunca falha o
     // render — erro é silenciosamente ignorado (retorno descartado).

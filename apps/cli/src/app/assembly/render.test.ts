@@ -1,4 +1,5 @@
-import { copyFile, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, copyFile, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { renderAssembly, previewIdentity, toEngineTimeline } from "./render.ts";
+import { validateAssembly } from "./validate.ts";
 
 it("preserva as três pistas e não duplica áudio", () => {
   const result = toEngineTimeline(fixtureAssembly()) as {
@@ -297,3 +299,56 @@ it("perfil de hardware diferente não reusa a prévia cacheada", async () => {
   expect(exec.python).toBe(2);
 });
 
+it("identidade da prévia invalida cache de renderer antigo (rendererVersion 2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-version-"));
+  const assembly = await assemblyWithMedia(dir);
+  const valid = validateAssembly(assembly);
+  const base = {
+    fps: valid.fps,
+    width: valid.width,
+    height: valid.height,
+    sources: valid.sources.map((source) => ({
+      id: source.id,
+      sha256: source.sha256,
+      included: source.included,
+    })),
+    tracks: valid.tracks,
+    profile: "software",
+  };
+  const oldKey = createHash("sha256").update(JSON.stringify(base)).digest("hex");
+  const newKey = createHash("sha256")
+    .update(JSON.stringify({ ...base, rendererVersion: 2 }))
+    .digest("hex");
+  expect(previewIdentity(assembly)).toBe(newKey);
+  expect(previewIdentity(assembly)).not.toBe(oldKey);
+});
+
+it("fallback do motor publica cache identificado como software", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-preview-fallback-"));
+  const assembly = await assemblyWithMedia(dir);
+  const exec: Executor = {
+    async run(call) {
+      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      return {
+        code: 0,
+        stdout: `ok\n${JSON.stringify({ data: {
+          fallback: true,
+          requested_encoder: "h264_videotoolbox",
+          effective_encoder: "libx264",
+        } })}`,
+        stderr: "",
+      };
+    },
+  };
+  const dest = await renderAssembly(assembly, dir, exec, { profile: "videotoolbox" });
+  expect(dest).toBe(join(dir, "rev-1", "reference.mp4"));
+  const sidecar = JSON.parse(await readFile(
+    join(dir, "preview-cache", previewIdentity(assembly, "software"), "preview.json"),
+    "utf8",
+  )) as { profile: string };
+  expect(sidecar.profile).toBe("software");
+  await expect(access(join(
+    dir, "preview-cache", previewIdentity(assembly, "videotoolbox"), "preview.json",
+  ))).rejects.toThrow();
+});

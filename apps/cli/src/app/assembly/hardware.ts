@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
@@ -28,6 +28,11 @@ const HW_ENCODERS: { profile: HardwareProfile; encoder: string; hwaccel?: string
   { profile: "vaapi", encoder: "h264_vaapi", hwaccel: "vaapi" },
 ];
 
+// Perfis que a detecção pode declarar ativos: somente os implementados pelo
+// motor neste caminho. vaapi segue mapeado em encoderFor, mas nunca é
+// anunciado porque o motor não faz o setup de device que ele exige.
+const DETECT_ORDER: HardwareProfile[] = ["videotoolbox", "nvenc"];
+
 const PROFILES = new Set<HardwareProfile>(["software", "videotoolbox", "nvenc", "vaapi"]);
 
 export function encoderFor(profile: HardwareProfile): { encoder: string; hwaccel?: string } {
@@ -36,11 +41,26 @@ export function encoderFor(profile: HardwareProfile): { encoder: string; hwaccel
   return { encoder: "libx264" };
 }
 
-function encodeArgs(profile: HardwareProfile): string[] {
-  const { encoder, hwaccel } = encoderFor(profile);
+/** Opções de entrada: -hwaccel é opção de entrada e vai antes de -i. */
+function inputArgs(profile: HardwareProfile): string[] {
+  const { hwaccel } = encoderFor(profile);
   return [
     ...(hwaccel ? ["-hwaccel", hwaccel] : []),
-    "-c:v", encoder,
+    "-threads", "2",
+  ];
+}
+
+/** Opções de saída da prova: 640px preservando proporção, software limitado. */
+function outputArgs(profile: HardwareProfile): string[] {
+  const { encoder } = encoderFor(profile);
+  const video = encoder === "libx264"
+    ? ["-c:v", encoder, "-preset", "veryfast", "-crf", "20"]
+    : ["-c:v", encoder, "-b:v", "8M", ...(encoder === "h264_videotoolbox" ? ["-allow_sw", "0"] : [])];
+  return [
+    "-vf", "scale=640:-2",
+    "-filter_threads", "1",
+    ...video,
+    "-threads", "2",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac",
   ];
@@ -113,15 +133,29 @@ async function encode(
   exec: Executor,
   input: string,
   output: string,
-  args: string[],
+  profile: HardwareProfile,
 ): Promise<boolean> {
   const result = await exec.run({
     command: "ffmpeg",
-    args: ["-y", "-i", input, "-t", "2", ...args, output],
+    args: [
+      "-y",
+      ...inputArgs(profile),
+      "-i", input,
+      "-t", "2",
+      ...outputArgs(profile),
+      output,
+    ],
   });
-  if (result.code !== 0) return false;
+  if (result.code !== 0) {
+    await unlink(output).catch(() => {});
+    return false;
+  }
   const info = await probe(output).catch(() => null);
-  return Boolean(info?.hasVideo && info.hasAudio && (info.durationMs ?? 0) > 0);
+  // Prova de vídeo: exige stream de vídeo e duração, nunca áudio — clipe
+  // silencioso válido não pode reprovar o encoder.
+  const ok = Boolean(info?.hasVideo && (info.durationMs ?? 0) > 0);
+  if (!ok) await unlink(output).catch(() => {});
+  return ok;
 }
 
 export async function proveHardwareEncode(
@@ -133,14 +167,15 @@ export async function proveHardwareEncode(
   const encoders = await listEncoders(exec);
   const attempted: HardwareProfile[] = [];
   const listed = new Set(encoders);
-  for (const candidate of HW_ENCODERS) {
-    if (!listed.has(candidate.encoder)) continue;
-    attempted.push(candidate.profile);
-    const output = join(outDir, `hw-${candidate.profile}.mp4`);
-    const ok = await encode(exec, input, output, encodeArgs(candidate.profile));
+  for (const profile of DETECT_ORDER) {
+    const { encoder } = encoderFor(profile);
+    if (!listed.has(encoder)) continue;
+    attempted.push(profile);
+    const output = join(outDir, `hw-${profile}.mp4`);
+    const ok = await encode(exec, input, output, profile);
     if (ok) {
       return {
-        profile: candidate.profile,
+        profile,
         fallback: false,
         output,
         encoders,
@@ -152,7 +187,7 @@ export async function proveHardwareEncode(
 
   attempted.push("software");
   const output = join(outDir, "hw-software.mp4");
-  const ok = await encode(exec, input, output, encodeArgs("software"));
+  const ok = await encode(exec, input, output, "software");
   if (!ok) throw new Error("encode de software falhou na fixture real");
   return {
     profile: "software",
@@ -164,6 +199,8 @@ export async function proveHardwareEncode(
   };
 }
 
+const PROFILE_CACHE_VERSION = 2;
+
 export async function detectHardwareProfile(
   input: string,
   outDir: string,
@@ -171,8 +208,14 @@ export async function detectHardwareProfile(
 ): Promise<HardwareProfile> {
   const cachePath = join(outDir, "profile.json");
   try {
-    const cached = JSON.parse(await readFile(cachePath, "utf8")) as { profile?: unknown };
-    if (typeof cached.profile === "string" && PROFILES.has(cached.profile as HardwareProfile)) {
+    const cached = JSON.parse(await readFile(cachePath, "utf8")) as { profile?: unknown; version?: unknown };
+    // Cache antigo (sem versão) não serve: a prova mudou de posição de
+    // -hwaccel, escala e critério de áudio.
+    if (
+      cached.version === PROFILE_CACHE_VERSION
+      && typeof cached.profile === "string"
+      && PROFILES.has(cached.profile as HardwareProfile)
+    ) {
       return cached.profile as HardwareProfile;
     }
   } catch {
@@ -185,6 +228,6 @@ export async function detectHardwareProfile(
     profile = "software";
   }
   await mkdir(outDir, { recursive: true });
-  await writeFile(cachePath, `${JSON.stringify({ profile })}\n`);
+  await writeFile(cachePath, `${JSON.stringify({ profile, version: PROFILE_CACHE_VERSION })}\n`);
   return profile;
 }

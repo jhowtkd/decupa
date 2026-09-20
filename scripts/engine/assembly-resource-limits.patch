@@ -1,0 +1,178 @@
+diff --git a/mcp/ve_tools/render.py b/mcp/ve_tools/render.py
+index 29d6db7..28d73b0 100644
+--- a/mcp/ve_tools/render.py
++++ b/mcp/ve_tools/render.py
+@@ -26,13 +26,39 @@ from .timeline import (
+ )
+ 
+ 
++# Encoders aceitos no caminho de montagem: allowlist validada, nunca
++# interpolada em shell. vaapi fica de fora porque este caminho não faz o
++# setup de device que ele exige.
++VIDEO_ENCODERS = ("libx264", "h264_videotoolbox", "h264_nvenc")
++HARDWARE_ENCODERS = ("h264_videotoolbox", "h264_nvenc")
++HWACCELS = ("", "videotoolbox")
++
++
++def video_output_args(encoder: str) -> list[str]:
++    """Args de saída de vídeo por encoder. Hardware usa teto de bitrate (sem
++    -crf, que é do x264); software fica limitado a preset rápido + 2 threads."""
++    if encoder == "h264_videotoolbox":
++        return ["-c:v", encoder, "-allow_sw", "0", "-b:v", "8M", "-pix_fmt", "yuv420p"]
++    if encoder == "h264_nvenc":
++        return ["-c:v", encoder, "-b:v", "8M", "-pix_fmt", "yuv420p"]
++    if encoder == "libx264":
++        return ["-c:v", encoder, "-preset", "veryfast", "-crf", "20",
++                "-threads", "2", "-pix_fmt", "yuv420p"]
++    raise ValueError("encoder não suportado neste caminho")
++
++
+ def render_preview(args: dict, ctx: RunContext) -> ToolResult:
+     if not args.get("timeline_path"):
+         return ToolResult(text="[ERROR] timeline_path is required")
+     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+         return ToolResult(text="[ERROR] ffmpeg/ffprobe not found on PATH")
+-    # Fail fast before a long encode: minimal/conda builds often drop libx264.
+-    cap_err = require_ffmpeg(encoders=("libx264", "aac"))
++    requested_encoder = args.get("encoder") or "libx264"
++    try:
++        video_output_args(requested_encoder)
++    except ValueError:
++        return ToolResult(text=f"[ERROR] encoder não suportado neste caminho: {requested_encoder}")
++    # Fail fast before a long encode: minimal/conda builds often drop codecs.
++    cap_err = require_ffmpeg(encoders=(requested_encoder, "aac"))
+     if cap_err:
+         return ToolResult(text=cap_err)
+     timeline_path = ctx.resolve(args["timeline_path"])
+@@ -50,6 +76,11 @@ def render_preview(args: dict, ctx: RunContext) -> ToolResult:
+     if isinstance(data.get("tracks"), list):
+         return render_project_timeline(args, ctx, data, timeline_path)
+ 
++    # Caminho legado: cut_clip/concat usam libx264 fixo, fora do encoder pedido.
++    lib_err = require_ffmpeg(encoders=("libx264",))
++    if lib_err:
++        return ToolResult(text=lib_err)
++
+     clips, unsupported_clips = renderable_timeline_clips(data)
+     if unsupported_clips:
+         return ToolResult(
+@@ -131,30 +162,64 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
+     if not plan["video_clips"]:
+         return ToolResult(text="[ERROR] no renderable video clips found in project timeline", data=plan)
+ 
++    requested_encoder = args.get("encoder") or "libx264"
++    try:
++        video_output_args(requested_encoder)
++    except ValueError:
++        return ToolResult(text=f"[ERROR] encoder não suportado neste caminho: {requested_encoder}")
++    hwaccel = args.get("hwaccel") or ""
++    if hwaccel not in HWACCELS:
++        return ToolResult(text=f"[ERROR] hwaccel não suportado neste caminho: {hwaccel}")
++
+     output_path = ctx.resolve(args.get("output_path") or "out/preview.mp4")
+     work_dir = ctx.resolve(args.get("work_dir") or f".video_agent/render/{timeline_path.stem}")
+     output_path.parent.mkdir(parents=True, exist_ok=True)
+     work_dir.mkdir(parents=True, exist_ok=True)
+ 
++    # Falha de hardware repete uma única vez em software, com workdir novo. O
++    # fallback vai explícito no relatório; nunca escondido.
++    attempts = [(requested_encoder, work_dir, hwaccel)]
++    if requested_encoder in HARDWARE_ENCODERS:
++        attempts.append(("libx264", work_dir / "fallback-software", ""))
++
+     started = time.time()
+-    try:
+-        cmd, filter_complex = build_project_ffmpeg_command(plan, output_path, work_dir)
+-    except Exception as exc:
+-        return ToolResult(
+-            text=f"[ERROR] ffmpeg project render command failed: {exc}",
+-            data={"plan": public_render_plan(plan)},
+-        )
+-    try:
+-        proc = run_proc(cmd, capture_output=True, text=True, timeout=7200)
+-    except Exception as exc:
+-        return ToolResult(text=f"[ERROR] ffmpeg project render failed: {exc}", data={"cmd": cmd})
+-    if proc.returncode != 0:
++    effective_encoder = requested_encoder
++    failures: list[dict] = []
++    cmd: list[str] = []
++    filter_complex = ""
++    for attempt_encoder, attempt_work, attempt_hwaccel in attempts:
++        attempt_work.mkdir(parents=True, exist_ok=True)
++        try:
++            cmd, filter_complex = build_project_ffmpeg_command(
++                plan, output_path, attempt_work,
++                encoder=attempt_encoder, hwaccel=attempt_hwaccel,
++            )
++        except Exception as exc:
++            return ToolResult(
++                text=f"[ERROR] ffmpeg project render command failed: {exc}",
++                data={"plan": public_render_plan(plan)},
++            )
++        try:
++            proc = run_proc(cmd, capture_output=True, text=True, timeout=7200)
++        except Exception as exc:
++            failures.append({"encoder": attempt_encoder, "error": str(exc)})
++            output_path.unlink(missing_ok=True)
++            continue
++        if proc.returncode != 0:
++            failures.append({"encoder": attempt_encoder, "stderr": proc.stderr.strip()[-1500:]})
++            output_path.unlink(missing_ok=True)
++            continue
++        if not output_path.is_file() or not source_has_video(output_path):
++            failures.append({"encoder": attempt_encoder, "error": "no playable video stream"})
++            output_path.unlink(missing_ok=True)
++            continue
++        effective_encoder = attempt_encoder
++        break
++    else:
+         return ToolResult(
+-            text=f"[ERROR] ffmpeg project render failed: {proc.stderr.strip()}",
+-            data={"cmd": cmd, "filter_complex": filter_complex},
++            text="[ERROR] ffmpeg project render failed on every encoder attempt",
++            data={"cmd": cmd, "filter_complex": filter_complex, "failures": failures},
+         )
+-    if not output_path.is_file() or not source_has_video(output_path):
+-        return ToolResult(text="[ERROR] project render produced no playable video stream", data={"cmd": cmd})
+ 
+     report = {
+         "timeline_path": str(timeline_path),
+@@ -162,6 +227,9 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
+         "output_path": str(output_path),
+         "output_sha256": file_sha256(output_path),
+         "renderer_scope": "project tracks: video/main, audio/music/voiceover, subtitle/text, image/overlay",
++        "requested_encoder": requested_encoder,
++        "effective_encoder": effective_encoder,
++        "fallback": effective_encoder != requested_encoder,
+         "output_width": plan["width"],
+         "output_height": plan["height"],
+         "output_fps": plan["fps"],
+@@ -352,8 +420,18 @@ def resolve_project_duration(data: dict, *clip_groups: list[dict]) -> float:
+     return max_end
+ 
+ 
+-def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path) -> tuple[list[str], str]:
++def build_project_ffmpeg_command(
++    plan: dict,
++    output_path: Path,
++    work_dir: Path,
++    encoder: str = "libx264",
++    hwaccel: str = "",
++) -> tuple[list[str], str]:
+     cmd = ["ffmpeg", "-y"]
++    if hwaccel:
++        if hwaccel not in HWACCELS or not hwaccel:
++            raise ValueError("hwaccel não suportado neste caminho")
++        cmd += ["-hwaccel", hwaccel]
+     input_kinds = []
+     for clip in plan["video_clips"]:
+         cmd += ["-ss", f"{clip['start']:.6f}", "-t", f"{clip['source_duration']:.6f}", "-i", clip["source"]]
+@@ -421,7 +499,7 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
+     cmd += [
+         "-filter_complex", filter_complex,
+         "-map", "[vout]", "-map", "[aout]",
+-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
++        *video_output_args(encoder),
+         "-c:a", "aac", "-ar", "48000", "-ac", "2",
+         "-movflags", "+faststart",
+         str(output_path),
