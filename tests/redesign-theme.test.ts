@@ -27,3 +27,10 @@ it("aliases antigos continuam resolvendo (sem var órfã)", async () => {
     expect(css).toContain(alias);
   }
 });
+
+it("limpeza usa os mesmos tokens da montagem", async () => {
+  const html = await readFile(new URL("../apps/cli/src/app/page.html", import.meta.url), "utf8");
+  for (const token of ["--bg: #111214", "--panel: #191A1D", "--accent: #F0CA6E"]) {
+    expect(html).toContain(token);
+  }
+});

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   acceptedFormatsLabel,
+  docSignature,
   emptyGuideHtml,
   menuActionsFor,
   needsEmptyGuide,
@@ -95,4 +96,41 @@ it("formatos derivam do accept: token desconhecido passa cru, vazio some", () =>
   expect(acceptedFormatsLabel("video/*")).toBe("vídeo");
   expect(acceptedFormatsLabel("video/*,audio/*,.srt")).toBe("vídeo, áudio e .srt");
   expect(acceptedFormatsLabel("")).toBe("");
+});
+
+function docProject(over: Record<string, unknown> = {}) {
+  return {
+    assembly: { sources: [{ id: "a" }] },
+    analyses: [{ sourceId: "a", words: [
+      { id: "w1", text: "ola", start: 0, end: 0.5 },
+      { id: "w2", text: "mundo", start: 0.5, end: 1 },
+    ] }],
+    corrections: [],
+    scenes: [{ id: "s1", takes: [{ id: "t1", sourceId: "a", start: 0, end: 1 }] }],
+    preparation: null,
+    ...over,
+  };
+}
+
+it("docSignature estável a metadados, sensível a conteúdo", () => {
+  expect(docSignature(docProject())).toBe(docSignature(docProject({ revision: 9, previewRevision: 9 })));
+});
+
+it("docSignature muda em corte/proteção/correção/texto", () => {
+  const base = docSignature(docProject());
+  const cut = docProject({ scenes: [{ id: "s1", takes: [{ id: "t1", sourceId: "a", start: 0, end: 1, removed: [{ start: 0, end: 0.5 }] }] }] });
+  expect(docSignature(cut)).not.toBe(base);
+  const prot = docProject({ scenes: [{ id: "s1", takes: [{ id: "t1", sourceId: "a", start: 0, end: 1, protected: [{ start: 0, end: 1 }] }] }] });
+  expect(docSignature(prot)).not.toBe(base);
+  const fixed = docProject({ analyses: [{ sourceId: "a", words: [
+    { id: "a:sha:c:1:w000001", text: "olá", start: 0, end: 0.5 },
+    { id: "w2", text: "mundo", start: 0.5, end: 1 },
+  ] }] });
+  expect(docSignature(fixed)).not.toBe(base);
+});
+
+it("docSignature vazio/transcrito", () => {
+  expect(docSignature(null)).toBe("empty");
+  expect(docSignature({ assembly: { sources: [] } })).toBe("empty");
+  expect(docSignature(docProject({ scenes: [] })).startsWith("transcript|")).toBe(true);
 });

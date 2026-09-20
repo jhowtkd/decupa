@@ -162,6 +162,29 @@ export function needsEmptyGuide(p) {
   return p.assembly.sources.length === 0;
 }
 
+/**
+ * Assinatura visual do documento central (pura): modo + ids/textos/flags de
+ * palavra. Metadados (revisão, prévia, seleção) NÃO entram — um `set` de
+ * projeto que só atualiza a prévia gera a mesma assinatura e o render pode
+ * pular o rebuild, preservando scroll/foco/reprodução.
+ */
+export function docSignature(p) {
+  if (!p || needsEmptyGuide(p)) return "empty";
+  if (p.scenes.length === 0) {
+    return "transcript|" + p.assembly.sources.map((source) =>
+      source.id + ":" + effectiveWords(p, source.id).map((word) => word.text).join(" "),
+    ).join("|") + "|" + (p.preparation ? p.preparation.status : "");
+  }
+  return "prose|" + p.scenes.map((scene) =>
+    scene.id + ":" + scene.takes.map((take) =>
+      take.id + ":" + takeWords(p, scene, take).map((word) =>
+        word.id + "," + (word.display || word.text)
+        + (word.removed ? "-r" : "") + (word.protected ? "-p" : "") + (word.corrected ? "-c" : ""),
+      ).join(";"),
+    ).join("|"),
+  ).join("||");
+}
+
 /** Rótulo pt-BR de um token do accept do filePicker (puro). */
 export function acceptLabel(token) {
   const map = { "video/*": "vídeo", "audio/*": "áudio", "image/*": "imagem" };
@@ -348,20 +371,21 @@ function renderCenter(p, selection) {
     : null;
   if (needsEmptyGuide(p)) {
     dropzone.hidden = true;
-    texto.hidden = false;
     const picker = document.getElementById("filePicker");
     const accept = picker?.getAttribute("accept") || "video/*,audio/*";
     texto.innerHTML = '<div class="measure">' + emptyGuideHtml(accept) + "</div>";
     return;
   }
   dropzone.hidden = true;
-  texto.hidden = false;
+  const scroller = document.getElementById("center");
+  const top = scroller ? scroller.scrollTop : 0;
   // Coluna de leitura: o documento (transcrição ou prosa) inteiro dentro do
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
   // não afeta a delegação.
   texto.innerHTML = '<div class="measure">'
     + (p.scenes.length === 0 ? renderTranscript(p) : renderProse(p, selection))
     + "</div>";
+  if (scroller) scroller.scrollTop = top;
   if (focusedKey) {
     texto.querySelector(
       `[data-scene="${CSS.escape(focusedKey.scene)}"][data-take="${CSS.escape(focusedKey.take)}"]`
@@ -452,8 +476,16 @@ export function mountTexto({ state, api, player }) {
 
   const selection = () => state.get("selection") || new Set();
 
+  let lastSig = null;
   function render(p) {
     if (!p) return;
+    const sig = docSignature(p);
+    if (sig === lastSig) {
+      const el = root();
+      if (el) paintSelection(el, selection());
+      return;
+    }
+    lastSig = sig;
     renderCenter(p, selection());
   }
 
