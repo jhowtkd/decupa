@@ -231,3 +231,7 @@ summary { cursor: pointer; color: var(--muted); }
   background: var(--accent); color: var(--on-accent);
   font: 600 10.5px var(--mono); padding: 1px 5px; border-radius: 4px; white-space: nowrap;
 }
+dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: 10px; padding: 18px 20px; max-width: min(480px, 92vw); }
+dialog::backdrop { background: rgb(0 0 0 / .55); }
+dialog h1 { margin-top: 0; }

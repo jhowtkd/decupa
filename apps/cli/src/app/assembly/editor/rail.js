@@ -61,6 +61,19 @@ export function exportView(ui, approved) {
   };
 }
 
+/**
+ * Resumo das fontes para o cabeçalho de materiais (puro): total,
+ * incluídas e apoio (role support OU both). Testado sem DOM.
+ */
+export function countsFor(sources) {
+  const list = sources || [];
+  return {
+    total: list.length,
+    included: list.filter((source) => source.included).length,
+    support: list.filter((source) => source.role === "support" || source.role === "both").length,
+  };
+}
+
 /** Sem checkboxes: o consentimento pago é por lote no disparo; aqui só ecoa o já concedido. */
 function paidFlags(project) {
   return {
@@ -75,7 +88,7 @@ export function mountRail({ state, api, player }) {
 
   const materials = document.createElement("section");
   materials.setAttribute("aria-label", "Materiais");
-  materials.innerHTML = "<h1>Materiais</h1>"
+  materials.innerHTML = '<h1>Materiais</h1><p class="muted" id="sourceCounts" aria-live="polite"></p>'
     + '<p class="muted">Arquivos locais. O original não é enviado a terceiros nesta tela.</p>'
     + '<p class="muted" id="invite" hidden>Solte mídias no centro ou escolha arquivos para começar.</p>'
     + '<div class="row"><button type="button" id="select">Escolher arquivos</button></div>'
@@ -86,16 +99,19 @@ export function mountRail({ state, api, player }) {
     + '<ul id="sources" class="plain"></ul>';
   root.appendChild(materials);
 
-  const briefing = document.createElement("section");
-  briefing.setAttribute("aria-label", "Briefing");
-  briefing.innerHTML = '<details id="briefing-box">'
-    + '<summary class="panel-label">briefing</summary>'
+  const briefingDialog = document.createElement("dialog");
+  briefingDialog.id = "briefingDialog";
+  briefingDialog.setAttribute("aria-labelledby", "briefingTitle");
+  briefingDialog.innerHTML = '<h1 id="briefingTitle">Briefing</h1>'
     + '<label>Tipo <select id="kind"><option value="brief">briefing</option><option value="script">roteiro</option></select></label>'
     + '<label>Texto <textarea id="inputText" rows="4"></textarea></label>'
     + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60"></label>'
-    + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button></div>'
-    + '</details>';
-  root.appendChild(briefing);
+    + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button>'
+    + '<button type="button" id="closeBriefing">Fechar</button></div>';
+  document.body.appendChild(briefingDialog);
+  let briefingAutoOpened = false;
+  document.getElementById("openBriefing").onclick = () => briefingDialog.showModal();
+  document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
 
   const preparation = document.createElement("section");
   preparation.setAttribute("aria-label", "Preparação");
@@ -103,9 +119,13 @@ export function mountRail({ state, api, player }) {
     + '<p class="muted" id="prepSummary" aria-live="polite"></p>'
     + '<div id="prepList"></div><div id="prepError"></div>'
     + '<div class="row"><button type="button" class="primary" id="prepare">Preparar montagem</button>'
-    + '<button type="button" id="resume">Retomar</button></div>'
-    + '<div id="prepareConfirm" hidden></div>';
+    + '<button type="button" id="resume">Retomar</button></div>';
   root.appendChild(preparation);
+
+  const prepDialog = document.createElement("dialog");
+  prepDialog.id = "prepDialog";
+  prepDialog.setAttribute("aria-labelledby", "prepTitle");
+  document.body.appendChild(prepDialog);
 
   const delivery = document.createElement("section");
   delivery.className = "delivery";
@@ -210,6 +230,11 @@ export function mountRail({ state, api, player }) {
       list.appendChild(li);
     }
     if (focusedId) list.querySelector(`[data-source-id="${focusedId}"]`)?.focus();
+    const countsEl = document.getElementById("sourceCounts");
+    if (countsEl) {
+      const counts = countsFor(project.assembly.sources);
+      countsEl.textContent = counts.total + " fonte(s) · " + counts.included + " incluída(s) · " + counts.support + " apoio";
+    }
     renderBatchButtons();
   }
 
@@ -316,11 +341,12 @@ export function mountRail({ state, api, player }) {
     }
   }
 
-  /** Consentimento pago por lote (Task 10): confirmação inline, nunca confirm() nativo. */
+  /** Consentimento pago por lote: diálogo nativo, nunca confirm() nativo. */
   function openPrepareConfirm(project) {
-    const box = document.getElementById("prepareConfirm");
-    box.replaceChildren();
-    box.hidden = false;
+    prepDialog.replaceChildren();
+    const title = document.createElement("h1");
+    title.id = "prepTitle";
+    title.textContent = "Preparar montagem";
     const count = project.assembly.sources.filter((source) => source.included).length;
     const note = document.createElement("p");
     if (project.permissions.visual === true) {
@@ -336,8 +362,7 @@ export function mountRail({ state, api, player }) {
     go.className = "primary";
     go.textContent = "Preparar agora";
     go.addEventListener("click", () => {
-      box.hidden = true;
-      box.replaceChildren();
+      prepDialog.close();
       // O clique no lote é o opt-in: o servidor persiste em permissions.
       void api.call("/project/prepare", {
         method: "POST",
@@ -351,13 +376,10 @@ export function mountRail({ state, api, player }) {
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancelar";
-    cancel.addEventListener("click", () => {
-      box.hidden = true;
-      box.replaceChildren();
-    });
+    cancel.addEventListener("click", () => prepDialog.close());
     row.append(go, cancel);
-    box.append(note, row);
-    go.focus();
+    prepDialog.append(title, note, row);
+    prepDialog.showModal();
   }
 
   function render(project) {
@@ -366,10 +388,12 @@ export function mountRail({ state, api, player }) {
     document.getElementById("inputText").value = project.input.text;
     document.getElementById("target").value = String(project.input.targetSeconds);
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
-    // Projeto sem fontes abre o briefing sozinho: o primeiro gesto é colar
-    // o roteiro e arrastar mídia (Task 4).
-    const box = document.getElementById("briefing-box");
-    if (box) box.open = project.assembly.sources.length === 0;
+    // Projeto sem fontes abre o briefing sozinho, uma vez: o primeiro gesto
+    // é colar o roteiro e arrastar mídia (era o <details> aberto, Task 4).
+    if (!briefingAutoOpened && project.assembly.sources.length === 0) {
+      briefingAutoOpened = true;
+      briefingDialog.showModal();
+    }
     renderSources(project);
     // A seção fica visível desde o vazio: o botão Preparar montagem é o
     // ponto de entrada do percurso (Task 10). Só o Retomar depende de percurso.
@@ -380,10 +404,7 @@ export function mountRail({ state, api, player }) {
     );
     const preparing = project.preparation && project.preparation.status === "running";
     setDisabled(document.getElementById("prepare"), preparing);
-    if (preparing) {
-      document.getElementById("prepareConfirm").replaceChildren();
-      document.getElementById("prepareConfirm").hidden = true;
-    }
+    if (preparing && prepDialog.open) prepDialog.close();
     renderPreparation(project);
     // O cartão fica visível durante todo o fluxo: o checklist diz o que
     // falta em vez de esconder a entrega até haver cenas.

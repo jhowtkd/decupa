@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { deliveryChecklist, exportView } from "./rail.js";
+import { countsFor, deliveryChecklist, exportView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -75,4 +75,13 @@ it("erro: mensagem do servidor visível e botão liberado para tentar de novo", 
     buttonLabel: "Exportar revisão",
     statusText: "Erro no export: aprovação final desatualizada",
   });
+});
+
+it("countsFor resume fontes/incluídas/apoio", () => {
+  expect(countsFor([])).toEqual({ total: 0, included: 0, support: 0 });
+  expect(countsFor([
+    { included: true, role: "speech" },
+    { included: false, role: "support" },
+    { included: true, role: "both" },
+  ])).toEqual({ total: 3, included: 2, support: 2 });
 });

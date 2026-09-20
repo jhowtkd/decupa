@@ -24,3 +24,10 @@ it("page.js monta as cinco regiões e fia stages/tools", async () => {
   expect(js).toContain("STAGE_TARGET");
   expect(js).toContain('data-tool="texto"');
 });
+
+it("rail.js ancora briefing e confirmação em dialogs nativos", async () => {
+  const js = await readFile(new URL("../apps/cli/src/app/assembly/editor/rail.js", import.meta.url), "utf8");
+  for (const s of ['id = "briefingDialog"', 'id = "prepDialog"', "showModal"]) {
+    expect(js).toContain(s);
+  }
+});
