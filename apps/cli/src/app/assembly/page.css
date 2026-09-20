@@ -1,11 +1,12 @@
 /* page.css — casca de 4 regiões (Task 5) + tema dark na rampa quente. */
 :root {
-  --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
-  --bg: var(--bg-0); --panel: var(--bg-1);   /* aliases: o arquivo usa muito */
-  --line: #2B3038; --line-strong: #3A414B;
-  --ink: #E9E7E2; --muted: #9AA0A9; --faint: #7d8590;
-  --accent: #F2C230; --on-accent: #1B1508;
-  --ok: #63BE97; --warn: #E0765C;
+  --bg: #111214; --panel: #191A1D; --panel2: #202226;
+  --line: #303238; --line-strong: #3A414B;
+  --ink: #F0F0ED; --muted: #AAADB5; --faint: #7d8590;
+  --accent: #F0CA6E; --on-accent: #1B1508;
+  --green: #9FC9B2; --red: #EFAAA0;
+  --bg-0: var(--bg); --bg-1: var(--panel); --bg-2: var(--panel2);
+  --ok: var(--green); --warn: var(--red);
   --removed: #3a2a26; --protected: #5b84b8;
   --serif: Charter, "Iowan Old Style", Georgia, serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
