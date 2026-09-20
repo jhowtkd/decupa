@@ -146,7 +146,7 @@ it("serve a página de montagem, não a de limpeza", async () => {
   expect(contexto).toContain("/project/output/");
   expect(contexto).toContain("Preparar montagem");
   expect(rail).toContain("Retomar");
-  expect(rail).toContain("download");
+  expect(contexto).toContain("download");
   expect(html).not.toContain("approve-structure");
 });
 

@@ -34,31 +34,35 @@ export function deliveryChecklist(project) {
 /**
  * Visão do botão/fluxo de export: estados distinguíveis (ocioso, em
  * progresso, concluído, erro). Pura para teste sem DOM.
+ * @param {{status: string, error: string|null}} ui
+ * @param {boolean} approved
+ * @param {Array<{id: string, label: string, href: string, file: string}> | null} [formats]
  */
-export function exportView(ui, approved) {
+export function exportView(ui, approved, formats = null) {
+  let view;
   if (ui.status === "running") {
-    return {
+    view = {
       disabled: true, loading: true, tone: "running",
       buttonLabel: "Exportando…", statusText: "Exportando…",
     };
-  }
-  if (ui.status === "error") {
-    return {
+  } else if (ui.status === "error") {
+    view = {
       disabled: !approved, loading: false, tone: "error",
       buttonLabel: "Exportar revisão",
       statusText: "Erro no export: " + (ui.error || "falha desconhecida"),
     };
-  }
-  if (ui.status === "done") {
-    return {
+  } else if (ui.status === "done") {
+    view = {
       disabled: !approved, loading: false, tone: "done",
       buttonLabel: "Exportado ✓", statusText: "Exportado ✓ — links abaixo.",
     };
+  } else {
+    view = {
+      disabled: !approved, loading: false, tone: "idle",
+      buttonLabel: "Exportar revisão", statusText: "",
+    };
   }
-  return {
-    disabled: !approved, loading: false, tone: "idle",
-    buttonLabel: "Exportar revisão", statusText: "",
-  };
+  return formats == null ? view : { ...view, formats };
 }
 
 /**
@@ -72,6 +76,21 @@ export function countsFor(sources) {
     included: list.filter((source) => source.included).length,
     support: list.filter((source) => source.role === "support" || source.role === "both").length,
   };
+}
+
+const OP_STAGE_LABEL = {
+  analyzing: "Analisando mídia",
+  preparing: "Preparando montagem",
+  rendering: "Renderizando prévia",
+  proposing: "Propondo cenas",
+  error: "Erro",
+  cancelled: "Cancelada",
+  ready: "Pronta",
+};
+
+/** Rótulo pt-BR da etapa da operação (puro); desconhecida repassa crua. */
+export function stageLabel(stage) {
+  return OP_STAGE_LABEL[stage] || String(stage);
 }
 
 /** Sem checkboxes: o consentimento pago é por lote no disparo; aqui só ecoa o já concedido. */
@@ -117,6 +136,7 @@ export function mountRail({ state, api, player }) {
   preparation.setAttribute("aria-label", "Preparação");
   preparation.innerHTML = "<h1>Preparação</h1>"
     + '<p class="muted" id="prepSummary" aria-live="polite"></p>'
+    + '<p class="muted" id="opLine" aria-live="polite"></p>'
     + '<div id="prepList"></div><div id="prepError"></div>'
     + '<div class="row"><button type="button" class="primary" id="prepare">Preparar montagem</button>'
     + '<button type="button" id="resume">Retomar</button></div>';
@@ -126,21 +146,6 @@ export function mountRail({ state, api, player }) {
   prepDialog.id = "prepDialog";
   prepDialog.setAttribute("aria-labelledby", "prepTitle");
   document.body.appendChild(prepDialog);
-
-  const delivery = document.createElement("section");
-  delivery.className = "delivery";
-  delivery.setAttribute("aria-label", "Entrega");
-  delivery.innerHTML = "<h1>Entrega</h1>"
-    + '<ul id="deliveryChecklist" class="plain"></ul>'
-    + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
-    + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
-    + '<p id="downloads"></p>';
-  root.appendChild(delivery);
-
-  // Estado transitório do fluxo de export (ocioso, progresso, concluído,
-  // erro): só o checklist e o cadeado derivam do projeto servido.
-  const exportUi = { status: "idle", error: null, revision: null };
 
   function checkedSourceIds() {
     return [...document.querySelectorAll("#sources input[type=checkbox]:checked")].map((el) => el.value);
@@ -243,9 +248,14 @@ export function mountRail({ state, api, player }) {
     if (!prep) return;
     const box = document.getElementById("prepList");
     box.replaceChildren();
+    const included = project.assembly.sources.filter((item) => item.included);
+    if (!included.length) {
+      document.getElementById("prepSummary").textContent = "Nenhuma fonte incluída — inclua materiais para preparar.";
+      return;
+    }
     let done = 0;
     let total = 0;
-    for (const source of project.assembly.sources.filter((item) => item.included)) {
+    for (const source of included) {
       const itemState = prep.sources[source.id] || { media: "pending", audio: "pending", visual: "pending" };
       const card = document.createElement("div");
       card.className = "prep-file";
@@ -291,54 +301,21 @@ export function mountRail({ state, api, player }) {
     }
   }
 
-  function renderDelivery(project) {
-    // Checklist derivado do estado real: atualiza a cada render de projeto.
-    const checklist = document.getElementById("deliveryChecklist");
-    checklist.replaceChildren();
-    for (const item of deliveryChecklist(project)) {
-      const li = document.createElement("li");
-      li.append(chip((item.done ? "✓ " : "○ ") + item.label));
-      checklist.appendChild(li);
+  /** Linha da operação na preparação: etapa + progresso + material + erro. */
+  function renderOpLine(operation) {
+    const line = document.getElementById("opLine");
+    if (!line) return;
+    if (!operation || !operation.stage) {
+      line.textContent = "";
+      return;
     }
-    // Export de outra revisão não conta: edição nova volta ao ocioso.
-    if (exportUi.status === "done" && exportUi.revision !== project.revision) {
-      exportUi.status = "idle";
-      exportUi.error = null;
-      exportUi.revision = null;
-    }
-    const downloads = document.getElementById("downloads");
-    downloads.replaceChildren();
-    // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
-    // o servidor também recusa export sem aprovação (exportApproved).
-    const approved = project.finalApprovedRevision != null;
-    const lock = document.getElementById("deliveryLock");
-    if (lock) {
-      lock.textContent = approved
-        ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
-        : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
-    }
-    const view = exportView(exportUi, approved);
-    const exportButton = document.getElementById("export");
-    exportButton.textContent = view.buttonLabel;
-    exportButton.classList.toggle("is-loading", view.loading);
-    setDisabled(exportButton, view.disabled);
-    const exportStatus = document.getElementById("exportStatus");
-    exportStatus.textContent = view.statusText;
-    exportStatus.className = "muted export-" + view.tone;
-    if (approved) {
-      const rev = project.finalApprovedRevision;
-      const otio = document.createElement("a");
-      otio.className = "data";
-      otio.href = "/project/output/" + rev + "/otio";
-      otio.textContent = "Baixar timeline.otio";
-      otio.setAttribute("download", "timeline.otio");
-      const mp4 = document.createElement("a");
-      mp4.className = "data";
-      mp4.href = "/project/output/" + rev + "/mp4";
-      mp4.textContent = "Baixar reference.mp4";
-      mp4.setAttribute("download", "reference.mp4");
-      downloads.append(otio, mp4);
-    }
+    const p = state.get("project");
+    const source = operation.sourceId && p
+      ? p.assembly.sources.find((item) => item.id === operation.sourceId) : null;
+    line.textContent = stageLabel(operation.stage)
+      + (operation.progress ? " · " + operation.progress : "")
+      + (source ? " · " + source.name : "")
+      + (operation.error ? ": " + operation.error : "");
   }
 
   /** Consentimento pago por lote: diálogo nativo, nunca confirm() nativo. */
@@ -406,10 +383,6 @@ export function mountRail({ state, api, player }) {
     setDisabled(document.getElementById("prepare"), preparing);
     if (preparing && prepDialog.open) prepDialog.close();
     renderPreparation(project);
-    // O cartão fica visível durante todo o fluxo: o checklist diz o que
-    // falta em vez de esconder a entrega até haver cenas.
-    delivery.hidden = false;
-    renderDelivery(project);
   }
 
   document.getElementById("select").onclick = () => api.call("/project/select", {
@@ -451,31 +424,8 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Retomando preparação…",
   });
-  document.getElementById("export").onclick = async () => {
-    const project = state.get("project");
-    exportUi.status = "running";
-    exportUi.error = null;
-    exportUi.revision = null;
-    renderDelivery(project);
-    try {
-      const { res, body } = await api.call("/project/export", {
-        method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
-        label: "Exportando…",
-      });
-      if (res.ok) {
-        exportUi.status = "done";
-        exportUi.revision = project.revision;
-      } else {
-        exportUi.status = "error";
-        exportUi.error = body.error || "erro " + res.status;
-      }
-    } catch (err) {
-      exportUi.status = "error";
-      exportUi.error = (err && err.message) || String(err);
-    }
-    renderDelivery(state.get("project"));
-  };
-
   state.subscribe("project", render);
+  state.subscribe("operation", renderOpLine);
   render(state.get("project"));
+  renderOpLine(state.get("operation"));
 }

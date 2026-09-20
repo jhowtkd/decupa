@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { countsFor, deliveryChecklist, exportView } from "./rail.js";
+import { countsFor, deliveryChecklist, exportView, stageLabel } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -84,4 +84,19 @@ it("countsFor resume fontes/incluídas/apoio", () => {
     { included: false, role: "support" },
     { included: true, role: "both" },
   ])).toEqual({ total: 3, included: 2, support: 2 });
+});
+
+it("exportView sem formatos preserva o contrato antigo", () => {
+  expect(exportView({ status: "idle", error: null }, true)).not.toHaveProperty("formats");
+});
+
+it("exportView com formatos ecoa capacidades", () => {
+  const formats = [{ id: "otio", label: "Baixar timeline.otio", href: "/project/output/3/otio", file: "timeline.otio" }];
+  expect(exportView({ status: "done", error: null }, true, formats)).toMatchObject({ tone: "done", formats });
+});
+
+it("stageLabel traduz etapas e repassa desconhecidas", () => {
+  expect(stageLabel("rendering")).toBe("Renderizando prévia");
+  expect(stageLabel("cancelled")).toBe("Cancelada");
+  expect(stageLabel("weird-stage")).toBe("weird-stage");
 });

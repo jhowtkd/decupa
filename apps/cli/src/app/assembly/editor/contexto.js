@@ -4,6 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration } from "./montage.js";
+import { deliveryChecklist, exportView } from "./rail.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -266,8 +267,21 @@ export function mountContexto({ state, api, player }) {
   briefingActions.innerHTML = "<h1>Ajuste</h1>"
     + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
     + '<div class="row"><button type="button" class="primary" id="adjust">Propor mudanças (modelo pago)</button>'
-    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar</button></div>';
+    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar preparação</button></div>';
   root.appendChild(briefingActions);
+
+  const delivery = document.createElement("section");
+  delivery.id = "delivery";
+  delivery.setAttribute("aria-label", "Entrega");
+  delivery.innerHTML = "<h1>Entrega</h1>"
+    + '<ul id="deliveryChecklist" class="plain"></ul>'
+    + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
+    + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
+    + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
+    + '<p id="downloads"></p>'
+    + '<ul id="versionHistory" class="plain"></ul>';
+  root.appendChild(delivery);
+  const exportUi = { status: "idle", error: null, revision: null };
 
   /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
   function renderCorrections(project) {
@@ -292,6 +306,61 @@ export function mountContexto({ state, api, player }) {
     }
   }
 
+  function renderDelivery(project) {
+    // Checklist derivado do estado real: atualiza a cada render de projeto.
+    const checklist = document.getElementById("deliveryChecklist");
+    checklist.replaceChildren();
+    for (const item of deliveryChecklist(project)) {
+      const li = document.createElement("li");
+      li.append(chip((item.done ? "✓ " : "○ ") + item.label));
+      checklist.appendChild(li);
+    }
+    // Export de outra revisão não conta: edição nova volta ao ocioso.
+    if (exportUi.status === "done" && exportUi.revision !== project.revision) {
+      exportUi.status = "idle";
+      exportUi.error = null;
+      exportUi.revision = null;
+    }
+    const downloads = document.getElementById("downloads");
+    downloads.replaceChildren();
+    // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
+    // o servidor também recusa export sem aprovação (exportApproved).
+    const approved = project.finalApprovedRevision != null;
+    const lock = document.getElementById("deliveryLock");
+    if (lock) {
+      lock.textContent = approved
+        ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
+        : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
+    }
+    const rev = project.finalApprovedRevision;
+    const formats = approved ? [
+      { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
+      { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
+    ] : null;
+    const view = exportView(exportUi, approved, formats);
+    const exportButton = document.getElementById("export");
+    exportButton.textContent = view.buttonLabel;
+    exportButton.classList.toggle("is-loading", view.loading);
+    setDisabled(exportButton, view.disabled);
+    const exportStatus = document.getElementById("exportStatus");
+    exportStatus.textContent = view.statusText;
+    exportStatus.className = "muted export-" + view.tone;
+    for (const format of view.formats || []) {
+      const link = document.createElement("a");
+      link.className = "data";
+      link.href = format.href;
+      link.textContent = format.label;
+      link.setAttribute("download", format.file);
+      downloads.appendChild(link);
+    }
+    const history = document.getElementById("versionHistory");
+    history.replaceChildren(
+      chip("revisão " + project.revision),
+      chip(project.previewRevision != null ? "prévia " + project.previewRevision : "sem prévia"),
+      chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
+    );
+  }
+
   function render(project) {
     if (!project) return;
     const operation = state.get("operation");
@@ -314,6 +383,7 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("adjust").textContent = project.permissions.model === true
       ? "Propor mudanças (já autorizado)"
       : "Propor mudanças (modelo pago)";
+    renderDelivery(project);
   }
 
   document.getElementById("cancelPrep").onclick = () => api.call(
@@ -329,6 +399,30 @@ export function mountContexto({ state, api, player }) {
     }),
     label: "Ajustando montagem…",
   });
+  document.getElementById("export").onclick = async () => {
+    const project = state.get("project");
+    exportUi.status = "running";
+    exportUi.error = null;
+    exportUi.revision = null;
+    renderDelivery(project);
+    try {
+      const { res, body } = await api.call("/project/export", {
+        method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
+        label: "Exportando…",
+      });
+      if (res.ok) {
+        exportUi.status = "done";
+        exportUi.revision = project.revision;
+      } else {
+        exportUi.status = "error";
+        exportUi.error = body.error || "erro " + res.status;
+      }
+    } catch (err) {
+      exportUi.status = "error";
+      exportUi.error = (err && err.message) || String(err);
+    }
+    renderDelivery(state.get("project"));
+  };
 
   state.subscribe("project", render);
   state.subscribe("operation", () => render(state.get("project")));

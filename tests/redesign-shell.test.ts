@@ -31,3 +31,11 @@ it("rail.js ancora briefing e confirmação em dialogs nativos", async () => {
     expect(js).toContain(s);
   }
 });
+
+it("entrega mora no inspetor, não no rail", async () => {
+  const rail = await readFile(new URL("../apps/cli/src/app/assembly/editor/rail.js", import.meta.url), "utf8");
+  const contexto = await readFile(new URL("../apps/cli/src/app/assembly/editor/contexto.js", import.meta.url), "utf8");
+  expect(rail).not.toContain("renderDelivery");
+  expect(contexto).toContain('id = "delivery"');
+  expect(contexto).toContain("versionHistory");
+});
