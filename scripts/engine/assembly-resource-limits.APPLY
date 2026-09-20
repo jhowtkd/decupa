@@ -17,6 +17,16 @@ Conteúdo (Task 1):
 - render_preview: exige o encoder selecionado (não mais libx264 fixo);
   caminho legado mantém exigência de libx264.
 
+Conteúdo (Task 2, cumulativo neste mesmo patch):
+- render_intervals(plan): partição em [start, end) por bordas V1/V2,
+  subdividida até 5s; slice_render_plan recorta com tempos locais e rejeita
+  sobreposição além de V1/V2.
+- _render_segmented_video: trechos sequenciais -an com ≤2 entradas cada,
+  concat demuxer -c:v copy; _mux_global_audio mistura beds do plano cheio
+  uma única vez e anexa com -c:v copy.
+- build_project_ffmpeg_command(..., include_audio): -threads 2 por entrada,
+  -filter_complex_threads 1; render_audio_bed com os mesmos limites.
+
 Aplicar (sem executar setup-engine.sh):
   cd work/video-agent-kit-plugin
   git apply --check ../../scripts/engine/assembly-resource-limits.patch

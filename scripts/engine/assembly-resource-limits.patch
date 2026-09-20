@@ -1,8 +1,8 @@
 diff --git a/mcp/ve_tools/render.py b/mcp/ve_tools/render.py
-index 29d6db7..28d73b0 100644
+index 29d6db7..504a842 100644
 --- a/mcp/ve_tools/render.py
 +++ b/mcp/ve_tools/render.py
-@@ -26,13 +26,39 @@ from .timeline import (
+@@ -26,13 +26,198 @@ from .timeline import (
  )
  
  
@@ -27,6 +27,165 @@ index 29d6db7..28d73b0 100644
 +    raise ValueError("encoder não suportado neste caminho")
 +
 +
++SEGMENT_MAX_SECONDS = 5
++
++
++def _to_frame(time_seconds: float, fps: float) -> int:
++    return int(math.floor(float(time_seconds) * float(fps) + 0.5))
++
++
++def render_intervals(plan: dict) -> list[tuple[int, int]]:
++    """Particiona a timeline em intervalos de frames [start, end).
++
++    Bordas nos inícios/fins dos clipes de vídeo (contrato V1/V2) mais 0 e a
++    duração total; cada trecho é subdividido até o teto de 5 segundos. Trechos
++    sequenciais cobrem toda a duração sem sobreposição.
++    """
++    fps = float(plan["fps"])
++    if not math.isfinite(fps) or fps <= 0:
++        raise RuntimeError("fps do plano inválido para intervalos")
++    total = _to_frame(float(plan["duration"]), fps)
++    if total <= 0:
++        raise RuntimeError("duração do plano inválida para intervalos")
++    max_frames = max(1, int(SEGMENT_MAX_SECONDS * fps))
++    edges = {0, total}
++    for clip in plan.get("video_clips", []):
++        edges.add(min(total, max(0, _to_frame(clip["timeline_start"], fps))))
++        edges.add(min(total, max(0, _to_frame(clip["timeline_end"], fps))))
++    bounds = sorted(edges)
++    intervals: list[tuple[int, int]] = []
++    for seg_start, seg_end in zip(bounds, bounds[1:]):
++        start = seg_start
++        while seg_end - start > max_frames:
++            intervals.append((start, start + max_frames))
++            start += max_frames
++        intervals.append((start, seg_end))
++    return intervals
++
++
++def slice_render_plan(plan: dict, start_frame: int, end_frame: int) -> dict:
++    """Recorta o plano para o intervalo [start_frame, end_frame), com tempos
++    locais. Sobreposição de vídeo além do contrato V1/V2 é rejeitada em vez
++    de abrir entradas ilimitadas. Não muta o plano original."""
++    fps = float(plan["fps"])
++
++    def slice_clip(clip: dict) -> dict | None:
++        clip_start_frame = _to_frame(clip["timeline_start"], fps)
++        clip_end_frame = _to_frame(clip["timeline_end"], fps)
++        local_start = max(clip_start_frame, start_frame)
++        local_end = min(clip_end_frame, end_frame)
++        if local_end <= local_start:
++            return None
++        speed = float(clip.get("speed") or 1.0)
++        span_seconds = (local_end - local_start) / fps
++        out = dict(clip)
++        out["start"] = float(clip.get("start", 0.0)) + ((local_start - clip_start_frame) / fps) * speed
++        out["source_duration"] = span_seconds * speed
++        out["render_duration"] = span_seconds
++        out["end"] = out["start"] + out["source_duration"]
++        out["timeline_start"] = (local_start - start_frame) / fps
++        out["timeline_end"] = (local_end - start_frame) / fps
++        if local_start > clip_start_frame:
++            out.pop("transition_in", None)
++        if local_end < clip_end_frame:
++            out.pop("transition_out", None)
++        return out
++
++    def slice_group(key: str) -> list[dict]:
++        return [c for c in (slice_clip(clip) for clip in plan.get(key, [])) if c is not None]
++
++    video_clips = slice_group("video_clips")
++    if len(video_clips) > 2:
++        raise RuntimeError(
++            f"sobreposição de {len(video_clips)} clipes de vídeo excede o contrato V1/V2 "
++            f"no intervalo [{start_frame},{end_frame})"
++        )
++    return {
++        **plan,
++        "duration": (end_frame - start_frame) / fps,
++        "video_clips": video_clips,
++        "audio_clips": [],
++        "overlay_clips": slice_group("overlay_clips"),
++        "text_clips": slice_group("text_clips"),
++    }
++
++
++class _AttemptFailed(RuntimeError):
++    def __init__(self, message: str, cmd: list[str] | None = None):
++        super().__init__(message)
++        self.cmd = cmd or []
++
++
++def _mixed_audio_filter(labels: list[str], duration: float) -> str:
++    if labels:
++        mix_inputs = "".join(f"[{label}]" for label in labels)
++        return (
++            f"{mix_inputs}amix=inputs={len(labels)}:duration=longest:dropout_transition=0:normalize=0,"
++            f"atrim=0:{duration:.6f},asetpts=PTS-STARTPTS[aout]"
++        )
++    return f"anullsrc=channel_layout=stereo:sample_rate=48000:d={duration:.6f}[aout]"
++
++
++def _render_segmented_video(plan: dict, work_dir: Path, encoder: str, hwaccel: str) -> tuple[Path, int]:
++    """Renderiza o vídeo em trechos sequenciais (≤5s, ≤2 entradas cada, sem
++    áudio) e concatena com -c:v copy. Devolve (vídeo concatenado, nº trechos)."""
++    intervals = render_intervals(plan)
++    seg_paths = []
++    for idx, (start_frame, end_frame) in enumerate(intervals):
++        sliced = slice_render_plan(plan, start_frame, end_frame)
++        seg_work = work_dir / f"seg_{idx:04d}"
++        seg_work.mkdir(parents=True, exist_ok=True)
++        seg_path = seg_work / "video.mp4"
++        cmd, _ = build_project_ffmpeg_command(
++            sliced, seg_path, seg_work, encoder=encoder, hwaccel=hwaccel, include_audio=False)
++        try:
++            proc = run_proc(cmd, capture_output=True, text=True, timeout=7200)
++        except Exception as exc:
++            raise _AttemptFailed(f"segmento {idx} [{start_frame},{end_frame}): {exc}", cmd) from exc
++        if proc.returncode != 0:
++            raise _AttemptFailed(
++                f"segmento {idx} [{start_frame},{end_frame}): {proc.stderr.strip()[-1500:]}", cmd)
++        if not seg_path.is_file() or not source_has_video(seg_path):
++            raise _AttemptFailed(f"segmento {idx} [{start_frame},{end_frame}) sem vídeo", cmd)
++        seg_paths.append(seg_path)
++    concat_file = work_dir / "concat.txt"
++    concat_file.write_text(
++        "".join(f"file '{ffconcat_escape(p)}'\n" for p in seg_paths), encoding="utf-8")
++    video_path = work_dir / "video-concat.mp4"
++    concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
++                  "-c:v", "copy", str(video_path)]
++    try:
++        proc = run_proc(concat_cmd, capture_output=True, text=True, timeout=1800)
++    except Exception as exc:
++        raise _AttemptFailed(f"concat de vídeo: {exc}", concat_cmd) from exc
++    if proc.returncode != 0 or not video_path.is_file():
++        raise _AttemptFailed(f"concat de vídeo: {proc.stderr.strip()[-1500:]}", concat_cmd)
++    return video_path, len(seg_paths)
++
++
++def _mux_global_audio(plan: dict, video_path: Path, output_path: Path, work_dir: Path) -> list[str]:
++    """Mistura o áudio global uma única vez (beds do plano cheio) e anexa ao
++    vídeo concatenado. Devolve o comando para diagnóstico."""
++    cmd: list[str] = ["ffmpeg", "-y", "-threads", "2", "-i", str(video_path)]
++    labels = []
++    for idx, (bed_path, _clip) in enumerate(bake_project_audio_beds(plan, work_dir)):
++        cmd += ["-threads", "2", "-i", str(bed_path)]
++        labels.append(f"gaud{idx}")
++    bed_filters = [audio_bed_filter(idx + 1, label) for idx, label in enumerate(labels)]
++    filter_complex = ";".join([*bed_filters, _mixed_audio_filter(labels, float(plan["duration"]))])
++    cmd += ["-filter_complex", filter_complex, "-filter_complex_threads", "1",
++            "-map", "0:v", "-map", "[aout]",
++            "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2",
++            "-movflags", "+faststart", str(output_path)]
++    try:
++        proc = run_proc(cmd, capture_output=True, text=True, timeout=1800)
++    except Exception as exc:
++        raise _AttemptFailed(f"mixagem global: {exc}", cmd) from exc
++    if proc.returncode != 0:
++        raise _AttemptFailed(f"mixagem global: {proc.stderr.strip()[-1500:]}", cmd)
++    return cmd
++
++
  def render_preview(args: dict, ctx: RunContext) -> ToolResult:
      if not args.get("timeline_path"):
          return ToolResult(text="[ERROR] timeline_path is required")
@@ -44,7 +203,7 @@ index 29d6db7..28d73b0 100644
      if cap_err:
          return ToolResult(text=cap_err)
      timeline_path = ctx.resolve(args["timeline_path"])
-@@ -50,6 +76,11 @@ def render_preview(args: dict, ctx: RunContext) -> ToolResult:
+@@ -50,6 +235,11 @@ def render_preview(args: dict, ctx: RunContext) -> ToolResult:
      if isinstance(data.get("tracks"), list):
          return render_project_timeline(args, ctx, data, timeline_path)
  
@@ -56,7 +215,7 @@ index 29d6db7..28d73b0 100644
      clips, unsupported_clips = renderable_timeline_clips(data)
      if unsupported_clips:
          return ToolResult(
-@@ -131,30 +162,64 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
+@@ -131,30 +321,60 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
      if not plan["video_clips"]:
          return ToolResult(text="[ERROR] no renderable video clips found in project timeline", data=plan)
  
@@ -94,31 +253,27 @@ index 29d6db7..28d73b0 100644
 -        return ToolResult(text=f"[ERROR] ffmpeg project render failed: {exc}", data={"cmd": cmd})
 -    if proc.returncode != 0:
 +    effective_encoder = requested_encoder
++    segment_count = 0
 +    failures: list[dict] = []
 +    cmd: list[str] = []
 +    filter_complex = ""
 +    for attempt_encoder, attempt_work, attempt_hwaccel in attempts:
 +        attempt_work.mkdir(parents=True, exist_ok=True)
 +        try:
-+            cmd, filter_complex = build_project_ffmpeg_command(
-+                plan, output_path, attempt_work,
-+                encoder=attempt_encoder, hwaccel=attempt_hwaccel,
-+            )
++            video_path, segment_count = _render_segmented_video(
++                plan, attempt_work, attempt_encoder, attempt_hwaccel)
++            cmd = _mux_global_audio(plan, video_path, output_path, attempt_work)
++            filter_complex = "segmented: sequential video intervals, single global audio mix"
++        except _AttemptFailed as exc:
++            failures.append({"encoder": attempt_encoder, "error": str(exc)})
++            cmd = exc.cmd
++            output_path.unlink(missing_ok=True)
++            continue
 +        except Exception as exc:
 +            return ToolResult(
 +                text=f"[ERROR] ffmpeg project render command failed: {exc}",
 +                data={"plan": public_render_plan(plan)},
 +            )
-+        try:
-+            proc = run_proc(cmd, capture_output=True, text=True, timeout=7200)
-+        except Exception as exc:
-+            failures.append({"encoder": attempt_encoder, "error": str(exc)})
-+            output_path.unlink(missing_ok=True)
-+            continue
-+        if proc.returncode != 0:
-+            failures.append({"encoder": attempt_encoder, "stderr": proc.stderr.strip()[-1500:]})
-+            output_path.unlink(missing_ok=True)
-+            continue
 +        if not output_path.is_file() or not source_has_video(output_path):
 +            failures.append({"encoder": attempt_encoder, "error": "no playable video stream"})
 +            output_path.unlink(missing_ok=True)
@@ -137,17 +292,19 @@ index 29d6db7..28d73b0 100644
  
      report = {
          "timeline_path": str(timeline_path),
-@@ -162,6 +227,9 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
+@@ -162,6 +382,11 @@ def render_project_timeline(args: dict, ctx: RunContext, data: dict, timeline_pa
          "output_path": str(output_path),
          "output_sha256": file_sha256(output_path),
          "renderer_scope": "project tracks: video/main, audio/music/voiceover, subtitle/text, image/overlay",
 +        "requested_encoder": requested_encoder,
 +        "effective_encoder": effective_encoder,
 +        "fallback": effective_encoder != requested_encoder,
++        "segment_count": segment_count,
++        "segmentation": "sequential intervals up to 5s, up to 2 video inputs per command, single global audio mix",
          "output_width": plan["width"],
          "output_height": plan["height"],
          "output_fps": plan["fps"],
-@@ -352,8 +420,18 @@ def resolve_project_duration(data: dict, *clip_groups: list[dict]) -> float:
+@@ -352,18 +577,32 @@ def resolve_project_duration(data: dict, *clip_groups: list[dict]) -> float:
      return max_end
  
  
@@ -158,6 +315,7 @@ index 29d6db7..28d73b0 100644
 +    work_dir: Path,
 +    encoder: str = "libx264",
 +    hwaccel: str = "",
++    include_audio: bool = True,
 +) -> tuple[list[str], str]:
      cmd = ["ffmpeg", "-y"]
 +    if hwaccel:
@@ -166,13 +324,66 @@ index 29d6db7..28d73b0 100644
 +        cmd += ["-hwaccel", hwaccel]
      input_kinds = []
      for clip in plan["video_clips"]:
-         cmd += ["-ss", f"{clip['start']:.6f}", "-t", f"{clip['source_duration']:.6f}", "-i", clip["source"]]
-@@ -421,7 +499,7 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
+-        cmd += ["-ss", f"{clip['start']:.6f}", "-t", f"{clip['source_duration']:.6f}", "-i", clip["source"]]
++        cmd += ["-threads", "2", "-ss", f"{clip['start']:.6f}",
++                "-t", f"{clip['source_duration']:.6f}", "-i", clip["source"]]
+         input_kinds.append(("video", clip))
+     for clip in plan["overlay_clips"]:
+-        cmd += ["-loop", "1", "-t", f"{clip['render_duration']:.6f}", "-i", clip["source"]]
++        cmd += ["-threads", "2", "-loop", "1", "-t", f"{clip['render_duration']:.6f}",
++                "-i", clip["source"]]
+         input_kinds.append(("overlay", clip))
+-    for bed_path, clip in bake_project_audio_beds(plan, work_dir):
+-        cmd += ["-i", str(bed_path)]
+-        input_kinds.append(("audio_bed", clip))
++    if include_audio:
++        for bed_path, clip in bake_project_audio_beds(plan, work_dir):
++            cmd += ["-threads", "2", "-i", str(bed_path)]
++            input_kinds.append(("audio_bed", clip))
+ 
+     filters = [f"color=c=black:s={plan['width']}x{plan['height']}:r={plan['fps']}:d={plan['duration']:.6f}[vbase0]"]
+     current_video = "vbase0"
+@@ -409,20 +648,20 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
+         text_current = out_label
+     filters.append(f"[{text_current}]trim=duration={plan['duration']:.6f},setpts=PTS-STARTPTS[vout]")
+ 
+-    if audio_labels:
+-        mix_inputs = "".join(f"[{label}]" for label in audio_labels)
+-        filters.append(
+-            f"{mix_inputs}amix=inputs={len(audio_labels)}:duration=longest:dropout_transition=0:normalize=0,"
+-            f"atrim=0:{plan['duration']:.6f},asetpts=PTS-STARTPTS[aout]"
+-        )
++    if include_audio:
++        filters.append(_mixed_audio_filter(audio_labels, float(plan["duration"])))
++        audio_map = ["-map", "[aout]"]
++        audio_codec = ["-c:a", "aac", "-ar", "48000", "-ac", "2"]
+     else:
+-        filters.append(f"anullsrc=channel_layout=stereo:sample_rate=48000:d={plan['duration']:.6f}[aout]")
++        audio_map = []
++        audio_codec = ["-an"]
+     filter_complex = ";".join(filters)
      cmd += [
          "-filter_complex", filter_complex,
-         "-map", "[vout]", "-map", "[aout]",
+-        "-map", "[vout]", "-map", "[aout]",
 -        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+-        "-c:a", "aac", "-ar", "48000", "-ac", "2",
++        "-filter_complex_threads", "1",
++        "-map", "[vout]", *audio_map,
 +        *video_output_args(encoder),
-         "-c:a", "aac", "-ar", "48000", "-ac", "2",
++        *audio_codec,
          "-movflags", "+faststart",
+         str(output_path),
+     ]
+@@ -498,10 +737,12 @@ def render_audio_bed(clip: dict, plan: dict, output_path: Path) -> None:
+         )
+     cmd = [
+         "ffmpeg", "-y",
++        "-threads", "2",
+         "-ss", f"{clip['start']:.6f}",
+         "-t", f"{clip['source_duration']:.6f}",
+         "-i", clip["source"],
+         "-filter_complex", ";".join(filters),
++        "-filter_complex_threads", "1",
+         "-map", "[aout]",
+         "-c:a", "pcm_s16le",
          str(output_path),

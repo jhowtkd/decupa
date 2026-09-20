@@ -168,6 +168,131 @@ it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () =>
   }
 });
 
+it("render segmentado de 12s preserva bordas, voz contínua e portrait VFR em 30000/1001", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { readFile } = await import("node:fs/promises");
+  const { SpawnExecutor } = await import("../pipeline.ts");
+  const run = promisify(execFile);
+  const dir = await mkdtemp(join(tmpdir(), "decupa-seg-"));
+  const fps = { num: 30000, den: 1001 };
+  const frame = fps.den / fps.num;
+  const srcA = join(dir, "a.mp4");
+  await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=25:d=13",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=13",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", srcA]);
+  const srcB = join(dir, "b.mp4");
+  await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x240:r=25:d=13",
+    "-f", "lavfi", "-i", "sine=frequency=880:duration=13",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", srcB]);
+  const srcC = join(dir, "c.mp4");
+  await run("ffmpeg", ["-v", "error", "-y",
+    "-f", "lavfi", "-i", "color=c=green:s=240x160:r=25:d=8",
+    "-f", "lavfi", "-i", "color=c=magenta:s=240x160:r=25:d=8",
+    "-f", "lavfi", "-i", "sine=frequency=660:duration=8",
+    "-filter_complex", "[0][1]vstack,select='lt(mod(n,9),7)'[v]",
+    "-map", "[v]", "-map", "2:a", "-fps_mode", "vfr",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+    "-bsf:v", "h264_metadata=display_orientation=insert:rotate=180",
+    "-c:a", "aac", "-shortest", srcC]);
+  const assembly = fixtureAssembly();
+  assembly.fps = fps;
+  assembly.width = 320;
+  assembly.height = 240;
+  assembly.sources = [
+    { id: "a", path: srcA, sha256: await hashFile(srcA), durationSeconds: 13, hasVideo: true, hasAudio: true, fps: { num: 25, den: 1 }, width: 320, height: 240, role: "speech", included: true, name: "a.mp4" },
+    { id: "b", path: srcB, sha256: await hashFile(srcB), durationSeconds: 13, hasVideo: true, hasAudio: true, fps: { num: 25, den: 1 }, width: 320, height: 240, role: "support", included: true, name: "b.mp4" },
+    { id: "c", path: srcC, sha256: await hashFile(srcC), durationSeconds: 7.9, hasVideo: true, hasAudio: true, fps: { num: 25, den: 1 }, width: 240, height: 320, role: "speech", included: true, name: "c.mp4" },
+  ];
+  assembly.tracks = [
+    { kind: "Video", name: "V1", clips: [
+      { id: "v1a", sceneId: "s", sourceId: "a", sourceStartSeconds: 0, startFrame: 0, durationFrames: 90 },
+      { id: "v1b", sceneId: "s", sourceId: "c", sourceStartSeconds: 0, startFrame: 90, durationFrames: 180 },
+      { id: "v1c", sceneId: "s", sourceId: "a", sourceStartSeconds: 0, startFrame: 270, durationFrames: 90 },
+    ] },
+    { kind: "Video", name: "V2", clips: [
+      { id: "v2b", sceneId: "s", sourceId: "b", sourceStartSeconds: 0, startFrame: 120, durationFrames: 165 },
+    ] },
+    { kind: "Audio", name: "A1", clips: [
+      { id: "a1a", sceneId: "s", sourceId: "a", sourceStartSeconds: 0, startFrame: 0, durationFrames: 360 },
+    ] },
+  ];
+  const out = await renderAssembly(assembly, dir, new SpawnExecutor());
+  const probeJson = async (args: string[]) => {
+    const { stdout } = await run("ffprobe", ["-v", "error", ...args, out]);
+    return stdout.trim();
+  };
+  // Canvas preservado apesar da entrada portrait.
+  expect(await probeJson(["-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "csv=p=0"]))
+    .toBe("h264,320,240");
+  // Duração dentro de um frame e contagem exata: sem erro acumulado no concat.
+  const vDur = Number(await probeJson(["-select_streams", "v:0", "-show_entries", "stream=duration", "-of", "csv=p=0"]));
+  expect(Math.abs(vDur - 360 * frame)).toBeLessThan(frame);
+  expect(await probeJson(["-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"]))
+    .toBe("360");
+  // Frames imediatamente antes/depois das bordas (média 1x1).
+  const avgAt = async (frameNo: number) => {
+    const path = join(dir, `seg-${frameNo}.rgb`);
+    await run("ffmpeg", ["-v", "error", "-y", "-ss", String(frameNo * frame), "-i", out,
+      "-frames:v", "1", "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", path]);
+    return readFile(path);
+  };
+  const red89 = await avgAt(89);
+  expect(red89[0]).toBeGreaterThan(150);
+  expect(red89[2]).toBeLessThan(80);
+  for (const blue of [150, 268, 270, 284]) {
+    const pixel = await avgAt(blue);
+    expect(pixel[2]).toBeGreaterThan(150);
+    expect(pixel[0]).toBeLessThan(80);
+  }
+  const red286 = await avgAt(286);
+  expect(red286[0]).toBeGreaterThan(150);
+  expect(red286[2]).toBeLessThan(80);
+  // Portrait VFR com rotação: bandas no lugar, pillarbox escuro.
+  const full91 = join(dir, "seg-91-full.rgb");
+  await run("ffmpeg", ["-v", "error", "-y", "-ss", String(91 * frame), "-i", out,
+    "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", full91]);
+  const full = await readFile(full91);
+  expect(full.length).toBe(320 * 240 * 3);
+  const at = (x: number, y: number) => full.subarray((y * 320 + x) * 3, (y * 320 + x) * 3 + 3);
+  const top = at(160, 30);
+  expect(top[0]).toBeGreaterThan(150);
+  expect(top[2]).toBeGreaterThan(150);
+  expect(top[1]).toBeLessThan(110);
+  const bottom = at(160, 210);
+  expect(bottom[1]).toBeGreaterThan(70);
+  expect(bottom[0]).toBeLessThan(110);
+  expect(bottom[2]).toBeLessThan(110);
+  const bar = at(10, 120);
+  expect(bar[0]).toBeLessThan(40);
+  expect(bar[1]).toBeLessThan(40);
+  expect(bar[2]).toBeLessThan(40);
+  // Fala contínua cruzando cortes e intervalos, sem tom do apoio nem do portrait.
+  const pcm = join(dir, "voice.pcm");
+  await run("ffmpeg", ["-v", "error", "-y", "-ss", "1.2", "-i", out, "-t", "3.0",
+    "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", pcm]);
+  const bytes = await readFile(pcm);
+  const energy = (hz: number, from: number, to: number) => {
+    let re = 0, im = 0;
+    for (let i = from; i < to; i++) {
+      const sample = bytes.readInt16LE(i * 2);
+      const phase = 2 * Math.PI * hz * i / 16000;
+      re += sample * Math.cos(phase);
+      im += sample * Math.sin(phase);
+    }
+    return re * re + im * im;
+  };
+  const total = bytes.length / 2;
+  const half = Math.floor(total / 2);
+  expect(energy(440, 0, total)).toBeGreaterThan(50 * energy(880, 0, total));
+  expect(energy(440, 0, total)).toBeGreaterThan(50 * energy(660, 0, total));
+  const firstHalf = energy(440, 0, half);
+  const secondHalf = energy(440, half, total);
+  expect(firstHalf / secondHalf).toBeGreaterThan(0.25);
+  expect(firstHalf / secondHalf).toBeLessThan(4);
+  for (const source of assembly.sources) expect(await hashFile(source.path)).toBe(source.sha256);
+}, 180_000);
+
 it("renderAssembly aceita fontes com identidade verificada sem exigir recalculo de hash completo", async () => {
   const dir = await mkdtemp(join(tmpdir(), "decupa-render-io-"));
   const clip = join(dir, "clip.mp4");
