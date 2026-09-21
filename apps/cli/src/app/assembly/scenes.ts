@@ -352,6 +352,8 @@ function emptyAssembly(project: Project): Assembly {
     fps: project.assembly.fps,
     width: project.assembly.width,
     height: project.assembly.height,
+    canvasSourceId: project.assembly.canvasSourceId,
+    canvasManual: project.assembly.canvasManual,
     sources: project.assembly.sources,
     tracks,
   };

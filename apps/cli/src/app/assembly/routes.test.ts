@@ -8,7 +8,8 @@ import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
 import { mediaWork } from "./media-work.ts";
-import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
+import { applyCanvasPolicy } from "./canvas.ts";
+import { paidBlockedReason, PAID_BLOCKED, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { applyHistorySnapshot } from "./revisions.ts";
 import type { Project, Source } from "./types.ts";
@@ -894,17 +895,21 @@ it("canvas vem do primeiro vídeo mesmo com áudio já cadastrado", () => {
     ...p,
     assembly: { ...p.assembly, sources: [audio] },
   };
-  const afterAudio = applyCanvasFrom(p, audio);
+  const afterAudio = applyCanvasPolicy(p);
   expect(afterAudio.assembly.width).toBe(320);
-  const afterVideo = applyCanvasFrom(afterAudio, video);
+  const afterVideo = applyCanvasPolicy({
+    ...afterAudio,
+    assembly: { ...afterAudio.assembly, sources: [audio, video] },
+  });
   expect(afterVideo.assembly.width).toBe(1920);
   expect(afterVideo.assembly.height).toBe(1080);
   expect(afterVideo.assembly.fps).toEqual({ num: 30000, den: 1001 });
+  expect(afterVideo.assembly.canvasSourceId).toBe("cam");
   const second = { ...video, id: "cam2", width: 640, height: 360, fps: { num: 25, den: 1 } };
-  const afterSecond = applyCanvasFrom({
+  const afterSecond = applyCanvasPolicy({
     ...afterVideo,
-    assembly: { ...afterVideo.assembly, sources: [audio, video] },
-  }, second);
+    assembly: { ...afterVideo.assembly, sources: [audio, video, second] },
+  });
   expect(afterSecond.assembly.width).toBe(1920);
   expect(afterSecond.assembly.fps).toEqual({ num: 30000, den: 1001 });
 });

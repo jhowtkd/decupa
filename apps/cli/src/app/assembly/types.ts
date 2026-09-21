@@ -55,6 +55,15 @@ export type Assembly = {
   fps: Rate;
   width: number;
   height: number;
+  /**
+   * Fonte cujas dimensões de exibição/fps definiram o canvas; `null` =
+   * decidido sem fonte (manual ou legado sem vídeo), `undefined` = ainda
+   * não escolhido — a próxima fonte com vídeo pode definir (ver
+   * applyCanvasPolicy).
+   */
+  canvasSourceId?: string | null;
+  /** Escolha de formato feita pelo usuário — nunca é sobrescrita em import. */
+  canvasManual?: boolean;
   sources: Source[];
   tracks: Track[];
 };

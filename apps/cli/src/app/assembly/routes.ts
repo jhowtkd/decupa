@@ -14,6 +14,7 @@ import { isCancelledError } from "@decupa/queue";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
+import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
@@ -31,7 +32,7 @@ import {
 import { proposeScenes, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
-import type { Project, Rate, Source } from "./types.ts";
+import type { Project, Source } from "./types.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
@@ -358,27 +359,13 @@ function requireRevision(body: Record<string, unknown>): number {
   return n;
 }
 
-export function applyCanvasFrom(project: Project, source: Source): Project {
-  if (!source.hasVideo) return project;
-  const alreadyHasVideo = project.assembly.sources.some((item) => item.hasVideo);
-  if (alreadyHasVideo) return project;
-  const fps: Rate = source.fps ?? project.assembly.fps;
-  const width = source.width && source.width % 2 === 0 ? source.width : project.assembly.width;
-  const height = source.height && source.height % 2 === 0 ? source.height : project.assembly.height;
-  return {
-    ...project,
-    assembly: { ...project.assembly, fps, width, height },
-  };
-}
-
 function addSource(project: Project, source: Source): Project {
   if (project.assembly.sources.some((item) => item.path === source.path)) return project;
-  const withCanvas = applyCanvasFrom(project, source);
   return {
-    ...withCanvas,
+    ...project,
     assembly: {
-      ...withCanvas.assembly,
-      sources: [...withCanvas.assembly.sources, source],
+      ...project.assembly,
+      sources: [...project.assembly.sources, source],
     },
   };
 }
@@ -447,7 +434,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
-      project = bump(project);
+      project = bump(applyCanvasPolicy(project));
       await saveProject(dir, expected, project);
     }
     return loadProject(dir);
@@ -731,7 +718,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             const source = await sourceFromFile(stored, nextSourceId(loaded), name);
-            return bump(addSource(loaded, source));
+            return bump(applyCanvasPolicy(addSource(loaded, source)));
           });
         } catch (err) {
           await unlink(stored).catch(() => {});
@@ -760,7 +747,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           for (const path of picked.paths) {
             next = addSource(next, await sourceFromFile(path, nextSourceId(next)));
           }
-          return bump(next);
+          return bump(applyCanvasPolicy(next));
         });
         sendJson(res, { project, ...snapshot() });
         return true;
@@ -783,21 +770,48 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "settings" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
-        const width = Number(body.width);
-        const height = Number(body.height);
-        if (!fpsRaw || !Number.isSafeInteger(fpsRaw.num) || !Number.isSafeInteger(fpsRaw.den)) {
-          throw new HttpError(400, "fps inválido");
-        }
-        const project = await mutate(baseRevision, (project) => bump({
-          ...project,
-          assembly: {
-            ...project.assembly,
-            fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
-            width,
-            height,
-          },
-        }));
+        const project = await mutate(baseRevision, (project) => {
+          const assembly = project.assembly;
+          const sourceId = body.sourceId === undefined ? undefined : String(body.sourceId);
+          if (sourceId !== undefined) {
+            const source = assembly.sources.find((item) => item.id === sourceId);
+            if (!source) throw new HttpError(404, "fonte não cadastrada");
+            if (!source.hasVideo) throw new HttpError(400, `fonte ${source.id} não tem vídeo`);
+            const canvas = canvasForSource(source, assembly);
+            return bump({
+              ...project,
+              assembly: {
+                ...assembly, ...canvas,
+                canvasSourceId: source.id,
+                canvasManual: true,
+              },
+            });
+          }
+          const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
+          const width = Number(body.width);
+          const height = Number(body.height);
+          if (!fpsRaw || !Number.isSafeInteger(fpsRaw.num) || !Number.isSafeInteger(fpsRaw.den)
+            || Number(fpsRaw.num) <= 0 || Number(fpsRaw.den) <= 0) {
+            throw new HttpError(400, "fps inválido");
+          }
+          if (!Number.isSafeInteger(width) || width <= 0 || width % 2 !== 0) {
+            throw new HttpError(400, "width precisa ser inteiro par positivo");
+          }
+          if (!Number.isSafeInteger(height) || height <= 0 || height % 2 !== 0) {
+            throw new HttpError(400, "height precisa ser inteiro par positivo");
+          }
+          return bump({
+            ...project,
+            assembly: {
+              ...assembly,
+              fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
+              width,
+              height,
+              canvasSourceId: null,
+              canvasManual: true,
+            },
+          });
+        });
         sendJson(res, { project, ...snapshot() });
         return true;
       }
