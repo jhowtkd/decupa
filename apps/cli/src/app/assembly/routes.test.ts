@@ -43,6 +43,7 @@ function indexingExec(): Executor {
 async function boot(
   selectPaths: string[] = [],
   extras: {
+    templatesRoot?: string;
     executor?: Executor;
     describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
     allowPaidVisual?: boolean;
@@ -1127,4 +1128,21 @@ it("novo projeto abre vazio e preserva projeto e mídia anteriores", async () =>
   expect(await readFile(join(dir,"project.json"),"utf8")).toBe(before);
   const html = await (await fetch(url)).text();
   expect(html).toContain('id="newProject"');
+});
+
+it("template gera candidata sem mudar montagem; aceite muda revisão e recusa stale",async()=>{
+ const {saveRecipe}=await import("../templates/store.ts");
+ const templatesRoot=await mkdtemp(join(tmpdir(),"template-library-"));
+ const recipe:import("../templates/types.ts").Recipe={id:"11111111-1111-4111-8111-111111111111",revision:1,name:"Evento",status:"draft",source:{path:"/tmp/reference.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[]};
+ await saveRecipe(templatesRoot,recipe,null);await saveRecipe(templatesRoot,{...recipe,status:"approved"},1);
+ const {base,dir}=await boot([],{templatesRoot,allowPaidModel:true,proposeSend:async()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[],explanation:"receita"})});
+ const p=await loadProject(dir);p.assembly=fixtureAssembly();p.assembly.revision=p.revision;p.analyses=[{sourceId:"a",key:"k",status:"ready",speech:[{id:"u",sourceId:"a",start:0,end:1,text:"tema"}],visual:[],words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]}}];
+ p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.tracks.forEach(t=>t.clips=[]);
+ await saveProject(dir,p.revision,()=>p);
+ const r=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ expect(r.status).toBe(200);const data=await r.json() as any;
+ expect((await loadProject(dir)).scenes).toHaveLength(0);
+ const accepted=await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})});
+ expect(accepted.status).toBe(200);expect((await loadProject(dir)).template?.id).toBe(recipe.id);
+ expect((await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})})).status).toBe(409);
 });

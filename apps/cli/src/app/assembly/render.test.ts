@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { access, copyFile, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { FakeExecutor, type Executor } from "../pipeline.ts";
 import { hashFile } from "@decupa/media";
@@ -11,6 +12,13 @@ import { ensurePlayback, proxyPath } from "./media.ts";
 import { mediaWork } from "./media-work.ts";
 import { renderAssembly, previewIdentity, toEngineTimeline } from "./render.ts";
 import { validateAssembly } from "./validate.ts";
+
+// Mesmo critério do tests/engine-gold.test.ts: o motor não é clonado no CI,
+// então os renders reais só rodam onde work/video-agent-kit-plugin existe.
+const ENGINE = process.env.VE_PLUGIN_ROOT
+  ?? join(resolve(dirname(fileURLToPath(import.meta.url)), "../../../../.."), "work", "video-agent-kit-plugin");
+const temMotor = await access(join(ENGINE, "mcp", "ve_tools", "render.py"))
+  .then(() => true, () => false);
 
 it("preserva as três pistas e não duplica áudio", () => {
   const result = toEngineTimeline(fixtureAssembly()) as {
@@ -274,7 +282,7 @@ it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () =>
   }
 });
 
-it("render segmentado de 12s preserva bordas, voz contínua e portrait VFR em 30000/1001", async () => {
+it.skipIf(!temMotor)("render segmentado de 12s preserva bordas, voz contínua e portrait VFR em 30000/1001", async () => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const { readFile } = await import("node:fs/promises");
@@ -585,7 +593,7 @@ it("fallback do motor publica cache identificado como software", async () => {
 });
 
 
-it("render real alterna V1/V2/V1 e mantém voz de 440Hz sem áudio de apoio",async()=>{
+it.skipIf(!temMotor)("render real alterna V1/V2/V1 e mantém voz de 440Hz sem áudio de apoio",async()=>{
   const {execFile}=await import("node:child_process");
   const {promisify}=await import("node:util");
   const {readFile}=await import("node:fs/promises");

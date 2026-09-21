@@ -79,6 +79,21 @@ export function effectiveWords(project: Project, sourceId: string): Word[] {
   return words.sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
+/** Compact only aligned word-free pauses; preserve acoustic handles and protected ranges. */
+export function tightenSpeechTake(project: Project, take: SpeechTake): SpeechTake {
+  const analysis=project.analyses.find(a=>a.sourceId===take.sourceId);
+  if(analysis?.wordsStatus!=="ready")return take;
+  const words=effectiveWords(project,take.sourceId).filter(w=>w.start<take.end&&w.end>take.start);
+  const cuts:SourceRange[]=[];
+  for(let i=1;i<words.length;i++){
+    const prev=words[i-1]!,next=words[i]!;
+    const start=Math.max(take.start,prev.end,prev.cutEnd??prev.end)+0.05;
+    const end=Math.min(take.end,next.start,next.cutStart??next.start)-0.05;
+    if(end-start>0.2)cuts.push({start,end});
+  }
+  return {...take,removed:normalizeRanges([...take.removed,...subtractRanges(cuts,take.protected)])};
+}
+
 function findScene(project: Project, sceneId: string): Scene {
   const scene = project.scenes.find((item) => item.id === sceneId);
   if (!scene) throw new Error(`cena não encontrada: ${sceneId}`);

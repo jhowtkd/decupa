@@ -1,3 +1,4 @@
+import { mountTemplates } from "/editor/templates.js";
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
@@ -107,7 +108,7 @@ async function call(path, opts = {}) {
     }
     if (!res.ok) ui.error = body.error || ("erro " + res.status);
     else ui.error = null;
-    for (const key of ["undoRevision", "brollCandidates"]) {
+    for (const key of ["undoRevision", "brollCandidates", "templateProposal"]) {
       if (Object.hasOwn(body, key)) state.set(key, body[key]);
     }
     if (body.project) {
@@ -306,6 +307,7 @@ async function importFiles(files) {
 mountStage({ state, api, player });
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
+mountTemplates({state,api});
 mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
@@ -351,6 +353,8 @@ toolTexto.addEventListener("click", () => {
 inspectTool.setAttribute("aria-controls", "contexto");
 inspectTool.onclick = () => showInspector(inspector.hidden);
 document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
+const narrowViewport = matchMedia("(max-width: 1100px)");
+narrowViewport.addEventListener("change", () => { showInspector(false); });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
     showInspector(false); inspectTool.focus();

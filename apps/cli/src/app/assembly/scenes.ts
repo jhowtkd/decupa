@@ -1,3 +1,6 @@
+import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
+import type { Recipe } from "../templates/types.ts";
+import { validateAnimationNotes } from "./handoff.ts";
 import { selectBroll } from "./broll.ts";
 import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, validateDecisionReport } from "./assembly-decisions.ts";
 import { randomUUID } from "node:crypto";
@@ -16,7 +19,7 @@ import type {
 } from "./types.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import { validateAssembly } from "./validate.ts";
-import { effectiveWords, retainedRanges, subtractRanges } from "./words.ts";
+import { effectiveWords, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
 - Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
@@ -82,7 +85,7 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
       if (!changed.has(item.id)) {
         throw new Error(`cena nova ${item.id} precisa estar em changedSceneIds`);
       }
-      scenes.push(resolveScene(item, index, null, { speech, visual, takes, sources }));
+      scenes.push(resolveScene(item, index, null, { speech, visual, takes, sources, project }));
       continue;
     }
     if (!changed.has(item.id)) {
@@ -92,14 +95,14 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
         scenes.push(current);
         continue;
       }
-      const resolved = resolveScene(item, index, current, { speech, visual, takes, sources });
+      const resolved = resolveScene(item, index, current, { speech, visual, takes, sources, project });
       if (canonical(resolved) !== canonical(current)) {
         throw new Error(`cena ${item.id} modificada fora do escopo (changedSceneIds)`);
       }
       scenes.push(current);
       continue;
     }
-    scenes.push(resolveScene(item, index, current, { speech, visual, takes, sources }));
+    scenes.push(resolveScene(item, index, current, { speech, visual, takes, sources, project }));
   }
   for (const id of changed) {
     if (!seenIds.has(id)) throw new Error(`changedSceneIds referencia cena ausente: ${id}`);
@@ -121,6 +124,7 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
     scenes: annotated,
     changedSceneIds: raw.changedSceneIds.map(String),
     explanation: String(raw.explanation ?? ""),
+    ...(raw.template !== undefined ? {template:approvedSnapshot(raw.template),templateReport:validateTemplateReport(raw.templateReport??[],approvedSnapshot(raw.template))} : {}),
   };
 }
 
@@ -136,6 +140,7 @@ export function validateResolvedProposal(proposal: Proposal, project: Project): 
 }
 
 type Catalogs = {
+  project?: Project;
   speech: Map<string, Span>;
   visual: Map<string, VisualSpan>;
   takes: Map<string, SpeechTake>;
@@ -205,7 +210,7 @@ function resolveScene(
         `fala ${selection.speechId} já tem take na cena ${id}: use takeId para preservar cortes`,
       );
     }
-    takes.push({
+    const newTake:SpeechTake={
       id: `${id}:${selection.speechId}`,
       sourceId: source.id,
       speechId: span.id,
@@ -213,7 +218,8 @@ function resolveScene(
       end: span.end,
       removed: [],
       protected: [],
-    });
+    };
+    takes.push(catalogs.project?tightenSpeechTake(catalogs.project,newTake):newTake);
     speechIds.push(span.id);
   }
   const evidence = Array.isArray(item.visualEvidenceIds)
@@ -240,6 +246,7 @@ function resolveScene(
   const gaps = Array.isArray(item.gaps) ? (item.gaps as unknown[]).map(String) : [];
   const scene: Scene = {
     id,
+    ...((item.animationNotes ?? current?.animationNotes) !== undefined ? {animationNotes: validateAnimationNotes(item.animationNotes ?? current?.animationNotes)} : {}),
     objective: String(item.objective ?? current?.objective ?? ""),
     rationale: String(item.rationale ?? current?.rationale ?? ""),
     speechIds: [...new Set(speechIds)],
@@ -459,7 +466,7 @@ export async function proposeScenes(
   project: Project,
   input: string,
   signal: AbortSignal,
-  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
+  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
   _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
@@ -468,6 +475,9 @@ export async function proposeScenes(
   // Snapshot profundo: mutação do chamador durante o send não contamina
   // nem o prompt nem a validação.
   const snapshot: Project = structuredClone(project);
+  const selected=deps?.template===undefined?project.template:deps.template;
+  const template=approvedSnapshot(selected);
+  snapshot.template=template;
   const inScope = new Set(
     snapshot.assembly.sources.filter((source) => source.included).map((source) => source.id),
   );
@@ -506,6 +516,7 @@ export async function proposeScenes(
       text: [
         SCENE_PROMPT,
         "Monte a narrativa pelas falas. O mapa visual contém apenas evidências já usadas nas cenas atuais; a ausência de outras imagens neste prompt não significa falta de cobertura. A seleção automática de apoio será feita separadamente pelo Jev usando o catálogo completo: não acrescente support nem visualEvidenceIds a cenas novas. Preserve os apoios e evidências atuais.",
+        ...(template ? ["Use a receita editorial como orientação adaptável: preserve sentido das falas, não copie mídia nem texto da referência, não force número de cenas. Relate cada orientação ativa em templateReport:[{ruleId,status:applied|adapted|unavailable,reason}]. Animações não executadas entram em scenes[].animationNotes:[{id,description,destination:Resolve|After Effects}], nunca como efeito já produzido. Formato e duração são orientações; sinalize adaptações às configurações e ao conteúdo deste projeto.",`receita: ${JSON.stringify({id:template.id,revision:template.revision,rules:template.rules.filter(r=>r.enabled)})}`] : []),
         `briefing salvo: ${JSON.stringify(snapshot.input)}`,
         `pedido adicional: ${input}`,
         `fontes: ${JSON.stringify(snapshot.assembly.sources.map((source) => ({
@@ -531,7 +542,7 @@ export async function proposeScenes(
       if (!previous?.support.length && Array.isArray(item.support) && item.support.length) throw Error("apoio novo deve ser escolhido pelo Jev, retorne support vazio");
       return item;
     });
-    const proposal = validateProposal({ ...raw, id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
+    const proposal = validateProposal({ ...raw, template, templateReport:template?raw.templateReport:[], id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
     return {proposal, candidates: resolveCutCandidates(snapshot, proposal, raw.cutCandidates)};
   }, signal);
   signal.throwIfAborted();

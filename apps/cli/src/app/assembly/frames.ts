@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Executor } from "../pipeline.ts";
 import type { Source } from "./types.ts";
@@ -20,12 +21,13 @@ export type VisualFrame = {
 export async function extractVisualFrames(
   source: Source,
   window: VisualWindow,
-  cacheDir: string,
   exec: Executor,
   opts?: { signal?: AbortSignal },
 ): Promise<VisualFrame[]> {
-  // Diretório efêmero por janela: o `finally` garante que o cache final fica limpo.
-  const tempDir = await mkdtemp(join(cacheDir, "frames-"));
+  // Diretório efêmero por janela no tmpdir: o `finally` garante limpeza e o
+  // caminho curto não estoura o limite de ~260 chars do Windows (o cache
+  // `analysis/<sha>/<sha>/visual-v4-<sha>` já consome ~200).
+  const tempDir = await mkdtemp(join(tmpdir(), "decupa-frames-"));
   try {
     const pattern = join(tempDir, "frame-%03d.jpg");
     // Ordem output-seek (`-i` antes de `-ss`): manter como está para os

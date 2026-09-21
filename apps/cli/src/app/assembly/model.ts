@@ -417,7 +417,7 @@ export async function describeSource(
       try {
         frames = await pool.encode(async () => {
           extractStarted = now();
-          return extractVisualFrames(source, window, cacheDir, exec, { signal });
+          return extractVisualFrames(source, window, exec, { signal });
         }, { signal });
         frameCount = frames.length;
         emit({

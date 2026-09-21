@@ -238,7 +238,7 @@ async function extractCounted(
   let started = queued;
   const frames = await ctx.pools.encode(async () => {
     started = performance.now();
-    const extracted = await extractVisualFrames(source, window, ctx.scratchDir, ctx.exec, { signal: ctx.signal });
+    const extracted = await extractVisualFrames(source, window, ctx.exec, { signal: ctx.signal });
     ctx.counters.extractMs += performance.now() - started;
     return extracted;
   }, { signal: ctx.signal });
