@@ -34,7 +34,64 @@ type ExportManifest = {
   sources?: unknown;
   handoff?: unknown;
   instrucoes?: unknown;
+  verificacao?: unknown;
 };
+
+/** Registro de conferência da importação (verificacao.json da entrega). */
+export type VerificationRecord = {
+  status: "pendente" | "confirmada";
+  revision: number;
+  artefato?: { timeline?: string; reference?: string };
+  origem?: string | null;
+  confirmadaEm?: string;
+};
+
+/**
+ * Estado de conferência da revisão exportada. Diretórios de entrega são
+ * por revisão: conteúdo novo nunca herda a confirmação da anterior.
+ */
+export async function readVerification(dir: string, revision: number): Promise<VerificationRecord | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(join(dir, "exports", String(revision), "verificacao.json"), "utf8"),
+    ) as VerificationRecord;
+    if (!parsed || parsed.revision !== revision) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Confirmação manual da conferência de importação: exige entrega íntegra
+ * da revisão atual e grava revisão, artefato e origem (sempre "manual").
+ */
+export async function confirmImportVerification(project: Project, dir: string): Promise<VerificationRecord> {
+  const dest = join(dir, "exports", String(project.revision));
+  let manifest: ExportManifest | null;
+  try {
+    manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as ExportManifest;
+  } catch {
+    manifest = null;
+  }
+  if (!manifest || manifest.revision !== project.revision || !(await exportedDirValid(dest))) {
+    throw new Error(`sem entrega íntegra da revisão ${project.revision}: exporte antes de confirmar`);
+  }
+  const record: VerificationRecord = {
+    status: "confirmada",
+    revision: project.revision,
+    artefato: {
+      timeline: typeof manifest.timeline === "string" ? manifest.timeline : undefined,
+      reference: typeof manifest.reference === "string" ? manifest.reference : undefined,
+    },
+    origem: "manual",
+    confirmadaEm: new Date().toISOString(),
+  };
+  await writeFile(join(dest, "verificacao.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  manifest.verificacao = "confirmada";
+  await writeFile(join(dest, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return record;
+}
 
 async function exportedFileSha(path: string): Promise<string | null> {
   try {
@@ -138,7 +195,8 @@ export function importInstructions(project: Project): string {
     ...sourceChecklist(assembly),
     "",
     "Verificação de importação: pendente — após importar e conferir, use",
-    "a seção Entrega para registrar a conferência desta revisão.",
+    "o botão \"Confirmar conferência\" na Entrega para registrar a",
+    "conferência manual desta revisão.",
     "",
   ].join("\n");
 }
@@ -243,7 +301,12 @@ export async function exportApproved(project: Project, dir: string): Promise<str
       await writeFile(otioPath, otioText, "utf8");
       await copyFile(reference, join(tmp, "reference.mp4"));
       await writeFile(join(tmp, "importar-no-resolve.txt"), instructionsText, "utf8");
-      await writeFile(join(tmp, "verificacao.json"), JSON.stringify({status:"pendente",revision:project.revision})+"\n", "utf8");
+      await writeFile(join(tmp, "verificacao.json"), `${JSON.stringify({
+        status: "pendente",
+        revision: project.revision,
+        artefato: { timeline: otioSha, reference: refSha },
+        origem: null,
+      } satisfies VerificationRecord)}\n`, "utf8");
       await writeFile(join(tmp,"handoff.json"),handoffText);
       await writeFile(join(tmp,"handoff.md"),`# Handoff — revisão ${project.revision}\n\n`+buildHandoff(project).map(n=>`- ${n.sceneId} · frame ${n.startFrame}, ${n.durationFrames} frames · ${n.destination}: ${n.description}`).join("\n"));
       const manifest = {

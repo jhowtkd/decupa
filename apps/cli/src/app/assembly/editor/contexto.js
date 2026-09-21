@@ -419,8 +419,9 @@ export function mountContexto({ state, api, player }) {
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<ul id="deliveryChecklist" class="plain"></ul>'
     + '<p class="muted" id="formatLine"></p>'
+    + '<p class="muted" id="verifyLine"></p>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
+    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button><button type="button" id="confirmImport" hidden>Confirmar conferência</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
@@ -453,6 +454,17 @@ export function mountContexto({ state, api, player }) {
     formatDialog.showModal();
   };
   document.getElementById("closeFormat").onclick = () => formatDialog.close();
+  // Confirmação manual da conferência (#63): exige entrega da revisão
+  // atual; grava revisão+artefato+origem manual no verificacao.json.
+  document.getElementById("confirmImport").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    void api.call("/project/verify-import", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision }),
+      label: "Confirmando conferência…",
+    });
+  };
   document.getElementById("saveFormat").onclick = async () => {
     const p = state.get("project");
     if (!p) return;
@@ -539,6 +551,21 @@ export function mountContexto({ state, api, player }) {
       + (project.assembly.canvasManual
         ? canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — personalizado"
         : canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — padrão do projeto");
+    // Estado da conferência: exportar nunca confirma; revisão nova
+    // não herda a confirmação (verificacao.json é por revisão).
+    const verifyLine = document.getElementById("verifyLine");
+    const confirmImportButton = document.getElementById("confirmImport");
+    const verificacao = state.get("verificacao");
+    if (!verificacao) {
+      verifyLine.textContent = "Conferência de importação: sem entrega da revisão atual.";
+      confirmImportButton.hidden = true;
+    } else if (verificacao.status === "confirmada") {
+      verifyLine.textContent = `Conferência de importação: confirmada (revisão ${verificacao.revision}, confirmação manual).`;
+      confirmImportButton.hidden = true;
+    } else {
+      verifyLine.textContent = `Conferência de importação: pendente — importe a revisão ${verificacao.revision} no Resolve e confira a timeline.`;
+      confirmImportButton.hidden = false;
+    }
     const rev = project.finalApprovedRevision;
     const formats = approved ? [
       { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },

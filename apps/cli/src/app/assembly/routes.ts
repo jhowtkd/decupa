@@ -23,7 +23,8 @@ import { holdPreparation, isPreparationActive, runPreparation } from "./preparat
 import { describeSource, type VisualClient } from "./model.ts";
 import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
-import { exportApproved } from "./export.ts";
+import { confirmImportVerification, exportApproved, readVerification } from "./export.ts";
+import { applySpeechProposal, proposeSpeechAdjustment, type SpeechProposal } from "./speech-proposal.ts";
 import { renderAssembly } from "./render.ts";
 import { peaksPath } from "./waveform.ts";
 import {
@@ -377,6 +378,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let controller: AbortController | null = null;
   const livePreviews = new Set<AbortController>();
   const templateProposalPath=join(dir,"template-proposal.json");
+  const speechProposalPath=join(dir,"speech-proposal.json");
   async function readTemplateProposal(){
     try{return JSON.parse(await readFile(templateProposalPath,"utf8")) as import("./types.ts").Proposal;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
   }
@@ -501,6 +503,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
+      const readSpeechProposal = async (): Promise<SpeechProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(speechProposalPath, "utf8")) as SpeechProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.scope) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+
       if (parts.length === 1 && req.method === "GET") {
         let project = await loadProject(dir);
         if (project.preparation?.status === "running" && !isPreparationActive(dir)) {
@@ -539,7 +552,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
-        sendJson(res, { project, undoRevision, templateProposal:await readTemplateProposal(), brollCandidates: candidates, ...snapshot() });
+        sendJson(res, {
+          project, undoRevision,
+          templateProposal:await readTemplateProposal(),
+          speechProposal: await readSpeechProposal(),
+          brollCandidates: candidates,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 
@@ -1064,6 +1084,89 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      // Ajuste localizado de fala (#64): proposta só cobre a fala
+      // escolhida; aceitar/rejeitar usam o arquivo sidecar e a revisão.
+      if (parts[1] === "speech-proposal" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sourceId = String(body.sourceId ?? "");
+        const speechId = String(body.speechId ?? "");
+        const request = String(body.request ?? "");
+        if (!sourceId || !speechId) {
+          throw new HttpError(400, "selecione a fala a ajustar");
+        }
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        // Permissão gravada no projeto conta como opt-in — o gate usa o
+        // estado carregado, não só a flag do processo.
+        if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
+          throw new HttpError(402, PAID_BLOCKED);
+        }
+        const { gen, signal } = begin("proposing");
+        try {
+          const proposal = await proposeSpeechAdjustment(
+            loaded, { sourceId, speechId }, request, deps.proposeSend, signal,
+          );
+          if (!stillCurrent(gen)) {
+            sendJson(res, { project: await loadProject(dir), ...snapshot() });
+            return true;
+          }
+          // A proposta espera o modelo fora da trava de mutação: se a revisão
+          // andou enquanto o modelo pensava, descarta em vez de publicar uma
+          // proposta já velha.
+          const latest = await loadProject(dir);
+          if (latest.revision !== proposal.baseRevision) {
+            operation = { stage: "ready" };
+            sendJson(res, { project: latest, speechProposal: null, ...snapshot() });
+            return true;
+          }
+          await publishAtomic(speechProposalPath, `${JSON.stringify(proposal)}\n`);
+          operation = { stage: "ready" };
+          sendJson(res, {
+            project: latest, speechProposal: proposal, ...snapshot(),
+          });
+        } catch (err) {
+          operation = { stage: "idle" };
+          const message = err instanceof Error ? err.message : String(err);
+          if (/fora do escopo|não encontrada|sem análise|não está na montagem|inválido|sem wordIds|sem lista/.test(message)) {
+            throw new HttpError(400, message);
+          }
+          throw err;
+        }
+        return true;
+      }
+
+      if (parts[1] === "speech-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSpeechProposal();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const project = await mutate(baseRevision, async (loaded) => {
+          await writeHistorySnapshot(dir, loaded);
+          return applySpeechProposal(loaded, proposal);
+        });
+        await unlink(speechProposalPath).catch(() => {});
+        sendJson(res, { project, speechProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "speech-reject" && req.method === "POST") {
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSpeechProposal();
+        // Rejeitar só exige a identidade da proposta: ela precisa continuar
+        // dispensável mesmo desatualizada (a recusa por revisão vale para
+        // aceitar, nunca para descartar).
+        if (!proposal || proposal.id !== proposalId) {
+          throw new HttpError(409, "proposta ausente");
+        }
+        await unlink(speechProposalPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
+        return true;
+      }
+
       if (parts[1] === "apply" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const proposalId = String(body.proposalId ?? "");
@@ -1223,7 +1326,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           const dest = await exportApproved(loaded, dir);
-          sendJson(res, { project: loaded, path: dest, ...snapshot() });
+          sendJson(res, {
+            project: loaded, path: dest,
+            verificacao: await readVerification(dir, loaded.revision),
+            ...snapshot(),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante|timecode ilegível/.test(message)) {
@@ -1231,6 +1338,29 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           throw err;
         }
+        return true;
+      }
+
+      // Conferência de importação (#63): confirmação manual sobre a
+      // entrega íntegra da revisão atual. Exportar nunca confirma;
+      // revisão nova começa sem verificacao.json (não herda).
+      if (parts[1] === "verify-import" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const project = await mutate(baseRevision, async (loaded) => {
+          try {
+            await confirmImportVerification(loaded, dir);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (/entrega íntegra/.test(message)) throw new HttpError(409, message);
+            throw err;
+          }
+          return loaded;
+        });
+        sendJson(res, {
+          project,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 

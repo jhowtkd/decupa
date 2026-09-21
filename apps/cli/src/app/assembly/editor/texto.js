@@ -306,7 +306,10 @@ function renderProse(p, selection) {
       + (down.disabled ? " disabled" : "")
       + ' aria-label="Mover cena ' + (index + 1) + ' para baixo">↧</button>'
       + '<button type="button" class="quiet" data-scene-action="delete" data-scene="' + esc(scene.id) + '"'
-      + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button></p>';
+      + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button>'
+      + '<button type="button" class="quiet" data-scene-action="ajustar" data-scene="' + esc(scene.id) + '"'
+      + ' aria-label="Ajustar fala da cena ' + (index + 1) + '"'
+      + ' title="Pedir ajuste localizado a uma fala desta cena">✂</button></p>';
     if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
     if (scene.gaps.length) {
       html += '<p class="warn">lacunas: ' + esc(scene.gaps.join("; ")) + "</p>";
@@ -489,6 +492,7 @@ export function mountTexto({ state, api, player }) {
     }
     lastSig = sig;
     renderCenter(p, selection());
+    paintProposalBanner(p, state.get("speechProposal"));
   }
 
   function findWord(btn) {
@@ -576,6 +580,130 @@ export function mountTexto({ state, api, player }) {
   }
 
   /** "Corrigir": mesmo POST da antiga barra global, com o texto do campo inline. */
+  // Ajuste localizado de fala (#64): seleção explícita da fala + pedido;
+  // a comparação mostra cortes e o impacto de duração antes de aplicar.
+  const speechDialog = document.createElement("dialog");
+  speechDialog.id = "speechDialog";
+  speechDialog.innerHTML = '<h1>Ajustar fala</h1>'
+    + '<label>Fala <select id="speechPick"></select></label>'
+    + '<label>Pedido <input id="speechRequest" type="text"'
+    + ' placeholder="ex.: tire as gagueiras e os preenchimentos"></label>'
+    + '<div class="row"><button type="button" class="primary" id="proposeSpeech">Propor ajuste</button>'
+    + '<button type="button" id="closeSpeech">Fechar</button></div>'
+    + '<div id="speechDiff" aria-live="polite"></div>'
+    + '<div class="row" id="speechApplyRow" hidden>'
+    + '<button type="button" class="primary" id="acceptSpeech">Aplicar ajuste</button>'
+    + '<button type="button" id="rejectSpeech">Recusar proposta</button></div>';
+  document.body.appendChild(speechDialog);
+
+  function speechSummary(proposal) {
+    const delta = proposal.before.durationSeconds - proposal.after.durationSeconds;
+    return {
+      scope: `fala ${proposal.scope.speechId} · cenas ${proposal.scope.sceneIds.join(", ")}`,
+      duration: `${proposal.before.durationSeconds.toFixed(1)}s → ${proposal.after.durationSeconds.toFixed(1)}s (corta ${delta.toFixed(1)}s)`,
+      cuts: proposal.cuts.map((cut) =>
+        `${cut.start.toFixed(1)}s–${cut.end.toFixed(1)}s` + (cut.reason ? ` — ${cut.reason}` : "")),
+      protected: proposal.skippedProtected > 0
+        ? `${proposal.skippedProtected} trecho(s) protegido(s) preservado(s)` : "",
+    };
+  }
+
+  function paintSpeechDiff(proposal) {
+    const box = speechDialog.querySelector("#speechDiff");
+    const applyRow = speechDialog.querySelector("#speechApplyRow");
+    if (!proposal) {
+      box.replaceChildren();
+      applyRow.hidden = true;
+      return;
+    }
+    const summary = speechSummary(proposal);
+    box.innerHTML = '<p class="muted">' + esc(summary.scope) + " · " + esc(summary.duration) + "</p>"
+      + '<p>' + esc(proposal.before.text) + "</p>"
+      + '<p class="muted">cortes: " + (summary.cuts.length ? "" : "nenhum") + "</p>'
+      + "<ul class=\"plain\">" + summary.cuts.map((cut) => "<li>" + esc(cut) + "</li>").join("") + "</ul>"
+      + (summary.protected ? '<p class="muted">' + esc(summary.protected) + "</p>" : "");
+    applyRow.hidden = false;
+  }
+
+  function openSpeechDialog(sceneId) {
+    const p = state.get("project");
+    if (!p) return;
+    const scene = p.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const sel = speechDialog.querySelector("#speechPick");
+    sel.replaceChildren();
+    for (const take of scene.takes) {
+      if (!take.speechId) continue;
+      const analysis = p.analyses.find((item) => item.sourceId === take.sourceId);
+      const speech = analysis?.speech.find((item) => item.id === take.speechId);
+      const label = `${sourceName(p, take.sourceId)} · ${take.start.toFixed(1)}–${take.end.toFixed(1)}s`
+        + ` — "${(speech?.text || "").slice(0, 60)}"`;
+      sel.appendChild(new Option(label, `${take.sourceId}\u0000${take.speechId}`));
+    }
+    paintSpeechDiff(state.get("speechProposal"));
+    speechDialog.showModal();
+  }
+
+  speechDialog.querySelector("#closeSpeech").onclick = () => speechDialog.close();
+  speechDialog.querySelector("#proposeSpeech").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
+    const request = speechDialog.querySelector("#speechRequest").value.trim();
+    const { res } = await api.call("/project/speech-proposal", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: p.revision,
+        sourceId: picked[0], speechId: picked[1],
+        request,
+      }),
+      label: "Propondo ajuste…",
+    });
+    if (res.ok) paintSpeechDiff(state.get("speechProposal"));
+  };
+  speechDialog.querySelector("#acceptSpeech").onclick = async () => {
+    const p = state.get("project");
+    const proposal = state.get("speechProposal");
+    if (!p || !proposal) return;
+    const { res } = await api.call("/project/speech-accept", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Aplicando ajuste…",
+    });
+    if (res.ok) { speechDialog.close(); }
+  };
+  speechDialog.querySelector("#rejectSpeech").onclick = async () => {
+    const p = state.get("project");
+    const proposal = state.get("speechProposal");
+    if (!p || !proposal) return;
+    const { res } = await api.call("/project/speech-reject", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Recusando proposta…",
+    });
+    if (res.ok) { paintSpeechDiff(null); }
+  };
+
+  /** Banner de proposta pendente no topo do texto (sobrevive a reload). */
+  function paintProposalBanner(p, proposal) {
+    const el = root();
+    if (!el) return;
+    el.querySelector(".speech-proposal")?.remove();
+    if (!proposal) return;
+    const summary = speechSummary(proposal);
+    const banner = document.createElement("div");
+    banner.className = "speech-proposal warn";
+    banner.innerHTML = "<strong>Ajuste de fala pendente</strong> — "
+      + esc(summary.scope) + " · " + esc(summary.duration)
+      + ' <button type="button" data-speech-apply="1">Aplicar</button>'
+      + ' <button type="button" data-speech-reject="1">Recusar</button>';
+    el.prepend(banner);
+  }
+  state.subscribe("speechProposal", (proposal) => {
+    paintSpeechDiff(proposal);
+    paintProposalBanner(state.get("project"), proposal);
+  });
+
   async function submitCorrection(text) {
     const p = state.get("project");
     if (!p) return;
@@ -691,6 +819,10 @@ export function mountTexto({ state, api, player }) {
     const p = state.get("project");
     if (!p) return;
     const { sceneAction, scene } = btn.dataset;
+    if (sceneAction === "ajustar") {
+      openSpeechDialog(scene);
+      return;
+    }
     if (sceneAction === "delete") {
       await api.call("/project/edit", {
         method: "POST",
@@ -719,6 +851,20 @@ export function mountTexto({ state, api, player }) {
     const importCta = ev.target.closest("[data-empty-import]");
     if (importCta && el.contains(importCta)) {
       document.getElementById("filePicker")?.click();
+      return;
+    }
+    const speechAction = ev.target.closest("[data-speech-apply],[data-speech-reject]");
+    if (speechAction && el.contains(speechAction)) {
+      const proposal = state.get("speechProposal");
+      const p = state.get("project");
+      if (proposal && p) {
+        void api.call(proposal && speechAction.hasAttribute("data-speech-apply")
+          ? "/project/speech-accept" : "/project/speech-reject", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+          label: speechAction.hasAttribute("data-speech-apply") ? "Aplicando ajuste…" : "Recusando proposta…",
+        });
+      }
       return;
     }
     const sceneBtn = ev.target.closest("[data-scene-action]");
