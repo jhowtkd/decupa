@@ -6,6 +6,7 @@ import { inspectArtifact, publishAtomic } from "@decupa/cache";
 import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { verifySourceIdentity } from "./media.ts";
+import { mediaWork } from "./media-work.ts";
 import { pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
@@ -107,6 +108,8 @@ export function toEngineTimeline(a: Assembly): object {
   return { project, assets, tracks, output_canvas, sequence: output_canvas };
 }
 
+const RENDERER_VERSION = 2;
+
 export function previewIdentity(assembly: Assembly, profile: HardwareProfile = "software"): string {
   const valid = validateAssembly(assembly);
   return createHash("sha256")
@@ -121,8 +124,29 @@ export function previewIdentity(assembly: Assembly, profile: HardwareProfile = "
       })),
       tracks: valid.tracks,
       profile,
+      rendererVersion: RENDERER_VERSION,
     }))
     .digest("hex");
+}
+
+/**
+ * Lê o relatório do motor na saída do adaptador. Quando o hardware falha e o
+ * motor repete em software, o fallback nunca é escondido: o cache passa a ser
+ * identificado como software. Saída sem JSON (fakes, versões antigas) mantém
+ * o perfil pedido.
+ */
+export function motorFellBack(stdout: string): boolean {
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as { data?: { fallback?: unknown } };
+      if (parsed?.data?.fallback === true) return true;
+    } catch {
+      // Linha JSON parcial ou de outro emissor: ignora e segue.
+    }
+  }
+  return false;
 }
 
 type PreviewRecord = { sha256: string; profile: HardwareProfile };
@@ -131,7 +155,7 @@ export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
-  opts: { profile?: HardwareProfile; detectHardware?: boolean } = {},
+  opts: { profile?: HardwareProfile; detectHardware?: boolean; signal?: AbortSignal } = {},
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
@@ -142,20 +166,22 @@ export async function renderAssembly(
   if (opts.detectHardware && opts.profile == null) {
     const source = valid.sources.find((item) => item.hasVideo) ?? valid.sources[0];
     if (source) {
-      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec);
+      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec, {
+        signal: opts.signal,
+      });
     }
   }
-  const key = previewIdentity(valid, profile);
-  const cacheDir = join(outDir, "preview-cache", key);
-  const cachedMp4 = join(cacheDir, "reference.mp4");
-  const sidecar = join(cacheDir, "preview.json");
+  const requestKey = previewIdentity(valid, profile);
+  const requestCacheDir = join(outDir, "preview-cache", requestKey);
+  const requestCachedMp4 = join(requestCacheDir, "reference.mp4");
+  const requestSidecar = join(requestCacheDir, "preview.json");
   const dest = join(outDir, `rev-${valid.revision}`, "reference.mp4");
-  const cached = await inspectArtifact(sidecar);
+  const cached = await inspectArtifact(requestSidecar);
   if (cached.status === "ready") {
-    const info = await probe(cachedMp4).catch(() => null);
+    const info = await probe(requestCachedMp4).catch(() => null);
     if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0) {
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(cachedMp4, dest);
+      await copyFile(requestCachedMp4, dest);
       return dest;
     }
   }
@@ -171,19 +197,25 @@ export async function renderAssembly(
 
   try {
     const { encoder, hwaccel } = encoderFor(profile);
-    const result = await exec.run({
-      command: "python3",
-      args: [
-        RENDER_SCRIPT,
-        "--timeline", timelinePath,
-        "--out", outPath,
-        "--work", work,
-        "--encoder", encoder,
-        ...(hwaccel ? ["--hwaccel", hwaccel] : []),
-      ],
-      cwd: work,
-      env: { CLAUDE_PROJECT_DIR: work },
-    });
+    // Só o exec pesado entra na fila (sem chave: cada chamada roda a sua);
+    // a detecção acima já liberou o slot. Cancelamento verificado ao sair.
+    const result = await mediaWork.run(async () => {
+      opts.signal?.throwIfAborted();
+      return exec.run({
+        command: "python3",
+        args: [
+          RENDER_SCRIPT,
+          "--timeline", timelinePath,
+          "--out", outPath,
+          "--work", work,
+          "--encoder", encoder,
+          ...(hwaccel ? ["--hwaccel", hwaccel] : []),
+        ],
+        cwd: work,
+        env: { CLAUDE_PROJECT_DIR: work },
+        signal: opts.signal,
+      });
+    }, opts.signal ? { signal: opts.signal } : undefined);
     if (result.code !== 0) {
       const detail = (result.stdout + result.stderr).trim().slice(0, 1500);
       throw new Error(`render falhou (código ${result.code}): ${detail || "sem saída"}`);
@@ -215,11 +247,17 @@ export async function renderAssembly(
       throw err;
     }
     await rename(tmp, dest);
+    // Fallback explícito do motor: o cache é identificado como software,
+    // nunca como o perfil de hardware pedido.
+    const effectiveProfile = motorFellBack(result.stdout) ? "software" : profile;
+    const cacheDir = join(outDir, "preview-cache", previewIdentity(valid, effectiveProfile));
+    const cachedMp4 = join(cacheDir, "reference.mp4");
+    const sidecar = join(cacheDir, "preview.json");
     await mkdir(cacheDir, { recursive: true });
     await copyFile(dest, cachedMp4);
     await publishAtomic(sidecar, `${JSON.stringify({
       sha256: await hashFile(dest),
-      profile,
+      profile: effectiveProfile,
     } satisfies PreviewRecord)}\n`);
     // Poda best-effort de derivados antigos (retention.ts): nunca falha o
     // render — erro é silenciosamente ignorado (retorno descartado).

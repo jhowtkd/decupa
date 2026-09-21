@@ -117,49 +117,16 @@ it("proposta do modelo só entra por ID de fala existente", async () => {
   expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
 });
 
-it("hybrid TypeSafe não intercepta a geração de cenas no provedor atual", async () => {
-  const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { bootProjectDecision } = await import("./decision-boot.ts");
-  const dir = await mkdtemp(join(tmpdir(), "scenes-typesafe-"));
-  await mkdir(join(dir, ".decupa"), { recursive: true });
-  await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify({ mode: "hybrid" }), "utf8");
-  let typeSafeCalls = 0;
-  const fetchImpl = (async () => {
-    typeSafeCalls += 1;
-    return new Response("{}", { status: 200 });
-  }) as typeof fetch;
-  await bootProjectDecision({
-    projectDir: dir,
-    env: { TYPESAFE_API_KEY: "sk-secret", DECUPA_TYPESAFE: "1" },
-    fetchImpl,
+it("Jev decide depois da geração e falha não repete o gerador", async () => {
+  const p=project();p.analyses[0]!.speech.push({id:"a:u002",sourceId:"a",start:2,end:3,text:"fechamento"});
+  let generations=0, decisions=0;
+  const result=await proposeScenes(p,"ajustar",new AbortController().signal,{
+    send:async()=>{generations++;return JSON.stringify({scenes:[{id:"s",speechIds:["a:u001","a:u002"]}],changedSceneIds:["s"],cutCandidates:[{sceneId:"s",speechId:"a:u001",reason:"repetição"}],decisionReport:{status:"inventado"}});},
+    decision:{mode:"hybrid",model:"test",client:{decide:async req=>{decisions++;expect(JSON.stringify(req.state)).toContain("ajustar");throw Error("sk-secret");}}},
   });
-  const afterBoot = typeSafeCalls;
-  const p = project();
-  let providerCalls = 0;
-  const proposal = await proposeScenes(p, "abrir", new AbortController().signal, {
-    send: async () => {
-      providerCalls += 1;
-      return JSON.stringify({
-        id: "p1",
-        baseRevision: 1,
-        changedSceneIds: ["s1"],
-        explanation: "abertura",
-        scenes: [{
-          id: "s1",
-          objective: "abrir",
-          rationale: "tema",
-          speechIds: ["a:u001"],
-          support: [],
-          gaps: [],
-        }],
-      });
-    },
-  });
-  expect(providerCalls).toBe(1);
-  expect(typeSafeCalls).toBe(afterBoot);
-  expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
+  expect(generations).toBe(1);expect(decisions).toBe(1);
+  expect(result.scenes[0]!.takes).toHaveLength(2);
+  expect(result.decisionReport?.status).toBe("fallback");
 });
 
 it.each([undefined, 999, "1"])("vincula metadados do modelo ao snapshot: %s", async (modelRevision) => {
@@ -431,4 +398,46 @@ it("fragmento de ~1 frame na grade não é descartado na compilação", () => {
   expect(v1).toHaveLength(1);
   expect(v1[0]!.durationFrames).toBe(1);
   expect(v1[0]!.startFrame).toBe(0);
+});
+
+it("aceita texto fora do JSON sem outra chamada e ainda valida suas referências", async () => {
+  const p = project();
+  const raw = { changedSceneIds: ["s1"], scenes: [{ id: "s1", objective: "abrir", speechIds: ["a:u001"], support: [], gaps: [] }] };
+  let calls = 0;
+  const proposal = await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async () => { calls++; return JSON.stringify(raw) + (calls === 1 ? "\nExplicação fora do JSON" : ""); },
+  });
+  expect(calls).toBe(1);
+  expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
+});
+
+it("envia briefing salvo e pedido adicional sem apagar a duração", async () => {
+  let sent = "";
+  await proposeScenes(project(), "destacar abertura", new AbortController().signal, {
+    send: async content => {
+      sent = JSON.stringify(content);
+      return JSON.stringify({scenes: [], changedSceneIds: [], explanation: "sem proposta"});
+    },
+  });
+  expect(sent).toContain("abrir com o tema");
+  expect(sent).toContain("targetSeconds");
+  expect(sent).toContain("destacar abertura");
+});
+
+
+it("envia só evidências visuais existentes sem alterar o catálogo de b-roll", async () => {
+  const p = project();
+  p.scenes = [{id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
+    visualEvidenceIds: ["a:v0"], support: [], gaps: []}];
+  p.analyses[0]!.visual.push({...p.analyses[0]!.visual[0]!, id: "a:v1", text: "DESCRICAO_APENAS_BROLL"});
+  let sent = "";
+  await proposeScenes(p, "ajustar", new AbortController().signal, {
+    send: async content => {
+      sent = JSON.stringify(content);
+      return JSON.stringify({scenes: [{id: "s1"}], changedSceneIds: [], explanation: "preservar"});
+    },
+  });
+  expect(sent).toContain("rosto");
+  expect(sent).not.toContain("DESCRICAO_APENAS_BROLL");
+  expect(p.analyses[0]!.visual).toHaveLength(2);
 });

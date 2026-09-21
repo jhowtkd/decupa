@@ -5,11 +5,14 @@
 <title>decupa · limpar fala</title>
 <style>
   :root {
-    --bg-0: #111316; --bg-1: #181B20; --bg-2: #20242B;
-    --line: #2B3038; --line-strong: #3A414B;
-    --ink: #E9E7E2; --muted: #9AA0A9; --faint: #7d8590;
-    --accent: #F2C230; --on-accent: #1B1508;
-    --warn: #E0765C; --ok: #63BE97;
+    --bg: #111214; --panel: #191A1D; --panel2: #202226;
+    --line: #303238; --line-strong: #3A414B;
+    --ink: #F0F0ED; --muted: #AAADB5; --faint: #7d8590;
+    --accent: #F0CA6E; --on-accent: #1B1508;
+    --green: #9FC9B2; --red: #EFAAA0;
+    --bg-0: var(--bg); --bg-1: var(--panel); --bg-2: var(--panel2);
+    --ok: var(--green); --warn: var(--red);
+    --removed: #3a2a26; --protected: #5b84b8;
     --serif: Charter, "Iowan Old Style", Georgia, serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
     --sans-ui: system-ui, -apple-system, sans-serif;
@@ -22,6 +25,7 @@
   }
   header {
     position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 14px;
+    min-height: 56px; box-sizing: border-box;
     padding: 10px 16px; border-bottom: 1px solid var(--line);
     background: var(--bg-1); font-family: var(--sans-ui); font-size: 13px;
   }
@@ -48,8 +52,8 @@
   #export-menu[hidden] { display: none; }
   main { max-width: none; padding: 40px 24px 180px; }
   #prosa {
-    max-width: 34em; margin: 0 auto;
-    font-family: var(--serif); font-size: 20px; line-height: 1.65;
+    max-width: 38em; margin: 0 auto;
+    font-family: var(--serif); font-size: 18px; line-height: 1.7;
   }
   button {
     display: inline-flex; align-items: center; gap: 6px;

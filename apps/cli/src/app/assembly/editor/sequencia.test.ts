@@ -5,6 +5,8 @@ import {
   activeScene,
   blocksAt,
   bucketizeSegments,
+  captionCues,
+  formatTimecode,
   planSceneWave,
   rulerTicks,
   seekFromRatio,
@@ -270,4 +272,27 @@ it("planSceneWave resolve cada fonte uma unica vez, fora do loop de pixels", () 
   // 3 segmentos em 2 fontes, 300 colunas: o loop antigo chamaria get uma vez
   // por coluna coberta (~300); com cache, uma vez por fonte distinta.
   expect(gets).toBe(2);
+});
+
+it("formatTimecode em MM:SS.mmm", () => {
+  expect(formatTimecode(0)).toBe("00:00.000");
+  expect(formatTimecode(61.5)).toBe("01:01.500");
+  expect(formatTimecode(600)).toBe("10:00.000");
+  expect(formatTimecode(NaN)).toBe("00:00.000");
+  expect(formatTimecode(-3)).toBe("00:00.000");
+});
+
+it("captionCues só com dado real, normalizado e ordenado", () => {
+  expect(captionCues({})).toEqual([]);
+  expect(captionCues({ captions: null })).toEqual([]);
+  expect(captionCues({
+    captions: [
+      { start: 2, end: 3, text: "b" },
+      { start: 0, end: 1, text: "a" },
+      { start: 5, end: 4, text: "inválido" },
+    ],
+  })).toEqual([
+    { start: 0, end: 1, text: "a" },
+    { start: 2, end: 3, text: "b" },
+  ]);
 });

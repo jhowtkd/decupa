@@ -27,17 +27,14 @@ it("página servida contém o guia vazio em 3 passos com CTA", async () => {
   expect(empty.project.assembly.sources).toHaveLength(0);
 
   const page = await (await fetch(`${base}/`)).text();
-  expect(page).toContain("data-empty-guide");
-  expect(page.match(/<li>/g)).toHaveLength(3);
-  expect(page).toContain("Importe");
-  expect(page).toContain("Selecione e arrume o texto");
-  expect(page).toContain("Revise e entregue");
-  // Formatos espelham o accept do filePicker existente (sem formato novo).
+  // Guia sai do HTML estático: o shell entrega os mounts e o mountTexto
+  // renderiza o guia (emptyGuideHtml, testado em texto.test.ts).
+  expect(page).toContain('id="texto"');
+  expect(page).toContain('id="dropzone"');
   expect(page).toContain('accept="video/*,audio/*"');
-  expect(page).toContain("vídeo e áudio");
-  // CTA aciona o fluxo de importação existente (filePicker.click).
-  expect(page).toContain("data-empty-import");
   const testo = await (await fetch(`${base}/editor/texto.js`)).text();
+  expect(testo).toContain("data-empty-guide");
+  expect(testo).toContain("emptyGuideHtml");
   expect(testo).toContain('document.getElementById("filePicker")?.click()');
 });
 

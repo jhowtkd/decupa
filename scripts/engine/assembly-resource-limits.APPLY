@@ -1,0 +1,46 @@
+Patch do motor: encoder de hardware honrado no caminho de montagem (Task 1).
+
+Base: work/video-agent-kit-plugin @ d9fe300 + assembly-frame-boundaries.patch
+já aplicado (mcp/ve_tools/render.py em 29d6db7). Alterações WIP em
+condense.py/condense_lang.py não fazem parte deste patch.
+Arquivo: mcp/ve_tools/render.py (somente este)
+
+Conteúdo (Task 1):
+- video_output_args(encoder): args de saída por encoder (VideoToolbox e nvenc
+  com teto de bitrate, sem -crf; libx264 limitado); ValueError fora da
+  allowlist.
+- build_project_ffmpeg_command(plan, out, work, encoder, hwaccel): aplica
+  -hwaccel antes das entradas e o encoder pedido na saída.
+- render_project_timeline: passa encoder/hwaccel explicitamente; falha de
+  hardware repete uma única vez em software com workdir novo; relatório com
+  requested_encoder/effective_encoder/fallback.
+- render_preview: exige o encoder selecionado (não mais libx264 fixo);
+  caminho legado mantém exigência de libx264.
+
+Conteúdo (Task 2, cumulativo neste mesmo patch):
+- render_intervals(plan): partição em [start, end) por bordas V1/V2,
+  subdividida até 5s; slice_render_plan recorta com tempos locais e rejeita
+  sobreposição além de V1/V2.
+- _render_segmented_video: trechos sequenciais -an com ≤2 entradas cada,
+  concat demuxer -c:v copy; _mux_global_audio mistura beds do plano cheio
+  uma única vez e anexa com -c:v copy.
+- build_project_ffmpeg_command(..., include_audio): -threads 2 por entrada,
+  -filter_complex_threads 1; render_audio_bed com os mesmos limites.
+
+Aplicar (sem executar setup-engine.sh):
+  cd work/video-agent-kit-plugin
+  git apply --check ../../scripts/engine/assembly-resource-limits.patch
+  git apply ../../scripts/engine/assembly-resource-limits.patch
+
+Conflito: o git apply aborta sem tocar o worktree — não rodar checkout,
+reset nem restore. Resolver à mão ou pedir ajuda; nunca descartar WIP.
+
+Reverter (somente este patch, preservando o restante do WIP): não existe
+reversão automática segura sobre WIP misto — restaurar o arquivo a partir do
+snapshot registrado antes da aplicação.
+
+Verificar:
+  python3 -m unittest discover -s scripts -p 'test_render_resources.py'
+  Esperado: OK (test_encoder).
+  VE_PLUGIN_ROOT="$PWD/work/video-agent-kit-plugin" python3 /tmp/vt-motor-smoke.py
+  Esperado: exit 0, MOTOR_VT_OK (requer ffmpeg com h264_videotoolbox).

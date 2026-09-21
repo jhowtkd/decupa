@@ -79,6 +79,7 @@ export type Scene = {
  * correct é overlay de grafia e não move a seleção de mídia.
  */
 export type EditAction =
+  | { type: "set-support"; sceneId: string; support: Scene["support"] }
   | { type: "remove" | "restore" | "protect" | "unprotect"; sceneId: string; takeId: string; wordIds: string[] }
   | { type: "correct"; sourceId: string; start: number; end: number; text: string }
   | { type: "include"; sceneId: string; sourceId: string; wordIds: string[] }
@@ -156,7 +157,18 @@ export type Analysis = {
   visualCoverage: VisualCoverage;
 };
 
+export type DecisionReport = {
+  mode: "off" | "observe" | "hybrid";
+  status: "not-run" | "completed" | "fallback";
+  model: string | null;
+  elapsedMs: number;
+  reason?: string;
+  cuts: {id:string; sceneId:string; takeId:string; applied:boolean; score:number|null}[];
+  supports?: {sceneId:string; candidateId:string|null; outcome:"selected"|"none"|"fallback"; reason:string}[];
+};
+
 export type Proposal = {
+  decisionReport?: DecisionReport;
   id: string;
   baseRevision: number;
   scenes: Scene[];

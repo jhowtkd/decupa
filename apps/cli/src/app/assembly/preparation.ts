@@ -1,3 +1,4 @@
+import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { hashFile } from "@decupa/media";
@@ -8,7 +9,7 @@ import { describeSource } from "./model.ts";
 import { renderAssembly } from "./render.ts";
 import { applyProposal, recordPreview } from "./revisions.ts";
 import { proposeScenes } from "./scenes.ts";
-import { loadProject, mergeAnalyses, saveProject } from "./store.ts";
+import { loadProject, mergeAnalyses, saveProject, writeHistorySnapshot } from "./store.ts";
 import { visualCoverage } from "./visual.ts";
 import { buildPeaks, peaksPath } from "./waveform.ts";
 import type { Preparation, PreviewArtifact, Project, Source } from "./types.ts";
@@ -24,9 +25,12 @@ export type PreparationRequest = {
 
 export type ModelTransport = {
   send(content: unknown[], signal?: AbortSignal): Promise<string>;
+  model?: string;
+  providerKey?: string;
 };
 
 export type PreparationDeps = {
+  decision?: AssemblyDecisionContext;
   exec: Executor;
   proposeSend?: ModelTransport["send"];
   describeClient?: ModelTransport;
@@ -131,8 +135,9 @@ async function renderPreview(
   dir: string,
   project: Project,
   exec: Executor,
+  signal?: AbortSignal,
 ): Promise<PreviewArtifact> {
-  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true });
+  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true, signal });
   return {
     revision: project.revision,
     assemblySha256: createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),
@@ -304,7 +309,7 @@ export async function runPreparation(
       const atStage = async (stage: Preparation["stage"]): Promise<void> => {
         await save((p) => ({
           ...p,
-          preparation: p.preparation ? { ...p.preparation, stage } : p.preparation,
+          preparation: p.preparation ? { ...p.preparation, stage, note: undefined } : p.preparation,
         }));
       };
       const markSource = async (
@@ -321,6 +326,7 @@ export async function runPreparation(
         const imageJobs: Promise<void>[] = [];
         for (const source of targets) {
           checkAlive();
+          await markSource(source.id, { media: "running" });
           try {
             await verifySourceIdentity(source);
             await markSource(source.id, { media: "ready" });
@@ -353,6 +359,7 @@ export async function runPreparation(
         for (const source of targets) {
           checkAlive();
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
+          await markSource(source.id, { audio: "running" });
           try {
             const analysis = await analyzeSource(source, dir, deps.exec, {
               signal,
@@ -408,6 +415,7 @@ export async function runPreparation(
             continue;
           }
           if (!deps.describeClient) continue;
+          await markSource(source.id, { visual: "running", error: undefined });
           try {
             const spans = await describeSource(source, dir, signal, {
               client: deps.describeClient,
@@ -494,7 +502,10 @@ export async function runPreparation(
         checkAlive();
         let proposal;
         try {
-          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend! });
+          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend!, decision: deps.decision, onDecision: async (note) => {
+            checkAlive();
+            await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
+          } });
         } catch (err) {
           checkAlive();
           return await markTerminal(
@@ -504,6 +515,8 @@ export async function runPreparation(
         }
         checkAlive();
         try {
+          await writeHistorySnapshot(dir, current);
+          checkAlive();
           await saveProject(dir, current.revision, (p) =>
             p.preparation?.id === id ? applyProposal(p, proposal) : p);
           current = await loadProject(dir);
@@ -520,7 +533,7 @@ export async function runPreparation(
       await atStage("preview");
       checkAlive();
       try {
-        const artifact = await renderPreview(dir, current, deps.exec);
+        const artifact = await renderPreview(dir, current, deps.exec, signal);
         checkAlive();
         await save((p) => recordPreview(p, artifact));
       } catch (err) {

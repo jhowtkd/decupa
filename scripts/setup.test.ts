@@ -22,8 +22,9 @@ it("não altera motor existente incompatível", async () => {
   await mkdir(engine, { recursive: true });
   execFileSync("git", ["init", engine]);
   await writeFile(join(engine, "user.txt"), "preservar");
-  const { installEngine } = await import("./setup.mjs");
+  const { installEngine, installEngineOrKeep } = await import("./setup.mjs");
   await expect(installEngine(root)).rejects.toThrow(/motor existente/);
+  await expect(installEngineOrKeep(root)).rejects.toThrow(/não é clone válido/);
   expect(await readFile(join(engine, "user.txt"), "utf8")).toBe("preservar");
 });
 
@@ -48,6 +49,9 @@ it("instala uma vez, repete e preserva alteração posterior", async () => {
   expect((await readFile(file, "utf8")).replace(/\r\n/g, "\n")).toBe("after\n");
   await writeFile(file, "my edit\n");
   await expect(installEngine(root, { pin, remote })).rejects.toThrow(/modificado/);
+  expect(await readFile(file, "utf8")).toBe("my edit\n");
+  const { installEngineOrKeep } = await import("./setup.mjs");
+  await expect(installEngineOrKeep(root, { pin, remote })).resolves.toBe("kept");
   expect(await readFile(file, "utf8")).toBe("my edit\n");
 });
 
@@ -148,4 +152,17 @@ it("preparo dos modelos é testado sem downloads nos sidecars", () => {
   for (const sidecar of ["speech", "vision"]) {
     execFileSync(python, ["-m", "unittest", "discover", "-s", `services/${sidecar}`, "-p", "test_*.py"], { cwd: process.cwd(), stdio: "pipe" });
   }
+});
+
+it("provision-provider resolve o módulo de credencial fora do workspace CLI", async () => {
+  const home = await mkdtemp(join(tmpdir(), "decupa-provision-home-"));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  for (const key of [
+    "DECUPA_COMPANY_API_KEY", "ZAI_API_KEY", "GEMINI_API_KEY", "MINIMAX_API_KEY",
+    "DECUPA_API_KEY", "TYPESAFE_API_KEY", "DECUPA_COMPANY_TYPESAFE_API_KEY",
+  ]) env[key] = "";
+  const stdout = execFileSync(process.execPath, [
+    "--experimental-strip-types", join(process.cwd(), "scripts/provision-provider.ts"),
+  ], { cwd: process.cwd(), env, encoding: "utf8" });
+  expect(stdout).toMatch(/Nenhuma chave de empresa/);
 });

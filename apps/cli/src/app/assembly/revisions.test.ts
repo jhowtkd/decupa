@@ -183,3 +183,25 @@ it("undo restaura cena e correção como revisão nova sem tocar permissões", (
   expect(undone.previewRevision).toBeNull();
   expect(undone.finalApprovedRevision).toBeNull();
 });
+
+it("set-support recompila V2 mantendo A1 e invalida aprovação",async()=>{
+  const {compileScenes}=await import("./scenes.ts");const p=projectWithTake();
+  p.analyses[0]!.visual=[{id:"b:v0",sourceId:"b",start:0,end:1,text:"público",confidence:"observed",tags:[]}];
+  p.assembly=compileScenes(p,p.scenes);p.finalApprovedRevision=p.revision;
+  const next=applyEdit(p,{type:"set-support",sceneId:"s1",support:[{visualId:"b:v0",offsetFrames:25,durationFrames:25}]});
+  expect(next.assembly.tracks.find(t=>t.name==="A1")).toEqual(p.assembly.tracks.find(t=>t.name==="A1"));
+  expect(next.assembly.tracks.find(t=>t.name==="V2")!.clips).toHaveLength(1);
+  expect(next.revision).toBe(p.revision+1);expect(next.finalApprovedRevision).toBeNull();
+  expect(applyEdit(next,{type:"set-support",sceneId:"s1",support:[]}).scenes[0]!.support).toEqual([]);
+});
+it.each(["id","excluded","audio-only","overlap","negative","zero","long","uncertain"])("set-support recusa %s sem mutar",kind=>{
+  const p=projectWithTake();p.analyses[0]!.visual=[{id:"b:v0",sourceId:"b",start:0,end:1,text:"público",confidence:"observed",tags:[]}];
+  const support=[{visualId:kind==="id"?"missing":"b:v0",offsetFrames:kind==="negative"?-1:25,durationFrames:kind==="zero"?0:kind==="long"?26:25}];
+  if(kind==="excluded")p.assembly.sources[1]!.included=false;
+  if(kind==="audio-only")p.assembly.sources[1]!.hasVideo=false;
+  if(kind==="uncertain")p.analyses[0]!.visual[0]!.confidence="uncertain";
+  if(kind==="overlap")support.push({...support[0]!});
+  const before=JSON.stringify(p);
+  expect(()=>applyEdit(p,{type:"set-support",sceneId:"s1",support})).toThrow();
+  expect(JSON.stringify(p)).toBe(before);
+});

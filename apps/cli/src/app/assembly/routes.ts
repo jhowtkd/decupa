@@ -1,3 +1,5 @@
+import { brollCandidates, candidateSupport } from "./broll.ts";
+import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -13,8 +15,8 @@ import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
-import { describeSource } from "./model.ts";
-import { ensurePlayback, verifySourceIdentity } from "./media.ts";
+import { describeSource, type VisualClient } from "./model.ts";
+import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
@@ -55,11 +57,12 @@ export type AssemblyOperation = {
 } | null;
 
 export type AssemblyDeps = {
+  decision?: AssemblyDecisionContext;
   exec: Executor;
   port: () => number;
   selectFn?: () => Promise<SelectResult>;
   proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
-  describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
+  describeClient?: VisualClient;
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
@@ -378,20 +381,38 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
+  const livePreviews = new Set<AbortController>();
   const select = deps.selectFn ?? selectLocalFiles;
 
   function snapshot() {
     return { operation };
   }
 
+  function abortOperations(): void {
+    controller?.abort();
+    for (const preview of livePreviews) preview.abort();
+  }
+
   function begin(stage: string, sourceId?: string): { gen: number; signal: AbortSignal } {
     cancelled = false;
-    controller?.abort();
+    abortOperations();
+    livePreviews.clear();
     if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
     controller = new AbortController();
     const gen = ++opGen;
     operation = { stage, sourceId };
     return { gen, signal: controller.signal };
+  }
+
+  // Prévia manual aguardada: controller próprio, sem derrubar a anterior —
+  // cada pedido completa (a fila de mídia serializa). /cancel aborta todas.
+  function beginPreview(): { gen: number; signal: AbortSignal; settle: () => void } {
+    cancelled = false;
+    const own = new AbortController();
+    livePreviews.add(own);
+    const gen = ++opGen;
+    operation = { stage: "rendering" };
+    return { gen, signal: own.signal, settle: () => { livePreviews.delete(own); } };
   }
 
   function stillCurrent(gen: number): boolean {
@@ -509,7 +530,18 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             void alignCorrectionJob(dir, correction.id, project.revision);
           }
         }
-        sendJson(res, { project, ...snapshot() });
+        let undoRevision: number | null = null;
+        if (project.revision > 0) {
+          const revision = project.revision - 1;
+          const exists = await stat(join(dir, "history", `rev-${revision}.json`)).then(() => true, error => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          });
+          if (exists) undoRevision = (await readHistorySnapshot(dir, revision)).revision;
+        }
+        const fps=project.assembly.fps.num/project.assembly.fps.den;
+        const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
+        sendJson(res, { project, undoRevision, brollCandidates: candidates, ...snapshot() });
         return true;
       }
 
@@ -542,7 +574,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const source = project.assembly.sources.find((item) => item.id === sourceId);
         if (!source) throw new HttpError(404, "fonte não cadastrada");
         try {
-          const { thumbnailPath } = await ensurePlayback(source, dir, deps.exec);
+          const thumbnailPath = await ensureThumbnail(source, dir, deps.exec);
           if (!thumbnailPath) throw new HttpError(404, "fonte sem miniatura (somente áudio)");
           await serveMedia(req, res, thumbnailPath, "image/jpeg");
         } catch (err) {
@@ -594,7 +626,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "cancel" && req.method === "POST") {
         cancelled = true;
-        controller?.abort();
+        abortOperations();
+        livePreviews.clear();
         if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
         sendJson(res, { ok: true, ...snapshot() });
@@ -914,11 +947,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
+          { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(releaseHold).then(
-          () => {
-            if (stillCurrent(gen)) operation = { stage: "ready" };
+          (result) => {
+            if (!stillCurrent(gen)) return;
+            const prep = result.preparation;
+            operation = prep?.status === "cancelled" ? { stage: "cancelled" }
+              : prep && prep.status !== "ready"
+                ? { stage: "error", error: prep.error || "Preparação incompleta. Confira os materiais e retome." }
+                : { stage: "ready" };
           },
           (err: unknown) => {
             if (stillCurrent(gen)) {
@@ -943,7 +981,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           const { gen, signal } = begin("proposing");
           const proposal = await proposeScenes(project, request, signal, {
-            send: deps.proposeSend,
+            send: deps.proposeSend, decision: deps.decision,
           });
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };
@@ -1046,30 +1084,34 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "preview" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const { gen } = begin("rendering");
-        const project = await mutate(baseRevision, async (project) => {
-          let reference: string;
-          try {
-            reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true });
-          } catch (err) {
-            // Sem isso a operação ficava presa em "rendering" e travava
-            // a atualização automática mesmo após o erro (R2).
-            if (stillCurrent(gen)) {
-              operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+        const { gen, signal, settle } = beginPreview();
+        try {
+          const project = await mutate(baseRevision, async (project) => {
+            let reference: string;
+            try {
+              reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true, signal });
+            } catch (err) {
+              // Sem isso a operação ficava presa em "rendering" e travava
+              // a atualização automática mesmo após o erro (R2).
+              if (stillCurrent(gen)) {
+                operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+              }
+              throw err;
             }
-            throw err;
-          }
-          if (!stillCurrent(gen)) return project;
-          operation = { stage: "ready" };
-          const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
-          return recordPreview(project, {
-            revision: project.revision,
-            assemblySha256,
-            relativePath: relative(dir, reference),
-            sha256: await hashFile(reference),
+            if (!stillCurrent(gen)) return project;
+            operation = { stage: "ready" };
+            const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
+            return recordPreview(project, {
+              revision: project.revision,
+              assemblySha256,
+              relativePath: relative(dir, reference),
+              sha256: await hashFile(reference),
+            });
           });
-        });
-        sendJson(res, { project, ...snapshot() });
+          sendJson(res, { project, ...snapshot() });
+        } finally {
+          settle();
+        }
         return true;
       }
 

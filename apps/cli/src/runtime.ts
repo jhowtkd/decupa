@@ -42,7 +42,8 @@ export function openBrowser(url: string): void {
  * `taskkill /PID <pid> /T /F` atua somente no PID criado aqui e ainda vivo —
  * nunca `/IM`, que mataria qualquer processo com o mesmo nome. No POSIX, o
  * filho é líder de grupo (spawn detached) e o SIGTERM vai para o grupo
- * inteiro; se o grupo não existir, tenta o PID direto.
+ * inteiro; se o grupo não existir, tenta o PID direto. Grupo que sobrevive
+ * recebe SIGKILL após 2s — nunca `pkill` global.
  */
 export function terminateTree(pid: number, platform = process.platform): void {
   if (platform === "win32") {
@@ -51,4 +52,13 @@ export function terminateTree(pid: number, platform = process.platform): void {
     return;
   }
   try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch { /* já saiu */ } }
+  const escalate = setTimeout(() => {
+    try {
+      process.kill(-pid, 0);
+    } catch {
+      return; // Árvore já saiu: nada a escalar.
+    }
+    try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* já saiu */ } }
+  }, 2000);
+  escalate.unref?.();
 }

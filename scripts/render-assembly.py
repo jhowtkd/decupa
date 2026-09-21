@@ -17,6 +17,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Perfis permitidos neste caminho: validado por allowlist, nunca interpolado
+# em shell (o motor recebe via argv). vaapi fica de fora porque o motor não
+# implementa o setup de device que ele exige.
+ALLOWED_ENCODERS = frozenset({"libx264", "h264_videotoolbox", "h264_nvenc"})
+ALLOWED_HWACCELS = frozenset({"", "videotoolbox"})
+
+
+def check_accel_args(encoder: str, hwaccel: str) -> str | None:
+    """Devolve a mensagem de erro quando encoder/hwaccel não é permitido."""
+    if encoder not in ALLOWED_ENCODERS:
+        return f"encoder não suportado neste caminho: {encoder}"
+    if hwaccel not in ALLOWED_HWACCELS:
+        return f"hwaccel não suportado neste caminho: {hwaccel}"
+    return None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -145,6 +160,10 @@ def result_failed(result) -> bool:
 
 def main() -> int:
     args = parse_args()
+    accel_error = check_accel_args(args.encoder, args.hwaccel)
+    if accel_error:
+        print(f"[ERROR] {accel_error}", file=sys.stderr)
+        return 2
     plugin_root = Path(os.environ.get("VE_PLUGIN_ROOT", REPO_ROOT / "work" / "video-agent-kit-plugin"))
     sys.path.insert(0, str(plugin_root / "mcp"))
     try:

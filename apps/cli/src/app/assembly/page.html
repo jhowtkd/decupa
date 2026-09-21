@@ -2,23 +2,43 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>decupa · montagem</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/page.css">
 </head>
 <body>
-<div id="rail" aria-label="Projeto"></div>
-<main id="texto" aria-label="Montagem"><div class="measure"><section data-empty-guide aria-label="Como começar">
-<h1>Monte seu vídeo em 3 passos</h1>
-<ol>
-<li><strong>Importe</strong> seus vídeos e áudios.</li>
-<li><strong>Selecione e arrume o texto</strong> para montar as cenas.</li>
-<li><strong>Revise e entregue</strong>: confira a prévia e exporte o resultado.</li>
-</ol>
-<p class="muted">Formatos aceitos: vídeo e áudio.</p>
-<p><button type="button" class="primary" data-empty-import>Importar mídia</button></p>
-<p class="muted">Ou arraste os arquivos para esta área.</p>
-</section></div></main>
-<aside id="contexto" aria-label="Contexto"></aside>
+<header id="topbar" aria-label="Projeto">
+  <strong class="brand"><span aria-hidden="true">▰</span> decupa</strong>
+  <span id="projectName" class="muted">montagem</span>
+  <span id="status" role="status" aria-live="polite">carregando…</span>
+  <span class="spacer"></span>
+  <button type="button" id="newProject" class="quiet">Novo projeto</button>
+  <button type="button" id="openBriefing" class="quiet">Briefing</button>
+  <button type="button" id="reviewAction" class="quiet">Revisar</button>
+  <button type="button" id="deliveryAction">Exportar</button>
+  <span id="primaryAction"></span>
+</header>
+<nav id="stages" aria-label="Etapas">
+  <button type="button" data-stage="materiais" aria-current="true"><small>01</small> Materiais</button>
+  <button type="button" data-stage="edicao"><small>02</small> Edição</button>
+  <button type="button" data-stage="revisao"><small>03</small> Revisão</button>
+  <button type="button" data-stage="entrega"><small>04</small> Entrega</button>
+</nav>
+<div id="tools" role="toolbar" aria-label="Ferramentas">
+  <button type="button" id="mediaTool" title="Materiais"><span aria-hidden="true">▱</span>Mídia</button>
+  <button type="button" data-tool="texto" aria-pressed="false" title="Mostrar/ocultar texto"><span aria-hidden="true">T</span>Texto</button>
+  <button type="button" id="inspectTool" title="Abrir inspetor"><span aria-hidden="true">☷</span>Inspetor</button>
+</div>
+<aside id="rail" aria-label="Materiais"></aside>
+<main id="center" aria-label="Bancada">
+  <section id="activity" aria-label="Andamento da montagem" hidden></section>
+  <section id="stage" aria-label="Prévia">
+    <video id="previewPlayer" controls preload="metadata"></video>
+  </section>
+  <section id="texto" aria-label="Texto" hidden></section>
+</main>
+<aside id="contexto" aria-label="Inspetor"></aside>
 <footer id="faixa" aria-label="Sequência"></footer>
 <div id="dropzone" hidden tabindex="0" role="button" aria-label="Enviar arquivos de mídia">
   Arraste arquivos para cá ou clique para escolher

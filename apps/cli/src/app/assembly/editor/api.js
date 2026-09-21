@@ -42,3 +42,25 @@ export function createApi({ onStatus } = {}) {
 
   return { call };
 }
+
+/** Um timer e uma consulta em voo, inclusive se refresh notificar o estado. */
+export function createProjectPoller({ refresh, isBusy, interval = 1000 }) {
+  let timer = null;
+  let inflight = false;
+  function schedule() {
+    if (timer !== null || inflight || !isBusy()) return;
+    timer = setTimeout(async () => {
+      timer = null;
+      inflight = true;
+      try {
+        await refresh();
+      } catch {
+        // O cliente já apresenta o erro; a consulta seguinte tenta reconectar.
+      } finally {
+        inflight = false;
+        schedule();
+      }
+    }, interval);
+  }
+  return { schedule };
+}

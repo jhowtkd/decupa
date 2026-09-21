@@ -1,12 +1,25 @@
-import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
-import { describeSource, VISUAL_PROMPT } from "./model.ts";
+import { describeSource, normalizeCompactSpans, sanitizeProviderKey, VISUAL_PROMPT, VISUAL_PROMPT_SPARSE, type VisualMetric } from "./model.ts";
 import { fixtureAssembly } from "./fixture.ts";
+
+/** Identidade fake: clientes injetados precisam dela para usar cache persistente. */
+const TEST_IDENTITY = { model: "test-model", providerKey: "test-provider" };
+
+async function findJsonFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) out.push(...await findJsonFiles(full));
+    else if (entry.name.endsWith(".json")) out.push(full);
+  }
+  return out;
+}
 
 async function speechSource(dir: string, durationSeconds = 3) {
   const path = join(dir, "fala.mp4");
@@ -186,6 +199,7 @@ it("segunda janela recebe frames distintos e soma a origem uma vez", async () =>
 /** Resposta com cobertura total da janela pedida, por texto distinto. */
 function fullWindowClient(counter: { calls: number }, failOn: { interval?: string }) {
   return {
+    ...TEST_IDENTITY,
     async send(content: unknown[]) {
       counter.calls += 1;
       const text = (content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text;
@@ -237,6 +251,7 @@ it("respostas complementares conservam ambos os trechos", async () => {
   let mode: "first" | "missing" = "first";
   let calls = 0;
   const client = {
+    ...TEST_IDENTITY,
     async send() {
       calls += 1;
       // Mesma posição (item 0) nas duas respostas: o ID posicional repete,
@@ -277,6 +292,7 @@ it("replay com artefato aquecido faz 0 chamadas de encode e de API", async () =>
   let api = 0;
   let encodes = 0;
   const client = {
+    ...TEST_IDENTITY,
     async send() {
       api += 1;
       return JSON.stringify({
@@ -331,4 +347,298 @@ it("resposta atrasada não altera revisão nova", async () => {
   });
   expect(calls).toBe(1);
   expect(spans[0]?.text).toBe("atual");
+});
+
+it("corrige uma resposta visual malformada sem pular a validação temporal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-repair-"));
+  const source = await speechSource(dir);
+  const requests: unknown[][] = [];
+  const client = { ...TEST_IDENTITY, async send(content: unknown[]) {
+    requests.push(content);
+    return requests.length === 1 ? '{"spans":[{"text":"aspas " quebradas"}]}'
+      : JSON.stringify({ spans: [{ start: 0, end: 3, text: "entrevista", confidence: "observed", tags: [] }] });
+  } };
+  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("não passou na validação") })]));
+  expect(spans[0]).toMatchObject({ start: 0, end: 3, text: "entrevista" });
+  await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
+  expect(requests).toHaveLength(2);
+});
+
+it("limita a correção visual a uma tentativa e recusa tempos fora da fonte", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-repair-"));
+  const source = await speechSource(dir);
+  let calls = 0;
+  const client = { async send() { calls++; return JSON.stringify({ spans: [{ start: 0, end: 999, text: "inválido", confidence: "observed" }] }); } };
+  await expect(describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor })).rejects.toThrow("termina depois da fonte");
+  expect(calls).toBe(2);
+});
+
+it("emite telemetria por fase e cache-hit na segunda execução", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-metrics-"));
+  const source = await speechSource(dir, 3);
+  const events: VisualMetric[] = [];
+  let clock = 0;
+  const client = {
+    ...TEST_IDENTITY,
+    async send() {
+      clock += 10;
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const deps = {
+    client,
+    exec: frameExecutor,
+    onMetric: (event: VisualMetric) => events.push(event),
+    now: () => clock,
+  };
+  await describeSource(source, dir, new AbortController().signal, deps);
+  await describeSource(source, dir, new AbortController().signal, deps);
+  expect(events.some((e) => e.phase === "request" && e.attempt === 1)).toBe(true);
+  expect(events.at(-1)?.outcome).toBe("cache-hit");
+  expect(JSON.stringify(events)).not.toContain("data:image");
+  expect(events.every((e) => e.elapsedMs >= 0 && e.queueMs >= 0)).toBe(true);
+  expect(events.every((e) => e.sourceId === "a")).toBe(true);
+});
+
+it("erro de transporte termina com evento error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-metrics-"));
+  const source = await speechSource(dir, 3);
+  const events: VisualMetric[] = [];
+  const client = {
+    async send(): Promise<string> { throw new Error("provedor falhou"); },
+  };
+  await expect(describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+    onMetric: (event: VisualMetric) => events.push(event),
+  })).rejects.toThrow(/provedor falhou/);
+  expect(events.some((e) => e.phase === "request" && e.outcome === "error")).toBe(true);
+  expect(JSON.stringify(events)).not.toContain("data:image");
+});
+
+it("cancelamento durante o envio termina cancelled", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-metrics-"));
+  const source = await speechSource(dir, 3);
+  const events: VisualMetric[] = [];
+  const ac = new AbortController();
+  const client = {
+    async send() {
+      ac.abort();
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  await expect(describeSource(source, dir, ac.signal, {
+    client,
+    exec: frameExecutor,
+    onMetric: (event: VisualMetric) => events.push(event),
+  })).rejects.toThrow();
+  expect(events.some((e) => e.outcome === "cancelled")).toBe(true);
+});
+
+it("resposta inválida seguida de válida gera duas tentativas medidas", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-metrics-"));
+  const source = await speechSource(dir, 3);
+  const events: VisualMetric[] = [];
+  let calls = 0;
+  const client = {
+    async send() {
+      calls += 1;
+      return calls === 1
+        ? '{"spans":[{"text":"aspas " quebradas"}]}'
+        : JSON.stringify({
+          spans: [{ start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+        });
+    },
+  };
+  await describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+    onMetric: (event: VisualMetric) => events.push(event),
+  });
+  expect(events.filter((e) => e.phase === "request").map((e) => e.attempt)).toEqual([1, 2]);
+});
+
+it("prompt esparso declara amostragem de 3s e exige honestidade por segundo", () => {
+  expect(VISUAL_PROMPT_SPARSE).toContain("a cada 3 segundos");
+  expect(VISUAL_PROMPT_SPARSE).not.toContain("1 fps");
+  expect(VISUAL_PROMPT_SPARSE).toContain('{"spans"');
+  expect(VISUAL_PROMPT_SPARSE).toContain("unavailable");
+});
+
+it("normaliza spans compactos em células de até 1s sem inventar cobertura", () => {
+  const span = {
+    id: "old", sourceId: "s", start: 19, end: 22.4, text: "Público na feira",
+    confidence: "observed" as const, tags: ["público"],
+  };
+  expect(normalizeCompactSpans([span]).map((s) => [s.start, s.end]))
+    .toEqual([[19, 20], [20, 21], [21, 22], [22, 22.4]]);
+  expect(normalizeCompactSpans([{ ...span, confidence: "uncertain" }])
+    .every((s) => s.confidence === "uncertain")).toBe(true);
+  // Lacuna na resposta permanece lacuna: nada preenche [1, 2).
+  const gappy = normalizeCompactSpans([
+    { ...span, start: 0, end: 1 },
+    { ...span, start: 2, end: 3 },
+  ]);
+  expect(gappy.map((s) => [s.start, s.end])).toEqual([[0, 1], [2, 3]]);
+});
+
+it("perfil compact preserva ação breve entre trechos estáticos", async () => {
+  const respond = () => JSON.stringify({
+    spans: [
+      { id: "local-0", start: 0, end: 4, text: "entrevista estática", confidence: "observed", tags: [] },
+      { id: "local-1", start: 4, end: 5, text: "levanta a placa", confidence: "observed", tags: [] },
+      { id: "local-2", start: 5, end: 6, text: "entrevista estática", confidence: "observed", tags: [] },
+    ],
+  });
+  const prompts: string[] = [];
+  const client = {
+    async send(content: unknown[]) {
+      prompts.push((content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text);
+      return respond();
+    },
+  };
+  // Diretórios separados: até a Task 3 o perfil não compõe a chave de cache.
+  const compactDir = await mkdtemp(join(tmpdir(), "assembly-model-compact-"));
+  const compactSource = await speechSource(compactDir, 6);
+  const spans = await describeSource(compactSource, compactDir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+    profile: "compact",
+  });
+  expect(spans.map((s) => [s.start, s.end, s.text])).toEqual([
+    [0, 1, "entrevista estática"],
+    [1, 2, "entrevista estática"],
+    [2, 3, "entrevista estática"],
+    [3, 4, "entrevista estática"],
+    [4, 5, "levanta a placa"],
+    [5, 6, "entrevista estática"],
+  ]);
+  expect(prompts.join("\n")).toContain("Agrupe intervalos consecutivos");
+  // Baseline intacto: sem perfil, intervalos multi-segundo não são fatiados.
+  const baselineDir = await mkdtemp(join(tmpdir(), "assembly-model-baseline-"));
+  const baselineSource = await speechSource(baselineDir, 6);
+  const baseline = await describeSource(baselineSource, baselineDir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+  });
+  expect(baseline.map((s) => [s.start, s.end])).toEqual([[0, 4], [4, 5], [5, 6]]);
+  expect(prompts.join("\n")).toContain("Descreva o que é observável por segundo");
+});
+
+it("janela final fracionária publica só o trecho solicitado", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-frac-"));
+  const source = await speechSource(dir, 20.4);
+  const client = {
+    async send(content: unknown[]) {
+      const text = (content.find((part) => (part as { type?: string }).type === "text") as { text: string }).text;
+      const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(text);
+      const start = match ? Number(match[1]) : 0;
+      const end = match ? Number(match[2]) : 0;
+      const fetchStart = start === 0 ? 0 : start - 1;
+      return JSON.stringify({
+        spans: [{
+          id: `local-${start}`, start: 0, end: end - fetchStart,
+          text: `janela-${start}`, confidence: "observed", tags: [],
+        }],
+      });
+    },
+  };
+  const spans = await describeSource(source, dir, new AbortController().signal, {
+    client,
+    exec: frameExecutor,
+    profile: "compact",
+  });
+  // Janela {start:20, end:20.4, fetchStart:19}: origem somada uma vez, fim
+  // fracionário preservado, sem inventar [20,21].
+  const tail = spans.filter((s) => s.start >= 20);
+  expect(tail).toHaveLength(1);
+  expect(tail[0]?.start).toBe(20);
+  expect(tail[0]?.end).toBeCloseTo(20.4, 9);
+  expect(spans.every((s) => s.end <= 20.4 + 1e-9)).toBe(true);
+});
+
+it("isola cache por modelo, provedor e perfil", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-identity-"));
+  const source = await speechSource(dir, 3);
+  let calls = 0;
+  const send = async () => {
+    calls += 1;
+    return JSON.stringify({
+      spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+    });
+  };
+  const run = (identity: { model: string; providerKey: string }, profile?: "baseline" | "compact") =>
+    describeSource(source, dir, new AbortController().signal, {
+      client: { ...identity, send },
+      exec: frameExecutor,
+      ...(profile ? { profile } : {}),
+    });
+  const same = { model: "m1", providerKey: "https://a.example" };
+  await run(same);
+  await run(same);
+  expect(calls).toBe(1);
+  const newModel = { model: "m2", providerKey: "https://a.example" };
+  await run(newModel);
+  await run(newModel);
+  expect(calls).toBe(2);
+  const newProvider = { model: "m2", providerKey: "https://b.example" };
+  await run(newProvider);
+  await run(newProvider);
+  expect(calls).toBe(3);
+  await run(newProvider, "compact");
+  await run(newProvider, "compact");
+  expect(calls).toBe(4);
+});
+
+it("chave de provedor sanitizada nunca leva credencial ao cache", async () => {
+  expect(sanitizeProviderKey("https://user:pass@api.example.com/v1?key=sk-secret#frag"))
+    .toBe("https://api.example.com/v1");
+  expect(sanitizeProviderKey("test-provider")).toBe("test-provider");
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-hygiene-"));
+  const source = await speechSource(dir, 3);
+  const client = {
+    model: "m1",
+    providerKey: "https://user:pass@api.example.com/v1?key=sk-secret",
+    async send() {
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
+  const envelopes = (await findJsonFiles(dir)).filter((file) => file.includes("w-0-3"));
+  expect(envelopes).toHaveLength(1);
+  const text = await readFile(envelopes[0]!, "utf8");
+  expect(text).toContain("https://api.example.com/v1");
+  expect(text).not.toContain("sk-secret");
+  expect(text).not.toContain("user:pass");
+  expect(text).not.toContain("apiKey");
+  expect(JSON.parse(text).identityKey).toMatch(/^[0-9a-f]{64}$/);
+});
+
+it("cliente sem identidade funciona sem ler ou escrever cache persistente", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-noid-"));
+  const source = await speechSource(dir, 3);
+  let calls = 0;
+  const client = {
+    async send() {
+      calls += 1;
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 3, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const deps = { client, exec: frameExecutor };
+  const first = await describeSource(source, dir, new AbortController().signal, deps);
+  const second = await describeSource(source, dir, new AbortController().signal, deps);
+  expect(calls).toBe(2);
+  expect(second).toEqual(first);
+  const envelopes = (await findJsonFiles(dir)).filter((file) => file.includes("w-"));
+  expect(envelopes).toEqual([]);
 });

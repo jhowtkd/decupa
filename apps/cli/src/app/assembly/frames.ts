@@ -22,6 +22,7 @@ export async function extractVisualFrames(
   window: VisualWindow,
   cacheDir: string,
   exec: Executor,
+  opts?: { signal?: AbortSignal },
 ): Promise<VisualFrame[]> {
   // Diretório efêmero por janela: o `finally` garante que o cache final fica limpo.
   const tempDir = await mkdtemp(join(cacheDir, "frames-"));
@@ -38,6 +39,7 @@ export async function extractVisualFrames(
         "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
         "-an", "-q:v", "5", pattern,
       ],
+      signal: opts?.signal,
     });
     if (result.code !== 0) {
       throw new Error(

@@ -2,9 +2,10 @@ import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
+import { analysisClientOptions, envWithStoredTypeSafe, installCompanyCredentials, readCredentials } from "@decupa/triage";
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
-import { readFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -24,7 +25,8 @@ import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
 import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
-import { bootProjectDecision } from "./assembly/decision-boot.ts";
+import type { VisualClient } from "./assembly/model.ts";
+import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -146,7 +148,7 @@ export async function startApp(opts: {
   }) => Promise<{ keepList: string }>;
   selectFn?: AssemblyDeps["selectFn"];
   proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
-  describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
+  describeClient?: VisualClient;
   /** Autorização explícita; desligada por padrão. Não dispara chamada sozinha. */
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
@@ -203,6 +205,7 @@ async function startCleanupApp(opts: {
   executor?: Executor;
   autoStart?: boolean;
   workDir?: string;
+  env?: Record<string, string | undefined>;
   speech?: IngestSpeech;
   triageFn?: (opts: {
     indexPath: string;
@@ -212,6 +215,9 @@ async function startCleanupApp(opts: {
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
+  if (opts.providerConfigDir) {
+    await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
+  }
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider;
@@ -628,13 +634,28 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
+  if (opts.providerConfigDir) {
+    await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
+  }
   const dir = resolve(opts.projectDir);
-  await bootProjectDecision({
-    projectDir: dir,
-    env: opts.env,
-    fetchImpl: opts.fetchImpl,
-    log: opts.decisionLog,
-  });
+  const stored = await readCredentials(dir).catch(() => null)
+    ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null);
+  // Identidade do cliente visual resolvida sem rede, das mesmas entradas do
+  // transporte: o cache visual isola por configuração efetiva. Resolvida na
+  // subida; troca de provedor no meio da sessão exige reinício (a primeira
+  // chamada paga falharia sem chave, como antes).
+  let visualIdentity: Pick<VisualClient, "model" | "providerKey"> = {};
+  try {
+    const resolved = analysisClientOptions({ stored, env: opts.env ?? process.env });
+    visualIdentity = { model: resolved.model, providerKey: resolved.baseUrl };
+  } catch {
+    // Sem chave: sem identidade, sem cache persistente.
+  }
+  let decisionConfig: unknown = null;
+  try { decisionConfig = JSON.parse(await readFile(join(dir, ".decupa", "decision.json"), "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const decision = createAssemblyDecisionContext(decisionConfig, envWithStoredTypeSafe(opts.env ?? process.env, stored), opts.fetchImpl);
+  opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
   const exec = opts.executor ?? new SpawnExecutor();
   const { speech, closeSpeech } = attachResidentSpeech({
     dir,
@@ -648,16 +669,18 @@ async function startAssemblyApp(opts: {
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
   const runtime = createAssemblyRuntime(dir, {
+    decision,
     exec,
     port: () => boundPort,
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
     proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir) : undefined),
-    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir) } : undefined),
+    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir), ...visualIdentity } : undefined),
     speech,
   });
   const project = await runtime.ensureProject(opts.inputs);
+  const newProjects: AppHandle[] = [];
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
@@ -667,6 +690,16 @@ async function startAssemblyApp(opts: {
         return;
       }
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir)) return;
+      if (url.pathname === "/project/new" && req.method === "POST") {
+        const nextDir = await mkdtemp(join(dirname(dir), "projeto-"));
+        const next = await startAssemblyApp({
+          ...opts, projectDir: nextDir, inputs: undefined, port: 0,
+        });
+        newProjects.push(next);
+        sendJson(res, { url: `http://127.0.0.1:${next.port}/` }, 201);
+        return;
+      }
+
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -707,6 +740,7 @@ async function startAssemblyApp(opts: {
     port, address: "127.0.0.1", jobId: project.id,
     close: async () => {
       if (exec instanceof SpawnExecutor) exec.killAll();
+      await Promise.all(newProjects.map(app => app.close()));
       await closeSpeech();
       await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
     },

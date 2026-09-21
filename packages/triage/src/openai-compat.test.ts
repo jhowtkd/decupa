@@ -83,3 +83,22 @@ describe("OpenAiCompatClient", () => {
     await expect(client.send(["oi"])).rejects.toThrow(/tempo esgotado/);
   });
 });
+
+
+it("limita raciocínio do GLM Flash apenas em chamadas de texto", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    payloads.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify(body({content: '{}'})));
+  }) as typeof fetch;
+  for (const [model, content] of [
+    ["glm-5.3-flash", [{type: "text", text: "montar"}]],
+    ["glm-5.3-flash", [{type: "image_url", image_url: {url: "test"}}]],
+    ["other", [{type: "text", text: "montar"}]],
+  ] as const) {
+    await new OpenAiCompatClient({apiKey: "k", baseUrl: "https://example.test", model, fetchImpl}).send([...content]);
+  }
+  expect(payloads[0]).toHaveProperty("reasoning_effort", "low");
+  expect(payloads[1]).not.toHaveProperty("reasoning_effort");
+  expect(payloads[2]).not.toHaveProperty("reasoning_effort");
+});

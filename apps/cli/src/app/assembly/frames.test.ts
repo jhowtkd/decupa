@@ -60,3 +60,21 @@ it("não transforma falha do FFmpeg em análise vazia", async () => {
   await expect(extractVisualFrames(source, window, cacheDir, exec))
     .rejects.toThrow(/extração de frames/);
 });
+
+it("propaga o sinal de cancelamento ao executor do FFmpeg", async () => {
+  const { source, cacheDir } = await sourceInTemp();
+  await mkdir(cacheDir, { recursive: true });
+  const seen: ExecCall[] = [];
+  const exec: Executor = {
+    async run(call) {
+      seen.push(call);
+      const pattern = call.args.at(-1)!;
+      await mkdir(dirname(pattern), { recursive: true });
+      await writeFile(pattern.replace("%03d", "001"), "jpeg-a");
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const ac = new AbortController();
+  await extractVisualFrames(source, { start: 0, end: 1, fetchStart: 0 }, cacheDir, exec, { signal: ac.signal });
+  expect(seen[0]?.signal).toBe(ac.signal);
+});

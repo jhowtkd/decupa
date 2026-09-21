@@ -78,6 +78,30 @@ export async function installEngine(root, { pin = PIN, remote = REMOTE } = {}) {
   await run('git', ['-C', engine, 'apply', patch], root);
 }
 
+/**
+ * Instala o motor. Se ele já existe e só está modificado, preserva e o
+ * setup segue (Python, modelos, credencial). `--keep-engine` também
+ * preserva clone em outra revisão; clone inválido continua fatal.
+ */
+export async function installEngineOrKeep(root, { keepEngine = false, ...opts } = {}) {
+  try {
+    await installEngine(root, opts);
+    return 'installed';
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    const modified = /motor existente modificado/.test(msg);
+    const existing = /motor existente/.test(msg);
+    if (existing && (modified || keepEngine)) {
+      console.log(msg);
+      console.log(modified
+        ? 'Motor existente modificado; preservado. O restante do setup continua.'
+        : 'Motor existente preservado (--keep-engine).');
+      return 'kept';
+    }
+    throw error;
+  }
+}
+
 const step = name => console.log(`\n== ${name} ==`);
 
 /**
@@ -122,7 +146,7 @@ export async function prepareModels(root, execute = run) {
   await execute('uv', ['run', '--no-sync', 'python', 'visual_index.py', '--prepare-models'], join(root, 'services/vision'));
 }
 
-export async function setup(root) {
+export async function setup(root, { keepEngine = false } = {}) {
   step('Verificando pré-requisitos');
   const missing = [];
   const [major, minor] = process.versions.node.split('.').map(Number);
@@ -153,7 +177,7 @@ export async function setup(root) {
   await run(process.execPath, [pnpm, 'install', '--frozen-lockfile'], root);
 
   step('Instalando o motor de condense pinado');
-  await installEngine(root);
+  await installEngineOrKeep(root, { keepEngine });
 
   step('Instalando Python 3.11 e 3.12 via uv');
   await run('uv', ['python', 'install', '3.11', '3.12'], root);
@@ -194,6 +218,10 @@ export async function setup(root) {
   await run(process.execPath, ['--experimental-strip-types', join(root, 'apps/cli/src/index.ts'), 'doctor', '--local'], root);
 
   await prepareModels(root);
+
+  step('Gravando credencial da empresa, se o ambiente tiver chave');
+  await run(process.execPath, ['--experimental-strip-types', join(root, 'scripts/provision-provider.ts')], root);
+
   console.log('Setup local concluído. Modelos padrão de fala PT-BR e visão instalados e carregados.');
 }
 
@@ -204,12 +232,16 @@ const invokedAs = process.argv[1]
   : undefined;
 if (invokedAs && invokedAs === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const unknown = argv.filter(arg => arg !== '--engine-only');
+  const unknown = argv.filter(arg => arg !== '--engine-only' && arg !== '--keep-engine');
   if (unknown.length) {
-    console.error(`argumento desconhecido: ${unknown.join(', ')} (use apenas --engine-only ou nenhum argumento)`);
+    console.error(`argumento desconhecido: ${unknown.join(', ')} (use --engine-only, --keep-engine, ou nenhum argumento)`);
     process.exitCode = 1;
+  } else if (argv.includes('--engine-only')) {
+    installEngine(ROOT).catch(error => { console.error(error.message); process.exitCode = 1; });
   } else {
-    const action = argv.includes('--engine-only') ? installEngine : setup;
-    action(ROOT).catch(error => { console.error(error.message); process.exitCode = 1; });
+    setup(ROOT, { keepEngine: argv.includes('--keep-engine') }).catch(error => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
   }
 }
