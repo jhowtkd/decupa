@@ -1094,12 +1094,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!sourceId || !speechId) {
           throw new HttpError(400, "selecione a fala a ajustar");
         }
-        if (!deps.allowPaidModel || !deps.proposeSend) {
-          throw new HttpError(402, PAID_BLOCKED);
-        }
         const loaded = await loadProject(dir);
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        // Permissão gravada no projeto conta como opt-in — o gate usa o
+        // estado carregado, não só a flag do processo.
+        if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
+          throw new HttpError(402, PAID_BLOCKED);
         }
         const { gen, signal } = begin("proposing");
         try {
@@ -1110,10 +1112,19 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             sendJson(res, { project: await loadProject(dir), ...snapshot() });
             return true;
           }
+          // A proposta espera o modelo fora da trava de mutação: se a revisão
+          // andou enquanto o modelo pensava, descarta em vez de publicar uma
+          // proposta já velha.
+          const latest = await loadProject(dir);
+          if (latest.revision !== proposal.baseRevision) {
+            operation = { stage: "ready" };
+            sendJson(res, { project: latest, speechProposal: null, ...snapshot() });
+            return true;
+          }
           await publishAtomic(speechProposalPath, `${JSON.stringify(proposal)}\n`);
           operation = { stage: "ready" };
           sendJson(res, {
-            project: await loadProject(dir), speechProposal: proposal, ...snapshot(),
+            project: latest, speechProposal: proposal, ...snapshot(),
           });
         } catch (err) {
           operation = { stage: "idle" };
@@ -1143,11 +1154,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if (parts[1] === "speech-reject" && req.method === "POST") {
-        const baseRevision = requireRevision(body);
         const proposalId = String(body.proposalId ?? "");
         const proposal = await readSpeechProposal();
-        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
-          throw new HttpError(409, "proposta ausente ou desatualizada");
+        // Rejeitar só exige a identidade da proposta: ela precisa continuar
+        // dispensável mesmo desatualizada (a recusa por revisão vale para
+        // aceitar, nunca para descartar).
+        if (!proposal || proposal.id !== proposalId) {
+          throw new HttpError(409, "proposta ausente");
         }
         await unlink(speechProposalPath).catch(() => {});
         sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });

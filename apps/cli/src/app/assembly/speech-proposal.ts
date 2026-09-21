@@ -102,9 +102,12 @@ export function buildSpeechProposal(
   }
 
   // Aplicação projetada por take: dentro do take, fora dos protegidos e
-  // fora do que já está removido.
+  // fora do que já está removido. Uma palavra só sai do texto do "depois"
+  // quando algum take de fato remove trecho dela — palavra coberta por
+  // proteção em todos os takes segue visível na comparação.
   let skippedProtected = 0;
   const changedTakeIds: string[] = [];
+  const removedWordIds = new Set<string>();
   let beforeSeconds = 0;
   let afterSeconds = 0;
   for (const { take } of scope.takes) {
@@ -118,13 +121,28 @@ export function buildSpeechProposal(
     skippedProtected += clipped
       .filter((range) => subtractRanges([range], take.protected).length === 0)
       .length;
-    if (allowed.length) changedTakeIds.push(take.id);
+    if (allowed.length) {
+      changedTakeIds.push(take.id);
+      for (const cut of cuts) {
+        for (const wordId of cut.wordIds) {
+          const index = byId.get(wordId)!;
+          const interval = wordCutInterval(ordered[index]!, ordered[index - 1], ordered[index + 1]);
+          const inTake = {
+            start: Math.max(interval.start, take.start),
+            end: Math.min(interval.end, take.end),
+          };
+          if (inTake.start >= inTake.end) continue;
+          if (subtractRanges(subtractRanges([inTake], take.protected), take.removed).length) {
+            removedWordIds.add(wordId);
+          }
+        }
+      }
+    }
     beforeSeconds += rangesDuration(retainedRanges(take));
     afterSeconds += rangesDuration(subtractRanges(retainedRanges(take), allowed));
   }
 
-  const cutWordIds = new Set(cuts.flatMap((cut) => cut.wordIds));
-  const afterText = scope.words.filter((word) => !cutWordIds.has(word.id)).map((word) => word.text).join(" ");
+  const afterText = scope.words.filter((word) => !removedWordIds.has(word.id)).map((word) => word.text).join(" ");
   return {
     id,
     baseRevision: project.revision,
