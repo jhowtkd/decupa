@@ -20,7 +20,7 @@ it("fiação shell↔módulos: regiões e ids dinâmicos existem", async () => {
     expect(html).toContain(`id="${id}"`);
   }
   const js = (await Promise.all([PAGEJS, RAIL, CONTEXTO, TEXTO, SEQ].map(read))).join("\n");
-  for (const id of ["briefingDialog", "prepDialog", "delivery", "sourceCounts", "inspectorState", "deliveryChecklist", "versionHistory", "opLine", "closeInspector"]) {
+  for (const id of ["briefingDialog", "delivery", "sourceCounts", "inspectorState", "deliveryChecklist", "versionHistory", "opLine", "closeInspector"]) {
     expect(js).toContain(id);
   }
   expect(js).toContain('materiais: "rail"');

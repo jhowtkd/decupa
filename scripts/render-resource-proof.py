@@ -25,6 +25,11 @@ import time
 SAMPLE_INTERVAL = 0.5
 KILL_GRACE_SECONDS = 2.0
 FOUR_GIB = 4 * 1024**3
+# ponytail: ps start times have one-second precision; PID reuse within that
+# second remains a platform limitation. Blind signaling expires after 5s.
+KNOWN_MAX_AGE = 5.0
+Identity = tuple[str, float]
+State = tuple[str, str]  # status, process start time (lstart)
 
 
 class MeasurementError(RuntimeError):
@@ -61,12 +66,12 @@ def swap_usage() -> str:
         return f"indisponível: {exc}"
 
 
-def _ps_table() -> tuple[dict[int, list[int]], dict[int, str]]:
+def _ps_table() -> tuple[dict[int, list[int]], dict[int, State]]:
     """(filhos por ppid, stat por pid). Falha de ps devolve vazios: quem
     mede trata como erro fatal; quem encerra cumpre o orçamento cego."""
     try:
         out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,stat="],
+            ["ps", "-axo", "pid=,ppid=,stat=,lstart="],
             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
     except Exception:
@@ -74,17 +79,17 @@ def _ps_table() -> tuple[dict[int, list[int]], dict[int, str]]:
     if out.returncode != 0:
         return {}, {}
     children: dict[int, list[int]] = {}
-    states: dict[int, str] = {}
+    states: dict[int, State] = {}
     for line in out.stdout.splitlines():
         parts = line.split()
-        if len(parts) < 3:
+        if len(parts) != 8:
             continue
         try:
             pid, ppid = int(parts[0]), int(parts[1])
         except ValueError:
             continue
         children.setdefault(ppid, []).append(pid)
-        states[pid] = parts[2]
+        states[pid] = (parts[2], " ".join(parts[3:]))
     return children, states
 
 
@@ -107,17 +112,17 @@ def tree_pids(root_pid: int) -> set[int]:
     return _descendants(root_pid, children)
 
 
-def _ps_alive(pid: int, states: dict[int, str]) -> bool:
+def _ps_alive(pid: int, states: dict[int, State]) -> bool:
     state = states.get(pid)
-    return state is not None and not state.startswith("Z")
+    return state is not None and not state[0].startswith("Z")
 
 
-def _sample_full(root_pid: int) -> tuple[int, float, set[int]]:
+def _sample_full(root_pid: int, known: dict[int, Identity] | None = None) -> tuple[int, float, dict[int, Identity]]:
     """(RSS bytes, %CPU, pids da árvore). Falha de ps levanta
     MeasurementError: zero sem medição não é consumo zero."""
     try:
         out = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,rss=,pcpu="],
+            ["ps", "-axo", "pid=,ppid=,rss=,pcpu=,stat=,lstart="],
             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
@@ -127,9 +132,10 @@ def _sample_full(root_pid: int) -> tuple[int, float, set[int]]:
         raise MeasurementError(f"ps falhou (exit {out.returncode}): {detail[0][:200] if detail else 'sem stderr'}")
     children: dict[int, list[int]] = {}
     stats: dict[int, tuple[int, float]] = {}
+    states: dict[int, State] = {}
     for line in out.stdout.splitlines():
         parts = line.split()
-        if len(parts) < 4:
+        if len(parts) != 10:
             continue
         try:
             pid, ppid, rss_kb = int(parts[0]), int(parts[1]), int(parts[2])
@@ -138,19 +144,31 @@ def _sample_full(root_pid: int) -> tuple[int, float, set[int]]:
             continue
         children.setdefault(ppid, []).append(pid)
         stats[pid] = (rss_kb * 1024, pcpu)
-    total_rss, total_cpu = 0, 0.0
-    stack = [root_pid]
-    seen = set()
-    while stack:
-        pid = stack.pop()
-        if pid in seen:
-            continue
-        seen.add(pid)
-        rss, cpu = stats.get(pid, (0, 0.0))
-        total_rss += rss
-        total_cpu += cpu
-        stack.extend(children.get(pid, []))
-    return total_rss, total_cpu, seen
+        states[pid] = (parts[4], " ".join(parts[5:]))
+    if not stats:
+        raise MeasurementError("ps não devolveu processos legíveis")
+    tracked = _refresh_known(root_pid, children, states, known or {})
+    return (sum(stats[p][0] for p in tracked),
+            sum(stats[p][1] for p in tracked), tracked)
+
+
+def _refresh_known(root_pid: int, children: dict[int, list[int]],
+                   states: dict[int, State], known: dict[int, Identity]) -> dict[int, Identity]:
+    now = time.monotonic()
+    if not states:
+        return {p: value for p, value in known.items() if now - value[1] <= KNOWN_MAX_AGE}
+    # Retain reparented children only while their original identity is alive.
+    result = {p: (birth, now) for p, (birth, _) in known.items()
+              if _ps_alive(p, states) and states[p][1] == birth}
+    # Never adopt a reused known PID, including the root, as a new descendant.
+    roots = list(result)
+    if root_pid not in known and root_pid in states:
+        roots.append(root_pid)
+    for root in roots:
+        for pid in _descendants(root, children):
+            if _ps_alive(pid, states) and (pid not in known or known[pid][0] == states[pid][1]):
+                result[pid] = (states[pid][1], now)
+    return result
 
 
 def sample_tree(root_pid: int) -> tuple[int, float]:
@@ -167,7 +185,7 @@ def _signal_tree(pids: set[int], sig: int) -> None:
             pass
 
 
-def _tree_dead_ps(proc, pid: int, targets: set[int], states: dict[int, str]) -> bool:
+def _tree_dead_ps(proc, pid: int, targets: set[int], states: dict[int, State]) -> bool:
     # Sem snapshot não se declara morte: cumpre o orçamento sinalizando.
     if not states:
         return False
@@ -180,81 +198,69 @@ def _tree_dead_ps(proc, pid: int, targets: set[int], states: dict[int, str]) -> 
     return not any(_ps_alive(t, states) for t in targets if t != pid)
 
 
-def _stopped_or_dead(pid: int, states: dict[int, str]) -> bool:
+def _stopped_or_dead(pid: int, states: dict[int, State]) -> bool:
     state = states.get(pid)
-    return state is None or state.startswith("Z") or state.startswith("T")
+    return state is None or state[0].startswith("Z") or state[0].startswith("T")
 
 
-def _signal_targets(known: set[int], states: dict[int, str], sig: int) -> None:
-    # Cego (sem snapshot): sinaliza todos os conhecidos; mortos evaporam via
-    # ProcessLookupError. Com snapshot: só os vivos, para não tocar pid
-    # reutilizado nem zumbi.
-    if states:
-        _signal_tree({t for t in known if _ps_alive(t, states)}, sig)
-    else:
-        _signal_tree(set(known), sig)
+def _signal_targets(known: dict[int, Identity], states: dict[int, State], sig: int) -> None:
+    now = time.monotonic()
+    targets = {p for p, (birth, _) in known.items()
+               if _ps_alive(p, states) and states[p][1] == birth}
+    if not states:
+        # Never freeze identities we cannot currently verify.
+        targets = set() if sig == signal.SIGSTOP else {
+            p for p, (_, seen) in known.items() if now - seen <= KNOWN_MAX_AGE}
+    _signal_tree(targets, sig)
 
 
-def _signal_group(pid: int, sig: int) -> None:
-    try:
-        os.killpg(pid, sig)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+def terminate_tree(pid: int, proc=None, known: dict[int, Identity] | None = None) -> None:
+    """Stop/terminate observed identities, including children in other sessions.
 
-
-def terminate_tree(pid: int, proc=None, known: set[int] | None = None) -> None:
-    """Encerra a árvore inteira do ensaio, inclusive sessões próprias (ex.
-    SpawnExecutor, que cria grupo novo). Primeiro aquieta tudo com SIGSTOP
-    até nenhum pid novo aparecer — parado não forka, então o snapshot
-    estabiliza; depois SIGTERM + SIGCONT, espera, e SIGKILL nos restantes
-    (KILL pega parado sem CONT). O grupo do raiz cobre reparentados do
-    grupo; os pids cobrem o resto. Nunca pkill global.
-    ``known`` semeia o universo com os descendentes observados durante o
-    acompanhamento: se ps falhar na hora de encerrar, o modo cego sinaliza
-    a última árvore conhecida (+ grupo) em vez de mirar só o raiz. Risco
-    residual do modo cego: reuso de PID na janela de poucos segundos; os
-    alvos foram observados vivos há pouco, o que estreita a janela.
-    O try/finally começa ANTES do primeiro SIGSTOP: qualquer interrupção no
-    meio do quiesce retoma (SIGCONT) o universo conhecido, sem deixar
-    processos parados para trás. Só paramos pids de `live`, então processos
-    nunca observados jamais ficam congelados por nós."""
-    live: set[int] = set(known) if known else set()
+    Fresh snapshots discard dead/reused PIDs. If ps fails, only identities
+    seen within KNOWN_MAX_AGE are signaled. No unconditional group signals:
+    a recycled process group must not target unrelated processes.
+    """
+    live = dict(known or {})
     try:
         stop_deadline = time.monotonic() + KILL_GRACE_SECONDS
         while time.monotonic() < stop_deadline:
             children, states = _ps_table()
             before = set(live)
-            live |= _descendants(pid, children)
+            live = _refresh_known(pid, children, states, live)
             _signal_targets(live, states, signal.SIGSTOP)
-            if live == before and all(_stopped_or_dead(t, states) for t in live):
+            if set(live) == before and all(_stopped_or_dead(t, states) for t in live):
                 break
             time.sleep(0.05)
-        _signal_tree(live, signal.SIGTERM)
-        _signal_group(pid, signal.SIGTERM)
-        _signal_tree(live, signal.SIGCONT)
-        _signal_group(pid, signal.SIGCONT)
+        _signal_targets(live, states, signal.SIGTERM)
+        _signal_targets(live, states, signal.SIGCONT)
         deadline = time.monotonic() + KILL_GRACE_SECONDS
         while time.monotonic() < deadline:
             children, states = _ps_table()
-            live |= _descendants(pid, children)
+            live = _refresh_known(pid, children, states, live)
             if _tree_dead_ps(proc, pid, live, states):
                 return
             _signal_targets(live, states, signal.SIGTERM)
             time.sleep(0.05)
         for _ in range(20):
             children, states = _ps_table()
-            live |= _descendants(pid, children)
+            live = _refresh_known(pid, children, states, live)
             if _tree_dead_ps(proc, pid, live, states):
                 return
-            _signal_group(pid, signal.SIGKILL)
             _signal_targets(live, states, signal.SIGKILL)
             time.sleep(0.05)
     finally:
-        # Nunca deixar para trás um processo parado que tocamos: retoma o
-        # universo conhecido (único conjunto que paramos) e o grupo por
-        # belt-and-braces — CONT em processo rodando é no-op.
-        _signal_tree(live, signal.SIGCONT)
-        _signal_group(pid, signal.SIGCONT)
+        # Refresh before resuming; never resume a recycled identity.
+        _, final_states = _ps_table()
+        _signal_targets(live, final_states, signal.SIGCONT)
+        # The direct child is owned by Popen (PID cannot recycle until reaped).
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -313,16 +319,16 @@ def main() -> int:
     stopped_for_memory = False
     interrupted = False
     measurement_error: str | None = None
-    known: set[int] = {proc.pid}
+    known: dict[int, Identity] = {}
     try:
         while proc.poll() is None:
             try:
-                rss, cpu, pids = _sample_full(proc.pid)
+                rss, cpu, pids = _sample_full(proc.pid, known)
             except MeasurementError as exc:
                 measurement_error = str(exc)
                 terminate_tree(proc.pid, proc, known)
                 break
-            known |= pids
+            known = pids
             peak_rss = max(peak_rss, rss)
             cpu_samples.append(round(cpu, 2))
             if rss > ceiling:

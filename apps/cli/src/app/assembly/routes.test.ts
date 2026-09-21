@@ -403,6 +403,8 @@ it("prepare com opt-in devolve 202 e interrompe sem fala em projeto vazio", asyn
     }
   }
   expect(status).toBe("interrupted");
+  const finished = await (await fetch(`${base}/project`)).json() as { operation: { stage: string; error: string } };
+  expect(finished.operation).toMatchObject({ stage: "error", error: "sem fala transcrita nas fontes incluídas" });
 });
 
 it("grava análise por arquivo e conserva a primeira se a segunda falha", async () => {
@@ -1072,4 +1074,57 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   expect(client.call).toHaveBeenCalledTimes(2);
   expect(client.call).toHaveBeenLastCalledWith("/project");
   expect(state.set).toHaveBeenCalledWith("project", { revision: 3 });
+});
+
+it("GET deriva Desfazer de histórico persistido e diagnostica corrupção", async()=>{
+  const {dir,base,app}=await boot();
+  expect((await (await fetch(`${base}/project`)).json() as {undoRevision:number|null}).undoRevision).toBeNull();
+  const p=await loadProject(dir);
+  const {writeHistorySnapshot}=await import("./store.ts");
+  await writeHistorySnapshot(dir,p);
+  await saveProject(dir,p.revision,{...p,revision:1,assembly:{...p.assembly,revision:1}});
+  await app.close();
+  const reopened=await startApp({projectDir:dir,port:0});stop=reopened.close;
+  const url=`http://127.0.0.1:${reopened.port}/project`;
+  expect((await (await fetch(url)).json() as {undoRevision:number|null}).undoRevision).toBe(0);
+  await writeFile(join(dir,"history","rev-0.json"),"{quebrado");
+  const corrupt=await fetch(url);
+  expect(corrupt.ok).toBe(false);
+});
+
+it("edita apoio por HTTP, protege revisão e restaura por undo",async()=>{
+  const {base,dir}=await boot();
+  const p=await loadProject(dir);p.assembly=fixtureAssembly();
+  p.analyses=[{sourceId:"a",key:"k",status:"ready",words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]},speech:[{id:"a:s",sourceId:"a",start:0,end:3,text:"tema"}],visual:[{id:"b:v",sourceId:"b",start:0,end:2,text:"público",confidence:"observed",tags:[]}]}];
+  const {validateProposal,compileScenes}=await import("./scenes.ts");
+  p.scenes=validateProposal({id:"p",baseRevision:0,changedSceneIds:["s"],scenes:[{id:"s",speechIds:["a:s"]}]},p).scenes;
+  p.assembly=compileScenes(p,p.scenes);await saveProject(dir,0,()=>p);
+  const before=await (await fetch(`${base}/project`)).json() as {brollCandidates:{entries:unknown[]}[];project:Project};
+  expect(before.brollCandidates[0]!.entries).toEqual([{visualId:"b:v",offsetFrames:0,durationFrames:50}]);
+  expect(JSON.stringify(before.brollCandidates)).not.toContain("path");
+  const post=(path:string,body:unknown)=>fetch(`${base}/project/${path}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const body={baseRevision:0,action:{type:"set-support",sceneId:"s",support:[{visualId:"b:v",offsetFrames:25,durationFrames:25}]}};
+  expect((await post("edit",body)).status).toBe(200);
+  expect((await post("edit",body)).status).toBe(409);
+  const undo=await post("undo",{baseRevision:1,revision:0});expect(undo.status).toBe(200);
+  const restored=await loadProject(dir);expect(restored.scenes[0]!.support).toEqual([]);expect(restored.revision).toBe(2);expect(restored.finalApprovedRevision).toBeNull();
+});
+
+
+it("novo projeto abre vazio e preserva projeto e mídia anteriores", async () => {
+  const {base, dir} = await boot();
+  await fetch(`${base}/project/input`, {method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify({baseRevision:0,kind:"brief",text:"Projeto anterior",targetSeconds:60})});
+  const before = await readFile(join(dir, "project.json"), "utf8");
+  const res = await fetch(`${base}/project/new`, {method:"POST"});
+  expect(res.status).toBe(201);
+  const {url} = await res.json() as {url:string};
+  const next = await (await fetch(new URL("project", url))).json() as {project:Project};
+  expect(next.project.revision).toBe(0);
+  expect(next.project.assembly.sources).toEqual([]);
+  expect(next.project.scenes).toEqual([]);
+  expect(next.project.input.text).toBe("");
+  expect(await readFile(join(dir,"project.json"),"utf8")).toBe(before);
+  const html = await (await fetch(url)).text();
+  expect(html).toContain('id="newProject"');
 });

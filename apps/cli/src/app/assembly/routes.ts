@@ -1,3 +1,5 @@
+import { brollCandidates, candidateSupport } from "./broll.ts";
+import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -13,8 +15,8 @@ import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
-import { describeSource } from "./model.ts";
-import { ensurePlayback, verifySourceIdentity } from "./media.ts";
+import { describeSource, type VisualClient } from "./model.ts";
+import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
 import { exportApproved } from "./export.ts";
 import { renderAssembly } from "./render.ts";
@@ -55,11 +57,12 @@ export type AssemblyOperation = {
 } | null;
 
 export type AssemblyDeps = {
+  decision?: AssemblyDecisionContext;
   exec: Executor;
   port: () => number;
   selectFn?: () => Promise<SelectResult>;
   proposeSend?: (content: unknown[], signal?: AbortSignal) => Promise<string>;
-  describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
+  describeClient?: VisualClient;
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
@@ -527,7 +530,18 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             void alignCorrectionJob(dir, correction.id, project.revision);
           }
         }
-        sendJson(res, { project, ...snapshot() });
+        let undoRevision: number | null = null;
+        if (project.revision > 0) {
+          const revision = project.revision - 1;
+          const exists = await stat(join(dir, "history", `rev-${revision}.json`)).then(() => true, error => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          });
+          if (exists) undoRevision = (await readHistorySnapshot(dir, revision)).revision;
+        }
+        const fps=project.assembly.fps.num/project.assembly.fps.den;
+        const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
+        sendJson(res, { project, undoRevision, brollCandidates: candidates, ...snapshot() });
         return true;
       }
 
@@ -560,7 +574,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const source = project.assembly.sources.find((item) => item.id === sourceId);
         if (!source) throw new HttpError(404, "fonte não cadastrada");
         try {
-          const { thumbnailPath } = await ensurePlayback(source, dir, deps.exec);
+          const thumbnailPath = await ensureThumbnail(source, dir, deps.exec);
           if (!thumbnailPath) throw new HttpError(404, "fonte sem miniatura (somente áudio)");
           await serveMedia(req, res, thumbnailPath, "image/jpeg");
         } catch (err) {
@@ -933,11 +947,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
+          { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(releaseHold).then(
-          () => {
-            if (stillCurrent(gen)) operation = { stage: "ready" };
+          (result) => {
+            if (!stillCurrent(gen)) return;
+            const prep = result.preparation;
+            operation = prep?.status === "cancelled" ? { stage: "cancelled" }
+              : prep && prep.status !== "ready"
+                ? { stage: "error", error: prep.error || "Preparação incompleta. Confira os materiais e retome." }
+                : { stage: "ready" };
           },
           (err: unknown) => {
             if (stillCurrent(gen)) {
@@ -962,7 +981,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           const { gen, signal } = begin("proposing");
           const proposal = await proposeScenes(project, request, signal, {
-            send: deps.proposeSend,
+            send: deps.proposeSend, decision: deps.decision,
           });
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };

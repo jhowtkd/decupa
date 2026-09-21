@@ -178,3 +178,24 @@ it("verifySourceIdentity aprova, nomeia ausente e detecta troca", async () => {
   await expect(verifySourceIdentity({ ...sameSize, size: undefined, mtimeMs: undefined }))
     .rejects.toThrow(/substituído/);
 });
+
+
+it("miniaturas concorrentes extraem um único frame sem gerar proxy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-thumb-"));
+  const source = await sourceFrom(join(FIXTURES, "clip.mp4"));
+  const exec = copyingExec();
+  const results = await Promise.all(Array.from({ length: 6 }, () => ensureThumbnail(source, dir, exec)));
+  expect(new Set(results).size).toBe(1);
+  expect(exec.calls).toHaveLength(1);
+  expect(exec.calls[0]!.args).toContain(source.path);
+  expect(exec.calls[0]!.args).toContain("-vframes");
+  await expect(access(proxyPath(dir, source.sha256))).rejects.toThrow();
+});
+
+it("pedidos simultâneos de reprodução compartilham o mesmo proxy", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-playback-"));
+  const source = await sourceFrom(join(FIXTURES, "clip.mp4"));
+  const exec = copyingExec();
+  await Promise.all(Array.from({ length: 4 }, () => ensurePlayback(source, dir, exec)));
+  expect(exec.calls.filter((call) => call.args.at(-1)?.endsWith(".tmp.mp4"))).toHaveLength(1);
+});

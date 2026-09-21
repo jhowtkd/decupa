@@ -15,6 +15,7 @@ export type { Credentials } from "./credentials.ts";
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
 export { PRESETS, presetConfig, resolveProvider } from "./provider.ts";
 export { readCredentials, writeCredentials, credentialsPath } from "./credentials.ts";
+export { companyCredentialsFromEnv, envWithStoredTypeSafe, installCompanyCredentials } from "./company-credentials.ts";
 export { analysisClientOptions, createAnalysisClient } from "./analysis-client.ts";
 export { isJsonFormatRejected, OpenAiCompatClient } from "./openai-compat.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";

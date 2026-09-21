@@ -25,11 +25,15 @@ it("page.js monta as cinco regiões e fia stages/tools", async () => {
   expect(js).toContain('data-tool="texto"');
 });
 
-it("rail.js ancora briefing e confirmação em dialogs nativos", async () => {
+it("rail.js mantém briefing editável e montagem direta, sem confirmação de custo", async () => {
   const js = await readFile(new URL("../apps/cli/src/app/assembly/editor/rail.js", import.meta.url), "utf8");
-  for (const s of ['id = "briefingDialog"', 'id = "prepDialog"', "showModal"]) {
+  for (const s of ['id = "briefingDialog"', "showModal"]) {
     expect(js).toContain(s);
   }
+  expect(js).not.toContain("prepDialog");
+  expect(js).toContain('document.getElementById("prepare").onclick = prepareMontage');
+  expect(js).toContain('document.getElementById("resume").onclick = prepareMontage');
+  expect(js).toContain("modelOptIn: true, visualOptIn: true");
 });
 
 it("entrega mora no inspetor, não no rail", async () => {

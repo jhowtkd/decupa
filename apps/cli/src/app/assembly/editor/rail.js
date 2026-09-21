@@ -2,7 +2,47 @@
 // Cada render assina `state.subscribe("project", ...)` e porta o bloco
 // original do page.js monolítico, mantendo o comentário de comportamento.
 const ROLES = { speech: "Fala", support: "Apoio", both: "Fala+apoio" };
-const STAGE_LABEL = { pending: "pendente", running: "rodando", ready: "pronta", error: "erro" };
+const STAGE_LABEL = { pending: "Na fila", running: "Em andamento", ready: "Concluída", error: "Falhou" };
+const PREP_STAGES = { media: "Verificar arquivos", audio: "Transcrever áudio", visual: "Analisar imagens", proposal: "Montar cenas", preview: "Renderizar prévia" };
+
+export function sourceProgress(project, source) {
+  const prep = project.preparation;
+  const stages = prep?.sources[source.id];
+  const analysis = project.analyses.find((item) => item.sourceId === source.id);
+  if (!source.included) return { tone: "muted", label: "Fora da montagem", detail: "" };
+  if (stages) {
+    const failed = ["media", "audio", "visual"].find((key) => stages[key] === "error");
+    const running = ["media", "audio", "visual"].find((key) => stages[key] === "running");
+    if (failed) return { tone: "error", label: PREP_STAGES[failed] + ": falhou", detail: stages.error || "Retome a preparação para tentar novamente." };
+    if (running && prep.status === "running") return { tone: "running", label: PREP_STAGES[running] + "…", detail: "" };
+    if (stages.media === "ready" && stages.audio === "ready" && (!source.hasVideo || stages.visual === "ready")) {
+      return { tone: "ready", label: "Análise concluída", detail: "" };
+    }
+    if (prep.status !== "running") return { tone: "error", label: "Preparação interrompida", detail: stages.error || "Retome para concluir as etapas pendentes." };
+    return { tone: "pending", label: "Na fila", detail: stages.audio === "ready" ? "Transcrição disponível" : "" };
+  }
+  if (analysis?.status === "error") return { tone: "error", label: "Falha na análise", detail: analysis.error || "" };
+  if (analysis) return { tone: "pending", label: "Transcrição disponível", detail: "" };
+  return { tone: "pending", label: "Aguardando preparação", detail: "" };
+}
+
+export function preparationView(project, operation) {
+  const prep = project.preparation;
+  const sources = project.assembly.sources.filter((source) => source.included);
+  const busy = prep?.status === "running";
+  const active = sources.find((source) => Object.values(prep?.sources[source.id] || {}).includes("running"));
+  const failed = sources.find((source) => sourceProgress(project, source).tone === "error");
+  const done = sources.filter((source) => sourceProgress(project, source).tone === "ready").length;
+  const tone = busy ? "running" : prep && ["interrupted", "attention"].includes(prep.status) ? "error" : "ready";
+  const title = busy ? PREP_STAGES[prep.stage] + "…"
+    : tone === "error" ? "A montagem precisa de atenção"
+    : prep?.status === "cancelled" ? "Preparação cancelada"
+    : prep?.status === "ready" ? "Montagem pronta para revisar" : "Prepare seus materiais";
+  return { busy, tone, title, done, total: sources.length,
+    detail: busy ? (active ? active.name + " · " : "") + (prep.note || `${done} de ${sources.length} mídias analisadas`)
+      : failed ? failed.name + " · " + sourceProgress(project, failed).detail
+      : prep?.error || operation?.error || "Confira a prévia antes de aprovar a entrega." };
+}
 
 /** Chip mono (.chip da Task 3): estado curto e legível ao lado do nome. */
 const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
@@ -93,24 +133,15 @@ export function stageLabel(stage) {
   return OP_STAGE_LABEL[stage] || String(stage);
 }
 
-/** Sem checkboxes: o consentimento pago é por lote no disparo; aqui só ecoa o já concedido. */
-function paidFlags(project) {
-  return {
-    modelOptIn: project.permissions.model === true,
-    visualOptIn: project.permissions.visual === true,
-  };
-}
-
 export function mountRail({ state, api, player }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
   const materials = document.createElement("section");
   materials.setAttribute("aria-label", "Materiais");
-  materials.innerHTML = '<h1>Materiais</h1><p class="muted" id="sourceCounts" aria-live="polite"></p>'
-    + '<p class="muted">Arquivos locais. O original não é enviado a terceiros nesta tela.</p>'
+  materials.innerHTML = '<h1>Materiais do projeto</h1><p class="muted" id="sourceCounts" aria-live="polite"></p>'
     + '<p class="muted" id="invite" hidden>Solte mídias no centro ou escolha arquivos para começar.</p>'
-    + '<div class="row"><button type="button" id="select">Escolher arquivos</button></div>'
+    + '<div class="row"><button type="button" id="select">+ Importar mídia</button></div>'
     // Ações em lote só existem enquanto há seleção (Task 4: #rail.has-selection).
     + '<div class="rail-actions"><button type="button" id="batchSupport" disabled>Categorizar seleção como apoio</button>'
     + '<button type="button" id="batchInclude" disabled>Incluir seleção</button>'
@@ -128,24 +159,37 @@ export function mountRail({ state, api, player }) {
     + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button>'
     + '<button type="button" id="closeBriefing">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
-  let briefingAutoOpened = false;
   document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
+  const newProject = document.getElementById("newProject");
+  newProject.onclick = async () => {
+    newProject.disabled = true;
+    try {
+      const { res, body } = await api.call("/project/new", {
+        method: "POST", body: "{}", label: "Criando projeto…",
+      });
+      if (res.ok) window.location.assign(body.url);
+    } finally {
+      newProject.disabled = false;
+    }
+  };
 
-  const preparation = document.createElement("section");
-  preparation.setAttribute("aria-label", "Preparação");
-  preparation.innerHTML = "<h1>Preparação</h1>"
-    + '<p class="muted" id="prepSummary" aria-live="polite"></p>'
-    + '<p class="muted" id="opLine" aria-live="polite"></p>'
-    + '<div id="prepList"></div><div id="prepError"></div>'
-    + '<div class="row"><button type="button" class="primary" id="prepare">Preparar montagem</button>'
-    + '<button type="button" id="resume">Retomar</button></div>';
-  root.appendChild(preparation);
 
-  const prepDialog = document.createElement("dialog");
-  prepDialog.id = "prepDialog";
-  prepDialog.setAttribute("aria-labelledby", "prepTitle");
-  document.body.appendChild(prepDialog);
+  const preparation = document.getElementById("activity");
+  preparation.innerHTML = '<div class="activity-heading"><span class="activity-indicator" aria-hidden="true"></span>'
+    + '<div><h1 id="prepSummary" aria-live="polite"></h1><p id="opLine" class="muted" aria-live="polite"></p></div>'
+    + '<div class="activity-actions"><button type="button" id="resume">Retomar preparação</button>'
+    + '<button type="button" id="stopPreparation" class="danger" hidden>Cancelar preparação</button></div></div>'
+    + '<ol id="prepList" class="preparation-steps"></ol><div id="prepError"></div>';
+  const prepare = document.createElement("button");
+  prepare.id = "prepare";
+  prepare.type = "button";
+  prepare.className = "primary";
+  prepare.textContent = "Montar vídeo";
+  document.getElementById("primaryAction").appendChild(prepare);
+  document.getElementById("stopPreparation").onclick = () => api.call("/project/cancel", {
+    method: "POST", body: "{}", label: "Cancelando preparação…",
+  });
 
   function checkedSourceIds() {
     return [...document.querySelectorAll("#sources input[type=checkbox]:checked")].map((el) => el.value);
@@ -160,8 +204,12 @@ export function mountRail({ state, api, player }) {
     document.getElementById("rail").classList.toggle("has-selection", any);
   }
 
+  let sourcesSignature = "";
   function renderSources(project) {
     const list = document.getElementById("sources");
+    const signature = JSON.stringify(project.assembly.sources);
+    if (signature === sourcesSignature) return;
+    sourcesSignature = signature;
     const focusedId = document.activeElement?.dataset?.sourceId;
     const checked = new Set(
       [...list.querySelectorAll("input[type=checkbox]:checked")].map((el) => el.value),
@@ -169,7 +217,8 @@ export function mountRail({ state, api, player }) {
     list.replaceChildren();
     for (const source of project.assembly.sources) {
       const li = document.createElement("li");
-      li.className = "card source";
+      li.className = "source";
+      li.dataset.sourceId = source.id;
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = source.id;
@@ -178,20 +227,40 @@ export function mountRail({ state, api, player }) {
       box.addEventListener("change", renderBatchButtons);
       const thumb = document.createElement("img");
       thumb.alt = "";
-      thumb.src = "/project/thumbnail/" + encodeURIComponent(source.id);
+      thumb.loading = "lazy";
+      if (source.hasVideo) thumb.src = "/project/thumbnail/" + encodeURIComponent(source.id);
+      const placeholder = document.createElement("span");
+      placeholder.className = "thumbnail-placeholder";
+      placeholder.textContent = source.hasVideo ? "Carregando miniatura…" : "Áudio";
+      thumb.addEventListener("load", () => { placeholder.hidden = true; });
+      thumb.addEventListener("error", () => { thumb.hidden = true; placeholder.textContent = "Sem miniatura"; });
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "source-preview";
+      preview.setAttribute("aria-label", "Ver original de " + source.name);
+      preview.append(placeholder, thumb);
+      preview.onclick = () => player.playOriginal(source.id);
       const meta = document.createElement("div");
       meta.className = "m-body";
       const name = document.createElement("div");
       name.className = "m-name";
       name.textContent = source.name;
-      const analysis = project.analyses.find((item) => item.sourceId === source.id);
       const chips = document.createElement("div");
       chips.className = "m-meta";
       chips.append(chip(Math.round(source.durationSeconds) + "s"));
+      const category = chip({ speech: "Fala", support: "Imagem de apoio", both: "Fala + apoio" }[source.role] || "Não classificado");
+      category.classList.add("source-role");
+      chips.append(category);
       if (!source.included) chips.append(chip("excluída"));
-      if (analysis) chips.append(chip(analysis.status));
+      const status = document.createElement("p");
+      status.className = "source-status";
+      status.setAttribute("role", "status");
+      const options = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Opções do material";
       const controls = document.createElement("div");
       controls.className = "controls";
+      options.append(summary, controls);
       const role = document.createElement("select");
       role.dataset.sourceId = source.id;
       role.setAttribute("aria-label", "categoria de " + source.name);
@@ -204,7 +273,7 @@ export function mountRail({ state, api, player }) {
       }
       role.addEventListener("change", () => api.call("/project/source-role", {
         method: "POST",
-        body: JSON.stringify({ baseRevision: project.revision, sourceIds: [source.id], role: role.value }),
+        body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: role.value }),
         label: "Atualizando categoria…",
       }));
       const toggle = document.createElement("button");
@@ -212,7 +281,7 @@ export function mountRail({ state, api, player }) {
       toggle.textContent = source.included ? "Excluir" : "Incluir";
       toggle.addEventListener("click", () => api.call("/project/source-selection", {
         method: "POST",
-        body: JSON.stringify({ baseRevision: project.revision, sourceIds: [source.id], included: !source.included }),
+        body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], included: !source.included }),
         label: source.included ? "Excluindo material…" : "Incluindo material…",
       }));
       const relink = document.createElement("button");
@@ -221,7 +290,7 @@ export function mountRail({ state, api, player }) {
       relink.textContent = "Relink";
       relink.addEventListener("click", () => api.call("/project/relink", {
         method: "POST",
-        body: JSON.stringify({ baseRevision: project.revision, sourceId: source.id }),
+        body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
         label: "Relinkando material…",
       }));
       const watch = document.createElement("button");
@@ -230,8 +299,8 @@ export function mountRail({ state, api, player }) {
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
       controls.append(role, toggle, relink, watch);
-      meta.append(name, chips, controls);
-      li.append(box, thumb, meta);
+      meta.append(name, chips, status);
+      li.append(box, preview, meta, options);
       list.appendChild(li);
     }
     if (focusedId) list.querySelector(`[data-source-id="${focusedId}"]`)?.focus();
@@ -245,143 +314,59 @@ export function mountRail({ state, api, player }) {
 
   function renderPreparation(project) {
     const prep = project.preparation;
+    for (const node of document.querySelectorAll("#sources .source")) {
+      const source = project.assembly.sources.find((item) => item.id === node.dataset.sourceId);
+      const status = sourceProgress(project, source);
+      node.dataset.status = status.tone;
+      const label = node.querySelector(".source-status");
+      label.textContent = status.label;
+      label.title = status.detail;
+    }
+    preparation.hidden = !prep;
     if (!prep) return;
-    const box = document.getElementById("prepList");
-    box.replaceChildren();
-    const included = project.assembly.sources.filter((item) => item.included);
-    if (!included.length) {
-      document.getElementById("prepSummary").textContent = "Nenhuma fonte incluída — inclua materiais para preparar.";
-      return;
+    const view = preparationView(project, state.get("operation"));
+    preparation.dataset.tone = view.tone;
+    document.getElementById("prepSummary").textContent = view.title;
+    document.getElementById("opLine").textContent = view.detail;
+    document.getElementById("stopPreparation").hidden = !view.busy;
+    document.getElementById("resume").hidden = view.busy || prep.status === "ready";
+    const steps = document.getElementById("prepList");
+    steps.replaceChildren();
+    const keys = prep.mode === "preview" ? ["preview"] : Object.keys(PREP_STAGES);
+    for (const key of keys) {
+      const li = document.createElement("li");
+      const sourceStage = ["media", "audio", "visual"].includes(key);
+      const included = project.assembly.sources.filter((source) => source.included);
+      const done = sourceStage ? included.length > 0 && included.every((source) => prep.sources[source.id]?.[key] === "ready")
+        : key === "proposal" ? project.scenes.length > 0 && ["preview"].includes(prep.stage)
+        : project.previewRevision === project.revision;
+      const status = done ? "ready" : key === prep.stage ? (view.busy ? "running" : "error") : "pending";
+      li.className = status;
+      li.textContent = (done ? "✓ " : "") + PREP_STAGES[key];
+      li.title = STAGE_LABEL[status];
+      steps.appendChild(li);
     }
-    let done = 0;
-    let total = 0;
-    for (const source of included) {
-      const itemState = prep.sources[source.id] || { media: "pending", audio: "pending", visual: "pending" };
-      const card = document.createElement("div");
-      card.className = "prep-file";
-      const name = document.createElement("div");
-      name.textContent = source.name;
-      card.appendChild(name);
-      const stages = document.createElement("div");
-      stages.className = "stages";
-      for (const stage of ["media", "audio", "visual"]) {
-        total += 1;
-        const value = itemState[stage] || "pending";
-        if (value === "ready") done += 1;
-        const span = document.createElement("span");
-        span.className = "stage " + value;
-        span.textContent = stage + ": " + (STAGE_LABEL[value] || value);
-        stages.appendChild(span);
-      }
-      card.appendChild(stages);
-      box.appendChild(card);
-    }
-    const summary = { running: "Preparando", ready: "Pronta", attention: "Atenção", interrupted: "Interrompida", cancelled: "Cancelada" };
-    document.getElementById("prepSummary").textContent =
-      (summary[prep.status] || prep.status) + " · etapa " + prep.stage + " · " + done + "/" + total + " etapas de fonte";
-    const errBox = document.getElementById("prepError");
-    errBox.replaceChildren();
-    const problems = [];
-    if (prep.error) problems.push(prep.error);
-    for (const [id, itemState] of Object.entries(prep.sources)) {
-      if (itemState.error) problems.push(id + ": " + itemState.error);
-    }
-    if (problems.length) {
-      const details = document.createElement("details");
-      const sum = document.createElement("summary");
-      sum.textContent = "Detalhes do problema (" + problems.length + ")";
-      details.appendChild(sum);
-      for (const text of problems) {
-        const p = document.createElement("p");
-        p.className = "warn";
-        p.textContent = text;
-        details.appendChild(p);
-      }
-      errBox.appendChild(details);
-    }
-  }
-
-  /** Linha da operação na preparação: etapa + progresso + material + erro. */
-  function renderOpLine(operation) {
-    const line = document.getElementById("opLine");
-    if (!line) return;
-    if (!operation || !operation.stage) {
-      line.textContent = "";
-      return;
-    }
-    const p = state.get("project");
-    const source = operation.sourceId && p
-      ? p.assembly.sources.find((item) => item.id === operation.sourceId) : null;
-    line.textContent = stageLabel(operation.stage)
-      + (operation.progress ? " · " + operation.progress : "")
-      + (source ? " · " + source.name : "")
-      + (operation.error ? ": " + operation.error : "");
-  }
-
-  /** Consentimento pago por lote: diálogo nativo, nunca confirm() nativo. */
-  function openPrepareConfirm(project) {
-    prepDialog.replaceChildren();
-    const title = document.createElement("h1");
-    title.id = "prepTitle";
-    title.textContent = "Preparar montagem";
-    const count = project.assembly.sources.filter((source) => source.included).length;
-    const note = document.createElement("p");
-    if (project.permissions.visual === true) {
-      // Permissão é monotônica: já concedida, só declara o estado honesto.
-      note.textContent = "já autorizado (persistente) — a preparação usa o modelo visual pago e envia as mídias ao provedor.";
-    } else {
-      note.textContent = "Vai analisar " + count + " arquivo(s) — custo estimado do modelo visual + envio das mídias ao provedor. Continuar?";
-    }
-    const row = document.createElement("div");
-    row.className = "row";
-    const go = document.createElement("button");
-    go.type = "button";
-    go.className = "primary";
-    go.textContent = "Preparar agora";
-    go.addEventListener("click", () => {
-      prepDialog.close();
-      // O clique no lote é o opt-in: o servidor persiste em permissions.
-      void api.call("/project/prepare", {
-        method: "POST",
-        body: JSON.stringify({
-          baseRevision: state.get("project").revision, request: "",
-          modelOptIn: true, visualOptIn: true,
-        }),
-        label: "Iniciando preparação…",
-      });
-    });
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancelar";
-    cancel.addEventListener("click", () => prepDialog.close());
-    row.append(go, cancel);
-    prepDialog.append(title, note, row);
-    if (!prepDialog.open) prepDialog.showModal();
+    const error = document.getElementById("prepError");
+    error.textContent = view.tone === "error"
+      ? "As etapas concluídas estão preservadas. Retome para tentar concluir o que falta ou exclua o material com falha."
+      : "";
   }
 
   function render(project) {
     if (!project) return;
-    document.getElementById("kind").value = project.input.kind;
-    document.getElementById("inputText").value = project.input.text;
-    document.getElementById("target").value = String(project.input.targetSeconds);
-    document.getElementById("invite").hidden = project.assembly.sources.length > 0;
-    // Projeto sem fontes abre o briefing sozinho, uma vez: o primeiro gesto
-    // é colar o roteiro e arrastar mídia (era o <details> aberto, Task 4).
-    if (!briefingAutoOpened && project.assembly.sources.length === 0) {
-      briefingAutoOpened = true;
-      if (!briefingDialog.open) briefingDialog.showModal();
+    if (!briefingDialog.open) {
+      document.getElementById("kind").value = project.input.kind;
+      document.getElementById("inputText").value = project.input.text;
+      document.getElementById("target").value = String(project.input.targetSeconds);
     }
+    document.getElementById("invite").hidden = project.assembly.sources.length > 0;
     renderSources(project);
-    // A seção fica visível desde o vazio: o botão Preparar montagem é o
-    // ponto de entrada do percurso (Task 10). Só o Retomar depende de percurso.
-    preparation.hidden = false;
     document.getElementById("resume").hidden = !(
       project.preparation && project.preparation.status !== "running"
       && project.preparation.status !== "ready"
     );
     const preparing = project.preparation && project.preparation.status === "running";
-    setDisabled(document.getElementById("prepare"), preparing);
-    if (preparing && prepDialog.open) prepDialog.close();
+    setDisabled(document.getElementById("prepare"), preparing || !project.assembly.sources.some((source) => source.included));
     renderPreparation(project);
   }
 
@@ -414,18 +399,19 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Guardando briefing…",
   });
-  document.getElementById("prepare").onclick = () => openPrepareConfirm(state.get("project"));
-  document.getElementById("resume").onclick = () => api.call("/project/prepare", {
+  const prepareMontage = () => api.call("/project/prepare", {
     method: "POST",
     body: JSON.stringify({
       baseRevision: state.get("project").revision,
       request: "",
-      ...paidFlags(state.get("project")),
+      modelOptIn: true, visualOptIn: true,
     }),
-    label: "Retomando preparação…",
+    label: "Preparando montagem…",
   });
+  document.getElementById("prepare").onclick = prepareMontage;
+  document.getElementById("resume").onclick = prepareMontage;
   state.subscribe("project", render);
-  state.subscribe("operation", renderOpLine);
+  state.subscribe("operation", () => { if (state.get("project")) renderPreparation(state.get("project")); });
   render(state.get("project"));
-  renderOpLine(state.get("operation"));
+
 }

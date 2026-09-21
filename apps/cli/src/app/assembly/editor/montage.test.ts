@@ -9,6 +9,7 @@ import {
   retainedOfTake,
   retainedSegments,
   timelineBlocks,
+  supportGroups, replaceSupportGroup, candidateEntries,
   wordAtPlayhead,
 } from "./montage.js";
 
@@ -136,4 +137,15 @@ it("wordAtPlayhead devolve a palavra cujo intervalo de montagem contém o tempo"
   expect(wordAtPlayhead(p, 0.0)).toBeNull();
   expect(wordAtPlayhead(p, 1.15)?.wordId).toBe("w4");
   expect(wordAtPlayhead(p, null)).toBeNull();
+});
+
+it("agrupa spans contíguos e substitui apenas o apoio selecionado",()=>{
+  const p=project(),scene=p.scenes[0]!;
+  p.analyses[0]!.visual=[0,1,2].map(start=>({id:`b:${start}`,sourceId:"b",start,end:start+1,text:"público",confidence:"observed",tags:[]}));
+  scene.support=[{visualId:"b:0",offsetFrames:0,durationFrames:25},{visualId:"b:1",offsetFrames:25,durationFrames:25},{visualId:"b:2",offsetFrames:75,durationFrames:25}];
+  const groups=supportGroups(p,scene);expect(groups).toHaveLength(2);
+  const entries=candidateEntries({entries:[{visualId:"b:0",offsetFrames:0,durationFrames:25},{visualId:"b:1",offsetFrames:25,durationFrames:25}]},5,30);
+  expect(entries).toEqual([{visualId:"b:0",offsetFrames:5,durationFrames:25},{visualId:"b:1",offsetFrames:30,durationFrames:5}]);
+  expect(replaceSupportGroup(p,scene,groups[0].id,entries)).toEqual([...entries,scene.support[2]]);
+  expect(replaceSupportGroup(p,scene,groups[0].id,[])).toEqual([scene.support[2]]);
 });

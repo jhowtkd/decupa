@@ -2,8 +2,8 @@
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
 import { createState } from "/editor/state.js";
-import { createApi } from "/editor/api.js";
-import { mountRail } from "/editor/rail.js";
+import { createApi, createProjectPoller } from "/editor/api.js";
+import { mountRail, preparationView } from "/editor/rail.js";
 import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
@@ -14,8 +14,6 @@ const ui = { importing: false, busy: false, label: null, error: null };
 let previewTimer = 0;
 let previewInflight = false;
 let previewPending = false;
-let correctPoll = 0;
-let pollTimer = 0;
 
 const OP_LABEL = {
   analyzing: "Analisando mídia",
@@ -39,6 +37,8 @@ function setStatus(text, busy) {
 
 /** Texto único do rail: erro > ação em voo > operação do servidor > revisão. */
 function renderStatus() {
+  const previewBusy = previewInflight || previewPending;
+  if (state.get("previewBusy") !== previewBusy) state.set("previewBusy", previewBusy);
   if (ui.error) {
     setStatus(ui.error, false);
     return;
@@ -49,18 +49,19 @@ function renderStatus() {
   }
   const operation = state.get("operation");
   const p = project();
+  if (p?.preparation) {
+    const view = preparationView(p, operation);
+    if (view.busy || view.tone === "error" || p.preparation.status === "cancelled") {
+      setStatus(view.title, view.busy);
+      return;
+    }
+  }
   if (operation && OP_LABEL[operation.stage]) {
-    const detail = operation.progress ? " · " + operation.progress
-      : operation.sourceId ? " · " + sourceName(operation.sourceId) : "";
-    setStatus(OP_LABEL[operation.stage] + "…" + detail, true);
+    setStatus(OP_LABEL[operation.stage] + "…" + (operation.progress ? " · " + operation.progress : ""), true);
     return;
   }
-  if (operation && operation.stage === "error") {
+  if (operation?.stage === "error") {
     setStatus("Erro: " + (operation.error || "falha no processamento"), false);
-    return;
-  }
-  if (p && p.preparation && p.preparation.status === "running") {
-    setStatus(p.preparation.note || ("Preparando… etapa " + p.preparation.stage), true);
     return;
   }
   if (previewInflight || previewPending) {
@@ -76,12 +77,6 @@ function renderStatus() {
     return;
   }
   setStatus("carregando…", true);
-}
-
-function sourceName(id) {
-  const p = project();
-  const found = p && p.assembly.sources.find((item) => item.id === id);
-  return found ? found.name : id;
 }
 
 const client = createApi({
@@ -112,6 +107,9 @@ async function call(path, opts = {}) {
     }
     if (!res.ok) ui.error = body.error || ("erro " + res.status);
     else ui.error = null;
+    for (const key of ["undoRevision", "brollCandidates"]) {
+      if (Object.hasOwn(body, key)) state.set(key, body[key]);
+    }
     if (body.project) {
       state.set("project", body.project);
       state.set("operation", body.operation || null);
@@ -119,6 +117,7 @@ async function call(path, opts = {}) {
     } else if (body.operation !== undefined) {
       state.set("operation", body.operation);
     }
+    if (res.ok && res.status !== 202 && (opts.method || "GET").toUpperCase() !== "GET") await call("/project");
     renderStatus();
     return { res, body };
   } catch (err) {
@@ -143,11 +142,14 @@ const player = {
   previewBusy() {
     return previewInflight || previewPending;
   },
-  playOriginal(sourceId) {
+  playOriginal(sourceId, start, end) {
     const el = this.el();
     if (!el) return;
-    el.src = "/project/media/" + encodeURIComponent(sourceId) + "?view=playback";
+    el.src = "/project/media/" + encodeURIComponent(sourceId) + "?view=playback"
+      + (start != null && end != null ? "#t=" + start.toFixed(2) + "," + end.toFixed(2) : "");
     el.removeAttribute("data-rev");
+    el.dataset.source = sourceId;
+    state.set("view", "original");
     el.play().catch(() => {});
   },
   seek(seconds) {
@@ -155,6 +157,8 @@ const player = {
     const el = this.el();
     if (!el) return;
     const p = project();
+    el.removeAttribute("data-source");
+    if (state.get("view") !== "montagem") state.set("view", "montagem");
     if (p && p.previewRevision != null) {
       const src = "/project/output/" + p.previewRevision + "/mp4";
       if (el.getAttribute("data-rev") !== String(p.previewRevision)) {
@@ -235,38 +239,16 @@ function scheduleAutoPreview() {
   }, 900);
 }
 
-/** Rebusca o projeto até o alinhamento da correção concluir (V3). */
-function watchCorrections() {
-  clearTimeout(correctPoll);
-  const tick = async () => {
+const poller = createProjectPoller({
+  refresh: () => call("/project"),
+  isBusy: () => {
     const p = project();
-    if (!p) return;
-    if (!(p.corrections || []).some((item) => item.status === "pending")) return;
-    await call("/project");
-    const latest = project();
-    if (latest && (latest.corrections || []).some((item) => item.status === "pending")) {
-      correctPoll = setTimeout(tick, 800);
-    }
-  };
-  correctPoll = setTimeout(tick, 800);
-}
-
-function watchPreparation() {
-  clearTimeout(pollTimer);
-  const tick = async () => {
-    const { body } = await call("/project");
-    const prep = body.project && body.project.preparation;
-    const op = body.operation;
-    const busy = (op && op.stage && op.stage !== "ready" && op.stage !== "cancelled" && op.stage !== "error")
-      || (prep && prep.status === "running");
-    if (busy) {
-      pollTimer = setTimeout(tick, 600);
-    } else if (prep && prep.status !== "running" && (body.project.scenes || []).length > 0) {
-      document.getElementById("texto").scrollIntoView();
-    }
-  };
-  pollTimer = setTimeout(tick, 600);
-}
+    const op = state.get("operation");
+    return p?.preparation?.status === "running"
+      || (p?.corrections || []).some((item) => item.status === "pending")
+      || !!(op && OP_LABEL[op.stage]);
+  },
+});
 
 async function importFiles(files) {
   if (ui.importing || ui.busy) {
@@ -327,27 +309,57 @@ mountRail({ state, api, player });
 mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
-const STAGE_TARGET = { materiais: "rail", edicao: "center", revisao: "stage", entrega: "delivery" };
+const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
+const inspector = document.getElementById("contexto");
+const inspectTool = document.getElementById("inspectTool");
+function showInspector(show = true) {
+  inspector.hidden = !show;
+  inspectTool.setAttribute("aria-expanded", String(show));
+  document.body.classList.toggle("inspector-open", show);
+}
+function setStage(stage) {
+  if (!STAGE_TARGET[stage]) return;
+  document.body.dataset.stage = stage;
+  for (const el of document.querySelectorAll("#stages [data-stage]")) {
+    if (el.dataset.stage === stage) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
+  }
+  document.getElementById("rail").hidden = !["materiais", "edicao"].includes(stage);
+  document.getElementById("faixa").hidden = stage !== "edicao";
+  const editing = stage === "edicao";
+  document.getElementById("texto").hidden = !editing;
+  document.getElementById("center").classList.toggle("with-text", editing);
+  document.querySelector('[data-tool="texto"]').setAttribute("aria-pressed", String(editing));
+  const delivery = document.getElementById("delivery");
+  (stage === "entrega" ? document.getElementById("center") : inspector).appendChild(delivery);
+  delivery.hidden = stage !== "entrega";
+  showInspector(false);
+}
 document.getElementById("stages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-stage]");
-  if (!button) return;
-  for (const el of document.querySelectorAll("#stages [data-stage]")) el.removeAttribute("aria-current");
-  button.setAttribute("aria-current", "true");
-  document.getElementById(STAGE_TARGET[button.dataset.stage])?.scrollIntoView({ block: "nearest" });
-  if (window.matchMedia("(max-width: 1100px)").matches && button.dataset.stage === "entrega") {
-    document.getElementById("contexto").hidden = false;
-  }
+  if (button) setStage(button.dataset.stage);
 });
 const toolTexto = document.querySelector('[data-tool="texto"]');
 toolTexto.addEventListener("click", () => {
+  if (document.body.dataset.stage !== "edicao") { setStage("edicao"); return; }
   const texto = document.getElementById("texto");
-  const show = texto.hasAttribute("hidden");
-  texto.toggleAttribute("hidden", !show);
+  const show = texto.hidden;
+  texto.hidden = !show;
+  document.getElementById("center").classList.toggle("with-text", show);
   toolTexto.setAttribute("aria-pressed", String(show));
 });
-if (window.matchMedia("(max-width: 1100px)").matches) {
-  document.getElementById("contexto").hidden = true;
-}
+inspectTool.setAttribute("aria-controls", "contexto");
+inspectTool.onclick = () => showInspector(inspector.hidden);
+document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
+    showInspector(false); inspectTool.focus();
+  }
+});
+document.getElementById("mediaTool").onclick = () => setStage("materiais");
+document.getElementById("reviewAction").onclick = () => setStage("revisao");
+document.getElementById("deliveryAction").onclick = () => setStage("entrega");
+setStage("materiais");
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
 // O elemento persiste (só o src troca), então uma fiação basta.
@@ -355,7 +367,7 @@ if (window.matchMedia("(max-width: 1100px)").matches) {
   const previewEl = player.el();
   if (previewEl) {
     previewEl.addEventListener("timeupdate", () => {
-      if (Number.isFinite(previewEl.currentTime)) state.set("playhead", previewEl.currentTime);
+      state.set("playhead", previewEl.hasAttribute("data-rev") && Number.isFinite(previewEl.currentTime) ? previewEl.currentTime : null);
     });
   }
 }
@@ -365,9 +377,11 @@ state.subscribe("project", (p) => {
   renderStatus();
   // 202 de prepare/adjust/prepare-resume trazem preparation running e caem
   // aqui: o polling retoma sem fiação extra nos módulos.
-  if (p.preparation && p.preparation.status === "running") watchPreparation();
-  if ((p.corrections || []).some((item) => item.status === "pending")) watchCorrections();
+  poller.schedule();
+  document.getElementById("projectName").textContent = p.assembly.name && p.assembly.name !== p.id ? p.assembly.name : "Montagem principal";
 });
+
+state.subscribe("operation", () => { renderStatus(); poller.schedule(); });
 
 document.addEventListener("decupa:schedule-preview", () => scheduleAutoPreview());
 
@@ -395,16 +409,13 @@ filePicker.addEventListener("change", () => {
   filePicker.value = "";
 });
 
-// Com o guia vazio no centro, a dropzone some: o #texto recebe os
-// arrastes no estado sem mídia, pelo mesmo importFiles (sem upload novo).
-const textoEl = document.getElementById("texto");
+// A bancada recebe arrastes tanto no estado vazio quanto durante a edição.
+const textoEl = document.getElementById("center");
 textoEl.addEventListener("dragover", (ev) => {
-  const p = project();
-  if (p && p.assembly.sources.length === 0) ev.preventDefault();
+  ev.preventDefault();
 });
 textoEl.addEventListener("drop", (ev) => {
-  const p = project();
-  if (p && p.assembly.sources.length === 0 && ev.dataTransfer.files.length) {
+  if (ev.dataTransfer.files.length) {
     ev.preventDefault();
     void importFiles([...ev.dataTransfer.files]);
   }

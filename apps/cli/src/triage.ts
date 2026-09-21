@@ -23,6 +23,7 @@ import {
   readCache,
   renderReport,
   readCredentials,
+  envWithStoredTypeSafe,
   resolveProvider,
   decideWithTypeSafe,
   routeTriage,
@@ -287,7 +288,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
     cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
 
-  const env = opts.env ?? process.env;
+  const env = envWithStoredTypeSafe(opts.env ?? process.env, stored);
   let routeMode = opts.routeMode;
   let typeSafeClient = opts.typeSafeClient;
   if (!typeSafeClient && opts.routeMode == null) {

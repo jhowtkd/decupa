@@ -61,13 +61,11 @@ type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; 
 function makeFakes(opts: FakeOpts = {}): {
   deps: PreparationDeps;
   calls: Calls;
-  failNextPropose: () => void;
   blockPropose: () => { release: (json: string) => void; gate: Promise<string> };
   blockAudio: () => { release: () => void };
   blockFfmpeg: () => { release: () => void };
 } {
   const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
-  let nextFail = false;
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
   let audioGate: Promise<void> | null = null;
   let ffmpegGate: Promise<void> | null = null;
@@ -158,10 +156,6 @@ function makeFakes(opts: FakeOpts = {}): {
   };
   const proposeSend = async (): Promise<string> => {
     calls.propose += 1;
-    if (nextFail) {
-      nextFail = false;
-      return "isto não é json {{{";
-    }
     if (gate) {
       const g = gate;
       gate = null;
@@ -173,6 +167,8 @@ function makeFakes(opts: FakeOpts = {}): {
     exec: { run: exec },
     proposeSend,
     describeClient: {
+      model: "fake-visual",
+      providerKey: "fake",
       send: async (content: unknown[]): Promise<string> => {
         calls.describe += 1;
         if (opts.failVisual) throw new Error("visual provider unavailable");
@@ -204,9 +200,6 @@ function makeFakes(opts: FakeOpts = {}): {
   return {
     deps,
     calls,
-    failNextPropose: () => {
-      nextFail = true;
-    },
     blockPropose: () => {
       let release!: (json: string) => void;
       const gatePromise = new Promise<string>((resolve) => {
@@ -286,6 +279,8 @@ describe("runPreparation", () => {
     expect(done.revision).toBe(base.revision + 1);
     expect(done.scenes).toHaveLength(1);
     expect(done.scenes[0]?.objective).toBe("Abertura");
+    expect((await readHistorySnapshot(dir, base.revision)).scenes).toEqual([]);
+    expect(done.proposal?.decisionReport?.status).toBe("not-run");
     expect(done.preparation?.status).toBe("ready");
     expect(done.preparation?.sources.fala?.media).toBe("ready");
     expect(done.preparation?.sources.fala?.audio).toBe("ready");
@@ -516,6 +511,7 @@ describe("runPreparation", () => {
     await vi.waitFor(async () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
+      expect(claimed.preparation?.sources.fala?.audio).toBe("running");
     });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
@@ -580,12 +576,8 @@ describe("runPreparation", () => {
     expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.status).toBe("ready");
     // A edição segue intacta: o corte e a revisão dela sobreviveram.
     expect(done.scenes[0]?.takes[0]?.removed).toHaveLength(1);
-    // Limite pré-existente (fora da Task 11): proposta resolvida que toca
-    // cena com takes não sobrevive à revalidação do applyProposal, então o
-    // percurso interrompe retomável em vez de aplicar as cenas.
-    expect(done.preparation?.status).toBe("interrupted");
-    expect(done.preparation?.error).toMatch(/use takeId para preservar cortes/);
-    expect(done.revision).toBe(prepared.revision + 1);
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.revision).toBe(prepared.revision + 2);
   });
 
   it("fonte removida durante a preparação interrompe retomável sem perder a outra fonte", async () => {
@@ -691,6 +683,53 @@ describe("runPreparation", () => {
     expect(again.preparation?.sources.fala?.visual).toBe("ready");
   });
 
+  it("reexecução com mesma configuração não troca IDs nem reanalisa", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const first = makeFakes();
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+    const beforeIds = done.analyses.find((item) => item.sourceId === "fala")?.visual.map((span) => span.id);
+    expect(beforeIds).toEqual(["fala:w0:0"]);
+    await saveProject(dir, done.revision, (p) => ({
+      ...p,
+      scenes: [{
+        id: "s-manual",
+        objective: "Manual",
+        rationale: "apoio manual de teste",
+        speechIds: ["fala:u0"],
+        takes: [{
+          id: "s-manual:fala:u0", sourceId: "fala", speechId: "fala:u0",
+          start: 0, end: 1.2, removed: [], protected: [],
+        }],
+        visualEvidenceIds: [],
+        support: [{ visualId: "fala:w0:0", offsetFrames: 0, durationFrames: 25 }],
+        gaps: [],
+      }],
+    }));
+    const current = await loadProject(dir);
+    const second = makeFakes();
+    const again = await runPreparation(
+      dir,
+      current.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      second.deps,
+      ctrl(),
+    );
+    // Mesma configuração: zero novas chamadas visuais, mesmos IDs, apoio válido.
+    expect(second.calls.describe).toBe(0);
+    expect(again.analyses.find((item) => item.sourceId === "fala")?.visual.map((span) => span.id))
+      .toEqual(beforeIds);
+    const support = again.scenes.find((scene) => scene.id === "s-manual")?.support ?? [];
+    expect(support).toHaveLength(1);
+    const catalog = new Set(again.analyses.flatMap((analysis) => analysis.visual.map((span) => span.id)));
+    expect(support.every((entry) => catalog.has(entry.visualId))).toBe(true);
+  });
+
   it("retomada não repete janela visual completa", async () => {
     const base = await seed(dir, [["longa.mp4", "fala", "speech", 21]]);
     const first = makeFakes({
@@ -744,10 +783,9 @@ describe("runPreparation", () => {
     expect(done.permissions).toEqual({ model: true, visual: true });
   });
 
-  it("falha da proposta interrompe sem mexer nas cenas", async () => {
+  it("proposta inválida após a correção interrompe sem mexer nas cenas", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
-    const { deps, failNextPropose } = makeFakes();
-    failNextPropose();
+    const { deps, calls } = makeFakes({ proposalJson: "isto não é json {{{" });
     const done = await runPreparation(
       dir,
       base.revision,
@@ -758,6 +796,7 @@ describe("runPreparation", () => {
     expect(done.preparation?.status).toBe("interrupted");
     expect(done.scenes).toHaveLength(0);
     expect(done.revision).toBe(base.revision);
+    expect(calls.propose).toBe(2);
   });
 
   it("preview só renderiza, sem nova proposta", async () => {
@@ -825,4 +864,23 @@ describe("runPreparation", () => {
     expect(done.preparation?.note).toBeUndefined();
     expect(done.previewArtifact).toBeTruthy();
   });
+});
+
+it.each(["cancelar","editar"])("não publica decisão Jev tardia ao %s", async action => {
+  const dir=mkdtempSync(join(tmpdir(),"prep-jev-"));
+  const base=await seed(dir,[["fala.mp4","fala","speech"],["outra.mp4","outra","speech"]]);
+  const {deps}=makeFakes({proposalJson:JSON.stringify({scenes:[{id:"s",speechIds:["fala:u0","outra:u0"]}],changedSceneIds:["s"],cutCandidates:[{sceneId:"s",speechId:"fala:u0",reason:"repetição"}]})});
+  let entered=false;let release!:()=>void;
+  const gate=new Promise<void>(r=>{release=r;});
+  deps.decision={mode:"hybrid",model:"test",client:{decide:async req=>{entered=true;await gate;return {model:"test",answers:Object.fromEntries(Object.keys(req.questions).map(id=>[id,{type:"noul" as const,noul:1}]))};}}};
+  const aborter=new AbortController();
+  const run=runPreparation(dir,base.revision,{mode:"prepare",request:"montar",modelOptIn:true,visualOptIn:true},deps,ctrl(aborter.signal));
+  await vi.waitFor(()=>expect(entered).toBe(true));
+  expect((await loadProject(dir)).preparation?.note).toBe("Jev avaliando cortes");
+  if(action==="cancelar") aborter.abort();
+  else await saveProject(dir,base.revision,p=>({...p,revision:p.revision+1,assembly:{...p.assembly,revision:p.revision+1,name:"edição preservada"}}));
+  release();const done=await run;
+  expect(done.scenes).toHaveLength(0);
+  expect(done.proposal).toBeNull();
+  expect(done.preparation?.status).toBe(action==="cancelar"?"cancelled":"interrupted");
 });

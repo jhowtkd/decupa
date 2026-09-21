@@ -129,10 +129,10 @@ export function timelineBlocks(project) {
     blocks.push({ kind: "scene", sceneId: scene.id,
       label: scene.objective || scene.id, start: cursor, end: sceneEnd });
     const fps = project.assembly.fps.num / project.assembly.fps.den;
-    for (const sup of scene.support) {
-      const start = cursor + sup.offsetFrames / fps;
-      blocks.push({ kind: "support", sceneId: scene.id, label: sup.visualId,
-        start, end: start + sup.durationFrames / fps });
+    for (const group of supportGroups(project, scene)) {
+      const start = cursor + group.offsetFrames / fps;
+      blocks.push({kind:"support",sceneId:scene.id,groupId:group.id,label:group.description,
+        start,end:start+group.durationFrames/fps});
     }
     cursor = sceneEnd;
   }
@@ -195,4 +195,28 @@ export function wordAtPlayhead(project, playhead) {
     }
   }
   return best;
+}
+
+/** Um apoio visual contínuo pode ocupar vários spans de análise. */
+export function supportGroups(project, scene) {
+  const catalog=new Map(project.analyses.flatMap(a=>a.visual).map(v=>[v.id,v]));
+  const fps=project.assembly.fps.num/project.assembly.fps.den,groups=[];
+  for(const [index,entry] of scene.support.map((e,i)=>[i,e]).sort((a,b)=>a[1].offsetFrames-b[1].offsetFrames)) {
+    const span=catalog.get(entry.visualId),previous=groups.at(-1),sourceStart=span?Math.round(span.start*fps):null;
+    if(span && previous && previous.sourceId===span.sourceId && previous.sourceEnd===sourceStart && previous.offsetFrames+previous.durationFrames===entry.offsetFrames) {
+      previous.durationFrames+=entry.durationFrames;previous.sourceEnd+=entry.durationFrames;previous.indices.push(index);
+    } else groups.push({id:entry.visualId+":"+entry.offsetFrames,sourceId:span?.sourceId,sourceStart,sourceEnd:sourceStart===null?null:sourceStart+entry.durationFrames,
+      description:span?.text||entry.visualId,offsetFrames:entry.offsetFrames,durationFrames:entry.durationFrames,indices:[index]});
+  }
+  return groups;
+}
+export function replaceSupportGroup(project,scene,groupId,entries) {
+  const indices=new Set(supportGroups(project,scene).find(g=>g.id===groupId)?.indices||[]);
+  return [...scene.support.filter((_,i)=>!indices.has(i)),...entries].sort((a,b)=>a.offsetFrames-b.offsetFrames);
+}
+export function candidateEntries(candidate,offsetFrames,durationFrames) {
+  if(!Number.isSafeInteger(offsetFrames)||offsetFrames<0||!Number.isSafeInteger(durationFrames)||durationFrames<=0) throw Error("Início e duração inválidos");
+  const available=candidate.entries.reduce((n,e)=>n+e.durationFrames,0);
+  if(durationFrames>available) throw Error("Duração maior que o apoio disponível");
+  return candidate.entries.filter(e=>e.offsetFrames<durationFrames).map(e=>({...e,offsetFrames:e.offsetFrames+offsetFrames,durationFrames:Math.min(e.durationFrames,durationFrames-e.offsetFrames)}));
 }

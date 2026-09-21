@@ -1,6 +1,6 @@
 import type { EditAction, Project, Proposal } from "./types.ts";
 import type { EditorialSnapshot } from "./store.ts";
-import { compileScenes, validateProposal } from "./scenes.ts";
+import { compileScenes, validateResolvedProposal } from "./scenes.ts";
 import { applyTextEdit } from "./words.ts";
 
 /**
@@ -19,7 +19,7 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
   if (proposal.baseRevision !== p.revision) {
     throw new Error(`proposta com revisão desatualizada: base ${proposal.baseRevision}, atual ${p.revision}`);
   }
-  const valid = validateProposal(proposal, p);
+  const valid = validateResolvedProposal(proposal, p);
   const currentIds = new Set(p.scenes.map((scene) => scene.id));
   const nextIds = new Set(valid.scenes.map((scene) => scene.id));
   const changed = new Set(valid.changedSceneIds);

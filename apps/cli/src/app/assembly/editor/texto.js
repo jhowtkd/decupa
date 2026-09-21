@@ -528,12 +528,7 @@ export function mountTexto({ state, api, player }) {
     }
     const start = Math.min(...found.map((entry) => entry.word.start));
     const end = Math.max(...found.map((entry) => entry.word.end));
-    const el = player.el();
-    if (!el) return;
-    el.src = "/project/media/" + encodeURIComponent(found[0].sourceId)
-      + "?view=playback#t=" + Math.max(0, start - LISTEN_PAD).toFixed(2) + "," + end.toFixed(2);
-    el.removeAttribute("data-rev");
-    el.play().catch(() => {});
+    player.playOriginal(found[0].sourceId, Math.max(0, start - LISTEN_PAD), end);
   }
 
   async function runMenuAction(action) {
@@ -834,7 +829,7 @@ export function mountTexto({ state, api, player }) {
 
   function paintPlayhead(playhead) {
     const el = root();
-    if (!el) return;
+    if (!el || el.hidden) return;
     const hit = wordAtPlayhead(state.get("project"), playhead);
     for (const btn of el.querySelectorAll("button.word")) {
       const on = hit

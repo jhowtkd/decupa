@@ -1,3 +1,5 @@
+import { selectBroll } from "./broll.ts";
+import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, validateDecisionReport } from "./assembly-decisions.ts";
 import { randomUUID } from "node:crypto";
 import type { Executor } from "../pipeline.ts";
 import { createAnalysisClient } from "@decupa/triage";
@@ -12,10 +14,12 @@ import type {
   SpeechTake,
   VisualSpan,
 } from "./types.ts";
+import { parseModelJson, requestValidated } from "./model-response.ts";
 import { validateAssembly } from "./validate.ts";
 import { effectiveWords, retainedRanges, subtractRanges } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
+- Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
 - Monte a sequência de cenas usando apenas estes IDs de fala e este mapa visual (com confiança e cobertura); explique lacunas em gaps.
 - Para cada cena, devolva \`selections\` ordenada: {"takeId"} reaproveita um take existente com todos os cortes e proteções; {"speechId"} acrescenta fala do catálogo como take novo.
 - Nunca proponha speechId de um take já existente na mesma cena: use takeId para preservar cortes e proteções.
@@ -100,6 +104,16 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
   for (const id of changed) {
     if (!seenIds.has(id)) throw new Error(`changedSceneIds referencia cena ausente: ${id}`);
   }
+  for (const previous of project.scenes.filter(scene => scene.support.length)) {
+    const next = scenes.find(scene => scene.id === previous.id);
+    if (!next || canonical(next.support) !== canonical(previous.support)) {
+      throw Error(`apoio existente da cena ${previous.id} exige edição manual`);
+    }
+    const supports = (scene: Scene) => compileScenes(project, [scene]).tracks.find(track => track.name === "V2")!.clips;
+    if (canonical(supports(previous)) !== canonical(supports(next))) {
+      throw Error(`ajuste truncaria apoio existente da cena ${previous.id}; ajuste o apoio manualmente primeiro`);
+    }
+  }
   const annotated = annotateSupport(project, scenes);
   return {
     id: String(raw.id),
@@ -108,6 +122,17 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
     changedSceneIds: raw.changedSceneIds.map(String),
     explanation: String(raw.explanation ?? ""),
   };
+}
+
+/** Revalida o resultado interno sem converter takes existentes em falas novas. */
+export function validateResolvedProposal(proposal: Proposal, project: Project): Proposal {
+  const existing = takeCatalog(project);
+  const valid = validateProposal({...proposal, scenes: proposal.scenes.map(scene => ({
+    ...scene,
+    ...(scene.takes ? {selections: scene.takes.map(take => existing.has(take.id) ? {takeId: take.id} : {speechId: take.speechId})} : {}),
+  }))}, project);
+  if (proposal.decisionReport !== undefined) valid.decisionReport = validateDecisionReport(proposal.decisionReport);
+  return valid;
 }
 
 type Catalogs = {
@@ -378,7 +403,7 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
       // nunca atravessa outra cena silenciosamente.
       if (durationFrames <= 0) continue;
       v2.push({
-        id: `${scene.id}-${item.visualId}`,
+        id: `${scene.id}-${item.visualId}-${item.offsetFrames}`,
         sceneId: scene.id,
         sourceId: span.sourceId,
         sourceStartSeconds: toSeconds(toFrames(span.start)),
@@ -410,7 +435,7 @@ function annotateSupport(project: Project, scenes: Scene[]): Scene[] {
   return scenes.map((scene) => {
     const notes: string[] = [];
     for (const item of scene.support) {
-      const clip = v2.get(`${scene.id}-${item.visualId}`);
+      const clip = v2.get(`${scene.id}-${item.visualId}-${item.offsetFrames}`);
       if (!clip) {
         notes.push(`apoio ${item.visualId} removido: sem duração na cena`);
       } else if (clip.durationFrames < item.durationFrames) {
@@ -422,7 +447,7 @@ function annotateSupport(project: Project, scenes: Scene[]): Scene[] {
   });
 }
 
-function effectiveSpanText(project: Project, sourceId: string, span: Span): string {
+export function effectiveSpanText(project: Project, sourceId: string, span: Span): string {
   const words = effectiveWords(project, sourceId)
     .filter((word) => word.start < span.end && span.start < word.end)
     .sort((a, b) => a.start - b.start || a.end - b.end);
@@ -434,7 +459,7 @@ export async function proposeScenes(
   project: Project,
   input: string,
   signal: AbortSignal,
-  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string },
+  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
   _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
@@ -457,10 +482,14 @@ export async function proposeScenes(
         text: effectiveSpanText(snapshot, span.sourceId, span),
       }))
     );
+  // A proposta organiza falas; o catálogo completo fica na seleção de b-roll.
+  const retainedVisualIds = new Set(snapshot.scenes.flatMap(scene => [
+    ...scene.visualEvidenceIds, ...scene.support.map(item => item.visualId),
+  ]));
   const visual = snapshot.analyses
     .filter((analysis) => inScope.has(analysis.sourceId))
     .flatMap((analysis) =>
-      analysis.visual.map((span) => ({
+      analysis.visual.filter(span => retainedVisualIds.has(span.id)).map((span) => ({
         id: span.id,
         sourceId: span.sourceId,
         start: span.start,
@@ -471,12 +500,14 @@ export async function proposeScenes(
       }))
     );
   const missingVisual = snapshot.analyses.flatMap((analysis) => analysis.visualCoverage.missing).length;
-  const text = await client.send([
+  const content = [
     {
       type: "text",
       text: [
         SCENE_PROMPT,
-        `pedido: ${input}`,
+        "Monte a narrativa pelas falas. O mapa visual contém apenas evidências já usadas nas cenas atuais; a ausência de outras imagens neste prompt não significa falta de cobertura. A seleção automática de apoio será feita separadamente pelo Jev usando o catálogo completo: não acrescente support nem visualEvidenceIds a cenas novas. Preserve os apoios e evidências atuais.",
+        `briefing salvo: ${JSON.stringify(snapshot.input)}`,
+        `pedido adicional: ${input}`,
         `fontes: ${JSON.stringify(snapshot.assembly.sources.map((source) => ({
           id: source.id,
           name: source.name,
@@ -491,11 +522,47 @@ export async function proposeScenes(
         `responda somente o JSON da proposta: {id, baseRevision: ${snapshot.revision}, scenes, changedSceneIds, explanation}`,
       ].join("\n\n"),
     },
-  ], signal);
-  const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const raw = JSON.parse(unfenced) as Record<string, unknown>;
-  return validateProposal(
-    { ...raw, id: randomUUID(), baseRevision: snapshot.revision },
-    snapshot,
-  );
+  ];
+  const generated = await requestValidated(content, (parts, requestSignal) => client.send(parts, requestSignal), (text) => {
+    const raw = parseModelJson(text) as Record<string, unknown>;
+    if (Array.isArray(raw.scenes)) raw.scenes = raw.scenes.map((item: Record<string, unknown>) => {
+      const previous = snapshot.scenes.find(s => s.id === item.id);
+      if (previous?.support.length && Array.isArray(raw.changedSceneIds) && raw.changedSceneIds.includes(item.id)) return {...item, support: previous.support, visualEvidenceIds: [...new Set([...previous.visualEvidenceIds,...previous.support.map(e=>e.visualId)])]};
+      if (!previous?.support.length && Array.isArray(item.support) && item.support.length) throw Error("apoio novo deve ser escolhido pelo Jev, retorne support vazio");
+      return item;
+    });
+    const proposal = validateProposal({ ...raw, id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
+    return {proposal, candidates: resolveCutCandidates(snapshot, proposal, raw.cutCandidates)};
+  }, signal);
+  signal.throwIfAborted();
+  if (generated.candidates.length && deps?.decision?.client && deps.decision.mode !== "off") await deps.onDecision?.("Jev avaliando cortes");
+  const decisionProject = {...snapshot, preparation: snapshot.preparation ? {...snapshot.preparation, request: input} : null};
+  // O pedido adicional também existe na rota legada, sem Preparation persistida.
+  if (!decisionProject.preparation) decisionProject.preparation = {id:"decision",revision:snapshot.revision,mode:"adjust",request:input,status:"running",stage:"proposal",sources:{}};
+  const context = deps?.decision ?? {mode:"off" as const,model:"jev-latest"};
+  const decided = await decideAssemblyCuts(decisionProject, generated.proposal, generated.candidates, context, signal);
+  return selectBroll(decisionProject, decided, context, signal, () => deps?.onDecision?.("Jev escolhendo imagens de apoio") ?? Promise.resolve());
+}
+
+export function setSceneSupport(project: Project, sceneId: string, support: Scene["support"]): Scene[] {
+  const current=project.scenes.find(s=>s.id===sceneId);
+  if(!current) throw Error("cena não encontrada");
+  const visual=visualCatalog(project),fps=project.assembly.fps.num/project.assembly.fps.den;
+  const sources=new Map(project.assembly.sources.map(s=>[s.id,s]));
+  const catalogs={speech:speechCatalog(project),visual,takes:takeCatalog(project),sources};
+  const entries=support.map((entry,i)=>validateSupport(entry,i,catalogs,sceneId));
+  const bare={...current,support:[]};
+  const assembly=compileScenes(project,[bare]);
+  const duration=Math.max(0,...assembly.tracks.flatMap(t=>t.clips.map(c=>c.startFrame+c.durationFrames)));
+  let end=0;
+  for(const entry of [...entries].sort((a,b)=>a.offsetFrames-b.offsetFrames)) {
+    const span=visual.get(entry.visualId)!,source=sources.get(span.sourceId)!;
+    if(!source.hasVideo || span.confidence!=="observed") throw Error("apoio exige vídeo observado");
+    if(entry.offsetFrames<end) throw Error("apoios sobrepostos");
+    if(entry.durationFrames>Math.round(span.end*fps)-Math.round(span.start*fps) || entry.offsetFrames+entry.durationFrames>duration) throw Error("apoio fora dos limites da fonte ou cena");
+    end=entry.offsetFrames+entry.durationFrames;
+  }
+  const removed=new Set(current.support.map(e=>e.visualId));
+  const evidence=[...new Set([...current.visualEvidenceIds.filter(id=>!removed.has(id)),...entries.map(e=>e.visualId)])];
+  return project.scenes.map(s=>s.id===sceneId?{...s,support:entries,visualEvidenceIds:evidence}:s);
 }

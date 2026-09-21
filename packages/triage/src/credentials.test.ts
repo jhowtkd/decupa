@@ -78,6 +78,24 @@ Set-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE -AclObject $acl
     await expectPrivate(path);
     expect((await readCredentials(dir))?.apiKey).toBe("nova");
   });
+
+  it("grava e conserva a chave do Jev ao reescrever só a análise", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-cred-jev-"));
+    await writeCredentials(dir, {
+      preset: "zai",
+      apiKey: "analise",
+      typesafeApiKey: "jev-secret",
+      typesafe: true,
+    });
+    expect((await readCredentials(dir))?.typesafeApiKey).toBe("jev-secret");
+    await writeCredentials(dir, { preset: "gemini", apiKey: "outra" });
+    expect(await readCredentials(dir)).toEqual({
+      preset: "gemini",
+      apiKey: "outra",
+      typesafeApiKey: "jev-secret",
+      typesafe: true,
+    });
+  });
 });
 
 it.runIf(process.platform === "win32")("não sobrescreve chave se a proteção Windows falhar", async () => {

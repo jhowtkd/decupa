@@ -4,7 +4,13 @@ import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Provider, StoredProvider } from "./provider.ts";
 
-export type Credentials = StoredProvider & { apiKey?: string };
+export type Credentials = StoredProvider & {
+  apiKey?: string;
+  /** Chave do Jev (TypeSafe). Independente da chave de análise. */
+  typesafeApiKey?: string;
+  /** Equivale a DECUPA_TYPESAFE=1 persistido neste usuário. */
+  typesafe?: boolean;
+};
 
 const FILE = "credentials";
 const run = promisify(execFile);
@@ -62,16 +68,25 @@ export async function readCredentials(dir: string): Promise<Credentials | null> 
   if (typeof rec.model === "string" && rec.model.length > 0) out.model = rec.model;
   if (typeof rec.baseUrl === "string" && rec.baseUrl.length > 0) out.baseUrl = rec.baseUrl;
   if (typeof rec.apiKey === "string" && rec.apiKey.length > 0) out.apiKey = rec.apiKey;
+  if (typeof rec.typesafeApiKey === "string" && rec.typesafeApiKey.length > 0) {
+    out.typesafeApiKey = rec.typesafeApiKey;
+  }
+  if (rec.typesafe === true) out.typesafe = true;
   return out;
 }
 
 export async function writeCredentials(dir: string, creds: Credentials): Promise<string> {
   const path = credentialsPath(dir);
   await mkdir(join(resolve(dir), ".decupa"), { recursive: true });
+  const previous = await readCredentials(dir).catch(() => null);
   const body: Credentials = { preset: creds.preset };
   if (creds.model) body.model = creds.model;
   if (creds.baseUrl) body.baseUrl = creds.baseUrl;
   if (creds.apiKey) body.apiKey = creds.apiKey;
+  const typesafeApiKey = creds.typesafeApiKey ?? previous?.typesafeApiKey;
+  if (typesafeApiKey) body.typesafeApiKey = typesafeApiKey;
+  const typesafe = creds.typesafe ?? previous?.typesafe;
+  if (typesafe) body.typesafe = true;
   if (process.platform === "win32") {
     // Cria somente arquivo vazio; restringe antes de truncar/gravar uma chave.
     const empty = await open(path, "a");

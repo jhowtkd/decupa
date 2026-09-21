@@ -21,7 +21,7 @@ it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reu
   const dir = await mkdtemp(join(tmpdir(), "decupa-onboarding-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const options = mode === "montagem" ? { projectDir: join(dir, "project") } : { input: join(FIXTURES, "clip.mp4"), workDir: join(dir, "work"), autoStart: false };
-  const app = await startApp({ ...options, port: 0, providerConfigDir: dir });
+  const app = await startApp({ ...options, port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
   expect(await (await fetch(base)).text()).toContain("Configure a IA do Decupa");
@@ -40,10 +40,26 @@ it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reu
   expect(await (await fetch(`http://127.0.0.1:${next.port}`)).text()).not.toContain("Configure a IA do Decupa");
 });
 
+it("grava credencial da empresa no boot e pula o formulário", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-company-boot-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await startApp({
+    projectDir: join(dir, "project"),
+    port: 0,
+    providerConfigDir: dir,
+    env: { DECUPA_COMPANY_API_KEY: "empresa-secret" },
+  });
+  cleanup.push(() => app.close());
+  const html = await (await fetch(`http://127.0.0.1:${app.port}`)).text();
+  expect(html).not.toContain("Configure a IA do Decupa");
+  expect(html).not.toContain("empresa-secret");
+  expect(await readCredentials(dir)).toEqual({ preset: "zai", apiKey: "empresa-secret" });
+});
+
 it("onboarding com Z.ai lista a opção e conclui a configuração", async () => {
   const dir = await mkdtemp(join(tmpdir(), "decupa-onboarding-zai-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
-  const app = await startApp({ projectDir: join(dir, "project"), port: 0, providerConfigDir: dir });
+  const app = await startApp({ projectDir: join(dir, "project"), port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
   expect(await (await fetch(base)).text()).toContain('<option value="zai">Z.ai</option>');

@@ -1,3 +1,4 @@
+import { validateDecisionReport } from "./assembly-decisions.ts";
 import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { access } from "node:fs/promises";
@@ -419,6 +420,9 @@ function validateV2(value: Record<string, unknown>): Project {
     if (!SHA256.test(sha)) throw new Error("previewArtifact.sha256 inválido");
     nonEmptyString(previewArtifact.assemblySha256, "previewArtifact.assemblySha256");
   }
+  if (isRecord(value.proposal) && value.proposal.decisionReport !== undefined) {
+    value.proposal.decisionReport = validateDecisionReport(value.proposal.decisionReport);
+  }
   return {
     version: 2,
     id: value.id,
@@ -684,7 +688,8 @@ export async function readHistorySnapshot(dir: string, revision: number): Promis
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(historyPath(dir, revision), "utf8"));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`histórico inválido para a revisão ${revision}`);
     throw new Error(`sem histórico para a revisão ${revision}`);
   }
   if (!isRecord(raw) || raw.revision !== revision) {

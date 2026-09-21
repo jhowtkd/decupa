@@ -5,6 +5,7 @@
 export function createState(initial = {}) {
   const values = { ...initial };
   const listeners = new Map();
+  const snapshots = new Map();
   function notify(key, value) {
     const subs = listeners.get(key);
     // oxlint-disable-next-line no-useless-spread -- cópia intencional: um ouvinte pode se remover durante o notify.
@@ -15,6 +16,12 @@ export function createState(initial = {}) {
       return values[key];
     },
     set(key, value) {
+      // Polls idênticos não recriam mídia, timeline nem campos em edição.
+      if (["project", "operation", "undoRevision", "brollCandidates"].includes(key)) {
+        const snapshot = JSON.stringify(value);
+        if (snapshots.get(key) === snapshot) return;
+        snapshots.set(key, snapshot);
+      }
       if (key === "project") {
         const prev = values.project;
         const prevRev = prev ? prev.revision : undefined;

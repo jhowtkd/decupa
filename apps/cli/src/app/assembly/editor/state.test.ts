@@ -22,3 +22,13 @@ it("revisão nova reseta watched; mesma revisão preserva", () => {
   expect(s.get("watched")).toEqual({ revision: null, ended: false });
   expect(seen).toEqual([{ revision: null, ended: false }]);
 });
+
+it("ignora snapshots idênticos mas publica progresso na mesma revisão", () => {
+  const s = createState();
+  const seen: unknown[] = [];
+  s.subscribe("project", (p: unknown) => seen.push(p));
+  s.set("project", { revision: 2, preparation: { stage: "audio" } });
+  s.set("project", { revision: 2, preparation: { stage: "audio" } });
+  s.set("project", { revision: 2, preparation: { stage: "visual" } });
+  expect(seen).toHaveLength(2);
+});

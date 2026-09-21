@@ -306,3 +306,17 @@ it("validateWord aceita cutStart na pausa anterior e recusa fora da fonte", () =
     start: 1.0, end: 1.5, cutStart: 1.6, cutEnd: 1.7,
   }, sources)).toThrow(/cutStart/);
 });
+
+it("persiste relatório Jev opcional e rejeita scores inválidos", async () => {
+  const p = validateProject(projectAt(1));
+  expect(validateProject(p).proposal).toBeNull();
+  p.proposal={id:"p",baseRevision:1,scenes:[],changedSceneIds:[],explanation:"teste",decisionReport:{
+    mode:"hybrid",status:"completed",model:"test",elapsedMs:10,
+    cuts:[{id:"c",sceneId:"s",takeId:"t",applied:true,score:0.8}],
+  }};
+  const dir=await mkdtemp(join(tmpdir(),"assembly-report-"));
+  await createProject(dir,p);
+  expect((await loadProject(dir)).proposal?.decisionReport).toEqual(p.proposal.decisionReport);
+  p.proposal.decisionReport!.cuts[0]!.score=2;
+  expect(()=>validateProject(p)).toThrow(/relatório/);
+});

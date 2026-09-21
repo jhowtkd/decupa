@@ -177,10 +177,10 @@ export function mountSequencia({ state, api, player }) {
   /** Desfaz a última edição (mesmo POST do antigo botão do contexto). */
   function undoEdit() {
     const p = state.get("project");
-    if (!p || p.revision === 0) return;
+    if (!p || state.get("undoRevision") == null) return;
     void api.call("/project/undo", {
       method: "POST",
-      body: JSON.stringify({ baseRevision: p.revision, revision: p.revision - 1 }),
+      body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
       label: "Desfazendo…",
     });
   }
@@ -196,13 +196,18 @@ export function mountSequencia({ state, api, player }) {
     undo.textContent = "⎌ Desfazer";
     undo.setAttribute("aria-label", "Desfazer edição");
     undo.title = "Desfazer edição";
-    undo.disabled = !p || p.revision === 0;
+    undo.disabled = !p || state.get("undoRevision") == null;
+    if (undo.disabled) undo.title = "Nenhuma alteração com histórico para desfazer";
     undo.onclick = undoEdit;
     bar.appendChild(undo);
     return bar;
   }
 
+  let signature = "";
   function render(p) {
+    const next = JSON.stringify(p && [p.revision, p.scenes, p.assembly.sources, p.captions]);
+    if (next === signature) return;
+    signature = next;
     const el = root();
     if (!el) return;
     if (!p) {
@@ -216,16 +221,21 @@ export function mountSequencia({ state, api, player }) {
     head.className = "faixa-head";
     const label = document.createElement("span");
     label.className = "panel-label";
-    label.textContent = "Sequência";
+    label.textContent = "Timeline";
     const total = document.createElement("span");
     total.className = "data total";
     total.textContent = formatTimecode(duration);
     head.append(label, total);
-    for (const source of p.assembly.sources.filter((item) => item.included)) {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = source.name + " · " + Math.round(source.durationSeconds) + "s";
-      head.appendChild(chip);
+    const count = document.createElement("span");
+    count.className = "muted";
+    count.textContent = p.scenes.length + " cenas · " + p.assembly.sources.filter((source) => source.included).length + " materiais";
+    head.append(count, transportRow(p));
+    if (!blocks.length) {
+      const empty = document.createElement("div");
+      empty.className = "timeline-empty";
+      empty.innerHTML = '<span aria-hidden="true">▤</span><div><strong>Sua sequência aparece aqui</strong><p>Prepare os materiais para criar o primeiro corte.</p></div>';
+      el.replaceChildren(head, empty);
+      return;
     }
     // Régua: marcas nice (rulerTicks) posicionadas por TEMPO, não por
     // índice — space-between mentiria contra os blocos/playhead, que são
@@ -243,7 +253,7 @@ export function mountSequencia({ state, api, player }) {
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     // Layout crítico inline (o tema segue em page.css, fora desta tarefa).
-    strip.style.cssText = "position:relative;display:flex;width:100%;min-height:64px;cursor:pointer;";
+    strip.style.cssText = "position:relative;width:100%;min-height:154px;cursor:pointer;";
     strip.setAttribute("role", "slider");
     strip.setAttribute("aria-label", "Sequência da montagem");
     strip.setAttribute("aria-valuemin", "0");
@@ -254,15 +264,20 @@ export function mountSequencia({ state, api, player }) {
       const title = block.label + " · " + formatTimecode(block.start) + "–" + formatTimecode(block.end);
       // Só a cena ganha canvas de waveform; o apoio segue bloco puro.
       const wave = block.kind === "scene"
-        ? '<canvas class="seq-wave" hidden style="position:absolute;inset:0;width:100%;height:100%;"></canvas>'
+        ? '<canvas class="seq-wave" hidden></canvas>'
         : "";
-      const pos = block.kind === "scene" ? "position:relative;overflow:hidden;" : "";
+      const pos = "position:absolute;left:" + (duration > 0 ? block.start / duration * 100 : 0).toFixed(3) + "%;";
+      const scene = p.scenes.find((item) => item.id === block.sceneId);
+      const source = p.assembly.sources.find((item) => item.id === scene?.takes[0]?.sourceId);
+      const thumb = block.kind === "scene" && source?.hasVideo
+        ? '<img class="timeline-thumb" alt="" loading="lazy" src="/project/thumbnail/' + encodeURIComponent(source.id) + '">' : "";
       return '<div class="seq-bloco' + (block.kind === "support" ? " seq-apoio" : "") + '"'
         + ' data-scene="' + esc(block.sceneId) + '" data-kind="' + esc(block.kind) + '"'
+        + ' data-group="' + esc(block.groupId || '') + '"'
         + ' data-start="' + block.start + '" data-end="' + block.end + '"'
         + ' title="' + esc(title) + '"'
         + ' style="width:' + width.toFixed(3) + '%;' + pos + '">'
-        + wave
+        + thumb + '<span class="clip-label">' + esc(block.label) + "</span>" + wave
         + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + "s</span>"
         + "</div>";
     }).join("")
@@ -284,7 +299,7 @@ export function mountSequencia({ state, api, player }) {
         captions.appendChild(cueEl);
       }
     }
-    el.replaceChildren(head, ruler, strip, ...(captions ? [captions] : []), transportRow(p));
+    el.replaceChildren(head, ruler, strip, ...(captions ? [captions] : []));
     paint(state.get("playhead"));
     void hydrateWaves(p);
   }
@@ -399,6 +414,7 @@ export function mountSequencia({ state, api, player }) {
     const p = state.get("project");
     if (!p) return;
     const seconds = seekFromRatio(p, ratio);
+    state.set("selectedScene", activeScene(p, seconds));
     state.set("playhead", seconds);
     try {
       player.seek(seconds);
@@ -420,6 +436,15 @@ export function mountSequencia({ state, api, player }) {
     let scrubbing = false;
     let scrubMoved = false;
     let lastScrub = 0;
+    el.addEventListener("keydown", (ev) => {
+      if (!ev.target.closest(".seq-strip") || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
+      ev.preventDefault();
+      const p = state.get("project");
+      const duration = p ? montageDuration(p) : 0;
+      const current = state.get("playhead") || 0;
+      const seconds = ev.key === "Home" ? 0 : ev.key === "End" ? duration : current + (ev.key === "ArrowRight" ? 1 : -1);
+      seekRatio(duration ? seconds / duration : 0);
+    });
     el.addEventListener("click", (ev) => {
       // O clique que fecha um arraste chega depois do pointerup: ignora.
       if (scrubMoved) {
@@ -429,6 +454,8 @@ export function mountSequencia({ state, api, player }) {
       const strip = ev.target.closest(".seq-strip");
       if (!strip) return;
       seekRatio(Math.min(1, Math.max(0, ratioOfEvent(strip, ev))));
+      const block=ev.target.closest(".seq-bloco");
+      if(block) {state.set("selectedScene",block.dataset.scene);state.set("selectedSupport",block.dataset.group||null);}
     });
     el.addEventListener("pointerdown", (ev) => {
       const strip = ev.target.closest(".seq-strip");
@@ -436,8 +463,11 @@ export function mountSequencia({ state, api, player }) {
       scrubbing = true;
       scrubMoved = false;
       lastScrub = 0;
+      const block = ev.target.closest(".seq-bloco");
       strip.setPointerCapture?.(ev.pointerId);
       seekRatio(Math.min(1, Math.max(0, ratioOfEvent(strip, ev))));
+      // Captura retargeta o click para a faixa; selecione pelo alvo original.
+      if (block) { state.set("selectedScene", block.dataset.scene); state.set("selectedSupport", block.dataset.group || null); }
     });
     el.addEventListener("pointermove", (ev) => {
       if (!scrubbing) return;
@@ -476,6 +506,7 @@ export function mountSequencia({ state, api, player }) {
   }
 
   bind();
+  state.subscribe("undoRevision", () => render(state.get("project")));
   state.subscribe("project", (p) => render(p));
   state.subscribe("playhead", (t) => paint(t));
   render(state.get("project"));

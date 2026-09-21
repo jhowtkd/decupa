@@ -583,3 +583,40 @@ it("fallback do motor publica cache identificado como software", async () => {
     dir, "preview-cache", previewIdentity(assembly, "videotoolbox"), "preview.json",
   ))).rejects.toThrow();
 });
+
+
+it("render real alterna V1/V2/V1 e mantém voz de 440Hz sem áudio de apoio",async()=>{
+  const {execFile}=await import("node:child_process");
+  const {promisify}=await import("node:util");
+  const {readFile}=await import("node:fs/promises");
+  const {SpawnExecutor}=await import("../pipeline.ts");
+  const {blankProject}=await import("./routes.ts");
+  const {compileScenes,validateProposal}=await import("./scenes.ts");
+  const {brollCandidates,candidateSupport}=await import("./broll.ts");
+  const run=promisify(execFile),dir=await mkdtemp(join(tmpdir(),"decupa-av-"));
+  const p=blankProject("av");p.assembly=fixtureAssembly();p.assembly.width=320;p.assembly.height=240;
+  for(const [index,color,hz,seconds] of [[0,"red",440,6],[1,"blue",880,3]] as const) {
+    const source=p.assembly.sources[index]!;source.path=join(dir,`${source.id}.mp4`);source.durationSeconds=seconds;source.hasAudio=true;
+    await run("ffmpeg",["-v","error","-y","-f","lavfi","-i",`color=c=${color}:s=320x240:r=25:d=${seconds}`,"-f","lavfi","-i",`sine=frequency=${hz}:duration=${seconds}`,"-c:v","libx264","-pix_fmt","yuv420p","-c:a","aac","-shortest",source.path]);
+    source.sha256=await hashFile(source.path);
+  }
+  p.analyses=[{sourceId:"a",key:"a",status:"ready",words:[],wordsStatus:"missing",speech:[{id:"a:s",sourceId:"a",start:0,end:6,text:"voz"}],visual:[],visualCoverage:{requested:[],returned:[],missing:[]}},
+    {sourceId:"b",key:"b",status:"ready",words:[],wordsStatus:"missing",speech:[],visual:[0,1,2].map(start=>({id:`b:v${start}`,sourceId:"b",start,end:start+1,text:"apoio",confidence:"observed",tags:[]})),visualCoverage:{requested:[],returned:[],missing:[]}}];
+  p.scenes=validateProposal({id:"p",baseRevision:p.revision,changedSceneIds:["s"],scenes:[{id:"s",speechIds:["a:s"],support:candidateSupport(p,brollCandidates(p)[0]!,25,75)}]},p).scenes;
+  p.assembly=compileScenes(p,p.scenes);
+  const payload=toEngineTimeline(p.assembly) as {tracks:{name:string;clips:{muted:boolean;volume:number}[]}[]};
+  expect(payload.tracks.find(t=>t.name==="V2")!.clips.every(c=>c.muted&&c.volume===0)).toBe(true);
+  const out=await renderAssembly(p.assembly,dir,new SpawnExecutor());
+  for(const [time,channel] of [[0.5,0],[2,2],[4.5,0]] as const) {
+    const path=join(dir,`frame-${time}.rgb`);
+    await run("ffmpeg",["-v","error","-y","-ss",String(time),"-i",out,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo",path]);
+    const pixel=await readFile(path);expect(pixel[channel]).toBeGreaterThan(150);expect(pixel[channel===0?2:0]).toBeLessThan(80);
+  }
+  const pcm=join(dir,"voice.pcm");
+  await run("ffmpeg",["-v","error","-y","-ss","1.2","-i",out,"-t","2.6","-vn","-ac","1","-ar","16000","-f","s16le",pcm]);
+  const bytes=await readFile(pcm);
+  const energy=(hz:number)=>{let re=0,im=0;for(let i=0;i<bytes.length/2;i++){const sample=bytes.readInt16LE(i*2),phase=2*Math.PI*hz*i/16000;re+=sample*Math.cos(phase);im+=sample*Math.sin(phase);}return re*re+im*im;};
+  expect(energy(440)).toBeGreaterThan(50*energy(880));
+  for(const source of p.assembly.sources) expect(await hashFile(source.path)).toBe(source.sha256);
+  expect(p.finalApprovedRevision).toBeNull();
+});

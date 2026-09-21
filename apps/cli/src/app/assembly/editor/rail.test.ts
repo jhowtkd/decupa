@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { countsFor, deliveryChecklist, exportView, stageLabel } from "./rail.js";
+import { countsFor, deliveryChecklist, exportView, stageLabel, sourceProgress, preparationView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -99,4 +99,18 @@ it("stageLabel traduz etapas e repassa desconhecidas", () => {
   expect(stageLabel("rendering")).toBe("Renderizando prévia");
   expect(stageLabel("cancelled")).toBe("Cancelada");
   expect(stageLabel("weird-stage")).toBe("weird-stage");
+});
+
+
+it("falha visual prevalece sobre transcrição pronta e operação ready", () => {
+  const source = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
+  const p = { assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "ready" }],
+    preparation: { status: "interrupted", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "error", error: "intervalo inválido" } } } };
+  expect(sourceProgress(p, source)).toMatchObject({ tone: "error", label: "Analisar imagens: falhou" });
+  expect(preparationView(p, { stage: "ready" })).toMatchObject({ tone: "error", busy: false, done: 0, detail: "entrevista.mov · intervalo inválido" });
+  p.preparation.status = "running";
+  p.preparation.sources.a.visual = "running";
+  expect(sourceProgress(p, source)).toMatchObject({ tone: "running", label: "Analisar imagens…" });
+  p.preparation.status = "cancelled";
+  expect(sourceProgress(p, source).label).toBe("Preparação interrompida");
 });

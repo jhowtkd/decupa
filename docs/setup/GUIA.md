@@ -38,7 +38,7 @@ Caminhos absolutos e com espaços funcionam — os scripts não passam por shell
 - Acesso do usuário aos repositórios `jhowtkd/decupa` e `jhowtkd/video-agent-kit-plugin`.
 - Pasta de instalação e pasta separada para projetos.
 - Um vídeo curto de fala PT-BR autorizado para validação local.
-- Provedor de IA obrigatório na primeira abertura: escolha provedor, modelo/endpoint quando necessário e informe a chave no formulário local. Não envie a chave no prompt.
+- Provedor de IA: na máquina do funcionário, defina `DECUPA_COMPANY_API_KEY` (e `DECUPA_COMPANY_PRESET` se não for Z.ai) **antes** do setup — o formulário é pulado. Sem isso, a primeira abertura pede a chave no app. Nunca envie a chave no prompt.
 - Internet para baixar dependências e modelos. Transcrição local usa CPU por padrão; GPU não é requisito do código atual. Não há mínimo de RAM/disco homologado: medir no computador antes de prometer desempenho.
 
 O agente deve instalar os pré-requisitos ausentes antes de executar o setup, conforme o prompt. Pré-requisitos de sistema — o script confere todos e **não instala nenhum deles** (sem ferramentas globais, sem administrador):
@@ -61,7 +61,7 @@ O setup baixa e carrega os modelos antes de declarar a instalação concluída, 
 
 Aguarde essas etapas: conexão indisponível, download incompleto ou falha ao carregar um modelo fazem o setup terminar com erro. Corrija a causa e repita `node scripts/setup.mjs`; os caches existentes são reutilizados, sem apagar dados.
 
-O primeiro vídeo com os modelos padrão usa esse cache, desde que rode com o mesmo usuário e configuração. Trocar idioma/modelo ou remover o cache pode exigir novos downloads. Transcrição continua local (CPU); downloads de arquivos não são chamadas a um provedor de IA. A configuração do provedor é obrigatória na primeira abertura do app, mesmo que a transcrição em si rode localmente.
+O primeiro vídeo com os modelos padrão usa esse cache, desde que rode com o mesmo usuário e configuração. Trocar idioma/modelo ou remover o cache pode exigir novos downloads. Transcrição continua local (CPU); downloads de arquivos não são chamadas a um provedor de IA. A configuração do provedor (arquivo `~/.decupa/credentials` ou o formulário, se o ambiente não tiver chave) é obrigatória antes de análise paga, mesmo que a transcrição em si rode localmente.
 
 Registre o tempo de instalação dos modelos separado do processamento do vídeo. As medições anteriores de setup (44 s/4 s) e ingestão (158 s para vídeo de 107 s) ocorreram antes desta etapa obrigatória e não estimam uma instalação fria atual. Carregar os modelos comprova sua disponibilidade, mas o teste com vídeo continua necessário para validar transcrição e render.
 
@@ -85,7 +85,7 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 ## 5. Instalação falhou no meio: retomada e proteção do motor
 
 - O setup é retomável: **repita `node scripts/setup.mjs`**. Ele inspeciona o estado existente, continua de onde parou e não faz reset forçado de nada.
-- Motor existente em `work/video-agent-kit-plugin` nunca é sobrescrito. Se estiver modificado, em outra revisão ou não for um clone válido, o setup recusa com mensagem do tipo “motor existente ...; nenhuma alteração feita” e preserva tudo intacto. A decisão é sua: preserve as mudanças locais (use um clone separado) ou restaure o motor manualmente.
+- Motor existente em `work/video-agent-kit-plugin` nunca é sobrescrito. Se só estiver modificado, o setup avisa e **continua** (Python, modelos, credencial). Se estiver em outra revisão, use `node scripts/setup.mjs --keep-engine` para preservar e seguir; clone inválido ainda aborta. Restaurar o motor continua sendo decisão sua.
 - Se `work/engine-venv` existir sem um Python válido, o setup falha informando o caminho e pedindo para remover a pasta manualmente — ele não apaga nada automaticamente.
 - Porta ocupada: escolha outra com `--port`, sem encerrar processos desconhecidos.
 - `bash scripts/setup-engine.sh` continua existindo, mas apenas delega para `node scripts/setup.mjs --engine-only` (mesma instalação segura, sem lógica Git duplicada).
@@ -100,9 +100,27 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 
 Se encontrar um bloqueio de plataforma, registre o erro concreto e peça a decisão necessária antes de instalar WSL, reiniciar ou portar código. Não crie executáveis falsos `open`/`say` para ocultar falhas.
 
-## 7. Provedor obrigatório na primeira abertura
+## 7. Provedor: chave da empresa no ambiente (funcionários)
 
-Antes de liberar limpeza ou montagem, o app mostra o formulário de provedor e chave. Não há opção de pular. Configurações incompletas mantêm o app bloqueado. A chave é salva em `~/.decupa/credentials` para o usuário do sistema e reutilizada em novos projetos, sem aparecer nas respostas HTTP. macOS/Linux usam `0600`; Windows usa ACL restrita ao usuário.
+Não cole a chave no chat, no Git, nem no prompt de um agente. Ela entra só no ambiente da máquina.
+
+Antes de `node scripts/setup.mjs` (ou da primeira abertura), defina no perfil do usuário ou no MDM:
+
+No zsh interativo o `#` não inicia comentário: não cole explicações na mesma linha do `export`.
+
+```bash
+export DECUPA_COMPANY_PRESET=zai
+export DECUPA_COMPANY_API_KEY='cole-a-chave-de-analise-aqui'
+export TYPESAFE_API_KEY='cole-a-chave-do-jev-aqui'
+```
+
+`DECUPA_COMPANY_PRESET` aceita `zai`, `gemini`, `minimax` ou `custom`. A primeira chave é a de análise; a segunda é o Jev (TypeSafe).
+
+Equivalente já reconhecido: `ZAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY` ou `DECUPA_API_KEY` (custom também precisa de `DECUPA_BASE_URL` e `DECUPA_MODEL`). O Jev também aceita `TYPESAFE_API_KEY`. Sem `DECUPA_TYPESAFE=0`, gravar a chave do Jev já o deixa disponível neste usuário (o projeto ainda precisa de `.decupa/decision.json` em modo hybrid para usá-lo).
+
+O setup e a primeira abertura gravam `~/.decupa/credentials` com permissão só daquele usuário (`0600` no macOS/Linux; ACL no Windows) e **pulam o formulário**. Arquivo existente não é sobrescrito. A chave não aparece nas respostas HTTP. Para custom, o endpoint precisa ser HTTPS.
+
+Sem essas variáveis, o app continua pedindo provedor e chave na primeira abertura. Configurações incompletas mantêm o app bloqueado. A credencial vale para os próximos projetos.
 
 Salvar valida os campos e o endpoint HTTPS, sem chamada remota: não comprova validade da chave, saldo nem suporte a imagens. A autorização de processamento pago permanece nos controles de cada fluxo. Para montagem com vídeo, selecione um modelo com suporte visual: a análise extrai localmente frames JPEG a 1 FPS e os envia via `image_url`, de modo que o endpoint custom precisa ser compatível com chat/completions e o modelo precisa aceitar imagens. Ações mais curtas que um segundo podem ficar incertas ou indisponíveis. O launcher disponibiliza o provedor configurado para esses controles sem exigir flags no terminal.
 

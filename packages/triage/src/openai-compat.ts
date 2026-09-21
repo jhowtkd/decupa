@@ -127,6 +127,11 @@ export class OpenAiCompatClient {
       messages: [{ role: "user", content }],
       max_tokens: this.maxTokens,
     };
+    // GLM-5.3 defaults to maximum reasoning, too slow for interactive text edits.
+    // Keep multimodal analysis and other models on their existing settings.
+    if (this.model.toLowerCase() === "glm-5.3-flash" && content.every(part =>
+      typeof part === "string" || (part !== null && typeof part === "object" && "type" in part && part.type === "text")
+    )) payload.reasoning_effort = "low";
     if (this.jsonObject) payload.response_format = { type: "json_object" };
     let res: Response;
     try {

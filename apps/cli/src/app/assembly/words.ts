@@ -1,3 +1,4 @@
+import { setSceneSupport } from "./scenes.ts";
 import { energyEnvelope, snapCut } from "@decupa/acoustics";
 import type {
   EditAction,
@@ -400,6 +401,7 @@ function applyDeleteScene(project: Project, sceneId: string): Project {
  */
 export function applyTextEdit(project: Project, action: EditAction): Project {
   switch (action.type) {
+    case "set-support": return invalidatePreview({...project, scenes: setSceneSupport(project, action.sceneId, action.support)});
     case "remove": return applyRemoveRestore(project, action, "remove");
     case "restore": return applyRemoveRestore(project, action, "restore");
     case "protect": return applyProtect(project, action, "protect");
@@ -518,6 +520,14 @@ export function parseEditAction(raw: unknown): EditAction {
         throw new Error("direção inválida para mover cena");
       }
       return { type: "move-scene", sceneId: nonEmptyId(raw.sceneId, "sceneId"), direction: raw.direction };
+    case "set-support": {
+      if (!Array.isArray(raw.support)) throw Error("support precisa ser array");
+      const support=raw.support.map(entry=>{
+        if(!entry || typeof entry!=="object" || typeof entry.visualId!=="string" || !Number.isSafeInteger(entry.offsetFrames) || entry.offsetFrames<0 || !Number.isSafeInteger(entry.durationFrames) || entry.durationFrames<=0) throw Error("apoio inválido");
+        return {visualId:entry.visualId,offsetFrames:entry.offsetFrames as number,durationFrames:entry.durationFrames as number};
+      });
+      return {type:"set-support",sceneId:nonEmptyId(raw.sceneId,"sceneId"),support};
+    }
     case "delete-scene":
       return { type: "delete-scene", sceneId: nonEmptyId(raw.sceneId, "sceneId") };
     default:
