@@ -45,7 +45,9 @@ export function parseSourceTimecode(raw: string, rate: Rate | null): SourceTimec
     const isNtsc = nominal % 30 === 0 && Math.abs(fps * 1001 / 1000 - nominal) / nominal < 0.001;
     const droppedPerMinute = nominal / 30 * 2;
     const totalMinutes = hours * 60 + minutes;
-    if (!isNtsc || (minutes % 10 !== 0 && frames < droppedPerMinute)) {
+    // Rótulos pulados existem só no segundo 0 de minuto não-múltiplo de 10;
+    // `00:01:01;01` é válido, `00:01:00;01` não.
+    if (!isNtsc || (minutes % 10 !== 0 && seconds === 0 && frames < droppedPerMinute)) {
       return { raw, frames: null, dropFrame };
     }
     // O rótulo conta quadros na taxa nominal; saltar 2 rótulos por minuto
