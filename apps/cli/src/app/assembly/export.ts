@@ -1,3 +1,4 @@
+import { buildHandoff } from "./handoff.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -30,6 +31,7 @@ type ExportManifest = {
   timeline?: unknown;
   reference?: unknown;
   sources?: unknown;
+  handoff?: unknown;
 };
 
 async function exportedFileSha(path: string): Promise<string | null> {
@@ -55,6 +57,7 @@ async function exportedDirValid(dest: string): Promise<boolean> {
     }
     const otioSha = await exportedFileSha(join(dest, "timeline.otio"));
     if (otioSha !== manifest.timeline) return false;
+    if (manifest.handoff !== undefined && await exportedFileSha(join(dest, "handoff.json")) !== manifest.handoff) return false;
     const refSha = await exportedFileSha(join(dest, "reference.mp4"));
     if (refSha !== manifest.reference) return false;
     const info = await probe(join(dest, "reference.mp4")).catch(() => null);
@@ -164,6 +167,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     }
     const otioText = `${buildOtio(snapshot)}\n`;
     const otioSha = createHash("sha256").update(otioText, "utf8").digest("hex");
+    const handoffText = JSON.stringify({projectId:project.id,revision:project.revision,items:buildHandoff(project)},null,2)+"\n";
+    const handoffSha = createHash("sha256").update(handoffText).digest("hex");
     const sourceShas = Object.fromEntries(
       snapshot.sources.map((s) => [s.id, s.sha256]),
     );
@@ -174,6 +179,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         existing.revision === project.revision
         && existing.timeline === otioSha
         && existing.reference === refSha
+        && existing.handoff === handoffSha
         && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
       if (matchesExpected && (await exportedDirValid(dest))) {
         return dest;
@@ -189,7 +195,10 @@ export async function exportApproved(project: Project, dir: string): Promise<str
       const otioPath = join(tmp, "timeline.otio");
       await writeFile(otioPath, otioText, "utf8");
       await copyFile(reference, join(tmp, "reference.mp4"));
+      await writeFile(join(tmp,"handoff.json"),handoffText);
+      await writeFile(join(tmp,"handoff.md"),`# Handoff — revisão ${project.revision}\n\n`+buildHandoff(project).map(n=>`- ${n.sceneId} · frame ${n.startFrame}, ${n.durationFrames} frames · ${n.destination}: ${n.description}`).join("\n"));
       const manifest = {
+        handoff: handoffSha,
         revision: project.revision,
         timeline: otioSha,
         reference: refSha,
@@ -221,6 +230,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
             existing.revision === project.revision
             && existing.timeline === otioSha
             && existing.reference === refSha
+        && existing.handoff === handoffSha
             && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
           if (same && (await exportedDirValid(dest))) return dest;
         } catch {

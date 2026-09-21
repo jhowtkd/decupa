@@ -1,3 +1,4 @@
+import type { Recipe } from "../templates/types.ts";
 export type Rate = { num: number; den: number };
 
 export type Source = {
@@ -55,7 +56,13 @@ export type VisualSpan = Span & {
   tags: string[];
 };
 
+export type AnimationNote = {
+  id: string; description: string; destination: "Resolve" | "After Effects";
+  reference?: {templateId:string; revision:number; start:number; end:number};
+};
+
 export type Scene = {
+  animationNotes?: AnimationNote[];
   id: string;
   objective: string;
   rationale: string;
@@ -167,7 +174,11 @@ export type DecisionReport = {
   supports?: {sceneId:string; candidateId:string|null; outcome:"selected"|"none"|"fallback"; reason:string}[];
 };
 
+export type TemplateReport = {ruleId:string;status:"applied"|"adapted"|"unavailable";reason:string}[];
+
 export type Proposal = {
+  template?: Recipe | null;
+  templateReport?: TemplateReport;
   decisionReport?: DecisionReport;
   id: string;
   baseRevision: number;
@@ -184,6 +195,7 @@ export type PreviewArtifact = {
 };
 
 export type Project = {
+  template?: Recipe | null;
   version: 2;
   id: string;
   revision: number;

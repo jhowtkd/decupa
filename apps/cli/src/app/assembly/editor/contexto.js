@@ -4,7 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, exportView } from "./rail.js";
+import { deliveryChecklist, exportView, resolveView } from "./rail.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -117,6 +117,7 @@ export function mountStage({ state, api, player }) {
   }
 
   function renderPreview(project) {
+    hint.textContent = "Assista à prévia atual antes de aprovar. " + (project?.scenes||[]).flatMap(s=>(s.animationNotes||[]).map(n=>"Pendente no handoff: "+n.description+" ("+n.destination+")")).join(" · ");
     if (!project) return;
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
@@ -419,12 +420,14 @@ export function mountContexto({ state, api, player }) {
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<ul id="deliveryChecklist" class="plain"></ul>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
+    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
   root.appendChild(delivery);
   const exportUi = { status: "idle", error: null, revision: null };
+  let resolveDelivery=null;
+  let resolveRevision=null;
 
   /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
   function renderCorrections(project) {
@@ -480,13 +483,18 @@ export function mountContexto({ state, api, player }) {
       { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
       { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
     ] : null;
+    if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
+    const nativeView=resolveView(resolveDelivery,approved);
     const exportButton = document.getElementById("export");
-    exportButton.textContent = view.buttonLabel;
+    exportButton.textContent = nativeView.buttonLabel;
     exportButton.classList.toggle("is-loading", view.loading);
-    setDisabled(exportButton, view.disabled);
+    setDisabled(exportButton, nativeView.disabled);
+    document.getElementById("exportDrp").hidden=resolveDelivery?.status!=="ready";
+    document.getElementById("resolveNewCopy").hidden=!nativeView.newCopy;
+    setDisabled(document.getElementById("exportTimeline"),view.disabled);
     const exportStatus = document.getElementById("exportStatus");
-    exportStatus.textContent = view.statusText;
+    exportStatus.textContent = (nativeView.statusText||view.statusText)+" · O .drp depende dos arquivos de mídia originais.";
     exportStatus.className = "muted export-" + view.tone;
     for (const format of view.formats || []) {
       const link = document.createElement("a");
@@ -496,6 +504,7 @@ export function mountContexto({ state, api, player }) {
       link.setAttribute("download", format.file);
       downloads.appendChild(link);
     }
+    if(resolveDelivery?.drpPath){const link=document.createElement("a");link.href="/project/resolve-drp";link.textContent="Baixar projeto .drp";link.download="projeto.drp";downloads.appendChild(link);}
     const history = document.getElementById("versionHistory");
     history.replaceChildren(
       chip("revisão " + project.revision),
@@ -540,7 +549,7 @@ export function mountContexto({ state, api, player }) {
     }),
     label: "Ajustando montagem…",
   });
-  document.getElementById("export").onclick = async () => {
+  document.getElementById("exportTimeline").onclick = async () => {
     const project = state.get("project");
     exportUi.status = "running";
     exportUi.error = null;
@@ -564,6 +573,29 @@ export function mountContexto({ state, api, player }) {
     }
     renderDelivery(state.get("project"));
   };
+
+  async function deliverResolve(newCopy=false, exportDrp=false) {
+    const project=state.get("project");resolveRevision=project.revision;
+    resolveDelivery={status:"running",stage:"connecting"};renderDelivery(project);
+    let stopped=false;
+    async function poll(){
+      if(stopped)return;
+      try{const response=await fetch("/project/resolve-status");const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
+      if(!stopped)setTimeout(poll,1000);
+    }
+    setTimeout(poll,500);
+    try{
+      const {res,body}=await api.call(exportDrp?"/project/export-drp":"/project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
+      if(res.ok)resolveDelivery=body.delivery;
+      else {const response=await fetch("/project/resolve-status");const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
+      if(res.ok){exportUi.status="done";exportUi.revision=project.revision;}
+    }catch(error){resolveDelivery={status:"error",error:error.message};}
+    finally{stopped=true;renderDelivery(state.get("project"));}
+  }
+  document.getElementById("export").onclick=()=>deliverResolve();
+  document.getElementById("resolveNewCopy").onclick=()=>deliverResolve(true);
+  document.getElementById("exportDrp").onclick=()=>deliverResolve(false,true);
+  fetch("/project/resolve-status").then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
 
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));

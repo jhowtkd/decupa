@@ -1,3 +1,6 @@
+import { publishAtomic } from "@decupa/cache";
+import { loadRecipe } from "../templates/store.ts";
+import { deliverApproved, readDelivery } from "./delivery.ts";
 import { brollCandidates, candidateSupport } from "./broll.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -57,6 +60,7 @@ export type AssemblyOperation = {
 } | null;
 
 export type AssemblyDeps = {
+  templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
   port: () => number;
@@ -382,6 +386,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let cancelled = false;
   let controller: AbortController | null = null;
   const livePreviews = new Set<AbortController>();
+  const templateProposalPath=join(dir,"template-proposal.json");
+  async function readTemplateProposal(){
+    try{return JSON.parse(await readFile(templateProposalPath,"utf8")) as import("./types.ts").Proposal;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
+  }
   const select = deps.selectFn ?? selectLocalFiles;
 
   function snapshot() {
@@ -541,7 +549,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
-        sendJson(res, { project, undoRevision, brollCandidates: candidates, ...snapshot() });
+        sendJson(res, { project, undoRevision, templateProposal:await readTemplateProposal(), brollCandidates: candidates, ...snapshot() });
         return true;
       }
 
@@ -601,6 +609,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "resolve-status" && req.method === "GET") {
+        const project=await loadProject(dir); sendJson(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+      }
+      if (parts[1] === "resolve-drp" && req.method === "GET") {
+        const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
+        if (!delivery?.drpPath) throw new HttpError(404,"DRP não registrado");
+        await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
+      }
       if (parts[1] === "output" && req.method === "GET") {
         const revision = parts[2] ?? "";
         const kind = parts[3] ?? "";
@@ -968,6 +984,42 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "template-proposal" && req.method === "POST") {
+        const expected=requireRevision(body);let project=await loadProject(dir);
+        if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        if(project.preparation?.status==="running")throw new HttpError(409,"Aguarde ou cancele a preparação atual.");
+        if(!deps.templatesRoot)throw new HttpError(409,"biblioteca de templates indisponível");
+        const template=body.templateId===null?null:await loadRecipe(deps.templatesRoot,String(body.templateId),Number(body.templateRevision));
+        if(template&&template.status!=="approved")throw new HttpError(409,"template não aprovado");
+        if(!deps.proposeSend||!(deps.allowPaidModel||project.permissions.model||body.modelOptIn===true))throw new HttpError(402,PAID_BLOCKED);
+        if(!project.assembly.sources.some(s=>s.included))throw new HttpError(409,"Importe os materiais do projeto primeiro.");
+        const {gen,signal}=begin("proposing");
+        try {
+          for(const source of project.assembly.sources.filter(s=>s.included)) {
+            if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
+            operation={stage:"analyzing",sourceId:source.id};
+            if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
+            const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
+            if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
+            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
+          }
+          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});
+          if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
+          await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
+          sendJson(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
+        }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}
+        return true;
+      }
+      if ((parts[1] === "template-accept" || parts[1] === "template-reject") && req.method === "POST") {
+        const expected=requireRevision(body);const proposal=await readTemplateProposal();
+        if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
+        let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return applyProposal(p,proposal);});
+        // Preserve a newer candidate if another generation finished concurrently.
+        if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
+        sendJson(res,{project,templateProposal:null,...snapshot()});return true;
+      }
       if (parts[1] === "propose" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const project = await mutate(baseRevision, async (project) => {
@@ -1133,6 +1185,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if ((parts[1] === "deliver-resolve" || parts[1] === "export-drp") && req.method === "POST") {
+        const expected=requireRevision(body);const project=await loadProject(dir);
+        if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        try {
+          const delivery=await deliverApproved(project,dir,deps.exec,new AbortController().signal,{exportDrp:parts[1]==="export-drp",newCopy:body.newCopy===true});
+          sendJson(res,{project:await loadProject(dir),delivery});
+        } catch(error) {throw new HttpError(409,error instanceof Error?error.message:String(error));}
+        return true;
+      }
       if (parts[1] === "export" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const loaded = await loadProject(dir);

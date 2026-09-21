@@ -297,3 +297,12 @@ it("include rejeita se qualquer palavra já retida, sem incluir parcialmente", (
     type: "include", sceneId: "s1", sourceId: "a", wordIds: ["w1", "w4"],
   })).toThrow(/já está na montagem/);
 });
+
+it("encurta somente pausas alinhadas, mantendo respiros e regiões protegidas",async()=>{
+ const {tightenSpeechTake}=await import("./words.ts");
+ const p={analyses:[{sourceId:"a",wordsStatus:"ready",words:[{id:"w1",sourceId:"a",text:"Oi",start:0,end:1,confidence:1},{id:"w2",sourceId:"a",text:"tudo",start:2,end:2.5,confidence:1},{id:"w3",sourceId:"a",text:"bem",start:2.6,end:3,confidence:1}]}],corrections:[]} as unknown as import("./types.ts").Project;
+ const take={id:"t",sourceId:"a",speechId:"s",start:0,end:3,removed:[],protected:[]};
+ expect(tightenSpeechTake(p,take).removed).toEqual([{start:1.05,end:1.95}]);
+ expect(tightenSpeechTake(p,{...take,protected:[{start:1,end:2}]}).removed).toEqual([]);
+ p.analyses[0]!.wordsStatus="missing";expect(tightenSpeechTake(p,take)).toEqual(take);
+});

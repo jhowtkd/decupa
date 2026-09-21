@@ -1,3 +1,5 @@
+import { createTemplateRuntime } from "./templates/routes.ts";
+import { homedir } from "node:os";
 import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
@@ -131,6 +133,7 @@ export async function startApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  templatesRoot?: string;
   provider?: string;
   executor?: Executor;
   /** false nos testes: não dispara o pipeline de verdade. */
@@ -201,6 +204,7 @@ async function startCleanupApp(opts: {
   input: string;
   port?: number;
   providerConfigDir?: string;
+  templatesRoot?: string;
   provider?: string;
   executor?: Executor;
   autoStart?: boolean;
@@ -623,6 +627,7 @@ async function startAssemblyApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  templatesRoot?: string;
   executor?: Executor;
   selectFn?: AssemblyDeps["selectFn"];
   proposeSend?: AssemblyDeps["proposeSend"];
@@ -668,7 +673,14 @@ async function startAssemblyApp(opts: {
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
+  const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
+  const templates=createTemplateRuntime(templatesRoot,{
+    port:()=>boundPort,selectFn:opts.selectFn,exec,speech,
+    send:opts.proposeSend??opts.describeClient?.send??lazyPaidSend(dir,opts.providerConfigDir),
+    modelKey:JSON.stringify(visualIdentity),allowModel:allowPaidModel,allowVisual:allowPaidVisual,
+  });
   const runtime = createAssemblyRuntime(dir, {
+    templatesRoot,
     decision,
     exec,
     port: () => boundPort,
@@ -716,6 +728,7 @@ async function startAssemblyApp(opts: {
         res.end(pageJs);
         return;
       }
+      if(await templates.handleTemplates(req,res))return;
       const handled = await runtime.handleAssembly(req, res, dir);
       if (handled) return;
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

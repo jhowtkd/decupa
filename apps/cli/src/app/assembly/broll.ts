@@ -81,7 +81,7 @@ export async function selectBroll(project:Project,proposal:Proposal,context:Asse
           signal.throwIfAborted();
           const batch=pool.slice(i,i+20),id=`support:${scene.id}:${round}:${i/20}`;
           const question:ChoiceQuestion={type:"choice",instructions:"Escolha a imagem que evidencia o assunto desta fala. Escolha none se não houver relação suficiente.",criteria:{none:"Manter vídeo principal",...Object.fromEntries(batch.map(c=>[c.id,`${c.sourceId} [${c.start}, ${c.end}]: ${c.description}`]))}};
-          const response=await context.client.decide({model:context.model,state:{brief:project.input,request:project.preparation?.request??"",objective:scene.objective,speech:scene.takes.map(t=>{const span=speech.get(t.speechId??"");return span?effectiveSpanText(project,t.sourceId,span):"";})},questions:{[id]:question}},signal);
+          const response=await context.client.decide({model:context.model,state:{template:project.template?.rules.filter(r=>r.enabled&&["broll","rhythm"].includes(r.category)),brief:project.input,request:project.preparation?.request??"",objective:scene.objective,speech:scene.takes.map(t=>{const span=speech.get(t.speechId??"");return span?effectiveSpanText(project,t.sourceId,span):"";})},questions:{[id]:question}},signal);
           signal.throwIfAborted();
           const answer=response.answers[id];
           if(answer?.type!=="choice"||!Object.hasOwn(question.criteria,answer.choice)||!Number.isFinite(answer.confidence)||answer.confidence<0||answer.confidence>1) throw Error("escolha inválida");

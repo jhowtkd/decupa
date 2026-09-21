@@ -114,3 +114,11 @@ it("falha visual prevalece sobre transcrição pronta e operação ready", () =>
   p.preparation.status = "cancelled";
   expect(sourceProgress(p, source).label).toBe("Preparação interrompida");
 });
+
+it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
+ const {resolveView}=await import("./rail.js");
+ expect(resolveView({status:"running",stage:"imported"},true)).toMatchObject({disabled:true,statusText:"Verificando timeline importada…"});
+ expect(resolveView({status:"ready",projectName:"P-r1"},true)).toMatchObject({disabled:false,statusText:"Projeto salvo: P-r1"});
+ expect(resolveView({status:"error",error:"Resolve indisponível"},true)).toMatchObject({statusText:"Resolve indisponível",newCopy:true});
+ expect(resolveView(null,false).disabled).toBe(true);
+});
