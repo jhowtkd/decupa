@@ -1,0 +1,180 @@
+- generic [active] [ref=e1]:
+  - banner "Projeto" [ref=e2]:
+    - strong [ref=e3]:
+      - generic [ref=e4]: ▰
+      - text: decupa
+    - generic [ref=e5]: Montagem principal
+    - status [ref=e6]: A montagem precisa de atenção
+    - button "Novo projeto" [ref=e7] [cursor=pointer]
+    - button "Briefing" [ref=e8] [cursor=pointer]
+    - button "Revisar" [ref=e9] [cursor=pointer]
+    - button "Exportar" [ref=e10] [cursor=pointer]
+    - button "Montar vídeo" [ref=e12] [cursor=pointer]
+  - navigation "Etapas" [ref=e13]:
+    - button "01 Materiais" [ref=e14] [cursor=pointer]:
+      - generic [ref=e15]: "01"
+      - text: Materiais
+    - button "02 Edição" [ref=e16] [cursor=pointer]:
+      - generic [ref=e17]: "02"
+      - text: Edição
+    - button "03 Revisão" [ref=e18] [cursor=pointer]:
+      - generic [ref=e19]: "03"
+      - text: Revisão
+    - button "04 Entrega" [ref=e20] [cursor=pointer]:
+      - generic [ref=e21]: "04"
+      - text: Entrega
+  - toolbar "Ferramentas" [ref=e22]:
+    - button "Mídia" [ref=e23] [cursor=pointer]:
+      - generic [ref=e24]: ▱
+      - text: Mídia
+    - button "Texto" [ref=e25] [cursor=pointer]:
+      - generic [ref=e26]: T
+      - text: Texto
+    - button "Inspetor" [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: ☷
+      - text: Inspetor
+  - complementary "Materiais" [ref=e29]:
+    - region "Materiais" [ref=e30]:
+      - heading "Materiais do projeto" [level=1] [ref=e31]
+      - paragraph [ref=e32]: 2 fonte(s) · 2 incluída(s) · 0 apoio
+      - button "+ Importar mídia" [ref=e34] [cursor=pointer]
+      - list [ref=e35]:
+        - listitem [ref=e36]:
+          - checkbox "selecionar 10092026_162809.mp4" [ref=e37]
+          - button "Ver original de 10092026_162809.mp4" [ref=e38] [cursor=pointer]:
+            - generic [ref=e39]: Sem miniatura
+          - generic [ref=e40]:
+            - generic [ref=e41]: 10092026_162809.mp4
+            - generic [ref=e43]: 20s
+            - status [ref=e44]: Análise concluída
+          - group [ref=e45]:
+            - generic "Opções do material" [ref=e46] [cursor=pointer]
+            - option "Fala" [selected]
+            - option "Apoio"
+            - option "Fala+apoio"
+        - listitem [ref=e47]:
+          - checkbox "selecionar 10092026_162919.mp4" [ref=e48]
+          - button "Ver original de 10092026_162919.mp4" [ref=e49] [cursor=pointer]:
+            - generic [ref=e50]: Sem miniatura
+          - generic [ref=e51]:
+            - generic [ref=e52]: 10092026_162919.mp4
+            - generic [ref=e54]: 39s
+            - 'status "cobertura visual incompleta: sem evidência em 39s–39.44s" [ref=e55]': Preparação interrompida
+          - group [ref=e56]:
+            - generic "Opções do material" [ref=e57] [cursor=pointer]
+            - option "Fala" [selected]
+            - option "Apoio"
+            - option "Fala+apoio"
+  - main "Bancada" [ref=e58]:
+    - region "Andamento da montagem" [ref=e59]:
+      - generic [ref=e60]:
+        - generic [ref=e62]:
+          - heading "A montagem precisa de atenção" [level=1] [ref=e63]
+          - paragraph [ref=e64]: "10092026_162919.mp4 · cobertura visual incompleta: sem evidência em 39s–39.44s"
+        - button "Retomar preparação" [ref=e66] [cursor=pointer]
+      - list [ref=e67]:
+        - listitem "Concluída" [ref=e68]: ✓ Verificar arquivos
+        - listitem "Concluída" [ref=e69]: ✓ Transcrever áudio
+        - listitem "Falhou" [ref=e70]: Analisar imagens
+        - listitem "Na fila" [ref=e71]: Montar cenas
+        - listitem "Concluída" [ref=e72]: ✓ Renderizar prévia
+      - generic [ref=e73]: As etapas concluídas estão preservadas. Retome para tentar concluir o que falta ou exclua o material com falha.
+    - region "Prévia" [ref=e74]:
+      - generic [ref=e75]:
+        - generic [ref=e76]:
+          - button "Montagem" [pressed] [ref=e77] [cursor=pointer]
+          - button "Original" [ref=e78] [cursor=pointer]
+        - generic [ref=e79]: Prévia da montagem
+      - generic [ref=e82]:
+        - generic [ref=e83]:
+          - generic [ref=e84]: prévia 4
+          - generic [ref=e85]: 48s
+          - generic [ref=e86]: 1080×1920 @ 30/1
+        - paragraph [ref=e87]: prévia atualizada ✓
+        - generic [ref=e88]:
+          - button "Atualizar prévia" [disabled] [ref=e89]
+          - button "Aprovar prévia assistida" [disabled] [ref=e90]
+  - complementary "Inspetor" [ref=e91]:
+    - generic [ref=e92]:
+      - heading "Clipe selecionado" [level=1] [ref=e93]
+      - 'heading "Gancho: prender a atenção do público com os benefícios de participar do evento" [level=2] [ref=e94]'
+      - paragraph [ref=e95]: 10092026_162809.mp4
+      - generic [ref=e96]:
+        - button "← Antes" [disabled] [ref=e97]
+        - button "Depois →" [ref=e98] [cursor=pointer]
+        - button "Remover cena" [ref=e99] [cursor=pointer]
+      - paragraph [ref=e100]: Decisão não registrada
+      - generic [ref=e101]:
+        - heading "Imagem de apoio · B-roll" [level=2] [ref=e102]
+        - paragraph [ref=e103]: A voz continua tocando; o áudio do apoio fica mudo.
+        - generic [ref=e104]:
+          - text: Apoio na cena
+          - combobox "Apoio na cena" [ref=e105]:
+            - option "Adicionar apoio" [selected]
+        - generic [ref=e106]:
+          - text: Imagem disponível
+          - combobox "Imagem disponível" [ref=e107]
+        - paragraph [ref=e108]: Nenhum apoio observado disponível. Importe mídia como Apoio ou Fala + apoio e prepare os materiais.
+        - generic [ref=e109]:
+          - generic [ref=e110]:
+            - text: Início na cena (s)
+            - spinbutton "Início na cena (s)" [ref=e111]: "1"
+          - generic [ref=e112]:
+            - text: Duração (s)
+            - spinbutton "Duração (s)" [ref=e113]: "1"
+        - generic [ref=e114]:
+          - button "Aplicar apoio" [disabled] [ref=e115]
+          - button "Remover apoio" [disabled] [ref=e116]
+    - paragraph [ref=e117]: prévia 4 · 0 correção(ões) pendente(s)
+    - region "Ajuste" [ref=e118]:
+      - heading "Ajuste" [level=1] [ref=e119]
+      - generic [ref=e120]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e121]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Aplicar ajuste com IA" [ref=e123] [cursor=pointer]
+    - region "Entrega" [ref=e124]:
+      - heading "Entrega" [level=1] [ref=e125]
+      - list [ref=e126]:
+        - listitem [ref=e127]:
+          - generic [ref=e128]: ✓ Mídia presente
+        - listitem [ref=e129]:
+          - generic [ref=e130]: ✓ Seleção feita
+        - listitem [ref=e131]:
+          - generic [ref=e132]: ○ Revisão pronta
+      - paragraph [ref=e133]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e135]
+      - status
+      - paragraph
+      - list [ref=e136]:
+        - generic [ref=e137]: revisão 4
+        - generic [ref=e138]: prévia 4
+        - generic [ref=e139]: não aprovada
+  - contentinfo "Sequência" [ref=e140]:
+    - generic [ref=e141]:
+      - generic [ref=e142]: Timeline
+      - generic [ref=e143]: 00:47.771
+      - generic [ref=e144]: 5 cenas · 2 materiais
+      - button "Desfazer edição" [disabled] [ref=e146]: ⎌ Desfazer
+    - generic [ref=e147]:
+      - generic [ref=e148]: 00:00.000
+      - generic [ref=e149]: 00:10.000
+      - generic [ref=e150]: 00:20.000
+      - generic [ref=e151]: 00:30.000
+      - generic [ref=e152]: 00:40.000
+    - slider "Sequência da montagem" [ref=e153] [cursor=pointer]:
+      - 'generic "Gancho: prender a atenção do público com os benefícios de participar do evento · 00:00.000–00:08.309" [ref=e154]':
+        - generic [ref=e155]: "Gancho: prender a atenção do público com os benefícios de participar do evento"
+        - generic [ref=e156]: 8,3s
+      - generic "Informar data e local da Feira do Empreendedor · 00:08.309–00:14.537" [ref=e157]:
+        - generic [ref=e158]: Informar data e local da Feira do Empreendedor
+        - generic [ref=e159]: 6,2s
+      - generic "Apresentar as atrações gerais da feira e as atividades do estande do Cebrae · 00:14.537–00:27.580" [ref=e160]:
+        - generic [ref=e161]: Apresentar as atrações gerais da feira e as atividades do estande do Cebrae
+        - generic [ref=e162]: 13,0s
+      - generic "Destacar as grandes palestras da programação · 00:27.580–00:39.402" [ref=e163]:
+        - generic [ref=e164]: Destacar as grandes palestras da programação
+        - generic [ref=e165]: 11,8s
+      - generic "Fechar com o resumo de benefícios e o convite final · 00:39.402–00:47.771" [ref=e166]:
+        - generic [ref=e167]: Fechar com o resumo de benefícios e o convite final
+        - generic [ref=e168]: 8,4s

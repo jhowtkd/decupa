@@ -1,7 +1,7 @@
 # Decupa — Templates editoriais e entrega nativa no DaVinci
 
 Data: 2026-09-21
-Estado: desenho aprovado em conversa; especificação escrita aguardando revisão do usuário. Implementação e plano ainda não iniciados.
+Estado: especificação aprovada pelo usuário em 2026-09-21. Planos de entrega nativa e templates escritos para revisão; implementação não iniciada.
 
 ## Objetivo e escopo aprovado
 

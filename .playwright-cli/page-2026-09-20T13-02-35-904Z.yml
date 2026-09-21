@@ -1,0 +1,114 @@
+- generic [ref=e1]:
+  - banner "Projeto" [ref=e2]:
+    - strong [ref=e3]: decupa
+    - generic [ref=e4]: montagem
+    - status [ref=e5]: revisão 7
+    - button "Briefing" [ref=e6] [cursor=pointer]
+  - navigation "Etapas" [ref=e7]:
+    - button "Materiais" [active] [ref=e8] [cursor=pointer]
+    - button "Edição" [ref=e9] [cursor=pointer]
+    - button "Revisão" [ref=e10] [cursor=pointer]
+    - button "Entrega" [ref=e11] [cursor=pointer]
+  - toolbar "Ferramentas" [ref=e12]:
+    - button "Texto" [ref=e13] [cursor=pointer]
+  - complementary "Materiais" [ref=e14]:
+    - region "Materiais" [ref=e15]:
+      - heading "Materiais" [level=1] [ref=e16]
+      - paragraph [ref=e17]: Arquivos locais. O original não é enviado a terceiros nesta tela.
+      - button "Escolher arquivos" [ref=e19] [cursor=pointer]
+      - list [ref=e20]:
+        - listitem [ref=e21]:
+          - checkbox "selecionar fala.mp4" [ref=e22]
+          - generic [ref=e23]:
+            - generic [ref=e24]: fala.mp4
+            - generic [ref=e25]:
+              - generic [ref=e26]: 96s
+              - generic [ref=e27]: ready
+            - generic [ref=e28]:
+              - combobox "categoria de fala.mp4" [ref=e29]:
+                - option "Fala" [selected]
+                - option "Apoio"
+                - option "Fala+apoio"
+              - button "Excluir" [ref=e30] [cursor=pointer]
+              - button "Relink" [ref=e31] [cursor=pointer]
+              - button "Ver original" [ref=e32] [cursor=pointer]
+        - listitem [ref=e33]:
+          - checkbox "selecionar apoio.mp4" [ref=e34]
+          - generic [ref=e35]:
+            - generic [ref=e36]: apoio.mp4
+            - generic [ref=e37]:
+              - generic [ref=e38]: 40s
+              - generic [ref=e39]: partial
+            - generic [ref=e40]:
+              - combobox "categoria de apoio.mp4" [ref=e41]:
+                - option "Fala"
+                - option "Apoio" [selected]
+                - option "Fala+apoio"
+              - button "Excluir" [ref=e42] [cursor=pointer]
+              - button "Relink" [ref=e43] [cursor=pointer]
+              - button "Ver original" [ref=e44] [cursor=pointer]
+    - region "Briefing" [ref=e45]:
+      - group [ref=e46]:
+        - generic "briefing" [ref=e47] [cursor=pointer]
+        - option "briefing"
+        - option "roteiro" [selected]
+    - region "Preparação" [ref=e48]:
+      - heading "Preparação" [level=1] [ref=e49]
+      - paragraph
+      - button "Preparar montagem" [ref=e51] [cursor=pointer]
+    - region "Entrega" [ref=e52]:
+      - heading "Entrega" [level=1] [ref=e53]
+      - list [ref=e54]:
+        - listitem [ref=e55]:
+          - generic [ref=e56]: ✓ Mídia presente
+        - listitem [ref=e57]:
+          - generic [ref=e58]: ✓ Seleção feita
+        - listitem [ref=e59]:
+          - generic [ref=e60]: ○ Revisão pronta
+      - paragraph [ref=e61]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e63]
+      - status
+      - paragraph
+  - main "Bancada" [ref=e64]:
+    - region "Prévia" [ref=e65]
+  - complementary "Inspetor" [ref=e564]:
+    - region "Prévia" [ref=e565]:
+      - heading "Prévia" [level=1] [ref=e566]
+      - generic [ref=e568]:
+        - generic [ref=e569]: prévia 7
+        - generic [ref=e570]: 73s
+        - generic [ref=e571]: 1280×720 @ 25/1
+      - paragraph [ref=e572]: prévia atualizada ✓
+      - paragraph [ref=e573]: Assista à prévia atual antes de aprovar.
+      - generic [ref=e574]:
+        - button "Atualizar prévia" [disabled] [ref=e575]
+        - button "Aprovar prévia assistida" [disabled] [ref=e576]
+    - region "Correções de texto" [ref=e577]:
+      - heading "Correções de texto" [level=1] [ref=e578]
+      - generic "Estado das correções de texto"
+    - region "Ajuste" [ref=e579]:
+      - heading "Ajuste" [level=1] [ref=e580]
+      - generic [ref=e581]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e582]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Propor mudanças (já autorizado)" [ref=e584] [cursor=pointer]
+  - contentinfo "Sequência" [ref=e585]:
+    - generic [ref=e586]:
+      - generic [ref=e587]: Sequência
+      - generic [ref=e588]: 73,1s
+    - generic [ref=e589]:
+      - generic [ref=e590]: 0s
+      - generic [ref=e591]: "20"
+      - generic [ref=e592]: "40"
+      - generic [ref=e593]: "60"
+    - slider "Sequência da montagem" [ref=e594] [cursor=pointer]:
+      - generic "Gancho e promessa · 0.0s–21.3s" [ref=e595]:
+        - generic [ref=e597]: 21,3s
+      - generic "Cortar × aparar · 21.3s–54.2s" [ref=e598]:
+        - generic [ref=e600]: 32,9s
+      - generic "vis-b1 · 21.8s–25.8s" [ref=e601]:
+        - generic [ref=e602]: 4,0s
+      - generic "Fechamento com gancho · 54.2s–73.1s" [ref=e603]:
+        - generic [ref=e605]: 18,9s
+    - button "Desfazer edição" [ref=e607] [cursor=pointer]: ⎌ Desfazer

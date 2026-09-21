@@ -1,0 +1,66 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]: decupa
+    - generic [ref=e4]: limpar fala
+    - generic [ref=e5]:
+      - text: 12/15 trechos
+      - text: 80s de 95s
+    - button "cancelar" [disabled] [ref=e7]
+    - button "sugerir cortes" [ref=e8] [cursor=pointer]
+    - generic [ref=e9]:
+      - button "exportar" [active] [ref=e10] [cursor=pointer]
+      - generic [ref=e34]:
+        - button "timeline .edl" [ref=e35] [cursor=pointer]
+        - button "vídeo .mp4" [ref=e36] [cursor=pointer]
+        - button "legendas .srt" [ref=e37] [cursor=pointer]
+        - button "transcrição .txt" [ref=e38] [cursor=pointer]
+  - main [ref=e11]:
+    - generic "clique para tirar este trecho" [ref=e12] [cursor=pointer]:
+      - text: E aí, pessoal, bem-vindos de volta ao canal.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e13] [cursor=pointer]:
+      - text: Hoje eu vou te mostrar o método que eu uso pra cortar meus vídeos em metade do tempo.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e14] [cursor=pointer]:
+      - text: Antes de começar, se esse conteúdo faz sentido pra você, deixa o like que ajuda demais.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e15] [cursor=pointer]:
+      - text: A primeira coisa que você precisa entender é a diferença entre cortar e aparar.
+      - button "ouvir"
+    - generic [ref=e16]:
+      - generic "pausa curta na junção" [ref=e17]: ⚠ pausa curta na junção → mova o out-point −0,2s
+      - button "ouvir junção" [ref=e18] [cursor=pointer]
+    - 'generic "restaurar: É é... deixa eu começar de novo." [ref=e19] [cursor=pointer]':
+      - generic [ref=e20]: É é... deixa eu começar de novo.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e21] [cursor=pointer]:
+      - text: Aparar é tirar o silêncio das pontas; cortar é tirar o que não serve do meio.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e22] [cursor=pointer]:
+      - text: Quem edita na mão perde tempo nas duas coisas, porque faz tudo frame a frame.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e23] [cursor=pointer]:
+      - text: O truque é deixar a transcrição guiar o corte, não o contrário.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e24] [cursor=pointer]:
+      - text: Você lê o texto, marca o que fica, e a ferramenta resolve o resto.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e25] [cursor=pointer]:
+      - text: É literalmente editar lendo, igual a gente edita um artigo de blog.
+      - button "ouvir"
+    - 'generic "restaurar: É literalmente editar lendo, igual edita um texto." [ref=e26] [cursor=pointer]':
+      - generic [ref=e27]: É literalmente editar lendo, igual edita um texto.
+      - button "ouvir"
+    - 'generic "restaurar: Repetindo de novo pra garantir." [ref=e28] [cursor=pointer]':
+      - generic [ref=e29]: Repetindo de novo pra garantir.
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e30] [cursor=pointer]:
+      - text: A segunda dica é cortar no ritmo da respiração, não no silêncio puro.
+      - button "ouvir"
+    - generic "olhou pro monitor no meio da frase" [ref=e31] [cursor=pointer]:
+      - text: Corte no meio da expiração e a fala continua natural, mesmo pulando três frases.
+      - generic "olhou pro monitor no meio da frase" [ref=e32]
+      - button "ouvir"
+    - generic "clique para tirar este trecho" [ref=e33] [cursor=pointer]:
+      - text: E a terceira dica... na verdade, eu guardo essa pro próximo vídeo.
+      - button "ouvir"

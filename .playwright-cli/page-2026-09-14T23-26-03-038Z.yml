@@ -1,0 +1,583 @@
+- generic [active] [ref=e1]:
+  - generic "Projeto" [ref=e2]:
+    - generic [ref=e3]:
+      - strong [ref=e4]: decupa
+      - status [ref=e5]: revisão 7
+    - region "Materiais" [ref=e6]:
+      - heading "Materiais" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Arquivos locais. O original não é enviado a terceiros nesta tela.
+      - button "Escolher arquivos" [ref=e10] [cursor=pointer]
+      - list [ref=e11]:
+        - listitem [ref=e12]:
+          - checkbox "selecionar fala.mp4" [ref=e13]
+          - generic [ref=e14]:
+            - generic [ref=e15]: fala.mp4
+            - generic [ref=e16]:
+              - generic [ref=e17]: 96s
+              - generic [ref=e18]: ready
+            - generic [ref=e19]:
+              - combobox "categoria de fala.mp4" [ref=e20]:
+                - option "Fala" [selected]
+                - option "Apoio"
+                - option "Fala+apoio"
+              - button "Excluir" [ref=e21] [cursor=pointer]
+              - button "Relink" [ref=e22] [cursor=pointer]
+              - button "Ver original" [ref=e23] [cursor=pointer]
+        - listitem [ref=e24]:
+          - checkbox "selecionar apoio.mp4" [ref=e25]
+          - generic [ref=e26]:
+            - generic [ref=e27]: apoio.mp4
+            - generic [ref=e28]:
+              - generic [ref=e29]: 40s
+              - generic [ref=e30]: partial
+            - generic [ref=e31]:
+              - combobox "categoria de apoio.mp4" [ref=e32]:
+                - option "Fala"
+                - option "Apoio" [selected]
+                - option "Fala+apoio"
+              - button "Excluir" [ref=e33] [cursor=pointer]
+              - button "Relink" [ref=e34] [cursor=pointer]
+              - button "Ver original" [ref=e35] [cursor=pointer]
+    - region "Briefing" [ref=e36]:
+      - group [ref=e37]:
+        - generic "briefing" [ref=e38] [cursor=pointer]
+        - option "briefing"
+        - option "roteiro" [selected]
+    - region "Preparação" [ref=e39]:
+      - heading "Preparação" [level=1] [ref=e40]
+      - paragraph
+      - button "Preparar montagem" [ref=e42] [cursor=pointer]
+    - region "Entrega" [ref=e43]:
+      - heading "Entrega" [level=1] [ref=e44]
+      - paragraph [ref=e45]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e47]
+      - paragraph
+  - main "Montagem" [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - paragraph [ref=e51]:
+          - generic [ref=e52]: cena 1
+          - generic [ref=e53]: Gancho e promessa
+          - generic [ref=e54]: 0.4-25.2s
+          - button "Mover cena 1 para cima" [disabled] [ref=e55]: ↥
+          - button "Mover cena 1 para baixo" [ref=e56] [cursor=pointer]: ↧
+          - button "Excluir cena 1" [ref=e57] [cursor=pointer]: ✕
+        - paragraph [ref=e58]: Abre com a promessa do método e o pedido de like; retake do meio sai inteiro.
+        - generic [ref=e59]:
+          - paragraph [ref=e60]:
+            - button "E" [ref=e61] [cursor=pointer]
+            - button "aí" [ref=e62] [cursor=pointer]
+            - button "pessoal," [ref=e63] [cursor=pointer]
+            - button "bem-vindos" [ref=e64] [cursor=pointer]
+            - button "de" [ref=e65] [cursor=pointer]
+            - button "volta" [ref=e66] [cursor=pointer]
+            - button "pro" [ref=e67] [cursor=pointer]
+            - button "canal." [ref=e68] [cursor=pointer]
+            - button "Hoje" [ref=e69] [cursor=pointer]
+            - button "eu" [ref=e70] [cursor=pointer]
+            - button "vou" [ref=e71] [cursor=pointer]
+            - button "te" [ref=e72] [cursor=pointer]
+            - button "mostrar" [ref=e73] [cursor=pointer]
+            - button "o" [ref=e74] [cursor=pointer]
+            - button "método" [ref=e75] [cursor=pointer]
+            - button "que" [ref=e76] [cursor=pointer]
+            - button "eu" [ref=e77] [cursor=pointer]
+            - button "uso (removida)" [ref=e78] [cursor=pointer]: uso
+            - button "pra (removida)" [ref=e79] [cursor=pointer]: pra
+            - button "cortar (removida)" [ref=e80] [cursor=pointer]: cortar
+            - button "meus (removida)" [ref=e81] [cursor=pointer]: meus
+            - button "vídeos (removida)" [ref=e82] [cursor=pointer]: vídeos
+            - button "em (removida)" [ref=e83] [cursor=pointer]: em
+            - button "metade" [ref=e84] [cursor=pointer]
+            - button "do" [ref=e85] [cursor=pointer]
+            - button "tempo." [ref=e86] [cursor=pointer]
+            - button "Antes" [ref=e87] [cursor=pointer]
+            - button "de" [ref=e88] [cursor=pointer]
+            - button "começar:" [ref=e89] [cursor=pointer]
+            - button "deixo" [ref=e90] [cursor=pointer]
+            - button "o" [ref=e91] [cursor=pointer]
+            - button "like" [ref=e92] [cursor=pointer]
+            - button "que" [ref=e93] [cursor=pointer]
+            - button "ajuda" [ref=e94] [cursor=pointer]
+            - button "demais" [ref=e95] [cursor=pointer]
+            - button "o" [ref=e96] [cursor=pointer]
+            - button "canal" [ref=e97] [cursor=pointer]
+            - button "a" [ref=e98] [cursor=pointer]
+            - button "crescer." [ref=e99] [cursor=pointer]
+          - generic [ref=e100]: fala.mp4
+        - generic [ref=e101]:
+          - text: não usado (111 palavras)
+          - generic [ref=e102]: incluir trecho
+          - paragraph [ref=e103]:
+            - button "pra" [ref=e104] [cursor=pointer]
+            - button "cortar" [ref=e105] [cursor=pointer]
+            - button "meus" [ref=e106] [cursor=pointer]
+            - button "vídeos" [ref=e107] [cursor=pointer]
+            - button "A" [ref=e108] [cursor=pointer]
+            - button "primeira" [ref=e109] [cursor=pointer]
+            - button "coisa" [ref=e110] [cursor=pointer]
+            - button "que" [ref=e111] [cursor=pointer]
+            - button "você" [ref=e112] [cursor=pointer]
+            - button "precisa" [ref=e113] [cursor=pointer]
+            - button "entender" [ref=e114] [cursor=pointer]
+            - button "é" [ref=e115] [cursor=pointer]
+            - button "a" [ref=e116] [cursor=pointer]
+            - button "diferença" [ref=e117] [cursor=pointer]
+            - button "entre" [ref=e118] [cursor=pointer]
+            - button "cortar" [ref=e119] [cursor=pointer]
+            - button "e" [ref=e120] [cursor=pointer]
+            - button "aparar." [ref=e121] [cursor=pointer]
+            - button "Aparar" [ref=e122] [cursor=pointer]
+            - button "é" [ref=e123] [cursor=pointer]
+            - button "tirar" [ref=e124] [cursor=pointer]
+            - button "o" [ref=e125] [cursor=pointer]
+            - button "silêncio" [ref=e126] [cursor=pointer]
+            - button "das" [ref=e127] [cursor=pointer]
+            - button "pontas." [ref=e128] [cursor=pointer]
+            - button "Cortar" [ref=e129] [cursor=pointer]
+            - button "é" [ref=e130] [cursor=pointer]
+            - button "tirar" [ref=e131] [cursor=pointer]
+            - button "o" [ref=e132] [cursor=pointer]
+            - button "que" [ref=e133] [cursor=pointer]
+            - button "não" [ref=e134] [cursor=pointer]
+            - button "serve" [ref=e135] [cursor=pointer]
+            - button "do" [ref=e136] [cursor=pointer]
+            - button "meio." [ref=e137] [cursor=pointer]
+            - button "Quem" [ref=e138] [cursor=pointer]
+            - button "edita" [ref=e139] [cursor=pointer]
+            - button "na" [ref=e140] [cursor=pointer]
+            - button "mão" [ref=e141] [cursor=pointer]
+            - button "perde" [ref=e142] [cursor=pointer]
+            - button "tempo" [ref=e143] [cursor=pointer]
+            - button "nas" [ref=e144] [cursor=pointer]
+            - button "duas," [ref=e145] [cursor=pointer]
+            - button "porque" [ref=e146] [cursor=pointer]
+            - button "faz" [ref=e147] [cursor=pointer]
+            - button "tudo" [ref=e148] [cursor=pointer]
+            - button "frame" [ref=e149] [cursor=pointer]
+            - button "a" [ref=e150] [cursor=pointer]
+            - button "frame." [ref=e151] [cursor=pointer]
+            - button "O" [ref=e152] [cursor=pointer]
+            - button "truque" [ref=e153] [cursor=pointer]
+            - button "é" [ref=e154] [cursor=pointer]
+            - button "deixar" [ref=e155] [cursor=pointer]
+            - button "a" [ref=e156] [cursor=pointer]
+            - button "transcrição" [ref=e157] [cursor=pointer]
+            - button "guiar" [ref=e158] [cursor=pointer]
+            - button "o" [ref=e159] [cursor=pointer]
+            - button "corte," [ref=e160] [cursor=pointer]
+            - button "e" [ref=e161] [cursor=pointer]
+            - button "não" [ref=e162] [cursor=pointer]
+            - button "o" [ref=e163] [cursor=pointer]
+            - button "contrário." [ref=e164] [cursor=pointer]
+            - button "Você" [ref=e165] [cursor=pointer]
+            - button "lê" [ref=e166] [cursor=pointer]
+            - button "o" [ref=e167] [cursor=pointer]
+            - button "texto," [ref=e168] [cursor=pointer]
+            - button "marca" [ref=e169] [cursor=pointer]
+            - button "o" [ref=e170] [cursor=pointer]
+            - button "que" [ref=e171] [cursor=pointer]
+            - button "fica," [ref=e172] [cursor=pointer]
+            - button "e" [ref=e173] [cursor=pointer]
+            - button "a" [ref=e174] [cursor=pointer]
+            - button "ferramenta" [ref=e175] [cursor=pointer]
+            - button "resolve" [ref=e176] [cursor=pointer]
+            - button "o" [ref=e177] [cursor=pointer]
+            - button "resto." [ref=e178] [cursor=pointer]
+            - button "A" [ref=e179] [cursor=pointer]
+            - button "segunda" [ref=e180] [cursor=pointer]
+            - button "dica" [ref=e181] [cursor=pointer]
+            - button "é" [ref=e182] [cursor=pointer]
+            - button "cortar" [ref=e183] [cursor=pointer]
+            - button "no" [ref=e184] [cursor=pointer]
+            - button "ritmo" [ref=e185] [cursor=pointer]
+            - button "da" [ref=e186] [cursor=pointer]
+            - button "respiração," [ref=e187] [cursor=pointer]
+            - button "não" [ref=e188] [cursor=pointer]
+            - button "no" [ref=e189] [cursor=pointer]
+            - button "silêncio" [ref=e190] [cursor=pointer]
+            - button "puro." [ref=e191] [cursor=pointer]
+            - button "Corte" [ref=e192] [cursor=pointer]
+            - button "no" [ref=e193] [cursor=pointer]
+            - button "meio" [ref=e194] [cursor=pointer]
+            - button "da" [ref=e195] [cursor=pointer]
+            - button "expiração" [ref=e196] [cursor=pointer]
+            - button "e" [ref=e197] [cursor=pointer]
+            - button "a" [ref=e198] [cursor=pointer]
+            - button "fala" [ref=e199] [cursor=pointer]
+            - button "continua" [ref=e200] [cursor=pointer]
+            - button "natural," [ref=e201] [cursor=pointer]
+            - button "mesmo" [ref=e202] [cursor=pointer]
+            - button "pulando" [ref=e203] [cursor=pointer]
+            - button "três" [ref=e204] [cursor=pointer]
+            - button "frases." [ref=e205] [cursor=pointer]
+            - button "E" [ref=e206] [cursor=pointer]
+            - button "a" [ref=e207] [cursor=pointer]
+            - button "terceira" [ref=e208] [cursor=pointer]
+            - button "dica" [ref=e209] [cursor=pointer]
+            - button "eu" [ref=e210] [cursor=pointer]
+            - button "guardo" [ref=e211] [cursor=pointer]
+            - button "pro" [ref=e212] [cursor=pointer]
+            - button "próximo" [ref=e213] [cursor=pointer]
+            - button "vídeo." [ref=e214] [cursor=pointer]
+          - generic [ref=e215]: fala.mp4
+      - generic [ref=e216]:
+        - paragraph [ref=e217]:
+          - generic [ref=e218]: cena 2
+          - generic [ref=e219]: Cortar × aparar
+          - generic [ref=e220]: 32.1-66.4s
+          - button "Mover cena 2 para cima" [ref=e221] [cursor=pointer]: ↥
+          - button "Mover cena 2 para baixo" [ref=e222] [cursor=pointer]: ↧
+          - button "Excluir cena 2" [ref=e223] [cursor=pointer]: ✕
+        - paragraph [ref=e224]: Conceito central com exemplo concreto; apoio entra sobre a segunda fala.
+        - generic [ref=e225]:
+          - paragraph [ref=e226]:
+            - button "A" [ref=e227] [cursor=pointer]
+            - button "primeira" [ref=e228] [cursor=pointer]
+            - button "Apoio vis-b1, seleciona a cena" [ref=e229] [cursor=pointer]: 🎬 vis-b1 · 4.0s
+            - button "coisa" [ref=e230] [cursor=pointer]
+            - button "que" [ref=e231] [cursor=pointer]
+            - button "você" [ref=e232] [cursor=pointer]
+            - button "precisa" [ref=e233] [cursor=pointer]
+            - button "entender" [ref=e234] [cursor=pointer]
+            - button "é" [ref=e235] [cursor=pointer]
+            - button "a" [ref=e236] [cursor=pointer]
+            - button "diferença" [ref=e237] [cursor=pointer]
+            - button "entre" [ref=e238] [cursor=pointer]
+            - button "cortar" [ref=e239] [cursor=pointer]
+            - button "e" [ref=e240] [cursor=pointer]
+            - button "aparar." [ref=e241] [cursor=pointer]
+            - button "Aparar" [ref=e242] [cursor=pointer]
+            - button "é" [ref=e243] [cursor=pointer]
+            - button "tirar" [ref=e244] [cursor=pointer]
+            - button "o" [ref=e245] [cursor=pointer]
+            - button "silêncio" [ref=e246] [cursor=pointer]
+            - button "das" [ref=e247] [cursor=pointer]
+            - button "pontas." [ref=e248] [cursor=pointer]
+            - button "Cortar" [ref=e249] [cursor=pointer]
+            - button "é" [ref=e250] [cursor=pointer]
+            - button "tirar" [ref=e251] [cursor=pointer]
+            - button "o" [ref=e252] [cursor=pointer]
+            - button "que" [ref=e253] [cursor=pointer]
+            - button "não" [ref=e254] [cursor=pointer]
+            - button "serve" [ref=e255] [cursor=pointer]
+            - button "do" [ref=e256] [cursor=pointer]
+            - button "meio." [ref=e257] [cursor=pointer]
+            - button "Quem" [ref=e258] [cursor=pointer]
+            - button "edita" [ref=e259] [cursor=pointer]
+            - button "na" [ref=e260] [cursor=pointer]
+            - button "mão" [ref=e261] [cursor=pointer]
+            - button "perde" [ref=e262] [cursor=pointer]
+            - button "tempo" [ref=e263] [cursor=pointer]
+            - button "nas" [ref=e264] [cursor=pointer]
+            - button "duas," [ref=e265] [cursor=pointer]
+            - button "porque" [ref=e266] [cursor=pointer]
+            - button "faz" [ref=e267] [cursor=pointer]
+            - button "tudo" [ref=e268] [cursor=pointer]
+            - button "frame" [ref=e269] [cursor=pointer]
+            - button "a" [ref=e270] [cursor=pointer]
+            - button "frame." [ref=e271] [cursor=pointer]
+          - generic [ref=e272]: fala.mp4
+        - generic [ref=e273]:
+          - paragraph [ref=e274]:
+            - button "O" [ref=e275] [cursor=pointer]
+            - button "truque" [ref=e276] [cursor=pointer]
+            - button "é" [ref=e277] [cursor=pointer]
+            - button "deixar" [ref=e278] [cursor=pointer]
+            - button "a" [ref=e279] [cursor=pointer]
+            - button "transcrição" [ref=e280] [cursor=pointer]
+            - button "guiar" [ref=e281] [cursor=pointer]
+            - button "o" [ref=e282] [cursor=pointer]
+            - button "corte," [ref=e283] [cursor=pointer]
+            - button "e" [ref=e284] [cursor=pointer]
+            - button "não" [ref=e285] [cursor=pointer]
+            - button "o" [ref=e286] [cursor=pointer]
+            - button "contrário." [ref=e287] [cursor=pointer]
+            - button "Você" [ref=e288] [cursor=pointer]
+            - button "lê" [ref=e289] [cursor=pointer]
+            - button "o" [ref=e290] [cursor=pointer]
+            - button "texto," [ref=e291] [cursor=pointer]
+            - button "marca" [ref=e292] [cursor=pointer]
+            - button "o" [ref=e293] [cursor=pointer]
+            - button "que" [ref=e294] [cursor=pointer]
+            - button "fica," [ref=e295] [cursor=pointer]
+            - button "e" [ref=e296] [cursor=pointer]
+            - button "a" [ref=e297] [cursor=pointer]
+            - button "ferramenta" [ref=e298] [cursor=pointer]
+            - button "resolve" [ref=e299] [cursor=pointer]
+            - button "o" [ref=e300] [cursor=pointer]
+            - button "resto." [ref=e301] [cursor=pointer]
+          - generic [ref=e302]: fala.mp4
+        - generic [ref=e303]:
+          - text: não usado (75 palavras)
+          - generic [ref=e304]: incluir trecho
+          - paragraph [ref=e305]:
+            - button "E" [ref=e306] [cursor=pointer]
+            - button "aí" [ref=e307] [cursor=pointer]
+            - button "pessoal," [ref=e308] [cursor=pointer]
+            - button "bem-vindos" [ref=e309] [cursor=pointer]
+            - button "de" [ref=e310] [cursor=pointer]
+            - button "volta" [ref=e311] [cursor=pointer]
+            - button "pro" [ref=e312] [cursor=pointer]
+            - button "canal." [ref=e313] [cursor=pointer]
+            - button "Hoje" [ref=e314] [cursor=pointer]
+            - button "eu" [ref=e315] [cursor=pointer]
+            - button "vou" [ref=e316] [cursor=pointer]
+            - button "te" [ref=e317] [cursor=pointer]
+            - button "mostrar" [ref=e318] [cursor=pointer]
+            - button "o" [ref=e319] [cursor=pointer]
+            - button "método" [ref=e320] [cursor=pointer]
+            - button "que" [ref=e321] [cursor=pointer]
+            - button "eu" [ref=e322] [cursor=pointer]
+            - button "uso" [ref=e323] [cursor=pointer]
+            - button "pra" [ref=e324] [cursor=pointer]
+            - button "cortar" [ref=e325] [cursor=pointer]
+            - button "meus" [ref=e326] [cursor=pointer]
+            - button "vídeos" [ref=e327] [cursor=pointer]
+            - button "em" [ref=e328] [cursor=pointer]
+            - button "metade" [ref=e329] [cursor=pointer]
+            - button "do" [ref=e330] [cursor=pointer]
+            - button "tempo." [ref=e331] [cursor=pointer]
+            - button "Antes" [ref=e332] [cursor=pointer]
+            - button "de" [ref=e333] [cursor=pointer]
+            - button "começar:" [ref=e334] [cursor=pointer]
+            - button "deixo" [ref=e335] [cursor=pointer]
+            - button "o" [ref=e336] [cursor=pointer]
+            - button "like" [ref=e337] [cursor=pointer]
+            - button "que" [ref=e338] [cursor=pointer]
+            - button "ajuda" [ref=e339] [cursor=pointer]
+            - button "demais" [ref=e340] [cursor=pointer]
+            - button "o" [ref=e341] [cursor=pointer]
+            - button "canal" [ref=e342] [cursor=pointer]
+            - button "a" [ref=e343] [cursor=pointer]
+            - button "crescer." [ref=e344] [cursor=pointer]
+            - button "A" [ref=e345] [cursor=pointer]
+            - button "segunda" [ref=e346] [cursor=pointer]
+            - button "dica" [ref=e347] [cursor=pointer]
+            - button "é" [ref=e348] [cursor=pointer]
+            - button "cortar" [ref=e349] [cursor=pointer]
+            - button "no" [ref=e350] [cursor=pointer]
+            - button "ritmo" [ref=e351] [cursor=pointer]
+            - button "da" [ref=e352] [cursor=pointer]
+            - button "respiração," [ref=e353] [cursor=pointer]
+            - button "não" [ref=e354] [cursor=pointer]
+            - button "no" [ref=e355] [cursor=pointer]
+            - button "silêncio" [ref=e356] [cursor=pointer]
+            - button "puro." [ref=e357] [cursor=pointer]
+            - button "Corte" [ref=e358] [cursor=pointer]
+            - button "no" [ref=e359] [cursor=pointer]
+            - button "meio" [ref=e360] [cursor=pointer]
+            - button "da" [ref=e361] [cursor=pointer]
+            - button "expiração" [ref=e362] [cursor=pointer]
+            - button "e" [ref=e363] [cursor=pointer]
+            - button "a" [ref=e364] [cursor=pointer]
+            - button "fala" [ref=e365] [cursor=pointer]
+            - button "continua" [ref=e366] [cursor=pointer]
+            - button "natural," [ref=e367] [cursor=pointer]
+            - button "mesmo" [ref=e368] [cursor=pointer]
+            - button "pulando" [ref=e369] [cursor=pointer]
+            - button "três" [ref=e370] [cursor=pointer]
+            - button "frases." [ref=e371] [cursor=pointer]
+            - button "E" [ref=e372] [cursor=pointer]
+            - button "a" [ref=e373] [cursor=pointer]
+            - button "terceira" [ref=e374] [cursor=pointer]
+            - button "dica" [ref=e375] [cursor=pointer]
+            - button "eu" [ref=e376] [cursor=pointer]
+            - button "guardo" [ref=e377] [cursor=pointer]
+            - button "pro" [ref=e378] [cursor=pointer]
+            - button "próximo" [ref=e379] [cursor=pointer]
+            - button "vídeo." [ref=e380] [cursor=pointer]
+          - generic [ref=e381]: fala.mp4
+      - generic [ref=e382]:
+        - paragraph [ref=e383]:
+          - generic [ref=e384]: cena 3
+          - generic [ref=e385]: Fechamento com gancho
+          - generic [ref=e386]: 76.3-95.2s
+          - button "Mover cena 3 para cima" [ref=e387] [cursor=pointer]: ↥
+          - button "Mover cena 3 para baixo" [disabled] [ref=e388]: ↧
+          - button "Excluir cena 3" [ref=e389] [cursor=pointer]: ✕
+        - paragraph [ref=e390]: Encerra com a promessa do próximo vídeo; olhada pro monitor no meio.
+        - paragraph [ref=e391]: "lacunas: menção ao próximo vídeo sem referência na tela"
+        - generic [ref=e392]:
+          - paragraph [ref=e393]:
+            - button "A" [ref=e394] [cursor=pointer]
+            - button "segunda" [ref=e395] [cursor=pointer]
+            - button "dica" [ref=e396] [cursor=pointer]
+            - button "é" [ref=e397] [cursor=pointer]
+            - button "cortar" [ref=e398] [cursor=pointer]
+            - button "no" [ref=e399] [cursor=pointer]
+            - button "ritmo" [ref=e400] [cursor=pointer]
+            - button "da" [ref=e401] [cursor=pointer]
+            - button "respiração," [ref=e402] [cursor=pointer]
+            - button "não" [ref=e403] [cursor=pointer]
+            - button "no" [ref=e404] [cursor=pointer]
+            - button "silêncio" [ref=e405] [cursor=pointer]
+            - button "puro." [ref=e406] [cursor=pointer]
+            - button "Corte" [ref=e407] [cursor=pointer]
+            - button "no" [ref=e408] [cursor=pointer]
+            - button "meio" [ref=e409] [cursor=pointer]
+            - button "da" [ref=e410] [cursor=pointer]
+            - button "expiração" [ref=e411] [cursor=pointer]
+            - button "e" [ref=e412] [cursor=pointer]
+            - button "a" [ref=e413] [cursor=pointer]
+            - button "fala" [ref=e414] [cursor=pointer]
+            - button "continua" [ref=e415] [cursor=pointer]
+            - button "natural," [ref=e416] [cursor=pointer]
+            - button "mesmo" [ref=e417] [cursor=pointer]
+            - button "pulando" [ref=e418] [cursor=pointer]
+            - button "três" [ref=e419] [cursor=pointer]
+            - button "frases." [ref=e420] [cursor=pointer]
+            - button "E" [ref=e421] [cursor=pointer]
+            - button "a" [ref=e422] [cursor=pointer]
+            - button "terceira" [ref=e423] [cursor=pointer]
+            - button "dica" [ref=e424] [cursor=pointer]
+            - button "eu" [ref=e425] [cursor=pointer]
+            - button "guardo" [ref=e426] [cursor=pointer]
+            - button "pro" [ref=e427] [cursor=pointer]
+            - button "próximo" [ref=e428] [cursor=pointer]
+            - button "vídeo." [ref=e429] [cursor=pointer]
+          - generic [ref=e430]: fala.mp4
+        - generic [ref=e431]:
+          - text: não usado (110 palavras)
+          - generic [ref=e432]: incluir trecho
+          - paragraph [ref=e433]:
+            - button "E" [ref=e434] [cursor=pointer]
+            - button "aí" [ref=e435] [cursor=pointer]
+            - button "pessoal," [ref=e436] [cursor=pointer]
+            - button "bem-vindos" [ref=e437] [cursor=pointer]
+            - button "de" [ref=e438] [cursor=pointer]
+            - button "volta" [ref=e439] [cursor=pointer]
+            - button "pro" [ref=e440] [cursor=pointer]
+            - button "canal." [ref=e441] [cursor=pointer]
+            - button "Hoje" [ref=e442] [cursor=pointer]
+            - button "eu" [ref=e443] [cursor=pointer]
+            - button "vou" [ref=e444] [cursor=pointer]
+            - button "te" [ref=e445] [cursor=pointer]
+            - button "mostrar" [ref=e446] [cursor=pointer]
+            - button "o" [ref=e447] [cursor=pointer]
+            - button "método" [ref=e448] [cursor=pointer]
+            - button "que" [ref=e449] [cursor=pointer]
+            - button "eu" [ref=e450] [cursor=pointer]
+            - button "uso" [ref=e451] [cursor=pointer]
+            - button "pra" [ref=e452] [cursor=pointer]
+            - button "cortar" [ref=e453] [cursor=pointer]
+            - button "meus" [ref=e454] [cursor=pointer]
+            - button "vídeos" [ref=e455] [cursor=pointer]
+            - button "em" [ref=e456] [cursor=pointer]
+            - button "metade" [ref=e457] [cursor=pointer]
+            - button "do" [ref=e458] [cursor=pointer]
+            - button "tempo." [ref=e459] [cursor=pointer]
+            - button "Antes" [ref=e460] [cursor=pointer]
+            - button "de" [ref=e461] [cursor=pointer]
+            - button "começar:" [ref=e462] [cursor=pointer]
+            - button "deixo" [ref=e463] [cursor=pointer]
+            - button "o" [ref=e464] [cursor=pointer]
+            - button "like" [ref=e465] [cursor=pointer]
+            - button "que" [ref=e466] [cursor=pointer]
+            - button "ajuda" [ref=e467] [cursor=pointer]
+            - button "demais" [ref=e468] [cursor=pointer]
+            - button "o" [ref=e469] [cursor=pointer]
+            - button "canal" [ref=e470] [cursor=pointer]
+            - button "a" [ref=e471] [cursor=pointer]
+            - button "crescer." [ref=e472] [cursor=pointer]
+            - button "A" [ref=e473] [cursor=pointer]
+            - button "primeira" [ref=e474] [cursor=pointer]
+            - button "coisa" [ref=e475] [cursor=pointer]
+            - button "que" [ref=e476] [cursor=pointer]
+            - button "você" [ref=e477] [cursor=pointer]
+            - button "precisa" [ref=e478] [cursor=pointer]
+            - button "entender" [ref=e479] [cursor=pointer]
+            - button "é" [ref=e480] [cursor=pointer]
+            - button "a" [ref=e481] [cursor=pointer]
+            - button "diferença" [ref=e482] [cursor=pointer]
+            - button "entre" [ref=e483] [cursor=pointer]
+            - button "cortar" [ref=e484] [cursor=pointer]
+            - button "e" [ref=e485] [cursor=pointer]
+            - button "aparar." [ref=e486] [cursor=pointer]
+            - button "Aparar" [ref=e487] [cursor=pointer]
+            - button "é" [ref=e488] [cursor=pointer]
+            - button "tirar" [ref=e489] [cursor=pointer]
+            - button "o" [ref=e490] [cursor=pointer]
+            - button "silêncio" [ref=e491] [cursor=pointer]
+            - button "das" [ref=e492] [cursor=pointer]
+            - button "pontas." [ref=e493] [cursor=pointer]
+            - button "Cortar" [ref=e494] [cursor=pointer]
+            - button "é" [ref=e495] [cursor=pointer]
+            - button "tirar" [ref=e496] [cursor=pointer]
+            - button "o" [ref=e497] [cursor=pointer]
+            - button "que" [ref=e498] [cursor=pointer]
+            - button "não" [ref=e499] [cursor=pointer]
+            - button "serve" [ref=e500] [cursor=pointer]
+            - button "do" [ref=e501] [cursor=pointer]
+            - button "meio." [ref=e502] [cursor=pointer]
+            - button "Quem" [ref=e503] [cursor=pointer]
+            - button "edita" [ref=e504] [cursor=pointer]
+            - button "na" [ref=e505] [cursor=pointer]
+            - button "mão" [ref=e506] [cursor=pointer]
+            - button "perde" [ref=e507] [cursor=pointer]
+            - button "tempo" [ref=e508] [cursor=pointer]
+            - button "nas" [ref=e509] [cursor=pointer]
+            - button "duas," [ref=e510] [cursor=pointer]
+            - button "porque" [ref=e511] [cursor=pointer]
+            - button "faz" [ref=e512] [cursor=pointer]
+            - button "tudo" [ref=e513] [cursor=pointer]
+            - button "frame" [ref=e514] [cursor=pointer]
+            - button "a" [ref=e515] [cursor=pointer]
+            - button "frame." [ref=e516] [cursor=pointer]
+            - button "O" [ref=e517] [cursor=pointer]
+            - button "truque" [ref=e518] [cursor=pointer]
+            - button "é" [ref=e519] [cursor=pointer]
+            - button "deixar" [ref=e520] [cursor=pointer]
+            - button "a" [ref=e521] [cursor=pointer]
+            - button "transcrição" [ref=e522] [cursor=pointer]
+            - button "guiar" [ref=e523] [cursor=pointer]
+            - button "o" [ref=e524] [cursor=pointer]
+            - button "corte," [ref=e525] [cursor=pointer]
+            - button "e" [ref=e526] [cursor=pointer]
+            - button "não" [ref=e527] [cursor=pointer]
+            - button "o" [ref=e528] [cursor=pointer]
+            - button "contrário." [ref=e529] [cursor=pointer]
+            - button "Você" [ref=e530] [cursor=pointer]
+            - button "lê" [ref=e531] [cursor=pointer]
+            - button "o" [ref=e532] [cursor=pointer]
+            - button "texto," [ref=e533] [cursor=pointer]
+            - button "marca" [ref=e534] [cursor=pointer]
+            - button "o" [ref=e535] [cursor=pointer]
+            - button "que" [ref=e536] [cursor=pointer]
+            - button "fica," [ref=e537] [cursor=pointer]
+            - button "e" [ref=e538] [cursor=pointer]
+            - button "a" [ref=e539] [cursor=pointer]
+            - button "ferramenta" [ref=e540] [cursor=pointer]
+            - button "resolve" [ref=e541] [cursor=pointer]
+            - button "o" [ref=e542] [cursor=pointer]
+            - button "resto." [ref=e543] [cursor=pointer]
+          - generic [ref=e544]: fala.mp4
+  - complementary "Contexto" [ref=e545]:
+    - region "Prévia" [ref=e546]:
+      - heading "Prévia" [level=1] [ref=e547]
+      - generic [ref=e549]:
+        - generic [ref=e550]: prévia 7
+        - generic [ref=e551]: 73s
+        - generic [ref=e552]: 1280×720 @ 25/1
+      - paragraph [ref=e553]: prévia atualizada ✓
+      - paragraph [ref=e554]: Assista à prévia atual antes de aprovar.
+      - generic [ref=e555]:
+        - button "Atualizar prévia" [disabled] [ref=e556]
+        - button "Aprovar prévia assistida" [disabled] [ref=e557]
+    - region "Correções de texto" [ref=e558]:
+      - heading "Correções de texto" [level=1] [ref=e559]
+      - generic "Estado das correções de texto"
+    - region "Ajuste" [ref=e560]:
+      - heading "Ajuste" [level=1] [ref=e561]
+      - generic [ref=e562]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e563]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Propor mudanças (já autorizado)" [ref=e565] [cursor=pointer]
+  - contentinfo "Sequência" [ref=e566]:
+    - slider "Sequência da montagem" [ref=e567] [cursor=pointer]:
+      - generic "Gancho e promessa · 0.0s–21.3s" [ref=e568]
+      - generic "Cortar × aparar · 21.3s–54.2s" [ref=e569]
+      - generic "vis-b1 · 21.8s–25.8s" [ref=e570]
+      - generic "Fechamento com gancho · 54.2s–73.1s" [ref=e571]
+    - button "Desfazer edição" [ref=e573] [cursor=pointer]: ⎌ Desfazer

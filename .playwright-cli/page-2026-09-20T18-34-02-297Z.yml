@@ -1,0 +1,155 @@
+- generic [active] [ref=e1]:
+  - banner "Projeto" [ref=e2]:
+    - strong [ref=e3]:
+      - generic [ref=e4]: ▰
+      - text: decupa
+    - generic [ref=e5]: Montagem principal
+    - status [ref=e6]: revisão 15
+    - button "Briefing" [ref=e7] [cursor=pointer]
+    - button "Revisar" [ref=e8] [cursor=pointer]
+    - button "Exportar" [ref=e9] [cursor=pointer]
+    - button "Montar vídeo" [ref=e11] [cursor=pointer]
+  - navigation "Etapas" [ref=e12]:
+    - button "01 Materiais" [ref=e13] [cursor=pointer]:
+      - generic [ref=e14]: "01"
+      - text: Materiais
+    - button "02 Edição" [ref=e15] [cursor=pointer]:
+      - generic [ref=e16]: "02"
+      - text: Edição
+    - button "03 Revisão" [ref=e17] [cursor=pointer]:
+      - generic [ref=e18]: "03"
+      - text: Revisão
+    - button "04 Entrega" [ref=e19] [cursor=pointer]:
+      - generic [ref=e20]: "04"
+      - text: Entrega
+  - toolbar "Ferramentas" [ref=e21]:
+    - button "Mídia" [ref=e22] [cursor=pointer]:
+      - generic [ref=e23]: ▱
+      - text: Mídia
+    - button "Texto" [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]: T
+      - text: Texto
+    - button "Inspetor" [ref=e26] [cursor=pointer]:
+      - generic [ref=e27]: ☷
+      - text: Inspetor
+  - complementary "Materiais" [ref=e28]:
+    - region "Materiais" [ref=e29]:
+      - heading "Materiais do projeto" [level=1] [ref=e30]
+      - paragraph [ref=e31]: 2 fonte(s) · 1 incluída(s) · 0 apoio
+      - button "+ Importar mídia" [ref=e33] [cursor=pointer]
+      - list [ref=e34]:
+        - listitem [ref=e35]:
+          - checkbox "selecionar fala.mp4" [ref=e36]
+          - button "Ver original de fala.mp4" [ref=e37] [cursor=pointer]:
+            - generic [ref=e38]: Carregando miniatura…
+          - generic [ref=e39]:
+            - generic [ref=e40]: fala.mp4
+            - generic [ref=e41]:
+              - generic [ref=e42]: 96s
+              - generic [ref=e43]: excluída
+            - status [ref=e44]: Fora da montagem
+          - group [ref=e45]:
+            - generic "Opções do material" [ref=e46] [cursor=pointer]
+            - option "Fala" [selected]
+            - option "Apoio"
+            - option "Fala+apoio"
+        - listitem [ref=e47]:
+          - checkbox "selecionar victor.MOV" [ref=e48]
+          - button "Ver original de victor.MOV" [ref=e49] [cursor=pointer]:
+            - generic [ref=e50]: Carregando miniatura…
+          - generic [ref=e51]:
+            - generic [ref=e52]: victor.MOV
+            - generic [ref=e54]: 43s
+            - status [ref=e55]: Análise concluída
+          - group [ref=e56]:
+            - generic "Opções do material" [ref=e57] [cursor=pointer]
+            - option "Fala" [selected]
+            - option "Apoio"
+            - option "Fala+apoio"
+  - main "Bancada" [ref=e58]:
+    - region "Andamento da montagem" [ref=e59]:
+      - generic [ref=e62]:
+        - heading "Montagem pronta para revisar" [level=1] [ref=e63]
+        - paragraph [ref=e64]: Confira a prévia antes de aprovar a entrega.
+      - list [ref=e65]:
+        - listitem "Concluída" [ref=e66]: ✓ Verificar arquivos
+        - listitem "Concluída" [ref=e67]: ✓ Transcrever áudio
+        - listitem "Concluída" [ref=e68]: ✓ Analisar imagens
+        - listitem "Concluída" [ref=e69]: ✓ Montar cenas
+        - listitem "Concluída" [ref=e70]: ✓ Renderizar prévia
+    - region "Prévia" [ref=e71]:
+      - generic [ref=e72]:
+        - generic [ref=e73]:
+          - button "Montagem" [pressed] [ref=e74] [cursor=pointer]
+          - button "Original" [ref=e75] [cursor=pointer]
+        - generic [ref=e76]: Prévia da montagem
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - generic [ref=e81]: prévia 15
+          - generic [ref=e82]: 37s
+          - generic [ref=e83]: 1280×720 @ 25/1
+        - paragraph [ref=e84]: prévia atualizada ✓
+        - generic [ref=e85]:
+          - button "Atualizar prévia" [disabled] [ref=e86]
+          - button "Aprovar prévia assistida" [disabled] [ref=e87]
+  - complementary "Inspetor" [ref=e88]:
+    - generic [ref=e89]:
+      - heading "Clipe selecionado" [level=1] [ref=e90]
+      - heading "Nenhuma cena ainda" [level=2] [ref=e91]
+      - paragraph [ref=e92]: victor.MOV · victor.MOV
+      - generic [ref=e93]:
+        - button "← Antes" [disabled] [ref=e94]
+        - button "Depois →" [ref=e95] [cursor=pointer]
+        - button "Remover cena" [ref=e96] [cursor=pointer]
+    - paragraph [ref=e97]: prévia 15 · 0 correção(ões) pendente(s)
+    - region "Ajuste" [ref=e98]:
+      - heading "Ajuste" [level=1] [ref=e99]
+      - generic [ref=e100]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e101]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Propor mudanças" [ref=e103] [cursor=pointer]
+    - region "Entrega" [ref=e104]:
+      - heading "Entrega" [level=1] [ref=e105]
+      - list [ref=e106]:
+        - listitem [ref=e107]:
+          - generic [ref=e108]: ✓ Mídia presente
+        - listitem [ref=e109]:
+          - generic [ref=e110]: ✓ Seleção feita
+        - listitem [ref=e111]:
+          - generic [ref=e112]: ○ Revisão pronta
+      - paragraph [ref=e113]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e115]
+      - status
+      - paragraph
+      - list [ref=e116]:
+        - generic [ref=e117]: revisão 15
+        - generic [ref=e118]: prévia 15
+        - generic [ref=e119]: não aprovada
+  - contentinfo "Sequência" [ref=e120]:
+    - generic [ref=e121]:
+      - generic [ref=e122]: Timeline
+      - generic [ref=e123]: 00:37.305
+      - generic [ref=e124]: 5 cenas · 1 materiais
+      - button "Desfazer edição" [ref=e126] [cursor=pointer]: ⎌ Desfazer
+    - generic [ref=e127]:
+      - generic [ref=e128]: 00:00.000
+      - generic [ref=e129]: 00:10.000
+      - generic [ref=e130]: 00:20.000
+      - generic [ref=e131]: 00:30.000
+    - slider "Sequência da montagem" [ref=e132] [cursor=pointer]:
+      - generic "scene-1 · 00:00.000–00:07.367" [ref=e133]:
+        - generic [ref=e134]: scene-1
+        - generic [ref=e136]: 7,4s
+      - generic "scene-2 · 00:07.367–00:17.017" [ref=e137]:
+        - generic [ref=e138]: scene-2
+        - generic [ref=e140]: 9,7s
+      - generic "scene-3 · 00:17.017–00:22.819" [ref=e141]:
+        - generic [ref=e142]: scene-3
+        - generic [ref=e144]: 5,8s
+      - generic "scene-4 · 00:22.819–00:31.682" [ref=e145]:
+        - generic [ref=e146]: scene-4
+        - generic [ref=e148]: 8,9s
+      - generic "scene-5 · 00:31.682–00:37.305" [ref=e149]:
+        - generic [ref=e150]: scene-5
+        - generic [ref=e152]: 5,6s

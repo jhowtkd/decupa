@@ -1,0 +1,117 @@
+- generic [active] [ref=e1]:
+  - banner "Projeto" [ref=e2]:
+    - strong [ref=e3]: decupa
+    - generic [ref=e4]: montagem
+    - status [ref=e5]: revisão 14
+    - button "Briefing" [ref=e6] [cursor=pointer]
+  - navigation "Etapas" [ref=e7]:
+    - button "Materiais" [ref=e8] [cursor=pointer]
+    - button "Edição" [ref=e9] [cursor=pointer]
+    - button "Revisão" [ref=e10] [cursor=pointer]
+    - button "Entrega" [ref=e11] [cursor=pointer]
+  - toolbar "Ferramentas" [ref=e12]:
+    - button "Texto" [pressed] [ref=e13] [cursor=pointer]
+  - complementary "Materiais" [ref=e14]:
+    - region "Materiais" [ref=e15]:
+      - heading "Materiais" [level=1] [ref=e16]
+      - paragraph [ref=e17]: 2 fonte(s) · 1 incluída(s) · 0 apoio
+      - paragraph [ref=e18]: Arquivos locais. O original não é enviado a terceiros nesta tela.
+      - button "Escolher arquivos" [ref=e20] [cursor=pointer]
+      - list [ref=e21]:
+        - listitem [ref=e22]:
+          - checkbox "selecionar fala.mp4" [ref=e23]
+          - generic [ref=e24]:
+            - generic [ref=e25]: fala.mp4
+            - generic [ref=e26]:
+              - generic [ref=e27]: 96s
+              - generic [ref=e28]: excluída
+            - generic [ref=e29]:
+              - combobox "categoria de fala.mp4" [ref=e30]:
+                - option "Fala" [selected]
+                - option "Apoio"
+                - option "Fala+apoio"
+              - button "Incluir" [ref=e31] [cursor=pointer]
+              - button "Relink" [ref=e32] [cursor=pointer]
+              - button "Ver original" [ref=e33] [cursor=pointer]
+        - listitem [ref=e34]:
+          - checkbox "selecionar victor.MOV" [ref=e35]
+          - generic [ref=e36]:
+            - generic [ref=e37]: victor.MOV
+            - generic [ref=e38]:
+              - generic [ref=e39]: 43s
+              - generic [ref=e40]: ready
+            - generic [ref=e41]:
+              - combobox "categoria de victor.MOV" [ref=e42]:
+                - option "Fala" [selected]
+                - option "Apoio"
+                - option "Fala+apoio"
+              - button "Excluir" [ref=e43] [cursor=pointer]
+              - button "Relink" [ref=e44] [cursor=pointer]
+              - button "Ver original" [ref=e45] [cursor=pointer]
+    - region "Preparação" [ref=e46]:
+      - heading "Preparação" [level=1] [ref=e47]
+      - paragraph [ref=e48]: Interrompida · etapa visual · 2/3 etapas de fonte
+      - paragraph [ref=e49]: Pronta
+      - generic [ref=e51]:
+        - generic [ref=e52]: victor.MOV
+        - generic [ref=e53]:
+          - generic [ref=e54]: "media: pronta"
+          - generic [ref=e55]: "audio: pronta"
+          - generic [ref=e56]: "visual: erro"
+      - group [ref=e58]:
+        - generic "Detalhes do problema (2)" [ref=e59] [cursor=pointer]
+      - generic [ref=e60]:
+        - button "Preparar montagem" [ref=e61] [cursor=pointer]
+        - button "Retomar" [ref=e62] [cursor=pointer]
+  - main "Bancada" [ref=e63]:
+    - region "Prévia" [ref=e64]:
+      - paragraph [ref=e66]: renderizando…
+      - paragraph [ref=e67]: Assista à prévia atual antes de aprovar.
+      - generic [ref=e68]:
+        - button "Atualizar prévia" [ref=e69] [cursor=pointer]
+        - button "Aprovar prévia assistida" [disabled] [ref=e70]
+    - region "Texto" [ref=e71]:
+      - generic [ref=e72]:
+        - generic [ref=e73]:
+          - heading "fala.mp4 · na fila" [level=2] [ref=e74]
+          - paragraph [ref=e75]: transcrição ainda não disponível.
+        - generic [ref=e76]:
+          - heading "victor.MOV · ready" [level=2] [ref=e77]
+          - paragraph [ref=e78]: Encerrando o dia do cooperativismo na cidade de Uruassu. Um dia bonito, um dia participativo, que as nossas cooperativas participaram e fizeram bonito. Fizeram bonito que a população não só veio para participar, mas grandes elogios, grande movimentação e ficou, olha. satisfatório de ver esse movimento. Satisfatório de ver que o modelo de negócios cooperativistas é o modelo de negócios que dá certo. E o modelo de negócios cada dia que fortalece. Parceria com o poder público que vem nos apoiando muito, prefeito, muito feliz de ver a população, a população da cidade Uruaçu fazendo parte desse movimento. Então, o Sistema Civil Egoiais agradece a todos que participaram e fizeram bonito. Muito obrigado a todos.
+  - complementary "Inspetor" [ref=e79]:
+    - paragraph [ref=e80]: sem prévia · 0 correção(ões) pendente(s)
+    - region "Correções de texto" [ref=e81]:
+      - heading "Correções de texto" [level=1] [ref=e82]
+      - generic "Estado das correções de texto"
+    - region "Ajuste" [ref=e83]:
+      - heading "Ajuste" [level=1] [ref=e84]
+      - generic [ref=e85]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e86]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Propor mudanças (já autorizado)" [ref=e88] [cursor=pointer]
+    - region "Entrega" [ref=e89]:
+      - heading "Entrega" [level=1] [ref=e90]
+      - list [ref=e91]:
+        - listitem [ref=e92]:
+          - generic [ref=e93]: ✓ Mídia presente
+        - listitem [ref=e94]:
+          - generic [ref=e95]: ✓ Seleção feita
+        - listitem [ref=e96]:
+          - generic [ref=e97]: ○ Revisão pronta
+      - paragraph [ref=e98]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e100]
+      - status
+      - paragraph
+      - list [ref=e101]:
+        - generic [ref=e102]: revisão 14
+        - generic [ref=e103]: sem prévia
+        - generic [ref=e104]: não aprovada
+  - contentinfo "Sequência" [ref=e105]:
+    - generic [ref=e106]:
+      - generic [ref=e107]: Sequência
+      - generic [ref=e108]: 00:00.000
+      - generic [ref=e109]: victor.MOV · 43s
+    - generic [ref=e111]: 00:00.000
+    - slider "Sequência da montagem" [ref=e112] [cursor=pointer]
+    - button "Desfazer edição" [ref=e114] [cursor=pointer]: ⎌ Desfazer

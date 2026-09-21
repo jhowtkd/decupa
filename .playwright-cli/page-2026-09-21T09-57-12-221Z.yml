@@ -1,0 +1,100 @@
+- generic [active] [ref=e1]:
+  - banner "Projeto" [ref=e2]:
+    - strong [ref=e3]:
+      - generic [ref=e4]: ▰
+      - text: decupa
+    - generic [ref=e5]: Montagem principal
+    - status [ref=e6]: revisão 0
+    - button "Novo projeto" [ref=e7] [cursor=pointer]
+    - button "Briefing" [ref=e8] [cursor=pointer]
+    - button "Revisar" [ref=e9] [cursor=pointer]
+    - button "Exportar" [ref=e10] [cursor=pointer]
+    - button "Montar vídeo" [disabled] [ref=e12]
+  - navigation "Etapas" [ref=e13]:
+    - button "01 Materiais" [ref=e14] [cursor=pointer]:
+      - generic [ref=e15]: "01"
+      - text: Materiais
+    - button "02 Edição" [ref=e16] [cursor=pointer]:
+      - generic [ref=e17]: "02"
+      - text: Edição
+    - button "03 Revisão" [ref=e18] [cursor=pointer]:
+      - generic [ref=e19]: "03"
+      - text: Revisão
+    - button "04 Entrega" [ref=e20] [cursor=pointer]:
+      - generic [ref=e21]: "04"
+      - text: Entrega
+  - toolbar "Ferramentas" [ref=e22]:
+    - button "Mídia" [ref=e23] [cursor=pointer]:
+      - generic [ref=e24]: ▱
+      - text: Mídia
+    - button "Texto" [ref=e25] [cursor=pointer]:
+      - generic [ref=e26]: T
+      - text: Texto
+    - button "Inspetor" [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: ☷
+      - text: Inspetor
+  - complementary "Materiais" [ref=e29]:
+    - region "Materiais" [ref=e30]:
+      - heading "Materiais do projeto" [level=1] [ref=e31]
+      - paragraph [ref=e32]: 0 fonte(s) · 0 incluída(s) · 0 apoio
+      - paragraph [ref=e33]: Solte mídias no centro ou escolha arquivos para começar.
+      - button "+ Importar mídia" [ref=e35] [cursor=pointer]
+      - list
+  - main "Bancada" [ref=e36]:
+    - region "Prévia" [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - button "Montagem" [pressed] [ref=e40] [cursor=pointer]
+          - button "Original" [disabled] [ref=e41]
+        - generic [ref=e42]: Prévia da montagem
+      - generic [ref=e44]:
+        - text: ▰
+        - heading "Seu próximo vídeo começa aqui" [level=1] [ref=e45]
+        - paragraph [ref=e46]: Importe os materiais, conte o que você quer no briefing e monte seu primeiro corte.
+        - button "Importar mídia" [ref=e47] [cursor=pointer]
+  - complementary "Inspetor" [ref=e48]:
+    - generic [ref=e49]:
+      - heading "Clipe selecionado" [level=1] [ref=e50]
+      - heading "Nenhuma cena ainda" [level=2] [ref=e51]
+      - paragraph [ref=e52]: Prepare os materiais para criar a sequência.
+      - generic [ref=e53]:
+        - button "← Antes" [disabled] [ref=e54]
+        - button "Depois →" [disabled] [ref=e55]
+        - button "Remover cena" [disabled] [ref=e56]
+      - paragraph [ref=e57]: Decisão não registrada
+    - paragraph [ref=e58]: sem prévia · 0 correção(ões) pendente(s)
+    - region "Ajuste" [ref=e59]:
+      - heading "Ajuste" [level=1] [ref=e60]
+      - generic [ref=e61]:
+        - text: Pedido
+        - textbox "Pedido" [ref=e62]:
+          - /placeholder: "Ex.: encurtar a abertura"
+      - button "Aplicar ajuste com IA" [disabled] [ref=e64]
+    - region "Entrega" [ref=e65]:
+      - heading "Entrega" [level=1] [ref=e66]
+      - list [ref=e67]:
+        - listitem [ref=e68]:
+          - generic [ref=e69]: ○ Mídia presente
+        - listitem [ref=e70]:
+          - generic [ref=e71]: ○ Seleção feita
+        - listitem [ref=e72]:
+          - generic [ref=e73]: ○ Revisão pronta
+      - paragraph [ref=e74]: 🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.
+      - button "Exportar revisão" [disabled] [ref=e76]
+      - status
+      - paragraph
+      - list [ref=e77]:
+        - generic [ref=e78]: revisão 0
+        - generic [ref=e79]: sem prévia
+        - generic [ref=e80]: não aprovada
+  - contentinfo "Sequência" [ref=e81]:
+    - generic [ref=e82]:
+      - generic [ref=e83]: Timeline
+      - generic [ref=e84]: 00:00.000
+      - generic [ref=e85]: 0 cenas · 0 materiais
+      - button "Desfazer edição" [disabled] [ref=e87]: ⎌ Desfazer
+    - generic [ref=e88]:
+      - generic [ref=e89]: ▤
+      - generic [ref=e90]:
+        - strong [ref=e91]: Sua sequência aparece aqui
+        - paragraph [ref=e92]: Prepare os materiais para criar o primeiro corte.
