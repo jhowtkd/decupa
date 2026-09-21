@@ -151,7 +151,34 @@ export function motorFellBack(stdout: string): boolean {
 
 type PreviewRecord = { sha256: string; profile: HardwareProfile };
 
+// Renders concorrentes do mesmo conteúdo se serializam: cada pedido roda
+// o seu (pastas de trabalho distintas), mas nunca ao mesmo tempo — os
+// arquivos do preview-cache e do rev-<n> são compartilhados e o rename
+// concorrente falha no Windows (EPERM).
+const renderTurns = new Map<string, Promise<unknown>>();
+
 export async function renderAssembly(
+  a: Assembly,
+  outDir: string,
+  exec: Executor,
+  opts: { profile?: HardwareProfile; detectHardware?: boolean; signal?: AbortSignal } = {},
+): Promise<string> {
+  const key = `${outDir}${previewIdentity(validateAssembly(a), opts.profile ?? "software")}`;
+  const previous = renderTurns.get(key) ?? Promise.resolve();
+  const turn = previous.then(
+    () => renderAssemblyOnce(a, outDir, exec, opts),
+    () => renderAssemblyOnce(a, outDir, exec, opts),
+  );
+  const tracked = turn.catch(() => undefined);
+  renderTurns.set(key, tracked);
+  try {
+    return await turn;
+  } finally {
+    if (renderTurns.get(key) === tracked) renderTurns.delete(key);
+  }
+}
+
+async function renderAssemblyOnce(
   a: Assembly,
   outDir: string,
   exec: Executor,
