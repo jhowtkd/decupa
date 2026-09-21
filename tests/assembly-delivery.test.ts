@@ -1,6 +1,7 @@
 import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { hashFile } from "../packages/media/src/hash.ts";
 import { startApp } from "../apps/cli/src/app/server.ts";
@@ -185,7 +186,7 @@ it("entrega após aprovação: checklist completo e export concluído com saída
   expect(urls.length).toBeGreaterThan(0);
   const originals = new Set<string>();
   for (const source of ready.assembly.sources) {
-    originals.add(`file://${await realpath(source.path)}`);
+    originals.add(pathToFileURL(await realpath(source.path)).href);
   }
   for (const url of urls) {
     expect(originals.has(url)).toBe(true);
