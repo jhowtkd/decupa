@@ -111,3 +111,52 @@ it("available_range do media_reference usa a mesma rate do source_range do clipe
   expect(clip.media_reference.available_range.duration.value).toBe(Math.round(3 * fps));
   expect(clip.media_reference.available_range.start_time.rate).toBe(fps);
 });
+
+it("timecode não-zero da fonte entra no available_range e o corte preserva o offset", () => {
+  const a = fixtureAssembly();
+  // Fonte gravada com TC 01:00:00:00 a 25 fps = quadro 90000 = 3600 s.
+  a.sources[0]!.timecode = { raw: "01:00:00:00", frames: 90000, dropFrame: false };
+  a.tracks[0]!.clips[0]!.sourceStartSeconds = 1.5;
+  a.tracks[0]!.clips[0]!.durationFrames = 25;
+  const doc = JSON.parse(buildOtio(validateAssembly(a)));
+  const ref = doc.tracks.children[0].children[0].media_reference;
+  expect(ref.available_range.start_time).toEqual({
+    OTIO_SCHEMA: "RationalTime.1", value: 90000, rate: 25,
+  });
+  expect(ref.metadata.decupa.timecode).toBe("01:00:00:00");
+  // in-point = origem do TC + offset do corte, na mesma taxa da timeline.
+  const clip = doc.tracks.children[0].children[0];
+  expect(clip.source_range.start_time.value).toBe(90000 + Math.round(1.5 * 25));
+  expect(clip.source_range.start_time.rate).toBe(25);
+});
+
+it("drop-frame 29.97 conta quadros reais — rótulo 01:00:00;00 vale 3600 s", () => {
+  const a = fixtureAssembly();
+  a.sources[0]!.fps = { num: 30000, den: 1001 };
+  a.sources[0]!.timecode = { raw: "01:00:00;00", frames: 107892, dropFrame: true };
+  const doc = JSON.parse(buildOtio(validateAssembly(a)));
+  const ref = doc.tracks.children[0].children[0].media_reference;
+  // 107892 quadros a 30000/1001 = 3600 s → 90000 quadros a 25 na timeline.
+  expect(ref.available_range.start_time.value).toBe(90000);
+  expect(ref.available_range.start_time.rate).toBe(25);
+  const clip = doc.tracks.children[0].children[0];
+  expect(clip.source_range.start_time.value).toBe(90000);
+});
+
+it("timecode ilegível aborta com diagnóstico que nomeia a fonte", () => {
+  const a = fixtureAssembly();
+  a.sources[0]!.timecode = { raw: "agora de manhã", frames: null, dropFrame: false };
+  expect(() => buildOtio(validateAssembly(a)))
+    .toThrowError(/fala\.mp4|fonte a.*timecode ilegível/);
+});
+
+it("checklist de importação lista fps, timecode e rotação por fonte", () => {
+  const a = fixtureAssembly();
+  a.sources[0]!.timecode = { raw: "01:00:00:00", frames: 90000, dropFrame: false };
+  a.sources[1]!.rotation = 90;
+  const settings = davinciImportSettings(validateAssembly(a));
+  const speech = settings.sources.find((s) => s.startsWith("- a"))!;
+  expect(speech).toContain("01:00:00:00");
+  const support = settings.sources.find((s) => s.startsWith("- b"))!;
+  expect(support).toContain("90");
+});

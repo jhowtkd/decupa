@@ -4,7 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, exportView, resolveView } from "./rail.js";
+import { deliveryChecklist, exportView, formatLabel, resolveView } from "./rail.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -482,6 +482,8 @@ export function mountContexto({ state, api, player }) {
     const formats = approved ? [
       { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
       { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
+      { id: "instrucoes", label: "Instruções de conferência (.txt)", href: "/project/output/" + rev + "/instrucoes", file: "importar-no-resolve.txt" },
+      { id: "verificacao", label: "verificacao.json", href: "/project/output/" + rev + "/verificacao", file: "verificacao.json" },
     ] : null;
     if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
@@ -510,6 +512,7 @@ export function mountContexto({ state, api, player }) {
       chip("revisão " + project.revision),
       chip(project.previewRevision != null ? "prévia " + project.previewRevision : "sem prévia"),
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
+      chip("formato " + formatLabel(project.assembly)),
     );
   }
 

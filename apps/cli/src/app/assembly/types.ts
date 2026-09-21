@@ -1,6 +1,18 @@
 import type { Recipe } from "../templates/types.ts";
 export type Rate = { num: number; den: number };
 
+/**
+ * Etiqueta de timecode da mídia tal como lida (ex.: "01:00:00:00" ou
+ * "01:00:00;00" drop-frame). `frames` é o número de quadros decorridos
+ * desde 00:00 na taxa da fonte — já com a contagem drop-frame aplicada;
+ * null quando a etiqueta existe mas não converte (inválida).
+ */
+export type SourceTimecode = {
+  raw: string;
+  frames: number | null;
+  dropFrame: boolean;
+};
+
 export type Source = {
   id: string;
   path: string;
@@ -19,6 +31,10 @@ export type Source = {
   /** Sentinelas baratas de identidade; ausentes em dados antigos. */
   size?: number;
   mtimeMs?: number;
+  /** Timecode de origem da mídia; ausente em fontes sem etiqueta. */
+  timecode?: SourceTimecode | null;
+  /** Rotação de exibição em graus (0/90/180/270); ausente/0 = sem rotação. */
+  rotation?: number | null;
 };
 
 export type Clip = {

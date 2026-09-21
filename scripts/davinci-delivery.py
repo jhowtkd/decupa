@@ -54,7 +54,10 @@ def verify(timeline, assembly):
                 require(abs(item.GetStart(True) - timeline.GetStartFrame() - clip['startFrame']) < .01, 'posição de corte diferente')
                 require(abs(item.GetDuration(True) - clip['durationFrames']) < .01, 'duração de clipe diferente')
                 source_rate = source.get('fps') or assembly['fps']
-                expected = clip['sourceStartSeconds'] * source_rate['num'] / source_rate['den']
+                # A origem da mídia é o timecode embutido (quadros na taxa da
+                # fonte) ou 0; o in-point soma o offset do corte.
+                tc_frames = (source.get('timecode') or {}).get('frames') or 0
+                expected = tc_frames + clip['sourceStartSeconds'] * source_rate['num'] / source_rate['den']
                 require(abs(item.GetSourceStartFrame() - expected) <= .51, 'intervalo de origem diferente')
                 # Source out is inclusive; compare both boundaries at the media rate.
                 expected_end = expected + clip['durationFrames'] / rate * source_rate['num'] / source_rate['den'] - 1

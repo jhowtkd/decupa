@@ -341,6 +341,8 @@ document.getElementById("stages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-stage]");
   if (button) setStage(button.dataset.stage);
 });
+// Ação principal do rail (revisar/entregar) navega sem chamada paga.
+window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
 const toolTexto = document.querySelector('[data-tool="texto"]');
 toolTexto.addEventListener("click", () => {
   if (document.body.dataset.stage !== "edicao") { setStage("edicao"); return; }

@@ -1,6 +1,6 @@
 import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { hashFile } from "../packages/media/src/hash.ts";
@@ -37,7 +37,12 @@ function indexingAndRender(): Executor {
 
 type DeliveryProject = {
   revision: number;
-  assembly: { sources: { id: string; included: boolean; path: string }[] };
+  assembly: {
+    sources: {
+      id: string; included: boolean; path: string;
+      timecode?: { raw: string; frames: number | null; dropFrame: boolean } | null;
+    }[];
+  };
   scenes: unknown[];
   previewRevision: number | null;
   previewArtifact: { revision: number; relativePath: string; sha256: string } | null;
@@ -188,4 +193,105 @@ it("entrega após aprovação: checklist completo e export concluído com saída
   }
   expect(otioText).not.toContain("proxy.mp4");
   expect(otioText).not.toMatch(/media\/[0-9a-f]{64}\//);
+});
+
+it("exporta timecode embutido (NDF e drop-frame) por fonte, com instruções", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-delivery-tc-"));
+  // Nomes com espaço/acento também passam pela probe real.
+  const speech = join(dir, "fala da aula #1.mov");
+  const support = join(dir, "apoio b-roll.mov");
+  await copyFile(join(FIXTURES, "tc-1h-25.mov"), speech);
+  await copyFile(join(FIXTURES, "tc-1h-2997df.mov"), support);
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech, support],
+    port: 0,
+    executor: indexingAndRender(),
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  const opened = await getProject(base);
+  // source.path é realpath'd (no macOS /var → /private/var): casa por nome.
+  const byName = new Map(opened.assembly.sources.map((s) => [basename(s.path), s]));
+  const fala = byName.get(basename(speech));
+  const broll = byName.get(basename(support));
+  // ffprobe lê o tmcd; 01:00:00:00@25 = 90000; DF 01:00:00;00@29.97 = 107892.
+  expect(fala?.timecode).toEqual({ raw: "01:00:00:00", frames: 90000, dropFrame: false });
+  expect(broll?.timecode).toEqual({ raw: "01:00:00;00", frames: 107892, dropFrame: true });
+
+  expect((await post(base, "/project/input", {
+    baseRevision: opened.revision,
+    kind: "brief", text: "contar o tema", targetSeconds: 2,
+  })).status).toBe(200);
+  const analyze = await post(base, "/project/analyze", {
+    sourceIds: opened.assembly.sources.map((s) => s.id),
+  });
+  const analyzed = await analyze.json() as {
+    project: { revision: number; analyses: { speech: { id: string }[] }[] };
+  };
+  const speechId = analyzed.project.analyses[0]?.speech[0]?.id;
+  expect((await post(base, "/project/propose", {
+    baseRevision: analyzed.project.revision,
+    proposal: {
+      id: "prop-tc", baseRevision: analyzed.project.revision,
+      changedSceneIds: ["s1"], explanation: "tc",
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema",
+        speechIds: [speechId], support: [], gaps: [],
+      }],
+    },
+  })).status).toBe(200);
+  const apply = await post(base, "/project/apply", {
+    baseRevision: analyzed.project.revision, proposalId: "prop-tc",
+  });
+  const applied = await apply.json() as { project: { revision: number } };
+  expect((await post(base, "/project/preview", {
+    baseRevision: applied.project.revision,
+  })).status).toBe(200);
+  const previewed = await getProject(base);
+  expect((await post(base, "/project/approve-final", {
+    baseRevision: previewed.revision,
+    watchedRevision: previewed.previewRevision,
+  })).status).toBe(200);
+
+  const ready = await getProject(base);
+  expect((await post(base, "/project/export", { baseRevision: ready.revision })).status).toBe(200);
+
+  // Manifest declara formato e cada fonte com seu timecode.
+  const manifest = JSON.parse(await readFile(
+    join(dir, "exports", String(ready.revision), "manifest.json"), "utf8",
+  )) as {
+    formato: { width: number; height: number; orientation: string; fps: { num: number } };
+    midia: { name: string; timecode: { raw: string; frames: number; dropFrame: boolean } | null }[];
+    verificacao: string;
+  };
+  expect(manifest.formato.orientation).toBe("horizontal");
+  const midiaByName = new Map(manifest.midia.map((m) => [m.name, m]));
+  expect(midiaByName.get("fala da aula #1.mov")?.timecode)
+    .toEqual({ raw: "01:00:00:00", frames: 90000, dropFrame: false });
+  expect(midiaByName.get("apoio b-roll.mov")?.timecode)
+    .toEqual({ raw: "01:00:00;00", frames: 107892, dropFrame: true });
+  expect(manifest.verificacao).toBe("pendente");
+
+  // OTIO: available_range começa no timecode convertido para a taxa da
+  // timeline (3600 s × 25 = 90000) — identidade de mídia preservada.
+  const otioText = await readFile(
+    join(dir, "exports", String(ready.revision), "timeline.otio"), "utf8",
+  );
+  const starts = [...otioText.matchAll(
+    /"available_range":\{"OTIO_SCHEMA":"TimeRange\.1","start_time":\{"OTIO_SCHEMA":"RationalTime\.1","value":(\d+)/g,
+  )].map((m) => Number(m[1]));
+  expect(starts).toEqual([90000, 90000]);
+
+  // Instruções de conferência servidas por fonte, verificação pendente.
+  const instrucoes = await fetch(`${base}/project/output/${ready.revision}/instrucoes`);
+  expect(instrucoes.status).toBe(200);
+  const txt = await instrucoes.text();
+  expect(txt).toContain("01:00:00:00");
+  expect(txt).toContain("01:00:00;00");
+  expect(txt).toMatch(/drop-frame/);
+  const verificacao = await fetch(`${base}/project/output/${ready.revision}/verificacao`);
+  expect(verificacao.status).toBe(200);
+  expect(await verificacao.json()).toEqual({ status: "pendente", revision: ready.revision });
 });
