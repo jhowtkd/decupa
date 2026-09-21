@@ -446,6 +446,7 @@ function validateV2(value: Record<string, unknown>): Project {
   }
   return {
     ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
+    ...(value.templateReport!==undefined?{templateReport:validateTemplateReport(value.templateReport,approvedSnapshot(value.template))}:{}),
     version: 2,
     id: value.id,
     revision: value.revision as number,
@@ -650,6 +651,7 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
       corrections,
       proposal: next.proposal ?? current.proposal,
       template: next.template === undefined ? current.template : next.template,
+      templateReport: next.templateReport === undefined ? current.templateReport : next.templateReport,
       previewRevision: next.previewRevision ?? current.previewRevision,
       finalApprovedRevision: next.finalApprovedRevision ?? current.finalApprovedRevision,
       preparation: next.preparation ?? current.preparation,
@@ -664,6 +666,7 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     corrections,
     proposal: next.proposal !== base.proposal ? next.proposal : current.proposal,
     template: next.template !== base.template ? next.template : current.template,
+    templateReport: next.templateReport !== base.templateReport ? next.templateReport : current.templateReport,
     previewRevision: next.previewRevision !== base.previewRevision
       ? next.previewRevision
       : current.previewRevision,
@@ -685,6 +688,8 @@ export function backupPath(dir: string): string {
 /** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
 export type EditorialSnapshot = {
   template?: Project["template"];
+  /** Relatório da receita aceita — desfazer restaura junto do template. */
+  templateReport?: Project["templateReport"];
   /** Perfil de ritmo da montagem no momento da foto — desfazer restaura. */
   rhythmProfile?: Project["assembly"]["rhythmProfile"];
   revision: number;
@@ -707,6 +712,7 @@ export async function writeHistorySnapshot(dir: string, project: Project): Promi
     corrections: project.corrections,
     proposal: project.proposal,
     ...(project.template!==undefined?{template:project.template}:{}),
+    ...(project.templateReport!==undefined?{templateReport:project.templateReport}:{}),
     ...(project.assembly.rhythmProfile!==undefined
       ?{rhythmProfile:project.assembly.rhythmProfile}:{}),
   };

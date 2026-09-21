@@ -207,7 +207,7 @@ export type DecisionReport = {
   supports?: {sceneId:string; candidateId:string|null; outcome:"selected"|"none"|"fallback"; reason:string}[];
 };
 
-export type TemplateReport = {ruleId:string;status:"applied"|"adapted"|"unavailable";reason:string}[];
+export type TemplateReport = {ruleId:string;status:"applied"|"adapted"|"unavailable";reason:string;sceneIds?:string[]}[];
 
 export type Proposal = {
   template?: Recipe | null;
@@ -229,6 +229,8 @@ export type PreviewArtifact = {
 
 export type Project = {
   template?: Recipe | null;
+  /** Relatório da receita aceita — acompanha template; persiste até a próxima proposta de template. */
+  templateReport?: TemplateReport;
   version: 2;
   id: string;
   revision: number;
