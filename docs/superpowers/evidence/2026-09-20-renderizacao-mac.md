@@ -70,3 +70,22 @@ sem limites foi executada, conforme o plano.
   usuário como responsiva, sem congelamento/travamento perceptível.
 - A montagem completa do usuário NÃO foi executada: ampliação além da
   amostra de 10 s aguarda decisão do usuário em outra sessão.
+
+## 5. Revisão do usuário (mesmo dia) — 3 correções aplicadas
+
+- P1, render enfileirado após cancelar: `preparation.ts` e a rota manual de
+  `routes.ts` agora repassam o `AbortSignal` ao `renderAssembly`; a rota de
+  prévia ganhou controller próprio (`beginPreview`, sem derrubar a anterior
+  — paralelas seguem ambas 200) e o `/cancel` aborta todas as prévias vivas.
+  Testes: cancelamento pela rota e pela preparação com a fila ocupada
+  (zero lançamentos python3/prova, operação `cancelled`).
+- P1, monitor encerra a árvore inteira: `terminate_tree` aquieta com
+  SIGSTOP até estabilizar (parado não forka), depois TERM+CONT, espera e
+  KILL com re-enumeração — cobre sessões próprias (SpawnExecutor) e forks
+  tardios. Validado 3/3 com descendente `setsid` (0,2 s, zero
+  sobreviventes, processo alheio intacto); normal e Ctrl+C revalidados.
+- P2, falha de medição: `ps` ausente ou com exit ≠ 0 levanta
+  `MeasurementError`; o ensaio é interrompido, a vítima encerrada e o JSON
+  registra `measurement_error` (nunca zero limpo). Validado com `ps`
+  retornando "permission denied" e com `ps` ausente do PATH.
+- Re-verificação: escopo 411/411, `typecheck` limpo, unittest 9/9.
