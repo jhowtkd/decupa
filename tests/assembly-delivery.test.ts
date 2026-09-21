@@ -293,5 +293,108 @@ it("exporta timecode embutido (NDF e drop-frame) por fonte, com instruções", a
   expect(txt).toMatch(/drop-frame/);
   const verificacao = await fetch(`${base}/project/output/${ready.revision}/verificacao`);
   expect(verificacao.status).toBe(200);
-  expect(await verificacao.json()).toEqual({ status: "pendente", revision: ready.revision });
+  const vbody = await verificacao.json() as {
+    status: string; revision: number; origem: string | null;
+    artefato: { timeline: string; reference: string };
+  };
+  expect(vbody.status).toBe("pendente");
+  expect(vbody.revision).toBe(ready.revision);
+  expect(vbody.origem).toBeNull();
+  expect(vbody.artefato.reference).toBe(ready.previewArtifact!.sha256);
+});
+
+it("conferência de importação: exportar nunca confirma e revisão nova não herda (#63)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-delivery-verify-"));
+  const speech = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech],
+    port: 0,
+    executor: indexingAndRender(),
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  type View = DeliveryProject & {
+    verificacao?: { status: string; revision: number; origem: string } | null;
+  };
+  const view = async (): Promise<View> => {
+    const data = await (await fetch(`${base}/project`)).json() as {
+      project: DeliveryProject;
+      verificacao?: { status: string; revision: number; origem: string } | null;
+    };
+    return { ...data.project, verificacao: data.verificacao ?? null };
+  };
+
+  // Sem entrega: confirmar é recusado e editar/revisar seguem livres.
+  let p = await view();
+  expect(p.verificacao ?? null).toBeNull();
+  const early = await post(base, "/project/verify-import", { baseRevision: p.revision });
+  expect(early.status).toBe(409);
+  expect((await early.json() as { error: string }).error).toMatch(/exporte antes/);
+
+  expect((await post(base, "/project/input", {
+    baseRevision: p.revision, kind: "brief", text: "tema", targetSeconds: 2,
+  })).status).toBe(200);
+  const analyze = await post(base, "/project/analyze", {
+    sourceIds: p.assembly.sources.map((s) => s.id),
+  });
+  expect(analyze.status).toBe(200);
+  const analyzed = await analyze.json() as {
+    project: { revision: number; analyses: { speech: { id: string }[] }[] };
+  };
+  const speechId = analyzed.project.analyses[0]?.speech[0]?.id;
+  expect((await post(base, "/project/propose", {
+    baseRevision: analyzed.project.revision,
+    proposal: {
+      id: "prop-v", baseRevision: analyzed.project.revision,
+      changedSceneIds: ["s1"], explanation: "corte",
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema",
+        speechIds: [speechId], support: [], gaps: [],
+      }],
+    },
+  })).status).toBe(200);
+  const apply = await post(base, "/project/apply", {
+    baseRevision: analyzed.project.revision, proposalId: "prop-v",
+  });
+  const applied = await apply.json() as { project: { revision: number } };
+  expect((await post(base, "/project/preview", {
+    baseRevision: applied.project.revision,
+  })).status).toBe(200);
+  const previewed = await view();
+  expect((await post(base, "/project/approve-final", {
+    baseRevision: previewed.revision,
+    watchedRevision: previewed.previewRevision,
+  })).status).toBe(200);
+
+  // Exportar ≠ conferir: nasce pendente e sem origem.
+  p = await view();
+  expect((await post(base, "/project/export", { baseRevision: p.revision })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao?.status).toBe("pendente");
+  expect(p.verificacao?.revision).toBe(p.revision);
+
+  // Confirmar exige a revisão certa e grava origem manual.
+  expect((await post(base, "/project/verify-import", {
+    baseRevision: p.revision,
+  })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao?.status).toBe("confirmada");
+  expect(p.verificacao?.origem).toBe("manual");
+  // O arquivo da entrega também reflete a confirmação.
+  const file = await fetch(`${base}/project/output/${p.revision}/verificacao`);
+  expect((await file.json() as { status: string; origem: string }).status).toBe("confirmada");
+
+  // Conteúdo novo não herda a confirmação: revisão nova não tem entrega
+  // própria, então confirmar volta a ser recusado.
+  expect((await post(base, "/project/input", {
+    baseRevision: p.revision, kind: "brief", text: "tema novo", targetSeconds: 3,
+  })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao ?? null).toBeNull();
+  expect((await post(base, "/project/verify-import", {
+    baseRevision: p.revision,
+  })).status).toBe(409);
 });

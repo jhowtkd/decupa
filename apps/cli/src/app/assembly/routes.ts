@@ -23,7 +23,7 @@ import { holdPreparation, isPreparationActive, runPreparation } from "./preparat
 import { describeSource, type VisualClient } from "./model.ts";
 import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
-import { exportApproved } from "./export.ts";
+import { confirmImportVerification, exportApproved, readVerification } from "./export.ts";
 import { renderAssembly } from "./render.ts";
 import { peaksPath } from "./waveform.ts";
 import {
@@ -539,7 +539,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
-        sendJson(res, { project, undoRevision, templateProposal:await readTemplateProposal(), brollCandidates: candidates, ...snapshot() });
+        sendJson(res, {
+          project, undoRevision,
+          templateProposal:await readTemplateProposal(),
+          brollCandidates: candidates,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 
@@ -1223,7 +1229,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           const dest = await exportApproved(loaded, dir);
-          sendJson(res, { project: loaded, path: dest, ...snapshot() });
+          sendJson(res, {
+            project: loaded, path: dest,
+            verificacao: await readVerification(dir, loaded.revision),
+            ...snapshot(),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante|timecode ilegível/.test(message)) {
@@ -1231,6 +1241,29 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           throw err;
         }
+        return true;
+      }
+
+      // Conferência de importação (#63): confirmação manual sobre a
+      // entrega íntegra da revisão atual. Exportar nunca confirma;
+      // revisão nova começa sem verificacao.json (não herda).
+      if (parts[1] === "verify-import" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const project = await mutate(baseRevision, async (loaded) => {
+          try {
+            await confirmImportVerification(loaded, dir);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (/entrega íntegra/.test(message)) throw new HttpError(409, message);
+            throw err;
+          }
+          return loaded;
+        });
+        sendJson(res, {
+          project,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 
