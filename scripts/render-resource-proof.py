@@ -7,8 +7,10 @@ via `ps` a cada 500ms e interrompe pelo teto do ensaio. Uso:
     python3 scripts/render-resource-proof.py [--out saida.json] -- CMD [ARGS...]
 
 Escreve JSON com wall_seconds, peak_rss_bytes, cpu_percent_samples,
-exit_code e stopped_for_memory, além de swap antes/depois (registro, sem
-interpretação). Sem credenciais e sem chamadas externas.
+exit_code, stopped_for_memory e measurement_error (null quando a medição
+funcionou), além de swap antes/depois (registro, sem interpretação). Se o
+ps falha, o ensaio é interrompido e registrado — nunca apresentado como
+consumo zero. Sem credenciais e sem chamadas externas.
 """
 from __future__ import annotations
 
@@ -23,6 +25,10 @@ import time
 SAMPLE_INTERVAL = 0.5
 KILL_GRACE_SECONDS = 2.0
 FOUR_GIB = 4 * 1024**3
+
+
+class MeasurementError(RuntimeError):
+    """ps indisponível ou ilegível: o ensaio segue sem proteção efetiva."""
 
 
 def physical_memory() -> int:
@@ -56,13 +62,16 @@ def swap_usage() -> str:
 
 
 def _ps_table() -> tuple[dict[int, list[int]], dict[int, str]]:
-    """(filhos por ppid, stat por pid). Falha de ps devolve vazios."""
+    """(filhos por ppid, stat por pid). Falha de ps devolve vazios: quem
+    mede trata como erro fatal; quem encerra cumpre o orçamento cego."""
     try:
         out = subprocess.run(
             ["ps", "-axo", "pid=,ppid=,stat="],
             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
     except Exception:
+        return {}, {}
+    if out.returncode != 0:
         return {}, {}
     children: dict[int, list[int]] = {}
     states: dict[int, str] = {}
@@ -104,14 +113,18 @@ def _ps_alive(pid: int, states: dict[int, str]) -> bool:
 
 
 def sample_tree(root_pid: int) -> tuple[int, float]:
-    """Soma RSS (bytes) e %CPU do PID e descendentes via ppid. Perdidos = 0."""
+    """Soma RSS (bytes) e %CPU do PID e descendentes via ppid. Falha de ps
+    levanta MeasurementError: zero sem medição não é consumo zero."""
     try:
         out = subprocess.run(
             ["ps", "-axo", "pid=,ppid=,rss=,pcpu="],
             capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
-    except Exception:
-        return 0, 0.0
+    except Exception as exc:
+        raise MeasurementError(f"ps indisponível: {exc}") from exc
+    if out.returncode != 0:
+        detail = (out.stderr or "").strip().splitlines()
+        raise MeasurementError(f"ps falhou (exit {out.returncode}): {detail[0][:200] if detail else 'sem stderr'}")
     children: dict[int, list[int]] = {}
     stats: dict[int, tuple[int, float]] = {}
     for line in out.stdout.splitlines():
@@ -149,6 +162,9 @@ def _signal_tree(pids: set[int], sig: int) -> None:
 
 
 def _tree_dead_ps(proc, pid: int, targets: set[int], states: dict[int, str]) -> bool:
+    # Sem snapshot não se declara morte: cumpre o orçamento sinalizando.
+    if not states:
+        return False
     # O filho direto vira zumbi até wait(): para ele vale poll().
     if proc is not None:
         if proc.poll() is None and _ps_alive(pid, states):
@@ -241,9 +257,15 @@ def main() -> int:
     cpu_samples: list[float] = []
     stopped_for_memory = False
     interrupted = False
+    measurement_error: str | None = None
     try:
         while proc.poll() is None:
-            rss, cpu = sample_tree(proc.pid)
+            try:
+                rss, cpu = sample_tree(proc.pid)
+            except MeasurementError as exc:
+                measurement_error = str(exc)
+                terminate_tree(proc.pid, proc)
+                break
             peak_rss = max(peak_rss, rss)
             cpu_samples.append(round(cpu, 2))
             if rss > ceiling:
@@ -264,6 +286,7 @@ def main() -> int:
         "exit_code": proc.returncode,
         "stopped_for_memory": stopped_for_memory,
         "interrupted": interrupted,
+        "measurement_error": measurement_error,
         "ceiling_bytes": ceiling,
         "physical_memory_bytes": physical_memory(),
         "swap_before": swap_before,
