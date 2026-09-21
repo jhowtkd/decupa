@@ -96,7 +96,7 @@ it("troca de apoio: candidatos com evidência, aplicação, desfazer (#65)", asy
     await copyFile(join(FIXTURES, "clip.mp4"), target);
   }
   // describe por chamada: fala (vídeo de fala) → apoio → extra.
-  const spansByCall: { id: string; start: number; end: number; text: string }[][] = [
+  const spansByCall: { id: string; start: number; end: number; text: string; confidence?: string; tags?: string[] }[][] = [
     [],
     [{ id: "v0", start: 0, end: 1, text: "apoio antigo", confidence: "observed", tags: [] }],
     [
@@ -197,7 +197,7 @@ it("sem candidato adequado a montagem é preservada e a lacuna explicada (#65)",
   await copyFile(join(FIXTURES, "clip.mp4"), speech);
   await copyFile(join(FIXTURES, "clip.mp4"), apoio);
   let describeCalls = 0;
-  const spansByCall = [
+  const spansByCall: { id: string; start: number; end: number; text: string; confidence?: string; tags?: string[] }[][] = [
     [],
     [{ id: "v0", start: 0, end: 1, text: "único trecho", confidence: "observed", tags: [] }],
   ];
