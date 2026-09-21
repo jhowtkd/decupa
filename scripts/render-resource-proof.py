@@ -112,9 +112,9 @@ def _ps_alive(pid: int, states: dict[int, str]) -> bool:
     return state is not None and not state.startswith("Z")
 
 
-def sample_tree(root_pid: int) -> tuple[int, float]:
-    """Soma RSS (bytes) e %CPU do PID e descendentes via ppid. Falha de ps
-    levanta MeasurementError: zero sem medição não é consumo zero."""
+def _sample_full(root_pid: int) -> tuple[int, float, set[int]]:
+    """(RSS bytes, %CPU, pids da árvore). Falha de ps levanta
+    MeasurementError: zero sem medição não é consumo zero."""
     try:
         out = subprocess.run(
             ["ps", "-axo", "pid=,ppid=,rss=,pcpu="],
@@ -150,6 +150,12 @@ def sample_tree(root_pid: int) -> tuple[int, float]:
         total_rss += rss
         total_cpu += cpu
         stack.extend(children.get(pid, []))
+    return total_rss, total_cpu, seen
+
+
+def sample_tree(root_pid: int) -> tuple[int, float]:
+    """Soma RSS (bytes) e %CPU do PID e descendentes via ppid."""
+    total_rss, total_cpu, _ = _sample_full(root_pid)
     return total_rss, total_cpu
 
 
@@ -179,56 +185,76 @@ def _stopped_or_dead(pid: int, states: dict[int, str]) -> bool:
     return state is None or state.startswith("Z") or state.startswith("T")
 
 
-def terminate_tree(pid: int, proc=None) -> None:
+def _signal_targets(known: set[int], states: dict[int, str], sig: int) -> None:
+    # Cego (sem snapshot): sinaliza todos os conhecidos; mortos evaporam via
+    # ProcessLookupError. Com snapshot: só os vivos, para não tocar pid
+    # reutilizado nem zumbi.
+    if states:
+        _signal_tree({t for t in known if _ps_alive(t, states)}, sig)
+    else:
+        _signal_tree(set(known), sig)
+
+
+def _signal_group(pid: int, sig: int) -> None:
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def terminate_tree(pid: int, proc=None, known: set[int] | None = None) -> None:
     """Encerra a árvore inteira do ensaio, inclusive sessões próprias (ex.
     SpawnExecutor, que cria grupo novo). Primeiro aquieta tudo com SIGSTOP
     até nenhum pid novo aparecer — parado não forka, então o snapshot
     estabiliza; depois SIGTERM + SIGCONT, espera, e SIGKILL nos restantes
     (KILL pega parado sem CONT). O grupo do raiz cobre reparentados do
-    grupo; os pids cobrem o resto. Nunca pkill global. Nunca deixa parado:
-    finally devolve SIGCONT."""
-    known: set[int] = set()
-    stop_deadline = time.monotonic() + KILL_GRACE_SECONDS
-    while time.monotonic() < stop_deadline:
-        children, states = _ps_table()
-        before = set(known)
-        known |= _descendants(pid, children)
-        _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGSTOP)
-        if known == before and all(_stopped_or_dead(t, states) for t in known):
-            break
-        time.sleep(0.05)
+    grupo; os pids cobrem o resto. Nunca pkill global.
+    ``known`` semeia o universo com os descendentes observados durante o
+    acompanhamento: se ps falhar na hora de encerrar, o modo cego sinaliza
+    a última árvore conhecida (+ grupo) em vez de mirar só o raiz. Risco
+    residual do modo cego: reuso de PID na janela de poucos segundos; os
+    alvos foram observados vivos há pouco, o que estreita a janela.
+    O try/finally começa ANTES do primeiro SIGSTOP: qualquer interrupção no
+    meio do quiesce retoma (SIGCONT) o universo conhecido, sem deixar
+    processos parados para trás. Só paramos pids de `live`, então processos
+    nunca observados jamais ficam congelados por nós."""
+    live: set[int] = set(known) if known else set()
     try:
-        _signal_tree(known, signal.SIGTERM)
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-        _signal_tree(known, signal.SIGCONT)
-        try:
-            os.killpg(pid, signal.SIGCONT)
-        except (ProcessLookupError, PermissionError):
-            pass
+        stop_deadline = time.monotonic() + KILL_GRACE_SECONDS
+        while time.monotonic() < stop_deadline:
+            children, states = _ps_table()
+            before = set(live)
+            live |= _descendants(pid, children)
+            _signal_targets(live, states, signal.SIGSTOP)
+            if live == before and all(_stopped_or_dead(t, states) for t in live):
+                break
+            time.sleep(0.05)
+        _signal_tree(live, signal.SIGTERM)
+        _signal_group(pid, signal.SIGTERM)
+        _signal_tree(live, signal.SIGCONT)
+        _signal_group(pid, signal.SIGCONT)
         deadline = time.monotonic() + KILL_GRACE_SECONDS
         while time.monotonic() < deadline:
             children, states = _ps_table()
-            known |= _descendants(pid, children)
-            if _tree_dead_ps(proc, pid, known, states):
+            live |= _descendants(pid, children)
+            if _tree_dead_ps(proc, pid, live, states):
                 return
-            _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGTERM)
+            _signal_targets(live, states, signal.SIGTERM)
             time.sleep(0.05)
         for _ in range(20):
             children, states = _ps_table()
-            known |= _descendants(pid, children)
-            if _tree_dead_ps(proc, pid, known, states):
+            live |= _descendants(pid, children)
+            if _tree_dead_ps(proc, pid, live, states):
                 return
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGKILL)
+            _signal_group(pid, signal.SIGKILL)
+            _signal_targets(live, states, signal.SIGKILL)
             time.sleep(0.05)
     finally:
-        _signal_tree(known, signal.SIGCONT)
+        # Nunca deixar para trás um processo parado que tocamos: retoma o
+        # universo conhecido (único conjunto que paramos) e o grupo por
+        # belt-and-braces — CONT em processo rodando é no-op.
+        _signal_tree(live, signal.SIGCONT)
+        _signal_group(pid, signal.SIGCONT)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -247,38 +273,69 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def _emit(args: argparse.Namespace, result: dict) -> None:
+    text = json.dumps(result, ensure_ascii=False, indent=2)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+    else:
+        print(text)
+
+
 def main() -> int:
     args = parse_args(sys.argv[1:])
     ceiling = args.test_ceiling_bytes or min(FOUR_GIB, physical_memory() // 4)
     swap_before = swap_usage()
     start = time.monotonic()
+    # Pre-flight: sem medição não se inicia o comando. Encerrar depende do
+    # mesmo ps; começar cego arriscaria deixar descendentes para trás.
+    try:
+        _sample_full(os.getpid())
+    except MeasurementError as exc:
+        _emit(args, {
+            "command": args.command,
+            "wall_seconds": round(time.monotonic() - start, 3),
+            "peak_rss_bytes": 0,
+            "cpu_percent_samples": [],
+            "exit_code": None,
+            "stopped_for_memory": False,
+            "interrupted": False,
+            "measurement_error": f"pre-flight: {exc}",
+            "ceiling_bytes": ceiling,
+            "physical_memory_bytes": physical_memory(),
+            "swap_before": swap_before,
+            "swap_after": swap_usage(),
+        })
+        return 0
     proc = subprocess.Popen(args.command, start_new_session=True)  # noqa: S603
     peak_rss = 0
     cpu_samples: list[float] = []
     stopped_for_memory = False
     interrupted = False
     measurement_error: str | None = None
+    known: set[int] = {proc.pid}
     try:
         while proc.poll() is None:
             try:
-                rss, cpu = sample_tree(proc.pid)
+                rss, cpu, pids = _sample_full(proc.pid)
             except MeasurementError as exc:
                 measurement_error = str(exc)
-                terminate_tree(proc.pid, proc)
+                terminate_tree(proc.pid, proc, known)
                 break
+            known |= pids
             peak_rss = max(peak_rss, rss)
             cpu_samples.append(round(cpu, 2))
             if rss > ceiling:
-                terminate_tree(proc.pid, proc)
+                terminate_tree(proc.pid, proc, known)
                 stopped_for_memory = True
                 break
             time.sleep(SAMPLE_INTERVAL)
     except KeyboardInterrupt:
         interrupted = True
-        terminate_tree(proc.pid, proc)
+        terminate_tree(proc.pid, proc, known)
     proc.wait()
     wall = time.monotonic() - start
-    result = {
+    _emit(args, {
         "command": args.command,
         "wall_seconds": round(wall, 3),
         "peak_rss_bytes": peak_rss,
@@ -291,13 +348,7 @@ def main() -> int:
         "physical_memory_bytes": physical_memory(),
         "swap_before": swap_before,
         "swap_after": swap_usage(),
-    }
-    text = json.dumps(result, ensure_ascii=False, indent=2)
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
-            fh.write(text + "\n")
-    else:
-        print(text)
+    })
     return 0
 
 
