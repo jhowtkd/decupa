@@ -186,7 +186,7 @@ export function docSignature(p) {
     ).join("|")
     // Apoios fazem parte da assinatura: troca de apoio muda scene.support
     // sem tocar palavras — sem isso o chip continuaria exibindo o antigo.
-    + ":s" + scene.support.map((entry) =>
+    + ":s" + (scene.support || []).map((entry) =>
       entry.visualId + "@" + entry.offsetFrames + "+" + entry.durationFrames,
     ).join(","),
   ).join("||");
