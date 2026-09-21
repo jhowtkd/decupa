@@ -1,6 +1,6 @@
 import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { hashFile } from "../packages/media/src/hash.ts";
@@ -212,9 +212,10 @@ it("exporta timecode embutido (NDF e drop-frame) por fonte, com instruções", a
   const base = `http://127.0.0.1:${app.port}`;
 
   const opened = await getProject(base);
-  const byName = new Map(opened.assembly.sources.map((s) => [s.path, s]));
-  const fala = byName.get(speech);
-  const broll = byName.get(support);
+  // source.path é realpath'd (no macOS /var → /private/var): casa por nome.
+  const byName = new Map(opened.assembly.sources.map((s) => [basename(s.path), s]));
+  const fala = byName.get(basename(speech));
+  const broll = byName.get(basename(support));
   // ffprobe lê o tmcd; 01:00:00:00@25 = 90000; DF 01:00:00;00@29.97 = 107892.
   expect(fala?.timecode).toEqual({ raw: "01:00:00:00", frames: 90000, dropFrame: false });
   expect(broll?.timecode).toEqual({ raw: "01:00:00;00", frames: 107892, dropFrame: true });
