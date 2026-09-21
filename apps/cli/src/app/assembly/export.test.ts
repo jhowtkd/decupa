@@ -277,9 +277,13 @@ it("manifest declara formato, mídia por fonte e verificação pendente", async 
   expect(instrucoes).toContain("01:00:00:00");
   expect(instrucoes).toContain("rotação 90°");
   const verificacao = JSON.parse(await readFile(join(dest, "verificacao.json"), "utf8")) as {
-    status: string; revision: number;
+    status: string; revision: number; origem: string | null;
+    artefato: { timeline: string; reference: string };
   };
-  expect(verificacao).toEqual({ status: "pendente", revision: 10 });
+  expect(verificacao.status).toBe("pendente");
+  expect(verificacao.revision).toBe(10);
+  expect(verificacao.origem).toBeNull();
+  expect(verificacao.artefato.reference).toMatch(/^[0-9a-f]{64}$/);
 });
 
 it("reexport da mesma revisão não apaga verificacao.json registrada", async () => {
