@@ -89,3 +89,24 @@ sem limites foi executada, conforme o plano.
   registra `measurement_error` (nunca zero limpo). Validado com `ps`
   retornando "permission denied" e com `ps` ausente do PATH.
 - Re-verificação: escopo 411/411, `typecheck` limpo, unittest 9/9.
+
+## 6. Segunda revisão do usuário (monitor) — 2 correções aplicadas
+
+- P1, `ps` falho impede descobrir descendentes: pre-flight
+  (`_sample_full(getpid)`) antes do Popen — sem medição o comando nem
+  inicia (`exit_code` null, `measurement_error` `pre-flight:*`, marcador
+  de início ausente). Durante o acompanhamento, os pids observados são
+  acumulados e semeiam `terminate_tree`; com `ps` falho, os loops cegos
+  sinalizam a última árvore conhecida + grupo (`_signal_targets`) em vez
+  de ninguém. Validado com `ps` morrendo no meio do ensaio (falso `ps`
+  falha após 4 chamadas): 3 amostras, aborto com `measurement_error`,
+  `exit_code` −15, filha `setsid` morta, processo alheio intacto. Risco
+  residual documentado: reuso de PID na janela cega de poucos segundos.
+- P2, SIGSTOP fora do `try/finally`: o bloco protegido começa antes do
+  primeiro STOP; o `finally` retoma o universo conhecido + grupo.
+  Validado com mocks (interrupção após o primeiro STOP): 1 STOP + 1 CONT,
+  vítima rodando (`SN`). Controles negativos no código anterior: só STOP
+  e vítima parada (`TN`); vítima iniciada sem pre-flight; filha `setsid`
+  sobrevivente — os 3 drivers reproduzem os defeitos antigos.
+- Re-verificação: unittest 9/9, driver de árvore P12 OK, caminho normal e
+  Ctrl+C revalidados (`interrupted`, `exit_code` −15, zero sobreviventes).
