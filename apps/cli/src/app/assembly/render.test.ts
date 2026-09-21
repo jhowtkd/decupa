@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { access, copyFile, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { FakeExecutor, type Executor } from "../pipeline.ts";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { fixtureAssembly } from "./fixture.ts";
+import { ensurePlayback, proxyPath } from "./media.ts";
+import { mediaWork } from "./media-work.ts";
 import { renderAssembly, previewIdentity, toEngineTimeline } from "./render.ts";
 import { validateAssembly } from "./validate.ts";
 
@@ -150,6 +152,110 @@ it("concorrentes válido + inválido preservam referência válida (V1)", async 
   const { probe } = await import("@decupa/media");
   const info = await probe(dest);
   expect(info.durationMs).toBeGreaterThan(0);
+});
+
+it("proxy e render simultâneos executam um pesado por vez", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-shared-budget-"));
+  const assembly = await assemblyWithMedia(dir);
+  const source = assembly.sources[0]!;
+  let active = 0, peak = 0, gated = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const exec: Executor = {
+    async run(call) {
+      const heavy = call.command === "ffmpeg" || call.command === "python3";
+      if (!heavy) return { code: 0, stdout: "", stderr: "" };
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        if (!gated) {
+          gated = true;
+          await gate;
+        }
+        const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+        if (call.command === "python3" && work) {
+          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        } else {
+          const out = call.args.at(-1)!;
+          if (out.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), out);
+          else if (out.endsWith(".tmp.jpg")) await writeFile(out, "miniatura");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      } finally {
+        active--;
+      }
+    },
+  };
+  try {
+    const both = Promise.all([
+      ensurePlayback(source, dir, exec),
+      renderAssembly(assembly, dir, exec),
+    ]);
+    await vi.waitFor(() => {
+      expect(gated).toBe(true);
+      expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+    });
+    release();
+    const [playback, dest] = await both;
+    expect(peak).toBe(1);
+    expect(playback.videoPath).toBe(proxyPath(dir, source.sha256));
+    expect(dest).toBe(join(dir, "rev-1", "reference.mp4"));
+  } finally {
+    release();
+  }
+});
+
+it("render cancelado na fila não lança ffmpeg e preserva a referência", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-render-cancel-"));
+  const assembly = await assemblyWithMedia(dir);
+  const dest = await renderAssembly(assembly, dir, copyingRenderExec());
+  const before = await hashFile(dest);
+  const calls: { command: string; args: string[] }[] = [];
+  let entered = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const exec: Executor = {
+    async run(call) {
+      calls.push({ command: call.command, args: call.args });
+      if (call.command === "ffmpeg" || call.command === "python3") {
+        entered++;
+        await gate;
+        const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+        if (call.command === "python3" && work) {
+          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        } else {
+          const out = call.args.at(-1)!;
+          if (out.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), out);
+          else if (out.endsWith(".tmp.jpg")) await writeFile(out, "miniatura");
+        }
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const controller = new AbortController();
+  try {
+    const pending = Promise.allSettled([
+      ensurePlayback(assembly.sources[0]!, dir, exec),
+      renderAssembly(assembly, dir, exec, { profile: "nvenc", signal: controller.signal }),
+    ]);
+    await vi.waitFor(() => {
+      expect(entered).toBe(1);
+      expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+    });
+    controller.abort();
+    release();
+    const [playback, render] = await pending;
+    expect(playback.status).toBe("fulfilled");
+    expect(render.status).toBe("rejected");
+    expect(calls.filter((c) => c.command === "python3")).toHaveLength(0);
+    expect(await hashFile(dest)).toBe(before);
+  } finally {
+    release();
+  }
 });
 
 it("mapeia startFrame 25 no mesmo fps float do canvas em 25 e 30000/1001", () => {

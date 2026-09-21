@@ -6,6 +6,7 @@ import { inspectArtifact, publishAtomic } from "@decupa/cache";
 import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { verifySourceIdentity } from "./media.ts";
+import { mediaWork } from "./media-work.ts";
 import { pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
@@ -154,7 +155,7 @@ export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
-  opts: { profile?: HardwareProfile; detectHardware?: boolean } = {},
+  opts: { profile?: HardwareProfile; detectHardware?: boolean; signal?: AbortSignal } = {},
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
@@ -165,7 +166,9 @@ export async function renderAssembly(
   if (opts.detectHardware && opts.profile == null) {
     const source = valid.sources.find((item) => item.hasVideo) ?? valid.sources[0];
     if (source) {
-      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec);
+      profile = await detectHardwareProfile(source.path, join(outDir, "hardware-proof"), exec, {
+        signal: opts.signal,
+      });
     }
   }
   const requestKey = previewIdentity(valid, profile);
@@ -194,19 +197,25 @@ export async function renderAssembly(
 
   try {
     const { encoder, hwaccel } = encoderFor(profile);
-    const result = await exec.run({
-      command: "python3",
-      args: [
-        RENDER_SCRIPT,
-        "--timeline", timelinePath,
-        "--out", outPath,
-        "--work", work,
-        "--encoder", encoder,
-        ...(hwaccel ? ["--hwaccel", hwaccel] : []),
-      ],
-      cwd: work,
-      env: { CLAUDE_PROJECT_DIR: work },
-    });
+    // Só o exec pesado entra na fila (sem chave: cada chamada roda a sua);
+    // a detecção acima já liberou o slot. Cancelamento verificado ao sair.
+    const result = await mediaWork.run(async () => {
+      opts.signal?.throwIfAborted();
+      return exec.run({
+        command: "python3",
+        args: [
+          RENDER_SCRIPT,
+          "--timeline", timelinePath,
+          "--out", outPath,
+          "--work", work,
+          "--encoder", encoder,
+          ...(hwaccel ? ["--hwaccel", hwaccel] : []),
+        ],
+        cwd: work,
+        env: { CLAUDE_PROJECT_DIR: work },
+        signal: opts.signal,
+      });
+    }, opts.signal ? { signal: opts.signal } : undefined);
     if (result.code !== 0) {
       const detail = (result.stdout + result.stderr).trim().slice(0, 1500);
       throw new Error(`render falhou (código ${result.code}): ${detail || "sem saída"}`);

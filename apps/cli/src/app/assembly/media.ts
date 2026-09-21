@@ -2,7 +2,15 @@ import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
+import { encoderFor, type HardwareProfile } from "./hardware.ts";
+import { mediaWork } from "./media-work.ts";
 import type { Source } from "./types.ts";
+
+export type MediaOpts = {
+  signal?: AbortSignal;
+  /** Perfil já comprovado: reutiliza o encoder sem redetectar hardware na fila. */
+  profile?: HardwareProfile;
+};
 
 export function playbackDir(dir: string, sha256: string): string {
   return join(dir, "media", sha256);
@@ -54,15 +62,27 @@ async function proxyIsValid(path: string, source: Source): Promise<boolean> {
   }
 }
 
-async function buildProxy(source: Source, dir: string, exec: Executor): Promise<string> {
+async function buildProxy(
+  source: Source,
+  dir: string,
+  exec: Executor,
+  opts: MediaOpts = {},
+): Promise<string> {
   const outDir = playbackDir(dir, source.sha256);
   await mkdir(outDir, { recursive: true });
   const tmp = join(outDir, `proxy.${process.pid}.tmp.mp4`);
-  const args = ["-n", "-i", source.path,
+  const { encoder, hwaccel } = encoderFor(opts.profile ?? "software");
+  const video = encoder === "libx264"
+    ? ["-c:v", encoder]
+    : ["-c:v", encoder, "-b:v", "8M", ...(encoder === "h264_videotoolbox" ? ["-allow_sw", "0"] : [])];
+  const args = ["-n",
+    ...(hwaccel ? ["-hwaccel", hwaccel] : []),
+    "-threads", "2", "-i", source.path,
     "-map", "0:v:0?", "-map", "0:a:0?",
-    "-vf", "scale='min(960,iw)':-2", "-c:v", "libx264",
+    "-vf", "scale='min(960,iw)':-2", "-filter_threads", "1",
+    ...video, "-threads", "2",
     "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", tmp];
-  const result = await exec.run({ command: "ffmpeg", args });
+  const result = await exec.run({ command: "ffmpeg", args, signal: opts.signal });
   if (result.code !== 0) {
     await unlink(tmp).catch(() => {});
     throw new Error(
@@ -77,13 +97,20 @@ async function buildProxy(source: Source, dir: string, exec: Executor): Promise<
   return proxyPath(dir, source.sha256);
 }
 
-async function buildThumbnail(source: Source, dir: string, proxy: string, exec: Executor): Promise<string | null> {
+async function buildThumbnail(
+  source: Source,
+  dir: string,
+  proxy: string,
+  exec: Executor,
+  opts: MediaOpts = {},
+): Promise<string | null> {
   const outDir = playbackDir(dir, source.sha256);
   const tmp = join(outDir, `thumb.${process.pid}.tmp.jpg`);
   const at = Math.min(1, source.durationSeconds * 0.1);
   const result = await exec.run({
     command: "ffmpeg",
-    args: ["-n", "-ss", String(at), "-i", proxy, "-vframes", "1", "-q:v", "5", tmp],
+    args: ["-n", "-ss", String(at), "-i", proxy, "-vframes", "1", "-vf", "scale='min(480,iw)':-2", "-q:v", "5", tmp],
+    signal: opts.signal,
   });
   if (result.code !== 0) {
     await unlink(tmp).catch(() => {});
@@ -100,28 +127,40 @@ async function buildThumbnail(source: Source, dir: string, proxy: string, exec: 
   return thumbnailPath(dir, source.sha256);
 }
 
-/**
- * Garante o derivado reproduzível da fonte (proxy H.264/AAC + miniatura
- * JPEG), publicando por rename só após probe. Arquivo parcial nunca vira
- * cache válido. Áudio sem vídeo não tem miniatura. A exportação segue
- * referenciando o original, não o proxy.
- */
+/** Miniatura independente do proxy; arquivos parciais nunca entram no cache. */
+export async function ensureThumbnail(
+  source: Source,
+  dir: string,
+  exec: Executor,
+  opts: MediaOpts = {},
+): Promise<string | null> {
+  await verifySourceIdentity(source);
+  if (!source.hasVideo) return null;
+  return mediaWork.run(async () => {
+    opts.signal?.throwIfAborted();
+    try {
+      if ((await stat(thumbnailPath(dir, source.sha256))).size > 0) return thumbnailPath(dir, source.sha256);
+    } catch {
+      // Extração direta: uma miniatura não precisa transcodificar o vídeo inteiro.
+    }
+    await mkdir(playbackDir(dir, source.sha256), { recursive: true });
+    return buildThumbnail(source, dir, source.path, exec, opts);
+  }, { key: thumbnailPath(dir, source.sha256) });
+}
+
+/** Proxy H.264/AAC validado por probe; exportação continua usando o original. */
 export async function ensurePlayback(
   source: Source,
   dir: string,
   exec: Executor,
+  opts: MediaOpts = {},
 ): Promise<{ videoPath: string; thumbnailPath: string | null }> {
   await verifySourceIdentity(source);
   const proxy = proxyPath(dir, source.sha256);
-  const videoPath = (await proxyIsValid(proxy, source))
-    ? proxy
-    : await buildProxy(source, dir, exec);
-  if (!source.hasVideo) return { videoPath, thumbnailPath: null };
-  try {
-    const { size } = await stat(thumbnailPath(dir, source.sha256));
-    if (size > 0) return { videoPath, thumbnailPath: thumbnailPath(dir, source.sha256) };
-  } catch {
-    // Gera abaixo.
-  }
-  return { videoPath, thumbnailPath: await buildThumbnail(source, dir, videoPath, exec) };
+  // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.
+  const videoPath = await mediaWork.run(async () => {
+    opts.signal?.throwIfAborted();
+    return (await proxyIsValid(proxy, source)) ? proxy : await buildProxy(source, dir, exec, opts);
+  }, { key: proxy });
+  return { videoPath, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
 }

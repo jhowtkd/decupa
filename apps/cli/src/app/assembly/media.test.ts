@@ -6,7 +6,7 @@ import { hashFile, probe } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { SpawnExecutor, type ExecCall, type Executor } from "../pipeline.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { ensurePlayback, proxyPath, thumbnailPath, verifySourceIdentity } from "./media.ts";
+import { ensurePlayback, ensureThumbnail, proxyPath, thumbnailPath, verifySourceIdentity } from "./media.ts";
 import type { Source } from "./types.ts";
 
 async function sourceFrom(path: string, overrides: Partial<Source> = {}): Promise<Source> {
@@ -111,6 +111,54 @@ it("áudio sem vídeo usa player próprio: sem miniatura e sem thumb", async () 
   expect(result.thumbnailPath).toBeNull();
   // Só o proxy foi pedido; nenhum comando de miniatura rodou.
   expect(exec.calls.filter((call) => call.args[call.args.length - 1]!.endsWith(".tmp.jpg"))).toHaveLength(0);
+});
+
+it("proxy usa limites de threads e encoder do perfil sem redetectar", async () => {
+  for (const profile of ["software", "videotoolbox"] as const) {
+    const dir = await mkdtemp(join(tmpdir(), "assembly-media-args-"));
+    const path = join(dir, "fala.mp4");
+    await copyFile(join(FIXTURES, "clip.mp4"), path);
+    const source = await sourceFrom(path);
+    const exec = copyingExec();
+    await ensurePlayback(source, dir, exec, { profile });
+    const proxyCall = exec.calls.find((call) => call.args.at(-1)?.endsWith(".tmp.mp4"));
+    expect(proxyCall).toBeDefined();
+    expect(proxyCall!.args).toContain("-threads");
+    expect(proxyCall!.args).toContain("-filter_threads");
+    if (profile === "videotoolbox") {
+      expect(proxyCall!.args.indexOf("-hwaccel")).toBeLessThan(proxyCall!.args.indexOf("-i"));
+      expect(proxyCall!.args).toContain("h264_videotoolbox");
+    } else {
+      expect(proxyCall!.args).toContain("libx264");
+    }
+  }
+});
+
+it("proxy corrompido é regenerado", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const first = await ensurePlayback(source, dir, copyingExec());
+  await writeFile(first.videoPath, "lixo");
+  const exec = copyingExec();
+  const second = await ensurePlayback(source, dir, exec);
+  expect(exec.calls.filter((call) => call.args.at(-1)?.endsWith(".tmp.mp4"))).toHaveLength(1);
+  expect(second.videoPath).toBe(first.videoPath);
+  expect((await probe(second.videoPath)).hasVideo).toBe(true);
+});
+
+it("sinal abortado rejeita antes de lançar ffmpeg", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const exec = copyingExec();
+  const controller = new AbortController();
+  controller.abort();
+  await expect(ensurePlayback(source, dir, exec, { signal: controller.signal })).rejects.toThrow(/abort/i);
+  await expect(ensureThumbnail(source, dir, exec, { signal: controller.signal })).rejects.toThrow(/abort/i);
+  expect(exec.calls).toHaveLength(0);
 });
 
 it("verifySourceIdentity aprova, nomeia ausente e detecta troca", async () => {

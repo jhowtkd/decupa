@@ -1,7 +1,9 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { probe } from "@decupa/media";
+import { isCancelledError } from "@decupa/queue";
 import type { Executor } from "../pipeline.ts";
+import { mediaWork } from "./media-work.ts";
 
 export type HardwareProfile = "software" | "videotoolbox" | "nvenc" | "vaapi";
 
@@ -134,34 +136,40 @@ async function encode(
   input: string,
   output: string,
   profile: HardwareProfile,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const result = await exec.run({
-    command: "ffmpeg",
-    args: [
-      "-y",
-      ...inputArgs(profile),
-      "-i", input,
-      "-t", "2",
-      ...outputArgs(profile),
-      output,
-    ],
-  });
-  if (result.code !== 0) {
-    await unlink(output).catch(() => {});
-    return false;
-  }
-  const info = await probe(output).catch(() => null);
-  // Prova de vídeo: exige stream de vídeo e duração, nunca áudio — clipe
-  // silencioso válido não pode reprovar o encoder.
-  const ok = Boolean(info?.hasVideo && (info.durationMs ?? 0) > 0);
-  if (!ok) await unlink(output).catch(() => {});
-  return ok;
+  return mediaWork.run(async () => {
+    signal?.throwIfAborted();
+    const result = await exec.run({
+      command: "ffmpeg",
+      args: [
+        "-y",
+        ...inputArgs(profile),
+        "-i", input,
+        "-t", "2",
+        ...outputArgs(profile),
+        output,
+      ],
+      signal,
+    });
+    if (result.code !== 0) {
+      await unlink(output).catch(() => {});
+      return false;
+    }
+    const info = await probe(output).catch(() => null);
+    // Prova de vídeo: exige stream de vídeo e duração, nunca áudio — clipe
+    // silencioso válido não pode reprovar o encoder.
+    const ok = Boolean(info?.hasVideo && (info.durationMs ?? 0) > 0);
+    if (!ok) await unlink(output).catch(() => {});
+    return ok;
+  }, { key: output });
 }
 
 export async function proveHardwareEncode(
   input: string,
   outDir: string,
   exec: Executor,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<HardwareProof> {
   await mkdir(outDir, { recursive: true });
   const encoders = await listEncoders(exec);
@@ -172,7 +180,7 @@ export async function proveHardwareEncode(
     if (!listed.has(encoder)) continue;
     attempted.push(profile);
     const output = join(outDir, `hw-${profile}.mp4`);
-    const ok = await encode(exec, input, output, profile);
+    const ok = await encode(exec, input, output, profile, opts.signal);
     if (ok) {
       return {
         profile,
@@ -187,7 +195,7 @@ export async function proveHardwareEncode(
 
   attempted.push("software");
   const output = join(outDir, "hw-software.mp4");
-  const ok = await encode(exec, input, output, "software");
+  const ok = await encode(exec, input, output, "software", opts.signal);
   if (!ok) throw new Error("encode de software falhou na fixture real");
   return {
     profile: "software",
@@ -205,6 +213,7 @@ export async function detectHardwareProfile(
   input: string,
   outDir: string,
   exec: Executor,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<HardwareProfile> {
   const cachePath = join(outDir, "profile.json");
   try {
@@ -223,8 +232,11 @@ export async function detectHardwareProfile(
   }
   let profile: HardwareProfile = "software";
   try {
-    profile = (await proveHardwareEncode(input, outDir, exec)).profile;
-  } catch {
+    profile = (await proveHardwareEncode(input, outDir, exec, opts)).profile;
+  } catch (err) {
+    // Falha de prova cai para software; cancelamento propaga — trabalho
+    // cancelado não pode seguir para o render nem poluir o cache.
+    if (isCancelledError(err)) throw err;
     profile = "software";
   }
   await mkdir(outDir, { recursive: true });
