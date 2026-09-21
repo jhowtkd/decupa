@@ -261,21 +261,14 @@ export function mountRail({ state, api, player }) {
       const controls = document.createElement("div");
       controls.className = "controls";
       options.append(summary, controls);
-      const role = document.createElement("select");
-      role.dataset.sourceId = source.id;
-      role.setAttribute("aria-label", "categoria de " + source.name);
-      for (const value of Object.keys(ROLES)) {
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = ROLES[value];
-        if (source.role === value) opt.selected = true;
-        role.appendChild(opt);
+      const role = document.createElement("div");
+      role.className="role-switch";role.setAttribute("role","group");role.setAttribute("aria-label","Uso de "+source.name);
+      for(const value of ["speech","support"]){
+        const button=document.createElement("button");button.type="button";button.textContent=ROLES[value];
+        button.setAttribute("aria-pressed",String(source.role===value||source.role==="both"));
+        button.onclick=()=>api.call("/project/source-role",{method:"POST",body:JSON.stringify({baseRevision:state.get("project").revision,sourceIds:[source.id],role:value}),label:"Atualizando categoria…"});
+        role.append(button);
       }
-      role.addEventListener("change", () => api.call("/project/source-role", {
-        method: "POST",
-        body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: role.value }),
-        label: "Atualizando categoria…",
-      }));
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.textContent = source.included ? "Excluir" : "Incluir";
@@ -298,8 +291,8 @@ export function mountRail({ state, api, player }) {
       watch.className = "quiet";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
-      controls.append(role, toggle, relink, watch);
-      meta.append(name, chips, status);
+      controls.append(toggle, relink, watch);
+      meta.append(name, chips, role, status);
       li.append(box, preview, meta, options);
       list.appendChild(li);
     }
@@ -422,6 +415,6 @@ export function resolveView(delivery, approved) {
     disabled:!approved||delivery?.status==="running",
     buttonLabel:"Abrir montagem no DaVinci",
     statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName+(delivery.error?" — "+delivery.error:""):delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
-    newCopy:delivery?.status==="error",
+    newCopy:delivery?.status==="error"&&delivery.created!==false,
   };
 }

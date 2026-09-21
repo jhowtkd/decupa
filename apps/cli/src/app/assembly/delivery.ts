@@ -8,7 +8,7 @@ import type {Project} from "./types.ts";
 import {exportApproved} from "./export.ts";
 import {buildHandoff} from "./handoff.ts";
 import {loadProject} from "./store.ts";
-export type DeliveryRecord={operationId:string;revision:number;assemblySha256:string;status:"running"|"ready"|"error";stage:string;projectName:string;pid:number;error?:string;drpPath?:string;previousReady?:DeliveryRecord};
+export type DeliveryRecord={operationId:string;revision:number;assemblySha256:string;status:"running"|"ready"|"error";stage:string;projectName:string;pid:number;error?:string;drpPath?:string;previousReady?:DeliveryRecord;created?:boolean};
 const active=new Set<string>();
 const recordPath=(dir:string,rev:number)=>join(dir,"deliveries",String(rev),"resolve-delivery.json");
 async function atomic(path:string,value:unknown){const temp=path+"."+randomUUID();await writeFile(temp,JSON.stringify(value,null,2));await rename(temp,path);}
@@ -30,7 +30,7 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
  try{
   const previous=await readDelivery(dir,project.revision);
   if(previous?.status==="running")throw Error("entrega em andamento");
-  if(previous?.status==="error"&&!options.newCopy)throw Error("Entrega anterior incompleta. Solicite uma nova cópia; o projeto anterior será preservado.");
+  if(previous?.status==="error"&&previous.created!==false&&!options.newCopy)throw Error("Entrega anterior incompleta. Solicite uma nova cópia; o projeto anterior será preservado.");
   if(options.exportDrp&&(!previous||previous.status!=="ready"))throw Error("Crie e verifique o projeto no Resolve antes de exportar DRP.");
   const dest=await exportApproved(project,dir);
   const root=join(dir,"deliveries",String(project.revision));await mkdir(root,{recursive:true});
@@ -38,14 +38,14 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   if(same)previousReady=previous;
   const operationId=randomUUID();
   const mode=options.exportDrp?"export":same?"open":"create";
-  record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
+  record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",created:false,projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
   if(same&&previous.assemblySha256!==record.assemblySha256)throw Error("montagem difere da entrega registrada");
   activeOperationId=operationId;active.add(operationId);await atomic(recordPath(dir,project.revision),record);
   const requestPath=join(root,`request-${operationId}.json`);
   const drpPath=options.exportDrp?join(root,`project-${operationId}.drp`):undefined;
   await atomic(requestPath,{...record,mode,projectId:project.id,otioPath:join(dest,"timeline.otio"),assembly:project.assembly,handoff:buildHandoff(project),drpPath});
   const result=await exec.run({command:"python3",args:[fileURLToPath(new URL("../../../../../scripts/davinci-delivery.py",import.meta.url)),"--request",requestPath],signal,onLine:line=>{
-   try{const event=JSON.parse(line);if(typeof event.stage==="string"&&record){record.stage=event.stage;const snapshot={...record};saveChain=saveChain.then(()=>atomic(recordPath(dir,project.revision),snapshot));}}catch{/* non-JSON diagnostics are not protocol events */}
+   try{const event=JSON.parse(line);if(typeof event.stage==="string"&&record){if(event.stage==="created")record.created=true;if(event.stage!=="error")record.stage=event.stage;const snapshot={...record};saveChain=saveChain.then(()=>atomic(recordPath(dir,project.revision),snapshot));}}catch{/* non-JSON diagnostics are not protocol events */}
   }});
   await saveChain;
   const last=result.stdout.trim().split("\n").at(-1);const output=last?JSON.parse(last):null;

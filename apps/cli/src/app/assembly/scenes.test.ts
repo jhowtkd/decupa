@@ -460,3 +460,11 @@ it("rascunho de template não chega ao provedor",async()=>{
  const p=project();let calls=0;
  await expect(proposeScenes(p,"",new AbortController().signal,{template:{status:"draft"} as never,send:async()=>{calls++;return "{}";}})).rejects.toThrow(/aprovado/);expect(calls).toBe(0);
 });
+
+it("nova proposta aplica pausas compactas antes de compilar a prévia",()=>{
+ const p=project();p.analyses[0]!.wordsStatus="ready";p.analyses[0]!.words=[{id:"w1",sourceId:"a",text:"olá",start:0,end:0.5,confidence:1},{id:"w2",sourceId:"a",text:"tema",start:1.5,end:2,confidence:1}];
+ const proposal=validateProposal({id:"p",baseRevision:p.revision,explanation:"teste",changedSceneIds:["s"],scenes:[{id:"s",objective:"abertura",rationale:"tema",speechIds:["a:u001"],support:[],gaps:[]}]},p);
+ expect(proposal.scenes[0]!.takes[0]!.removed).toEqual([{start:0.55,end:1.45}]);
+ const audio=compileScenes(p,proposal.scenes).tracks.find(t=>t.kind==="Audio")!.clips;
+ expect(audio).toHaveLength(2);expect(audio[1]!.startFrame).toBe(audio[0]!.durationFrames);
+});

@@ -65,7 +65,7 @@ def verify(timeline, assembly):
 
 def deliver(request, resolve, emit):
     assembly = validate(request)
-    require(resolve is not None, 'Abra o DaVinci Resolve com scripting local disponível.')
+    require(resolve is not None, 'Não foi possível conectar à API do DaVinci Resolve. Abra o Resolve Studio e confira Preferences > System > General > External scripting using: Local. O arquivo .drp só pode ser gerado depois que o Resolve criar e salvar o projeto. Se a edição instalada não oferecer essa API, importe a timeline no Resolve e use File > Export Project para salvar o .drp.')
     manager = resolve.GetProjectManager()
     require(manager is not None, 'ProjectManager indisponível')
     mode = request.get('mode', 'create')

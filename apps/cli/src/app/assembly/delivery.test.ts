@@ -31,7 +31,7 @@ it("repete entrega abrindo projeto e exporta DRP sem reimportação",async()=>{
 });
 it("falha parcial fica registrada e exige nova cópia explícita",async()=>{
  const {dir,p}=await setup();let calls=0;
- const exec={run:async()=>{calls++;return {code:1,stdout:JSON.stringify({ok:false,error:"import failed"}),stderr:""};}};
+ const exec={run:async(call:ExecCall)=>{calls++;call.onLine?.(JSON.stringify({stage:"created"}));return {code:1,stdout:JSON.stringify({ok:false,error:"import failed"}),stderr:""};}};
  await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/import failed/);
  expect((await readDelivery(dir,0))?.status).toBe("error");
  await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/cópia/);expect(calls).toBe(1);
@@ -61,4 +61,10 @@ it("mutex bloqueia concorrência e é liberado pelo SO após morte do processo",
   const exited=once(child,"exit");child.kill("SIGKILL");await exited;
   expect((await deliverApproved(p,dir,exec,new AbortController().signal)).status).toBe("ready");expect(calls).toBe(1);
  }finally{if(child.exitCode===null)child.kill("SIGKILL");}
+});
+
+it("falha antes de criar projeto permite repetir sem nova cópia",async()=>{
+ const {dir,p}=await setup();let calls=0;const exec={run:async()=>{calls++;return {code:1,stdout:JSON.stringify({ok:false,error:"API indisponível"}),stderr:""};}};
+ for(let i=0;i<2;i++)await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/API indisponível/);
+ expect(calls).toBe(2);expect(await readDelivery(dir,0)).toMatchObject({created:false,status:"error",stage:"connecting"});
 });

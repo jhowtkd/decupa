@@ -420,7 +420,7 @@ export function mountContexto({ state, api, player }) {
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<ul id="deliveryChecklist" class="plain"></ul>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportTimeline">Exportar timeline</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div>'
+    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
@@ -586,7 +586,8 @@ export function mountContexto({ state, api, player }) {
     setTimeout(poll,500);
     try{
       const {res,body}=await api.call(exportDrp?"/project/export-drp":"/project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
-      resolveDelivery=res.ok?body.delivery:{status:"error",error:body.error};
+      if(res.ok)resolveDelivery=body.delivery;
+      else {const response=await fetch("/project/resolve-status");const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
       if(res.ok){exportUi.status="done";exportUi.revision=project.revision;}
     }catch(error){resolveDelivery={status:"error",error:error.message};}
     finally{stopped=true;renderDelivery(state.get("project"));}

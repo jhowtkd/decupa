@@ -19,7 +19,7 @@ import type {
 } from "./types.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import { validateAssembly } from "./validate.ts";
-import { effectiveWords, retainedRanges, subtractRanges } from "./words.ts";
+import { effectiveWords, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
 - Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
@@ -85,7 +85,7 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
       if (!changed.has(item.id)) {
         throw new Error(`cena nova ${item.id} precisa estar em changedSceneIds`);
       }
-      scenes.push(resolveScene(item, index, null, { speech, visual, takes, sources }));
+      scenes.push(resolveScene(item, index, null, { speech, visual, takes, sources, project }));
       continue;
     }
     if (!changed.has(item.id)) {
@@ -95,14 +95,14 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
         scenes.push(current);
         continue;
       }
-      const resolved = resolveScene(item, index, current, { speech, visual, takes, sources });
+      const resolved = resolveScene(item, index, current, { speech, visual, takes, sources, project });
       if (canonical(resolved) !== canonical(current)) {
         throw new Error(`cena ${item.id} modificada fora do escopo (changedSceneIds)`);
       }
       scenes.push(current);
       continue;
     }
-    scenes.push(resolveScene(item, index, current, { speech, visual, takes, sources }));
+    scenes.push(resolveScene(item, index, current, { speech, visual, takes, sources, project }));
   }
   for (const id of changed) {
     if (!seenIds.has(id)) throw new Error(`changedSceneIds referencia cena ausente: ${id}`);
@@ -140,6 +140,7 @@ export function validateResolvedProposal(proposal: Proposal, project: Project): 
 }
 
 type Catalogs = {
+  project?: Project;
   speech: Map<string, Span>;
   visual: Map<string, VisualSpan>;
   takes: Map<string, SpeechTake>;
@@ -209,7 +210,7 @@ function resolveScene(
         `fala ${selection.speechId} já tem take na cena ${id}: use takeId para preservar cortes`,
       );
     }
-    takes.push({
+    const newTake:SpeechTake={
       id: `${id}:${selection.speechId}`,
       sourceId: source.id,
       speechId: span.id,
@@ -217,7 +218,8 @@ function resolveScene(
       end: span.end,
       removed: [],
       protected: [],
-    });
+    };
+    takes.push(catalogs.project?tightenSpeechTake(catalogs.project,newTake):newTake);
     speechIds.push(span.id);
   }
   const evidence = Array.isArray(item.visualEvidenceIds)
