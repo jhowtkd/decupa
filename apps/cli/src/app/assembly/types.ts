@@ -1,3 +1,4 @@
+import type { Recipe } from "../templates/types.ts";
 export type Rate = { num: number; den: number };
 
 export type Source = {
@@ -173,7 +174,11 @@ export type DecisionReport = {
   supports?: {sceneId:string; candidateId:string|null; outcome:"selected"|"none"|"fallback"; reason:string}[];
 };
 
+export type TemplateReport = {ruleId:string;status:"applied"|"adapted"|"unavailable";reason:string}[];
+
 export type Proposal = {
+  template?: Recipe | null;
+  templateReport?: TemplateReport;
   decisionReport?: DecisionReport;
   id: string;
   baseRevision: number;
@@ -190,6 +195,7 @@ export type PreviewArtifact = {
 };
 
 export type Project = {
+  template?: Recipe | null;
   version: 2;
   id: string;
   revision: number;

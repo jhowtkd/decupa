@@ -680,6 +680,7 @@ async function startAssemblyApp(opts: {
     modelKey:JSON.stringify(visualIdentity),allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
   const runtime = createAssemblyRuntime(dir, {
+    templatesRoot,
     decision,
     exec,
     port: () => boundPort,

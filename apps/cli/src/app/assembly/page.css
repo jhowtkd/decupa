@@ -323,3 +323,5 @@ body.inspector-open[data-stage="revisao"], body.inspector-open[data-stage="entre
   body[data-stage="revisao"], body[data-stage="entrega"], body.inspector-open[data-stage="revisao"], body.inspector-open[data-stage="entrega"] { grid-template-columns: 56px 0 minmax(0, 1fr); }
   body:not([data-stage="edicao"]) #contexto { bottom: 0; }
 }
+
+.template-panel{margin-top:24px;padding-top:16px;border-top:1px solid #46515f}.template-panel h2{font-size:16px}.template-panel label{display:block;margin:12px 0;font-size:13px}.template-panel select{width:100%;margin-top:8px}.template-panel button{margin:5px 0}.template-panel ol{padding-left:20px;font-size:13px}.template-panel p{overflow-wrap:anywhere}

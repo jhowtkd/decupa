@@ -441,3 +441,22 @@ it("envia só evidências visuais existentes sem alterar o catálogo de b-roll",
   expect(sent).not.toContain("DESCRICAO_APENAS_BROLL");
   expect(p.analyses[0]!.visual).toHaveLength(2);
 });
+
+it("template acompanha proposta e aceite sem alterar o projeto na geração",async()=>{
+ const {applyProposal,applyHistorySnapshot}=await import("./revisions.ts");
+ const p=project();const before=structuredClone(p);
+ const recipe:import("../templates/types.ts").Recipe={id:"11111111-1111-4111-8111-111111111111",revision:1,name:"Editorial",status:"approved",source:{path:"/tmp/ref.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[{id:"r",category:"speech",observation:"abre com fala",instruction:"abrir pelo tema",enabled:true,confidence:"observed",evidence:[{start:0,end:1}]}]};
+ let prompt="";
+ const proposal=await proposeScenes(p,"usar receita",new AbortController().signal,{template:recipe,send:async(content)=>{
+  prompt=JSON.stringify(content);
+  return JSON.stringify({changedSceneIds:["s1"],explanation:"adaptação",templateReport:[{ruleId:"r",status:"applied",reason:"fala abre pelo tema"}],scenes:[{id:"s1",objective:"tema",rationale:"abertura",selections:[{speechId:"a:u001"}],support:[],gaps:[],animationNotes:[{id:"n",description:"nome pendente",destination:"Resolve"}]}]});
+ }});
+ expect(prompt).toContain("abrir pelo tema");expect(prompt).not.toContain("/tmp/ref.mp4");expect(p).toEqual(before);
+ const accepted=applyProposal(p,proposal);expect(accepted.template?.name).toBe("Editorial");expect(accepted.scenes[0]!.animationNotes).toHaveLength(1);
+ recipe.name="Outra";expect(accepted.template?.name).toBe("Editorial");
+ const undone=applyHistorySnapshot(accepted,{revision:p.revision,input:p.input,scenes:p.scenes,corrections:p.corrections,proposal:p.proposal});expect(undone.template).toBeNull();
+});
+it("rascunho de template não chega ao provedor",async()=>{
+ const p=project();let calls=0;
+ await expect(proposeScenes(p,"",new AbortController().signal,{template:{status:"draft"} as never,send:async()=>{calls++;return "{}";}})).rejects.toThrow(/aprovado/);expect(calls).toBe(0);
+});

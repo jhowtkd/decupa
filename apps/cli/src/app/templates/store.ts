@@ -63,3 +63,18 @@ export async function listRecipes(root:string):Promise<Recipe[]>{
  for(const id of names.filter(n=>uuid.test(n))){const data=await entry(root,id);result.push(validateRecipe(data.current));const last=data.approved.at(-1);if(last&&last.revision!==data.current.revision)result.push(validateRecipe(last));}
  return result;
 }
+
+export function approvedSnapshot(raw:unknown):Recipe|null{
+ if(raw===null||raw===undefined)return null;
+ if(!record(raw)||raw.status!=="approved")throw Error("template não aprovado");
+ return structuredClone(validateRecipe(raw));
+}
+export function validateTemplateReport(raw:unknown,recipe:Recipe|null):import("../assembly/types.ts").TemplateReport {
+ const rules=recipe?.rules.filter(r=>r.enabled)??[];
+ if(!Array.isArray(raw)||raw.length!==rules.length)throw Error("relatório do template incompleto");
+ const seen=new Set<string>();
+ return raw.map(r=>{
+  if(!record(r)||typeof r.ruleId!=="string"||seen.has(r.ruleId)||!rules.some(rule=>rule.id===r.ruleId)||!["applied","adapted","unavailable"].includes(String(r.status))||!text(r.reason))throw Error("relatório do template inválido");
+  seen.add(r.ruleId);return {ruleId:r.ruleId,status:r.status as "applied"|"adapted"|"unavailable",reason:r.reason};
+ });
+}

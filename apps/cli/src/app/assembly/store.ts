@@ -1,3 +1,4 @@
+import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
 import { validateAnimationNotes } from "./handoff.ts";
 import { validateDecisionReport } from "./assembly-decisions.ts";
 import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
@@ -425,7 +426,12 @@ function validateV2(value: Record<string, unknown>): Project {
   if (isRecord(value.proposal) && value.proposal.decisionReport !== undefined) {
     value.proposal.decisionReport = validateDecisionReport(value.proposal.decisionReport);
   }
+  if (isRecord(value.proposal) && value.proposal.template !== undefined) {
+    value.proposal.template=approvedSnapshot(value.proposal.template);
+    value.proposal.templateReport=validateTemplateReport(value.proposal.templateReport??[],value.proposal.template as Project["template"]??null);
+  }
   return {
+    ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
     version: 2,
     id: value.id,
     revision: value.revision as number,
@@ -629,6 +635,7 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
       analyses,
       corrections,
       proposal: next.proposal ?? current.proposal,
+      template: next.template === undefined ? current.template : next.template,
       previewRevision: next.previewRevision ?? current.previewRevision,
       finalApprovedRevision: next.finalApprovedRevision ?? current.finalApprovedRevision,
       preparation: next.preparation ?? current.preparation,
@@ -642,6 +649,7 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     analyses,
     corrections,
     proposal: next.proposal !== base.proposal ? next.proposal : current.proposal,
+    template: next.template !== base.template ? next.template : current.template,
     previewRevision: next.previewRevision !== base.previewRevision
       ? next.previewRevision
       : current.previewRevision,
@@ -662,6 +670,7 @@ export function backupPath(dir: string): string {
 
 /** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
 export type EditorialSnapshot = {
+  template?: Project["template"];
   revision: number;
   input: Project["input"];
   scenes: Project["scenes"];
@@ -681,6 +690,7 @@ export async function writeHistorySnapshot(dir: string, project: Project): Promi
     scenes: project.scenes,
     corrections: project.corrections,
     proposal: project.proposal,
+    ...(project.template!==undefined?{template:project.template}:{}),
   };
   await mkdir(join(dir, "history"), { recursive: true });
   await writeFile(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");

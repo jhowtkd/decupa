@@ -36,6 +36,7 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
     scenes: valid.scenes,
     assembly: { ...assembly, revision },
     proposal: valid,
+    template: valid.template === undefined ? p.template : structuredClone(valid.template),
     previewRevision: null,
     finalApprovedRevision: null,
   };
@@ -56,6 +57,7 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
     scenes: snap.scenes,
     corrections: snap.corrections,
     proposal: snap.proposal,
+    template: structuredClone(snap.template ?? null),
     assembly: { ...assembly, revision },
     previewRevision: null,
     finalApprovedRevision: null,

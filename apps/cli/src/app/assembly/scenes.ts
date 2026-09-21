@@ -1,3 +1,5 @@
+import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
+import type { Recipe } from "../templates/types.ts";
 import { validateAnimationNotes } from "./handoff.ts";
 import { selectBroll } from "./broll.ts";
 import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, validateDecisionReport } from "./assembly-decisions.ts";
@@ -122,6 +124,7 @@ export function validateProposal(raw: unknown, project: Project): Proposal {
     scenes: annotated,
     changedSceneIds: raw.changedSceneIds.map(String),
     explanation: String(raw.explanation ?? ""),
+    ...(raw.template !== undefined ? {template:approvedSnapshot(raw.template),templateReport:validateTemplateReport(raw.templateReport??[],approvedSnapshot(raw.template))} : {}),
   };
 }
 
@@ -461,7 +464,7 @@ export async function proposeScenes(
   project: Project,
   input: string,
   signal: AbortSignal,
-  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
+  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
   _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
@@ -470,6 +473,9 @@ export async function proposeScenes(
   // Snapshot profundo: mutação do chamador durante o send não contamina
   // nem o prompt nem a validação.
   const snapshot: Project = structuredClone(project);
+  const selected=deps?.template===undefined?project.template:deps.template;
+  const template=approvedSnapshot(selected);
+  snapshot.template=template;
   const inScope = new Set(
     snapshot.assembly.sources.filter((source) => source.included).map((source) => source.id),
   );
@@ -508,6 +514,7 @@ export async function proposeScenes(
       text: [
         SCENE_PROMPT,
         "Monte a narrativa pelas falas. O mapa visual contém apenas evidências já usadas nas cenas atuais; a ausência de outras imagens neste prompt não significa falta de cobertura. A seleção automática de apoio será feita separadamente pelo Jev usando o catálogo completo: não acrescente support nem visualEvidenceIds a cenas novas. Preserve os apoios e evidências atuais.",
+        ...(template ? ["Use a receita editorial como orientação adaptável: preserve sentido das falas, não copie mídia nem texto da referência, não force número de cenas. Relate cada orientação ativa em templateReport:[{ruleId,status:applied|adapted|unavailable,reason}]. Animações não executadas entram em scenes[].animationNotes:[{id,description,destination:Resolve|After Effects}], nunca como efeito já produzido. Formato e duração são orientações; sinalize adaptações às configurações e ao conteúdo deste projeto.",`receita: ${JSON.stringify({id:template.id,revision:template.revision,rules:template.rules.filter(r=>r.enabled)})}`] : []),
         `briefing salvo: ${JSON.stringify(snapshot.input)}`,
         `pedido adicional: ${input}`,
         `fontes: ${JSON.stringify(snapshot.assembly.sources.map((source) => ({
@@ -533,7 +540,7 @@ export async function proposeScenes(
       if (!previous?.support.length && Array.isArray(item.support) && item.support.length) throw Error("apoio novo deve ser escolhido pelo Jev, retorne support vazio");
       return item;
     });
-    const proposal = validateProposal({ ...raw, id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
+    const proposal = validateProposal({ ...raw, template, templateReport:template?raw.templateReport:[], id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
     return {proposal, candidates: resolveCutCandidates(snapshot, proposal, raw.cutCandidates)};
   }, signal);
   signal.throwIfAborted();
