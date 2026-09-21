@@ -25,7 +25,7 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
  // ponytail: one local Resolve session; the OS releases this mutex on process death.
  const lock=createServer(socket=>socket.destroy());
  await new Promise<void>((resolve,reject)=>{lock.once("error",()=>reject(Error("Outra entrega ao Resolve está em andamento (porta local 47789 ocupada).")));lock.listen({host:"127.0.0.1",port:47789,exclusive:true},resolve);});
- let previousReady:DeliveryRecord|undefined;
+ let previousReady:DeliveryRecord|undefined;let activeOperationId:string|undefined;
  let record:DeliveryRecord|undefined;let saveChain=Promise.resolve();
  try{
   const previous=await readDelivery(dir,project.revision);
@@ -40,7 +40,7 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   const mode=options.exportDrp?"export":same?"open":"create";
   record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
   if(same&&previous.assemblySha256!==record.assemblySha256)throw Error("montagem difere da entrega registrada");
-  active.add(operationId);await atomic(recordPath(dir,project.revision),record);
+  activeOperationId=operationId;active.add(operationId);await atomic(recordPath(dir,project.revision),record);
   const requestPath=join(root,`request-${operationId}.json`);
   const drpPath=options.exportDrp?join(root,`project-${operationId}.drp`):undefined;
   await atomic(requestPath,{...record,mode,projectId:project.id,otioPath:join(dest,"timeline.otio"),assembly:project.assembly,handoff:buildHandoff(project),drpPath});
@@ -59,5 +59,5 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   await saveChain.catch(()=>{});
   if(record&&record.status!=="ready"){record={...(previousReady??record),status:previousReady?"ready":"error",error:error instanceof Error?error.message:String(error)};await atomic(recordPath(dir,project.revision),record);}
   throw error;
- }finally{if(record)active.delete(record.operationId);await new Promise<void>(resolve=>lock.close(()=>resolve()));}
+ }finally{if(activeOperationId)active.delete(activeOperationId);await new Promise<void>(resolve=>lock.close(()=>resolve()));}
 }
