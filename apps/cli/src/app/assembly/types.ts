@@ -64,6 +64,8 @@ export type Assembly = {
   canvasSourceId?: string | null;
   /** Escolha de formato feita pelo usuário — nunca é sobrescrita em import. */
   canvasManual?: boolean;
+  /** Perfil de ritmo aplicado à montagem (#66); `null`/ausente = sem ritmo. */
+  rhythmProfile?: string | null;
   sources: Source[];
   tracks: Track[];
 };
@@ -142,6 +144,12 @@ export type SpeechTake = SourceRange & {
   speechId: string | null;
   removed: SourceRange[];
   protected: SourceRange[];
+  /**
+   * Camada de ritmo (#66): o que o perfil atual removeu deste take.
+   * Trocar de perfil subtrai esta camada antes de somar a nova — nunca
+   * acumula remoções irreversíveis.
+   */
+  rhythm?: { profile: string; removed: SourceRange[] };
 };
 
 /** Correção de grafia: overlay de texto que não move a seleção de mídia. */

@@ -25,6 +25,11 @@ import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.t
 import { visualCoverage } from "./visual.ts";
 import { confirmImportVerification, exportApproved, readVerification } from "./export.ts";
 import { applySpeechProposal, proposeSpeechAdjustment, type SpeechProposal } from "./speech-proposal.ts";
+import { applySupportSwap, buildSupportSwapProposal, type SupportSwapProposal } from "./support-swap.ts";
+import {
+  applyRhythmProposal, buildRhythmProposal, rhythmProfile, rhythmSampleAssembly,
+  RHYTHM_PROFILES, type RhythmProposal,
+} from "./rhythm.ts";
 import { renderAssembly } from "./render.ts";
 import { peaksPath } from "./waveform.ts";
 import {
@@ -379,6 +384,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   const livePreviews = new Set<AbortController>();
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
+  const supportSwapPath=join(dir,"support-swap.json");
+  const rhythmProposalPath=join(dir,"rhythm-proposal.json");
   async function readTemplateProposal(){
     try{return JSON.parse(await readFile(templateProposalPath,"utf8")) as import("./types.ts").Proposal;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
   }
@@ -513,6 +520,26 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return null;
         }
       };
+      const readSupportSwap = async (): Promise<SupportSwapProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(supportSwapPath, "utf8")) as SupportSwapProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.scope) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+      const readRhythmProposal = async (): Promise<RhythmProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(rhythmProposalPath, "utf8")) as RhythmProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.profileId) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
 
       if (parts.length === 1 && req.method === "GET") {
         let project = await loadProject(dir);
@@ -556,6 +583,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           project, undoRevision,
           templateProposal:await readTemplateProposal(),
           speechProposal: await readSpeechProposal(),
+          supportSwap: await readSupportSwap(),
+          rhythmProposal: await readRhythmProposal(),
+          rhythmProfiles: RHYTHM_PROFILES,
           brollCandidates: candidates,
           verificacao: await readVerification(dir, project.revision),
           ...snapshot(),
@@ -1164,6 +1194,133 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         await unlink(speechProposalPath).catch(() => {});
         sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sceneId = String(body.sceneId ?? "");
+        const supportIndex = Number(body.supportIndex);
+        const request = String(body.request ?? "");
+        if (!sceneId || !Number.isSafeInteger(supportIndex) || supportIndex < 0) {
+          throw new HttpError(400, "selecione o apoio a trocar");
+        }
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        let proposal: SupportSwapProposal;
+        try {
+          proposal = buildSupportSwapProposal(loaded, { sceneId, supportIndex }, request);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        await publishAtomic(supportSwapPath, `${JSON.stringify(proposal)}\n`);
+        sendJson(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const candidateId = String(body.candidateId ?? "");
+        const proposal = await readSupportSwap();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        let project: Project;
+        try {
+          project = await mutate(baseRevision, async (loaded) => {
+            await writeHistorySnapshot(dir, loaded);
+            return applySupportSwap(loaded, proposal, candidateId);
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/não é elegível|fora da proposta|não existe mais|não encontrada|inexistente/.test(message)) {
+            throw new HttpError(400, message);
+          }
+          throw err;
+        }
+        await unlink(supportSwapPath).catch(() => {});
+        sendJson(res, { project, supportSwap: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap-reject" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSupportSwap();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        await unlink(supportSwapPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
+        return true;
+      }
+
+      // Controle de ritmo (#66): proposta determinística (sem modelo pago)
+      // — comparação por pausa + amostra auditável renderizada pela linha
+      // de prévia; aceitar/rejeitar seguem o fluxo de propostas localizadas.
+      if (parts[1] === "rhythm-proposal" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        let proposal: RhythmProposal;
+        try {
+          proposal = buildRhythmProposal(loaded, rhythmProfile(String(body.profileId ?? "")).id);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        await publishAtomic(rhythmProposalPath, `${JSON.stringify(proposal)}\n`);
+        sendJson(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "rhythm-sample" && req.method === "GET") {
+        const proposalId = parts[2] ?? "";
+        const which = parts[3] === "depois" ? "depois" : "antes";
+        const proposal = await readRhythmProposal();
+        const project = await loadProject(dir);
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== project.revision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const assembly = rhythmSampleAssembly(project, proposal, which);
+        if (!assembly) throw new HttpError(404, "amostra indisponível: a proposta não tem trecho com pausa");
+        const rendered = await renderAssembly(assembly, join(dir, "rhythm-samples"), deps.exec, {
+          profile: "software",
+        });
+        await serveMedia(req, res, rendered, "video/mp4");
+        return true;
+      }
+
+      if (parts[1] === "rhythm-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readRhythmProposal();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const project = await mutate(baseRevision, async (loaded) => {
+          await writeHistorySnapshot(dir, loaded);
+          return applyRhythmProposal(loaded, proposal);
+        });
+        await unlink(rhythmProposalPath).catch(() => {});
+        sendJson(res, { project, rhythmProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "rhythm-reject" && req.method === "POST") {
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readRhythmProposal();
+        // Rejeitar dispensa a proposta pela identidade — desatualizada
+        // também sai (a recusa por revisão vale para aceitar).
+        if (!proposal || proposal.id !== proposalId) {
+          throw new HttpError(409, "proposta ausente");
+        }
+        await unlink(rhythmProposalPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
         return true;
       }
 

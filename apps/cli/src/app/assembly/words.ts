@@ -222,7 +222,7 @@ function wordIntervalsInTake(
   return ranges;
 }
 
-function overlaps(range: SourceRange, list: SourceRange[]): boolean {
+export function overlaps(range: SourceRange, list: SourceRange[]): boolean {
   return list.some((item) => range.start < item.end && item.start < range.end);
 }
 
@@ -236,7 +236,7 @@ function withTake(project: Project, sceneId: string, takeId: string, next: Speec
   };
 }
 
-function invalidatePreview(project: Project): Project {
+export function invalidatePreview(project: Project): Project {
   return {
     ...project,
     revision: project.revision + 1,
@@ -274,6 +274,33 @@ export function applySpeechCuts(
     });
   }
   return touched ? invalidatePreview(next) : next;
+}
+
+/**
+ * Substituição localizada de apoio (#65): troca o item `index` de
+ * `scene.support` pelos entries do candidato, mantendo takes, cortes e os
+ * demais apoios. `visualEvidenceIds` ganha as evidências novas. Uma única
+ * invalidação — igual às outras edições de cena.
+ */
+export function replaceSceneSupport(
+  project: Project,
+  sceneId: string,
+  index: number,
+  entries: Scene["support"],
+): Project {
+  const scene = findScene(project, sceneId);
+  if (index < 0 || index >= scene.support.length) {
+    throw new Error(`apoio ${index} inexistente na cena ${sceneId}`);
+  }
+  const support = [...scene.support];
+  support.splice(index, 1, ...entries);
+  const visualEvidenceIds = [
+    ...new Set([...scene.visualEvidenceIds, ...entries.map((entry) => entry.visualId)]),
+  ];
+  const scenes = project.scenes.map((item) =>
+    item.id === sceneId ? { ...item, support, visualEvidenceIds } : item
+  );
+  return invalidatePreview({ ...project, scenes });
 }
 
 function applyRemoveRestore(

@@ -226,6 +226,9 @@ export function validateAssembly(value: unknown): Assembly {
     canvasManual: value.canvasManual === undefined
       ? undefined
       : booleanField(value.canvasManual, "montagem.canvasManual"),
+    rhythmProfile: value.rhythmProfile === undefined || value.rhythmProfile === null
+      ? value.rhythmProfile as string | null | undefined
+      : nonEmptyString(value.rhythmProfile, "montagem.rhythmProfile"),
     sources,
     tracks,
   };

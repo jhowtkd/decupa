@@ -427,6 +427,108 @@ export function mountContexto({ state, api, player }) {
     + '<ul id="versionHistory" class="plain"></ul>';
   root.appendChild(delivery);
 
+  // Controle de ritmo (#66): escolha do perfil é etapa anterior à
+  // prévia/aprovação — a proposta compara pausas e oferece amostra
+  // auditável do mesmo trecho antes e depois, sem chamada paga.
+  const rhythm = document.createElement("section");
+  rhythm.setAttribute("aria-label", "Ritmo");
+  rhythm.innerHTML = "<h1>Ritmo</h1>"
+    + '<p class="muted" id="rhythmCurrent"></p>'
+    + '<div class="row" id="rhythmChoices"></div>';
+  root.insertBefore(rhythm, delivery);
+
+  const rhythmDialog = document.createElement("dialog");
+  rhythmDialog.id = "rhythmDialog";
+  rhythmDialog.innerHTML = '<h1>Ritmo do corte</h1>'
+    + '<p class="muted" id="rhythmProfileDesc"></p>'
+    + '<p id="rhythmSummary"></p>'
+    + '<ul id="rhythmPauses" class="plain"></ul>'
+    + '<p class="muted" id="rhythmUnaligned"></p>'
+    + '<div class="row"><label>Antes <video id="rhythmAntes" controls width="240" muted></video></label>'
+    + '<label>Depois <video id="rhythmDepois" controls width="240" muted></video></label></div>'
+    + '<div class="row"><button type="button" class="primary" id="acceptRhythm">Aplicar ritmo</button>'
+    + '<button type="button" id="rejectRhythm">Rejeitar</button>'
+    + '<button type="button" id="closeRhythm">Fechar</button></div>';
+  document.body.appendChild(rhythmDialog);
+
+  function paintRhythm() {
+    const p = state.get("project");
+    const proposal = state.get("rhythmProposal");
+    const profiles = state.get("rhythmProfiles") || {};
+    document.getElementById("rhythmCurrent").textContent = !p
+      ? ""
+      : p.assembly.rhythmProfile
+        ? `Perfil aplicado: ${profiles[p.assembly.rhythmProfile]?.name || p.assembly.rhythmProfile} — trocar não acumula cortes.`
+        : "Nenhum perfil aplicado — escolha para ouvir a comparação.";
+    const choices = document.getElementById("rhythmChoices");
+    if (!p) { choices.textContent = ""; return; }
+    if (!choices.childElementCount) {
+      for (const profile of Object.values(profiles)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = profile.name;
+        button.onclick = () => {
+          const current = state.get("project");
+          if (!current) return;
+          void api.call("/project/rhythm-proposal", {
+            method: "POST",
+            body: JSON.stringify({ baseRevision: current.revision, profileId: profile.id }),
+            label: `Comparando ritmo ${profile.name}…`,
+          });
+        };
+        choices.appendChild(button);
+      }
+    }
+    if (!proposal) { if (rhythmDialog.open) rhythmDialog.close(); return; }
+    const profile = profiles[proposal.profileId];
+    document.getElementById("rhythmProfileDesc").textContent = profile
+      ? `${profile.name}: ${profile.description}` : proposal.profileId;
+    document.getElementById("rhythmSummary").textContent =
+      `Fala total: ${proposal.beforeSeconds.toFixed(1)}s → ${proposal.afterSeconds.toFixed(1)}s `
+      + `(${proposal.takes.reduce((t, take) => t + take.removedSeconds, 0).toFixed(1)}s de pausas retiradas).`;
+    const list = document.getElementById("rhythmPauses");
+    list.replaceChildren();
+    for (const take of proposal.takes) {
+      for (const pause of take.pauses) {
+        const li = document.createElement("li");
+        li.textContent = `pausa em ${pause.start.toFixed(2)}s (${pause.duration.toFixed(2)}s) → sobra ${pause.keep.toFixed(2)}s`
+          + (pause.protectedPart ? " · trecho protegido preservado" : "");
+        list.appendChild(li);
+      }
+    }
+    document.getElementById("rhythmUnaligned").textContent = proposal.unaligned.length
+      ? `Sem alinhamento de palavras: ${proposal.unaligned.length} fonte(s) ignorada(s), sem microcortes — alinhe para incluir.`
+      : "";
+    for (const which of ["antes", "depois"]) {
+      const el = document.getElementById(which === "antes" ? "rhythmAntes" : "rhythmDepois");
+      el.src = proposal.sample ? `/project/rhythm-sample/${proposal.id}/${which}` : "";
+      el.style.visibility = proposal.sample ? "visible" : "hidden";
+    }
+    if (!rhythmDialog.open) rhythmDialog.showModal();
+  }
+  state.subscribe("rhythmProposal", paintRhythm);
+  state.subscribe("project", paintRhythm);
+  document.getElementById("closeRhythm").onclick = () => rhythmDialog.close();
+  document.getElementById("acceptRhythm").onclick = () => {
+    const p = state.get("project");
+    const proposal = state.get("rhythmProposal");
+    if (!p || !proposal) return;
+    void api.call("/project/rhythm-accept", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Aplicando ritmo…",
+    });
+  };
+  document.getElementById("rejectRhythm").onclick = () => {
+    const proposal = state.get("rhythmProposal");
+    if (!proposal) return;
+    void api.call("/project/rhythm-reject", {
+      method: "POST",
+      body: JSON.stringify({ proposalId: proposal.id }),
+      label: "Rejeitando ritmo…",
+    });
+  };
+
   // Escolha de formato: visível (linha + chip) e editável por diálogo —
   // muda a revisão e invalida prévia/aprovação via /project/settings.
   const formatDialog = document.createElement("dialog");
