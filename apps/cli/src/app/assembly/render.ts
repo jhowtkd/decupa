@@ -151,34 +151,25 @@ export function motorFellBack(stdout: string): boolean {
 
 type PreviewRecord = { sha256: string; profile: HardwareProfile };
 
-// Renders concorrentes do mesmo conteúdo se serializam: cada pedido roda
-// o seu (pastas de trabalho distintas), mas nunca ao mesmo tempo — os
-// arquivos do preview-cache e do rev-<n> são compartilhados e o rename
-// concorrente falha no Windows (EPERM).
-const renderTurns = new Map<string, Promise<unknown>>();
+// Renders concorrentes rodam cada um na própria pasta de trabalho, mas a
+// publicação se serializa por projeto: os arquivos do preview-cache e do
+// rev-<n> são compartilhados e rename/copyFile concorrentes sobre o mesmo
+// destino falham no Windows (EPERM).
+const publishTurns = new Map<string, Promise<unknown>>();
 
-export async function renderAssembly(
-  a: Assembly,
-  outDir: string,
-  exec: Executor,
-  opts: { profile?: HardwareProfile; detectHardware?: boolean; signal?: AbortSignal } = {},
-): Promise<string> {
-  const key = `${outDir}${previewIdentity(validateAssembly(a), opts.profile ?? "software")}`;
-  const previous = renderTurns.get(key) ?? Promise.resolve();
-  const turn = previous.then(
-    () => renderAssemblyOnce(a, outDir, exec, opts),
-    () => renderAssemblyOnce(a, outDir, exec, opts),
-  );
+async function publishTurn<T>(outDir: string, fn: () => Promise<T>): Promise<T> {
+  const previous = publishTurns.get(outDir) ?? Promise.resolve();
+  const turn = previous.then(fn, fn);
   const tracked = turn.catch(() => undefined);
-  renderTurns.set(key, tracked);
+  publishTurns.set(outDir, tracked);
   try {
     return await turn;
   } finally {
-    if (renderTurns.get(key) === tracked) renderTurns.delete(key);
+    if (publishTurns.get(outDir) === tracked) publishTurns.delete(outDir);
   }
 }
 
-async function renderAssemblyOnce(
+export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
@@ -207,9 +198,11 @@ async function renderAssemblyOnce(
   if (cached.status === "ready") {
     const info = await probe(requestCachedMp4).catch(() => null);
     if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0) {
-      await mkdir(dirname(dest), { recursive: true });
-      await copyFile(requestCachedMp4, dest);
-      return dest;
+      return await publishTurn(outDir, async () => {
+        await mkdir(dirname(dest), { recursive: true });
+        await copyFile(requestCachedMp4, dest);
+        return dest;
+      });
     }
   }
   const published = join(outDir, `rev-${valid.revision}`);
@@ -273,19 +266,21 @@ async function renderAssemblyOnce(
       await unlink(tmp).catch(() => {});
       throw err;
     }
-    await rename(tmp, dest);
     // Fallback explícito do motor: o cache é identificado como software,
     // nunca como o perfil de hardware pedido.
     const effectiveProfile = motorFellBack(result.stdout) ? "software" : profile;
     const cacheDir = join(outDir, "preview-cache", previewIdentity(valid, effectiveProfile));
     const cachedMp4 = join(cacheDir, "reference.mp4");
     const sidecar = join(cacheDir, "preview.json");
-    await mkdir(cacheDir, { recursive: true });
-    await copyFile(dest, cachedMp4);
-    await publishAtomic(sidecar, `${JSON.stringify({
-      sha256: await hashFile(dest),
-      profile: effectiveProfile,
-    } satisfies PreviewRecord)}\n`);
+    await publishTurn(outDir, async () => {
+      await rename(tmp, dest);
+      await mkdir(cacheDir, { recursive: true });
+      await copyFile(dest, cachedMp4);
+      await publishAtomic(sidecar, `${JSON.stringify({
+        sha256: await hashFile(dest),
+        profile: effectiveProfile,
+      } satisfies PreviewRecord)}\n`);
+    });
     // Poda best-effort de derivados antigos (retention.ts): nunca falha o
     // render — erro é silenciosamente ignorado (retorno descartado).
     await pruneProject(outDir).catch(() => {});
