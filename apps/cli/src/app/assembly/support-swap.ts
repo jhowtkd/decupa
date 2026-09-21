@@ -83,8 +83,11 @@ export function buildSupportSwapProposal(
     )
     .map((candidate) => ({
       ...candidate,
+      // Mesmos arredondamentos de candidateSupport: endpoints são
+      // Math.round por borda — a diferença de duração usa frames já
+      // arredondados para não anunciar cobertura que não existe.
       fullCoverage:
-        Math.round((candidate.end - candidate.start) * fps) >= current.durationFrames,
+        Math.round(candidate.end * fps) - Math.round(candidate.start * fps) >= current.durationFrames,
     }));
   let gap: string | null = null;
   if (!candidates.length) {

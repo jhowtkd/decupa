@@ -183,7 +183,12 @@ export function docSignature(p) {
         word.id + "," + (word.display || word.text)
         + (word.removed ? "-r" : "") + (word.protected ? "-p" : "") + (word.corrected ? "-c" : ""),
       ).join(";"),
-    ).join("|"),
+    ).join("|")
+    // Apoios fazem parte da assinatura: troca de apoio muda scene.support
+    // sem tocar palavras — sem isso o chip continuaria exibindo o antigo.
+    + ":s" + scene.support.map((entry) =>
+      entry.visualId + "@" + entry.offsetFrames + "+" + entry.durationFrames,
+    ).join(","),
   ).join("||");
 }
 
@@ -238,6 +243,15 @@ function sourceName(p, id) {
   return found ? found.name : id;
 }
 
+/** Nome da fonte de um trecho visual: visualId → span na análise → fonte. */
+function visualSourceName(p, visualId) {
+  for (const analysis of p.analyses || []) {
+    const span = (analysis.visual || []).find((item) => item.id === visualId);
+    if (span) return sourceName(p, span.sourceId);
+  }
+  return visualId;
+}
+
 function renderTranscript(p) {
   const running = p.preparation && p.preparation.status === "running";
   let html = "";
@@ -278,8 +292,8 @@ function chipHtml(p, scene, support, index) {
   return '<button type="button" class="chip-apoio"'
     + ' data-scene="' + esc(scene.id) + '" data-support="' + index + '"'
     + ' title="apoio em ' + at.toFixed(1) + "s da montagem · " + dur.toFixed(1) + 's"'
-    + ' aria-label="Apoio ' + esc(sourceName(p, support.visualId)) + ", seleciona a cena" + '"'
-    + ">🎬 " + esc(sourceName(p, support.visualId)) + " · " + dur.toFixed(1) + "s</button>";
+    + ' aria-label="Apoio ' + esc(visualSourceName(p, support.visualId)) + ", seleciona a cena" + '"'
+    + ">🎬 " + esc(visualSourceName(p, support.visualId)) + " · " + dur.toFixed(1) + "s</button>";
 }
 
 function renderProse(p, selection) {
@@ -730,7 +744,7 @@ export function mountTexto({ state, api, player }) {
     current.innerHTML = "<p class=\"muted\">apoios da cena " + esc(scene.id) + ":</p>"
       + '<ul class="plain">'
       + scene.support.map((entry, i) =>
-        "<li>" + esc(sourceName(p, entry.visualId)) + " · "
+        "<li>" + esc(visualSourceName(p, entry.visualId)) + " · "
         + (entry.durationFrames / (p.assembly.fps.num / p.assembly.fps.den)).toFixed(1) + "s "
         + '<button type="button" data-swap-support="' + i + '">buscar candidatos</button></li>').join("")
       + "</ul>";
@@ -769,6 +783,9 @@ export function mountTexto({ state, api, player }) {
         }),
         label: "Trocando apoio…",
       });
+      // Troca aplicada: a proposta some e a lista de candidatos ficaria
+      // velha — fecha o diálogo; os chips já repintam pela assinatura.
+      supportDialog.close();
     } else if (reject) {
       const proposal = state.get("supportSwap");
       if (!proposal) return;
@@ -777,6 +794,7 @@ export function mountTexto({ state, api, player }) {
         body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
         label: "Recusando troca…",
       });
+      supportDialog.close();
     }
   });
 
