@@ -23,3 +23,10 @@ it("cancelamento persiste estado e não aprova parcial",async()=>{
  const deps={workDir:dir,exec:{run:async()=>{throw Error("unexpected");}},send:async()=>"{}",modelKey:"t",allowModel:true,allowVisual:true,persist:async(p:Recipe)=>{states.push(p.analysis.status);},transcribe:async()=>{ctrl.abort();return [];},describe:async()=>[]};
  await expect(analyzeRecipe(r,deps,ctrl.signal)).rejects.toThrow();expect(states.at(-1)).toBe("cancelled");
 });
+
+it("lacuna visual inclusive cauda fracionária impede aprovação e pode ser reanalisada",async()=>{
+ const {dir,r}=await setup();let end=r.source.durationSeconds-0.2;let calls=0;let saved:Recipe=r;
+ const deps={workDir:dir,exec:{run:async()=>{throw Error("unexpected");}},send:async()=>JSON.stringify({rules:[]}),modelKey:"partial",allowModel:true,allowVisual:true,persist:async(p:Recipe)=>{saved=p;},transcribe:async()=>[],describe:async()=>{calls++;return [{id:"v",sourceId:r.id,start:0,end,text:"cena",confidence:"observed" as const,tags:[]}];}};
+ await expect(analyzeRecipe(r,deps,new AbortController().signal)).rejects.toThrow(/Lacunas visuais/);expect(saved.analysis.status).toBe("error");expect(saved.analysis.error).toContain(end.toFixed(3));
+ end=r.source.durationSeconds;expect((await analyzeRecipe(r,deps,new AbortController().signal)).analysis.status).toBe("ready");expect(calls).toBe(2);
+});

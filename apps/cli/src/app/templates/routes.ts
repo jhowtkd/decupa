@@ -12,7 +12,7 @@ import {approveRecipe,listRecipes,loadRecipe,saveRecipe,validateRecipe,recipeId}
 import type {Recipe} from "./types.ts";
 const jobs=new Map<string,AbortController>();
 const HERE=fileURLToPath(new URL(".",import.meta.url));
-class HttpError extends Error {constructor(public status:number,message:string){super(message);}}
+class HttpError extends Error {readonly status:number;constructor(status:number,message:string){super(message);this.status=status;}}
 function json(res:ServerResponse,value:unknown,status=200){res.writeHead(status,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(value));}
 async function body(req:IncomingMessage):Promise<Record<string,unknown>>{
  const parts:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new HttpError(413,"pedido excede 1 MiB");parts.push(Buffer.from(chunk));}

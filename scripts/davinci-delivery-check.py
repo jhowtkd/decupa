@@ -2,6 +2,11 @@
 import importlib.util
 import tempfile
 import unittest
+import subprocess
+import sys
+import json
+import os
+import fcntl
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("delivery", Path(__file__).with_name("davinci-delivery.py"))
 d = importlib.util.module_from_spec(spec)
@@ -10,7 +15,7 @@ spec.loader.exec_module(d)
 class API:
     def __init__(self, request):
         self.request=request; self.settings={}; self.events=[]; self.current=None
-        self.fail=None; self.offset=0; self.source_offset=0; self.path=request['assembly']['sources'][0]['path']
+        self.fail=None; self.offset=0; self.source_offset=0; self.source_end_offset=0; self.path=request['assembly']['sources'][0]['path']
     def GetProjectManager(self): return self
     def GetCurrentProject(self): return self.current
     def GetName(self): return self.request['projectName']
@@ -34,6 +39,11 @@ class API:
     def GetStart(self,*args): return 86400+self.offset
     def GetDuration(self,*args): return 24
     def GetSourceStartFrame(self): return self.source_offset
+    def GetSourceEndFrame(self):
+        source_rate=self.request['assembly']['sources'][0]['fps']
+        timeline_rate=self.request['assembly']['fps']
+        return self.source_offset + round(24 * source_rate['num']/source_rate['den'] / (timeline_rate['num']/timeline_rate['den'])) - 1 + self.source_end_offset
+    def GetUniqueId(self): return 'created-project'
     def GetMediaPoolItem(self): return self
     def GetClipProperty(self,key): return self.path
     def AddMarker(self,*args): return self.fail!='marker'
@@ -52,6 +62,13 @@ class Checks(unittest.TestCase):
         otio=Path(self.tmp.name)/'timeline.otio'; otio.write_text('{}')
         self.r={'operationId':'test','projectId':'p','revision':1,'projectName':'P-r1-test','otioPath':str(otio),'assembly':{'fps':{'num':24000,'den':1001},'width':320,'height':240,'sources':[{'id':'a','path':str(media),'fps':{'num':24000,'den':1001}}],'tracks':[{'kind':'Video','name':'V1','clips':[{'sourceId':'a','sourceStartSeconds':0,'startFrame':0,'durationFrames':24}]}]},'handoff':[{'id':'n','sceneId':'s','description':'Title','destination':'Resolve','startFrame':0,'durationFrames':24}]}
         self.api=API(self.r)
+    def test_live_bridge_lock_blocks_orphan_overlap(self):
+        request=Path(self.tmp.name)/'request.json';request.write_text(json.dumps(self.r))
+        with open(Path(tempfile.gettempdir())/f'decupa-resolve-bridge-{os.getuid()}.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            result=subprocess.run([sys.executable,str(Path(__file__).with_name('davinci-delivery.py')),'--request',str(request)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,1)
+            self.assertIn('Outra ponte',result.stdout)
     def test_delivery(self):
         events=[]; self.r['drpPath']=str(Path(self.tmp.name)/'project.drp')
         result=d.deliver(self.r,self.api,events.append)
@@ -68,11 +85,21 @@ class Checks(unittest.TestCase):
         with self.assertRaisesRegex(Exception,'feche'): d.deliver(self.r,self.api,lambda e:None)
         self.assertEqual(self.api.events,[])
     def test_positions_and_media(self):
-        for attr,value in [('offset',1),('source_offset',2),('path','/missing')]:
+        for attr,value in [('offset',1),('source_offset',2),('source_end_offset',5),('path','/missing')]:
             with self.subTest(attr=attr):
                 api=API(self.r); setattr(api,attr,value)
                 with self.assertRaises(Exception): d.deliver(self.r,api,lambda e:None)
                 self.assertNotIn('save',api.events)
+    def test_switch_before_save(self):
+        def switched(t):
+            self.api.current=object()
+            return True
+        self.api.SetCurrentTimeline=switched
+        with self.assertRaisesRegex(Exception,'projeto atual mudou'): d.deliver(self.r,self.api,lambda e:None)
+        self.assertNotIn('save',self.api.events)
+    def test_different_source_rate(self):
+        self.r['assembly']['sources'][0]['fps']={'num':60,'den':1}
+        self.assertTrue(d.deliver(self.r,self.api,lambda e:None)['verified'])
     def test_reopen_does_not_import_or_save(self):
         self.r['mode']='open'
         result=d.deliver(self.r,self.api,lambda e:None)

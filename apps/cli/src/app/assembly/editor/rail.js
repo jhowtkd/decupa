@@ -421,7 +421,7 @@ export function resolveView(delivery, approved) {
   return {
     disabled:!approved||delivery?.status==="running",
     buttonLabel:"Abrir montagem no DaVinci",
-    statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName:delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
+    statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName+(delivery.error?" — "+delivery.error:""):delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
     newCopy:delivery?.status==="error",
   };
 }

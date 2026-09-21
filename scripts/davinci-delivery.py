@@ -1,5 +1,7 @@
 """Permanent Resolve delivery. Never deletes projects or saves unrelated work."""
 import argparse
+import fcntl
+import tempfile
 import json
 import math
 import os
@@ -54,6 +56,9 @@ def verify(timeline, assembly):
                 source_rate = source.get('fps') or assembly['fps']
                 expected = clip['sourceStartSeconds'] * source_rate['num'] / source_rate['den']
                 require(abs(item.GetSourceStartFrame() - expected) <= .51, 'intervalo de origem diferente')
+                # Source out is inclusive; compare both boundaries at the media rate.
+                expected_end = expected + clip['durationFrames'] / rate * source_rate['num'] / source_rate['den'] - 1
+                require(abs(item.GetSourceEndFrame() - expected_end) <= .51, 'fim do intervalo de origem diferente')
                 media.append(pool)
     return media
 
@@ -74,6 +79,8 @@ def deliver(request, resolve, emit):
     if mode == 'create':
         project = manager.CreateProject(name)
         require(project is not None, 'nome de projeto indisponível; solicite outra cópia')
+        project_id = project.GetUniqueId()
+        require(bool(project_id), 'identidade do projeto indisponível')
         emit({'stage': 'created', 'projectName': name})
         rate = assembly['fps']['num'] / assembly['fps']['den']
         fps = {24000/1001: '23.976', 30000/1001: '29.97', 60000/1001: '59.94'}.get(rate, str(rate))
@@ -95,6 +102,8 @@ def deliver(request, resolve, emit):
             require(timeline.AddMarker(frame, 'Yellow', 'Animação pendente', description, max(n['durationFrames'] for n in notes), json.dumps([n['id'] for n in notes])), 'falha ao criar marcador')
         require(project.SetCurrentTimeline(timeline), 'falha ao abrir timeline')
         emit({'stage': 'verified', 'projectName': name})
+        current = manager.GetCurrentProject()
+        require(current is not None and callable(getattr(current, 'GetUniqueId', None)) and current.GetUniqueId() == project_id, 'projeto atual mudou; nada foi salvo')
         require(manager.SaveProject(), 'falha ao salvar projeto')
         emit({'stage': 'saved', 'projectName': name})
     else:
@@ -127,7 +136,13 @@ def main():
         request = json.loads(Path(args.request).read_text())
         validate(request)
         emit({'stage': 'connecting'})
-        emit(deliver(request, connect(), emit))
+        # The bridge may outlive a killed Node parent; keep an OS lock until it exits.
+        with open(Path(tempfile.gettempdir()) / f'decupa-resolve-bridge-{os.getuid()}.lock', 'a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError('Outra ponte do Resolve ainda está em andamento.') from exc
+            emit(deliver(request, connect(), emit))
         return 0
     except Exception as exc:
         emit({'ok': False, 'stage': 'error', 'error': str(exc)})

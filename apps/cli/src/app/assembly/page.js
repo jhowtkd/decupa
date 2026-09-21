@@ -306,8 +306,8 @@ async function importFiles(files) {
 
 mountStage({ state, api, player });
 mountContexto({ state, api, player });
-mountTemplates({state,api});
 mountRail({ state, api, player });
+mountTemplates({state,api});
 mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 

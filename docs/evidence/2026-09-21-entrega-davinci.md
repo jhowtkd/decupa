@@ -8,3 +8,5 @@ Branch: codex/templates-resolve. Implementação isolada, sem publicação.
 - Interface/contexto/state/api: 22 testes passaram. Typecheck passou.
 - Consulta somente leitura ao módulo oficial `DaVinciResolveScript.scriptapp('Resolve')`: retornou sem conexão em 2026-09-21. Não foi criado nem alterado projeto no Resolve.
 - Pendente: importação real, inspeção audiovisual, exportar/reabrir DRP e validar segunda revisão preservando a primeira. Testes offline não comprovam esses critérios.
+
+Resultado final e limitações: [templates e Resolve](2026-09-21-templates-resolve.md).

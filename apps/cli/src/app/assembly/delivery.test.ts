@@ -1,3 +1,5 @@
+import {spawn} from "node:child_process";
+import {once} from "node:events";
 import {expect,it} from "vitest";
 import {mkdtemp,copyFile,readFile,writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";import {join} from "node:path";
@@ -40,4 +42,23 @@ it("edição durante entrega não é anunciada como revisão atual",async()=>{
  return {code:0,stdout:JSON.stringify({ok:true,projectName:r.projectName,verified:true}),stderr:""};}};
  await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/revisão mudou/);
  expect((await readDelivery(dir,0))?.status).toBe("ready");
+});
+
+it("falha ao reabrir preserva projeto entregue e permite tentar novamente",async()=>{
+ const {dir,p}=await setup();const names:string[]=[];let fail=false;
+ const exec={run:async(call:ExecCall)=>{const r=JSON.parse(await readFile(call.args.at(-1)!,"utf8"));names.push(r.projectName);return {code:fail?1:0,stdout:JSON.stringify(fail?{ok:false,error:"Resolve fechado"}:{ok:true,projectName:r.projectName,verified:true}),stderr:""};}};
+ const first=await deliverApproved(p,dir,exec,new AbortController().signal);fail=true;
+ for(const options of [{},{exportDrp:true}]){await expect(deliverApproved(p,dir,exec,new AbortController().signal,options)).rejects.toThrow(/fechado/);expect(await readDelivery(dir,0)).toMatchObject({status:"ready",projectName:first.projectName});}
+ fail=false;await deliverApproved(p,dir,exec,new AbortController().signal);expect(new Set(names).size).toBe(1);
+});
+
+it("mutex bloqueia concorrência e é liberado pelo SO após morte do processo",async()=>{
+ const child=spawn(process.execPath,["--input-type=module","-e",'import {createServer} from "node:net";createServer(s=>s.destroy()).listen({host:"127.0.0.1",port:47789,exclusive:true},()=>console.log("locked"));'],{stdio:["ignore","pipe","pipe"]});
+ try{
+  await once(child.stdout!,"data");const {dir,p}=await setup();let calls=0;
+  const exec={run:async(call:ExecCall)=>{calls++;const r=JSON.parse(await readFile(call.args.at(-1)!,"utf8"));return {code:0,stdout:JSON.stringify({ok:true,projectName:r.projectName,verified:true}),stderr:""};}};
+  await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/andamento/);expect(calls).toBe(0);
+  const exited=once(child,"exit");child.kill("SIGKILL");await exited;
+  expect((await deliverApproved(p,dir,exec,new AbortController().signal)).status).toBe("ready");expect(calls).toBe(1);
+ }finally{if(child.exitCode===null)child.kill("SIGKILL");}
 });
