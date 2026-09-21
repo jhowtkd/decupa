@@ -262,7 +262,10 @@ export function applySpeechCuts(
     if (!cuts.length) continue;
     const scene = findScene(next, sceneId);
     const take = findTake(scene, takeId);
-    const allowed = subtractRanges(cuts, take.protected);
+    // Só conta como mudança o trecho que ainda não está removido — corte
+    // coberto por proteção ou por remoção anterior é no-op e não deve
+    // gerar revisão nem invalidar aprovação.
+    const allowed = subtractRanges(subtractRanges(cuts, take.protected), take.removed);
     if (!allowed.length) continue;
     touched = true;
     next = withTake(next, scene.id, take.id, {

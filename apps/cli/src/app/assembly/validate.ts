@@ -234,9 +234,11 @@ export function validateAssembly(value: unknown): Assembly {
   };
   // Migração: projeto antigo com vídeo registra a fonte do formato sem
   // recalcular dimensões — o formato gravado segue até ação explícita.
+  // Regra histórica: o canvas vinha sempre da primeira fonte com vídeo
+  // (applyCanvasFrom), independente de papel — a fala principal só vale
+  // para projetos novos.
   if (assembly.canvasSourceId === undefined) {
-    const principal = sources.find((s) => s.role === "speech" && s.hasVideo)
-      ?? sources.find((s) => s.hasVideo);
+    const principal = sources.find((s) => s.hasVideo);
     if (principal) assembly.canvasSourceId = principal.id;
   }
 

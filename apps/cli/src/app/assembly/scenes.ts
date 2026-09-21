@@ -353,6 +353,8 @@ function emptyAssembly(project: Project): Assembly {
     width: project.assembly.width,
     height: project.assembly.height,
     rhythmProfile: project.assembly.rhythmProfile,
+    canvasSourceId: project.assembly.canvasSourceId,
+    canvasManual: project.assembly.canvasManual,
     sources: project.assembly.sources,
     tracks,
   };

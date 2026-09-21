@@ -118,6 +118,20 @@ async function exportedDirValid(dest: string): Promise<boolean> {
     if (otioSha !== manifest.timeline) return false;
     if (manifest.handoff !== undefined && await exportedFileSha(join(dest, "handoff.json")) !== manifest.handoff) return false;
     if (manifest.instrucoes !== undefined && await exportedFileSha(join(dest, "importar-no-resolve.txt")) !== manifest.instrucoes) return false;
+    // verificacao.json não pode usar hash fixo (a confirmação manual muda o
+    // conteúdo depois): valida forma e identidade — objeto com a revisão do
+    // manifest e status reconhecido.
+    try {
+      const verificacao = JSON.parse(
+        await readFile(join(dest, "verificacao.json"), "utf8"),
+      ) as { revision?: unknown; status?: unknown };
+      if (verificacao.revision !== manifest.revision
+        || typeof verificacao.status !== "string" || verificacao.status === "") {
+        return false;
+      }
+    } catch {
+      return false;
+    }
     const refSha = await exportedFileSha(join(dest, "reference.mp4"));
     if (refSha !== manifest.reference) return false;
     const info = await probe(join(dest, "reference.mp4")).catch(() => null);
