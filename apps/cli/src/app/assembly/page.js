@@ -353,6 +353,8 @@ toolTexto.addEventListener("click", () => {
 inspectTool.setAttribute("aria-controls", "contexto");
 inspectTool.onclick = () => showInspector(inspector.hidden);
 document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
+const narrowViewport = matchMedia("(max-width: 1100px)");
+narrowViewport.addEventListener("change", () => { showInspector(false); });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
     showInspector(false); inspectTool.focus();
