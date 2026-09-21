@@ -106,6 +106,26 @@ function validateSource(value: unknown, index: number, seen: Set<string>): Sourc
     if (n < 0) throw new Error(`fonte ${id}.${key} não pode ser negativo`);
     source[key] = n;
   }
+  if (value.timecode !== undefined && value.timecode !== null) {
+    const tc = value.timecode;
+    if (!isRecord(tc)) throw new Error(`fonte ${id}.timecode precisa ser um objeto`);
+    source.timecode = {
+      raw: nonEmptyString(tc.raw, `fonte ${id}.timecode.raw`),
+      frames: tc.frames === null ? null : nonNegativeInt(tc.frames, `fonte ${id}.timecode.frames`),
+      dropFrame: booleanField(tc.dropFrame, `fonte ${id}.timecode.dropFrame`),
+    };
+  } else if (value.timecode === null) {
+    source.timecode = null;
+  }
+  if (value.rotation !== undefined && value.rotation !== null) {
+    const deg = safeInt(value.rotation, `fonte ${id}.rotation`);
+    if (![0, 90, 180, 270].includes(deg)) {
+      throw new Error(`fonte ${id}.rotation precisa ser 0, 90, 180 ou 270`);
+    }
+    source.rotation = deg;
+  } else if (value.rotation === null) {
+    source.rotation = null;
+  }
   return source;
 }
 

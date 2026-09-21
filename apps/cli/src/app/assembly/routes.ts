@@ -14,6 +14,7 @@ import { isCancelledError } from "@decupa/queue";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
+import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
@@ -196,6 +197,8 @@ async function sourceFromFile(path: string, id: string, displayName?: string): P
     name: displayName ?? basename(resolved),
     size,
     mtimeMs,
+    timecode: info.timecode ? parseSourceTimecode(info.timecode, info.frameRate) : null,
+    rotation: info.rotation,
   };
 }
 
@@ -620,9 +623,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (parts[1] === "output" && req.method === "GET") {
         const revision = parts[2] ?? "";
         const kind = parts[3] ?? "";
-        const file = kind === "otio" ? "timeline.otio" : kind === "mp4" ? "reference.mp4" : "";
+        const file = kind === "otio" ? "timeline.otio"
+          : kind === "mp4" ? "reference.mp4"
+          : kind === "instrucoes" ? "importar-no-resolve.txt"
+          : kind === "verificacao" ? "verificacao.json" : "";
         if (!file) throw new HttpError(404, "saída desconhecida");
-        const type = kind === "otio" ? "application/json" : "video/mp4";
+        const type = kind === "otio" || kind === "verificacao" ? "application/json"
+          : kind === "instrucoes" ? "text/plain; charset=utf-8" : "video/mp4";
         const candidates = [join(dir, "exports", revision, file)];
         if (kind === "mp4") candidates.push(join(dir, `rev-${revision}`, "reference.mp4"));
         let served = false;
@@ -1205,7 +1212,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           sendJson(res, { project: loaded, path: dest, ...snapshot() });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante/.test(message)) {
+          if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante|timecode ilegível/.test(message)) {
             throw new HttpError(409, message);
           }
           throw err;

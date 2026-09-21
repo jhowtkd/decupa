@@ -67,4 +67,23 @@ export default async function setup(): Promise<void> {
       "-c:a", "pcm_s16le", edited,
     ]);
   }
+
+  // Timecode embutido: 01:00:00:00 a 25 fps (NDF) e 01:00:00;00 a
+  // 30000/1001 (drop-frame). .mov carrega tmcd; mp4/ffmpeg do CI também.
+  const tc25 = join(FIXTURES, "tc-1h-25.mov");
+  if (!(await exists(tc25))) {
+    await ff([
+      "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-timecode", "01:00:00:00", "-c:v", "mpeg4", "-c:a", "aac", tc25,
+    ]);
+  }
+  const tcDf = join(FIXTURES, "tc-1h-2997df.mov");
+  if (!(await exists(tcDf))) {
+    await ff([
+      "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30000/1001:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-timecode", "01:00:00;00", "-c:v", "mpeg4", "-c:a", "aac", tcDf,
+    ]);
+  }
 }

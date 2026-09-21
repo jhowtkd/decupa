@@ -58,6 +58,18 @@ function setDisabled(el, value) {
 }
 
 /**
+ * Rótulo do formato da entrega: dimensões, orientação e fps — espelha o
+ * manifest da exportação. Puro para teste sem DOM.
+ */
+export function formatLabel(assembly) {
+  if (!assembly) return "";
+  const orientation = assembly.width > assembly.height ? "horizontal"
+    : assembly.width < assembly.height ? "vertical" : "quadrado";
+  const fps = `${assembly.fps.num}/${assembly.fps.den}`;
+  return `${assembly.width}×${assembly.height} ${orientation} @ ${fps} fps`;
+}
+
+/**
  * Checklist da entrega: derivado do estado real do projeto (mídia
  * presente, seleção feita, revisão pronta). Pura para teste sem DOM;
  * o render aplica a cada projeto recebido.
@@ -131,6 +143,42 @@ const OP_STAGE_LABEL = {
 /** Rótulo pt-BR da etapa da operação (puro); desconhecida repassa crua. */
 export function stageLabel(stage) {
   return OP_STAGE_LABEL[stage] || String(stage);
+}
+
+/**
+ * Ação principal do projeto (pura): distingue montar, preparar, revisar
+ * e entregar. `stage` pede navegação gratuita — revisar/entregar nunca
+ * disparam chamada paga; montar/preparar chamam /project/prepare.
+ */
+export function primaryAction(project, operation) {
+  const assembly = project?.assembly;
+  const included = (assembly?.sources ?? []).filter((source) => source.included);
+  const prep = project?.preparation ?? null;
+  const busyStage = operation && ["analyzing", "preparing", "rendering", "proposing"].includes(operation.stage)
+    ? operation.stage : null;
+  if (busyStage) {
+    return { kind: "busy", label: stageLabel(busyStage) + "…", disabled: true, stage: null };
+  }
+  if (!included.length) {
+    return { kind: "montar", label: "Montar vídeo", disabled: true, stage: null };
+  }
+  const hasClips = (assembly?.tracks ?? []).some((track) => track.clips.length > 0);
+  if (hasClips && project.finalApprovedRevision === project.revision) {
+    return { kind: "entregar", label: "Abrir entrega", disabled: false, stage: "entrega" };
+  }
+  // Mídia incluída sem análise registrada na preparação atual precisa de
+  // preparação antes de revisar — a montagem existente ignora a fonte nova.
+  const needsPrep = prep && included.some((source) => !prep.sources[source.id]);
+  if (needsPrep) {
+    return { kind: "preparar", label: "Preparar montagem", disabled: false, stage: null };
+  }
+  if (hasClips || prep?.status === "ready") {
+    return { kind: "revisar", label: "Revisar montagem", disabled: false, stage: "revisao" };
+  }
+  if (prep && ["interrupted", "attention", "cancelled"].includes(prep.status)) {
+    return { kind: "preparar", label: "Retomar preparação", disabled: false, stage: null };
+  }
+  return { kind: "montar", label: "Montar vídeo", disabled: false, stage: null };
 }
 
 export function mountRail({ state, api, player }) {
@@ -359,7 +407,11 @@ export function mountRail({ state, api, player }) {
       && project.preparation.status !== "ready"
     );
     const preparing = project.preparation && project.preparation.status === "running";
-    setDisabled(document.getElementById("prepare"), preparing || !project.assembly.sources.some((source) => source.included));
+    const action = primaryAction(project, state.get("operation"));
+    const prepareButton = document.getElementById("prepare");
+    prepareButton.textContent = action.label;
+    prepareButton.dataset.action = action.kind;
+    setDisabled(prepareButton, preparing || action.disabled);
     renderPreparation(project);
   }
 
@@ -392,6 +444,14 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Guardando briefing…",
   });
+  const prepareClick = () => {
+    const action = primaryAction(state.get("project"), state.get("operation"));
+    if (action.stage) {
+      window.dispatchEvent(new CustomEvent("decupa:set-stage", { detail: action.stage }));
+      return;
+    }
+    prepareMontage();
+  };
   const prepareMontage = () => api.call("/project/prepare", {
     method: "POST",
     body: JSON.stringify({
@@ -401,7 +461,7 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Preparando montagem…",
   });
-  document.getElementById("prepare").onclick = prepareMontage;
+  document.getElementById("prepare").onclick = prepareClick;
   document.getElementById("resume").onclick = prepareMontage;
   state.subscribe("project", render);
   state.subscribe("operation", () => { if (state.get("project")) renderPreparation(state.get("project")); });
