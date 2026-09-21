@@ -415,3 +415,13 @@ export function mountRail({ state, api, player }) {
   render(state.get("project"));
 
 }
+
+export function resolveView(delivery, approved) {
+  const stages={connecting:"Conectando ao DaVinci…",created:"Importando montagem…",imported:"Verificando timeline importada…",verified:"Salvando projeto…",saved:"Projeto salvo",exported:"DRP exportado"};
+  return {
+    disabled:!approved||delivery?.status==="running",
+    buttonLabel:"Abrir montagem no DaVinci",
+    statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName:delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
+    newCopy:delivery?.status==="error",
+  };
+}
