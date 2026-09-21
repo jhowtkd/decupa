@@ -309,7 +309,10 @@ function renderProse(p, selection) {
       + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button>'
       + '<button type="button" class="quiet" data-scene-action="ajustar" data-scene="' + esc(scene.id) + '"'
       + ' aria-label="Ajustar fala da cena ' + (index + 1) + '"'
-      + ' title="Pedir ajuste localizado a uma fala desta cena">✂</button></p>';
+      + ' title="Pedir ajuste localizado a uma fala desta cena">✂</button>'
+      + (scene.support.length ? '<button type="button" class="quiet" data-scene-action="apoio"'
+        + ' data-scene="' + esc(scene.id) + '" aria-label="Trocar apoio da cena ' + (index + 1) + '"'
+        + ' title="Trocar um apoio desta cena por outro candidato">🎬</button>' : "") + "</p>";
     if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
     if (scene.gaps.length) {
       html += '<p class="warn">lacunas: ' + esc(scene.gaps.join("; ")) + "</p>";
@@ -493,6 +496,7 @@ export function mountTexto({ state, api, player }) {
     lastSig = sig;
     renderCenter(p, selection());
     paintProposalBanner(p, state.get("speechProposal"));
+    paintSupportSwap(state.get("supportSwap"));
   }
 
   function findWord(btn) {
@@ -704,6 +708,100 @@ export function mountTexto({ state, api, player }) {
     paintProposalBanner(state.get("project"), proposal);
   });
 
+  // Troca localizada de apoio (#65): diálogo lista os apoios da cena e os
+  // candidatos com origem + evidência; aceitar aplica só a troca escolhida.
+  const supportDialog = document.createElement("dialog");
+  supportDialog.id = "supportDialog";
+  supportDialog.innerHTML = '<h1>Trocar apoio</h1>'
+    + '<div id="supportCurrent"></div>'
+    + '<div id="supportCandidates"></div>'
+    + '<div class="row"><button type="button" id="closeSupport">Fechar</button></div>';
+  document.body.appendChild(supportDialog);
+  let swapSceneId = null;
+
+  function openSupportDialog(sceneId) {
+    const p = state.get("project");
+    if (!p) return;
+    const scene = p.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    swapSceneId = sceneId;
+    const current = supportDialog.querySelector("#supportCurrent");
+    const list = supportDialog.querySelector("#supportCandidates");
+    current.innerHTML = "<p class=\"muted\">apoios da cena " + esc(scene.id) + ":</p>"
+      + '<ul class="plain">'
+      + scene.support.map((entry, i) =>
+        "<li>" + esc(sourceName(p, entry.visualId)) + " · "
+        + (entry.durationFrames / (p.assembly.fps.num / p.assembly.fps.den)).toFixed(1) + "s "
+        + '<button type="button" data-swap-support="' + i + '">buscar candidatos</button></li>').join("")
+      + "</ul>";
+    list.replaceChildren();
+    supportDialog.showModal();
+  }
+
+  supportDialog.addEventListener("click", async (ev) => {
+    const close = ev.target.closest("#closeSupport");
+    if (close) { supportDialog.close(); return; }
+    const pick = ev.target.closest("[data-swap-support]");
+    const candidate = ev.target.closest("[data-swap-candidate]");
+    const reject = ev.target.closest("[data-swap-reject]");
+    const p = state.get("project");
+    if (!p) return;
+    if (pick) {
+      const { res } = await api.call("/project/support-swap", {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: p.revision,
+          sceneId: swapSceneId,
+          supportIndex: Number(pick.dataset.swapSupport),
+          request: "",
+        }),
+        label: "Buscando candidatos…",
+      });
+      void res;
+    } else if (candidate) {
+      const proposal = state.get("supportSwap");
+      if (!proposal) return;
+      await api.call("/project/support-swap-accept", {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: p.revision, proposalId: proposal.id,
+          candidateId: candidate.dataset.swapCandidate,
+        }),
+        label: "Trocando apoio…",
+      });
+    } else if (reject) {
+      const proposal = state.get("supportSwap");
+      if (!proposal) return;
+      await api.call("/project/support-swap-reject", {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+        label: "Recusando troca…",
+      });
+    }
+  });
+
+  /** Preenche candidatos/gap da proposta de troca no diálogo. */
+  function paintSupportSwap(proposal) {
+    if (!supportDialog.open) return;
+    const list = supportDialog.querySelector("#supportCandidates");
+    if (!proposal) { list.replaceChildren(); return; }
+    let html = '<p class="muted">atual: ' + esc(proposal.current.sourceName || proposal.current.sourceId)
+      + " " + proposal.current.sourceStart.toFixed(1) + "–" + proposal.current.sourceEnd.toFixed(1) + "s"
+      + (proposal.current.evidence ? ' — "' + esc(proposal.current.evidence) + '"' : "") + "</p>";
+    if (proposal.gap) html += '<p class="warn">' + esc(proposal.gap) + "</p>";
+    html += '<ul class="plain">' + proposal.candidates.map((candidate) =>
+      "<li><button type=\"button\" data-swap-candidate=\"" + esc(candidate.id) + "\">"
+      + esc(candidate.sourceId) + " " + candidate.start.toFixed(1) + "–" + candidate.end.toFixed(1) + "s"
+      + " · " + esc(candidate.description)
+      + (candidate.fullCoverage ? "" : ' <span class="warn">corta no fim</span>')
+      + "</button></li>").join("") + "</ul>";
+    if (proposal.candidates.length || proposal.gap) {
+      html += '<button type="button" data-swap-reject="1">Manter apoio atual</button>';
+    }
+    list.innerHTML = html;
+  }
+  state.subscribe("supportSwap", paintSupportSwap);
+
   async function submitCorrection(text) {
     const p = state.get("project");
     if (!p) return;
@@ -821,6 +919,10 @@ export function mountTexto({ state, api, player }) {
     const { sceneAction, scene } = btn.dataset;
     if (sceneAction === "ajustar") {
       openSpeechDialog(scene);
+      return;
+    }
+    if (sceneAction === "apoio") {
+      openSupportDialog(scene);
       return;
     }
     if (sceneAction === "delete") {
