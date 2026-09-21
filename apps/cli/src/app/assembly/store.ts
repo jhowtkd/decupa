@@ -1,3 +1,4 @@
+import { validateAnimationNotes } from "./handoff.ts";
 import { validateDecisionReport } from "./assembly-decisions.ts";
 import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -369,6 +370,7 @@ function validateSceneShape(
     visualEvidenceIds,
     support: Array.isArray(value.support) ? value.support as Project["scenes"][number]["support"] : [],
     gaps: Array.isArray(value.gaps) ? value.gaps.map(String) : [],
+    ...(value.animationNotes !== undefined ? {animationNotes: validateAnimationNotes(value.animationNotes)} : {}),
   };
 }
 

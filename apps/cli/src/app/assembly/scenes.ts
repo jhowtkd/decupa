@@ -1,3 +1,4 @@
+import { validateAnimationNotes } from "./handoff.ts";
 import { selectBroll } from "./broll.ts";
 import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, validateDecisionReport } from "./assembly-decisions.ts";
 import { randomUUID } from "node:crypto";
@@ -240,6 +241,7 @@ function resolveScene(
   const gaps = Array.isArray(item.gaps) ? (item.gaps as unknown[]).map(String) : [];
   const scene: Scene = {
     id,
+    ...((item.animationNotes ?? current?.animationNotes) !== undefined ? {animationNotes: validateAnimationNotes(item.animationNotes ?? current?.animationNotes)} : {}),
     objective: String(item.objective ?? current?.objective ?? ""),
     rationale: String(item.rationale ?? current?.rationale ?? ""),
     speechIds: [...new Set(speechIds)],

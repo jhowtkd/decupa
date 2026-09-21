@@ -55,7 +55,13 @@ export type VisualSpan = Span & {
   tags: string[];
 };
 
+export type AnimationNote = {
+  id: string; description: string; destination: "Resolve" | "After Effects";
+  reference?: {templateId:string; revision:number; start:number; end:number};
+};
+
 export type Scene = {
+  animationNotes?: AnimationNote[];
   id: string;
   objective: string;
   rationale: string;
