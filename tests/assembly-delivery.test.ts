@@ -1,7 +1,8 @@
-import { copyFile, mkdtemp, readFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { hashFile } from "../packages/media/src/hash.ts";
 import { startApp } from "../apps/cli/src/app/server.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
 import { FIXTURES } from "./fixtures/global-setup.ts";
@@ -35,10 +36,10 @@ function indexingAndRender(): Executor {
 
 type DeliveryProject = {
   revision: number;
-  assembly: { sources: { id: string; included: boolean }[] };
+  assembly: { sources: { id: string; included: boolean; path: string }[] };
   scenes: unknown[];
   previewRevision: number | null;
-  previewArtifact: { revision: number } | null;
+  previewArtifact: { revision: number; relativePath: string; sha256: string } | null;
   finalApprovedRevision: number | null;
 };
 
@@ -164,6 +165,26 @@ it("entrega após aprovação: checklist completo e export concluído com saída
   expect(await otio.text()).toContain("Timeline.1");
   const manifest = JSON.parse(
     await readFile(join(dir, "exports", String(ready.revision), "manifest.json"), "utf8"),
-  ) as { revision: number };
+  ) as { revision: number; reference: string };
   expect(manifest.revision).toBe(ready.revision);
+  // Exporta exatamente o MP4 assistido e aprovado — mesmo hash da prévia.
+  expect(ready.previewArtifact).not.toBeNull();
+  const approvedFile = join(dir, ready.previewArtifact!.relativePath);
+  expect(await hashFile(approvedFile)).toBe(ready.previewArtifact!.sha256);
+  expect(await hashFile(join(dir, "exports", String(ready.revision), "reference.mp4")))
+    .toBe(ready.previewArtifact!.sha256);
+  expect(manifest.reference).toBe(ready.previewArtifact!.sha256);
+  // OTIO referencia os originais, nunca derivados.
+  const otioText = await readFile(join(dir, "exports", String(ready.revision), "timeline.otio"), "utf8");
+  const urls = [...otioText.matchAll(/"target_url":"([^"]+)"/g)].map((m) => m[1]!);
+  expect(urls.length).toBeGreaterThan(0);
+  const originals = new Set<string>();
+  for (const source of ready.assembly.sources) {
+    originals.add(`file://${await realpath(source.path)}`);
+  }
+  for (const url of urls) {
+    expect(originals.has(url)).toBe(true);
+  }
+  expect(otioText).not.toContain("proxy.mp4");
+  expect(otioText).not.toMatch(/media\/[0-9a-f]{64}\//);
 });

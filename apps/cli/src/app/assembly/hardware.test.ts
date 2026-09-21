@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, copyFile, mkdtemp, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -7,7 +7,7 @@ import { expect, it } from "vitest";
 import { probe } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { SpawnExecutor, type Executor } from "../pipeline.ts";
-import { proveHardwareEncode } from "./hardware.ts";
+import { detectHardwareProfile, proveHardwareEncode } from "./hardware.ts";
 
 it("prova encode em fixture real com áudio e cai para software se o hardware falhar", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-hw-"));
@@ -173,4 +173,42 @@ it("falha de hardware cai para software sem deixar parcial", async () => {
   await expect(access(join(dir, "hw-videotoolbox.mp4"))).rejects.toThrow();
   const out = await probe(proof.output);
   expect(out.hasVideo).toBe(true);
+});
+
+it("cache de perfil antigo sem versão é invalidado e redetectado", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-hw-cache-"));
+  const input = join(dir, "clip.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), input);
+  await writeFile(join(dir, "profile.json"), JSON.stringify({ profile: "nvenc" }));
+  const calls: { command: string; args: string[] }[] = [];
+  const exec: Executor = {
+    async run(call) {
+      calls.push({ command: call.command, args: call.args });
+      if (call.args.includes("-encoders")) {
+        return {
+          code: 0,
+          stdout: " V..... libx264            libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 Part 10\n",
+          stderr: "",
+        };
+      }
+      const out = call.args.at(-1);
+      if (call.command === "ffmpeg" && out && out.endsWith(".mp4")) {
+        await copyFile(input, out);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (call.command === "ffprobe" && call.args.includes("pix_fmt")) {
+        return { code: 0, stdout: "yuv420p", stderr: "" };
+      }
+      if (call.command === "ffprobe") {
+        return { code: 0, stdout: "2.000000", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  expect(await detectHardwareProfile(input, dir, exec)).toBe("software");
+  expect(calls.some((c) => c.command === "ffmpeg")).toBe(true);
+  expect(JSON.parse(await readFile(join(dir, "profile.json"), "utf8"))).toMatchObject({
+    profile: "software",
+    version: 2,
+  });
 });
