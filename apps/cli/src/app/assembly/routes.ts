@@ -378,20 +378,38 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
+  const livePreviews = new Set<AbortController>();
   const select = deps.selectFn ?? selectLocalFiles;
 
   function snapshot() {
     return { operation };
   }
 
+  function abortOperations(): void {
+    controller?.abort();
+    for (const preview of livePreviews) preview.abort();
+  }
+
   function begin(stage: string, sourceId?: string): { gen: number; signal: AbortSignal } {
     cancelled = false;
-    controller?.abort();
+    abortOperations();
+    livePreviews.clear();
     if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
     controller = new AbortController();
     const gen = ++opGen;
     operation = { stage, sourceId };
     return { gen, signal: controller.signal };
+  }
+
+  // Prévia manual aguardada: controller próprio, sem derrubar a anterior —
+  // cada pedido completa (a fila de mídia serializa). /cancel aborta todas.
+  function beginPreview(): { gen: number; signal: AbortSignal; settle: () => void } {
+    cancelled = false;
+    const own = new AbortController();
+    livePreviews.add(own);
+    const gen = ++opGen;
+    operation = { stage: "rendering" };
+    return { gen, signal: own.signal, settle: () => { livePreviews.delete(own); } };
   }
 
   function stillCurrent(gen: number): boolean {
@@ -594,7 +612,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "cancel" && req.method === "POST") {
         cancelled = true;
-        controller?.abort();
+        abortOperations();
+        livePreviews.clear();
         if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
         sendJson(res, { ok: true, ...snapshot() });
@@ -1046,30 +1065,34 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "preview" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const { gen } = begin("rendering");
-        const project = await mutate(baseRevision, async (project) => {
-          let reference: string;
-          try {
-            reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true });
-          } catch (err) {
-            // Sem isso a operação ficava presa em "rendering" e travava
-            // a atualização automática mesmo após o erro (R2).
-            if (stillCurrent(gen)) {
-              operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+        const { gen, signal, settle } = beginPreview();
+        try {
+          const project = await mutate(baseRevision, async (project) => {
+            let reference: string;
+            try {
+              reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true, signal });
+            } catch (err) {
+              // Sem isso a operação ficava presa em "rendering" e travava
+              // a atualização automática mesmo após o erro (R2).
+              if (stillCurrent(gen)) {
+                operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+              }
+              throw err;
             }
-            throw err;
-          }
-          if (!stillCurrent(gen)) return project;
-          operation = { stage: "ready" };
-          const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
-          return recordPreview(project, {
-            revision: project.revision,
-            assemblySha256,
-            relativePath: relative(dir, reference),
-            sha256: await hashFile(reference),
+            if (!stillCurrent(gen)) return project;
+            operation = { stage: "ready" };
+            const assemblySha256 = createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex");
+            return recordPreview(project, {
+              revision: project.revision,
+              assemblySha256,
+              relativePath: relative(dir, reference),
+              sha256: await hashFile(reference),
+            });
           });
-        });
-        sendJson(res, { project, ...snapshot() });
+          sendJson(res, { project, ...snapshot() });
+        } finally {
+          settle();
+        }
         return true;
       }
 

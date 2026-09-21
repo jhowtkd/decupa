@@ -131,8 +131,9 @@ async function renderPreview(
   dir: string,
   project: Project,
   exec: Executor,
+  signal?: AbortSignal,
 ): Promise<PreviewArtifact> {
-  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true });
+  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true, signal });
   return {
     revision: project.revision,
     assemblySha256: createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),
@@ -520,7 +521,7 @@ export async function runPreparation(
       await atStage("preview");
       checkAlive();
       try {
-        const artifact = await renderPreview(dir, current, deps.exec);
+        const artifact = await renderPreview(dir, current, deps.exec, signal);
         checkAlive();
         await save((p) => recordPreview(p, artifact));
       } catch (err) {

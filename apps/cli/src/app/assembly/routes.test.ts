@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
+import { mediaWork } from "./media-work.ts";
 import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { applyHistorySnapshot } from "./revisions.ts";
@@ -498,6 +499,59 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
   expect(a.status).toBe(200);
   expect(b.status).toBe(200);
   expect(new Set(workDirs).size).toBeGreaterThan(1);
+});
+
+it("prévia cancelada na fila não lança render pela rota", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-routes-"));
+  const clip = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), clip);
+  const calls: { command: string; args: string[] }[] = [];
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [clip],
+    port: 0,
+    executor: {
+      async run(call) {
+        calls.push({ command: call.command, args: call.args });
+        const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+        if (work && call.command === "python3") {
+          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+  const opened = await loadProject(dir);
+  let release!: () => void;
+  const holderGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const holding = mediaWork.run(() => holderGate);
+  try {
+    const previewed = fetch(`${base}/project/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: opened.revision }),
+    });
+    await vi.waitFor(() => {
+      expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+    });
+    const cancelled = await fetch(`${base}/project/cancel`, { method: "POST" });
+    expect(cancelled.status).toBe(200);
+    release();
+    const res = await previewed;
+    expect(res.status).not.toBe(200);
+    expect(((await res.json()) as { error?: string }).error ?? "").toMatch(/cancelad|aborted/i);
+    expect(calls.filter((c) => c.command === "python3")).toHaveLength(0);
+    expect(calls.filter((c) => c.command === "ffmpeg" && (c.args.at(-1) ?? "").includes("hw-"))).toHaveLength(0);
+    const state = await (await fetch(`${base}/project`)).json() as { operation: { stage: string } };
+    expect(state.operation.stage).toBe("cancelled");
+  } finally {
+    release();
+    await holding.catch(() => undefined);
+  }
 });
 
 type ProjectSummary = {

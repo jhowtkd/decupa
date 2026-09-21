@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { createProject, loadProject, saveProject } from "./store.ts";
+import { createProject, loadProject, readHistorySnapshot, saveProject } from "./store.ts";
 import { blankProject } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { holdPreparation, isPreparationActive, runPreparation, type PreparationDeps } from "./preparation.ts";
+import { mediaWork } from "./media-work.ts";
 import { applyTextEdit } from "./words.ts";
 import type { ExecCall, ExecResult } from "../pipeline.ts";
 import type { Project, Source } from "./types.ts";
@@ -423,6 +424,47 @@ describe("runPreparation", () => {
     const done = await run;
     expect(done.preparation?.status).toBe("cancelled");
     expect(done.scenes).toHaveLength(0);
+  });
+
+  it("prévia enfileirada na preparação não lança após cancelar", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, calls } = makeFakes();
+    const prepared = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    expect(prepared.preparation?.status).toBe("ready");
+    expect(calls.render).toBe(1);
+    await rm(join(dir, "preview-cache"), { recursive: true, force: true });
+    let release!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holding = mediaWork.run(() => holderGate);
+    const aborter = new AbortController();
+    try {
+      const run = runPreparation(
+        dir,
+        prepared.revision,
+        { mode: "preview", request: "", modelOptIn: false, visualOptIn: false },
+        deps,
+        ctrl(aborter.signal),
+      );
+      await vi.waitFor(() => {
+        expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+      });
+      aborter.abort();
+      release();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(calls.render).toBe(1);
+    } finally {
+      release();
+      await holding.catch(() => undefined);
+    }
   });
 
   it("edição do usuário durante a proposta não é sobrescrita", async () => {
