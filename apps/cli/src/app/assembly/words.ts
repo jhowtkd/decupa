@@ -222,7 +222,7 @@ function wordIntervalsInTake(
   return ranges;
 }
 
-function overlaps(range: SourceRange, list: SourceRange[]): boolean {
+export function overlaps(range: SourceRange, list: SourceRange[]): boolean {
   return list.some((item) => range.start < item.end && item.start < range.end);
 }
 
@@ -236,7 +236,7 @@ function withTake(project: Project, sceneId: string, takeId: string, next: Speec
   };
 }
 
-function invalidatePreview(project: Project): Project {
+export function invalidatePreview(project: Project): Project {
   return {
     ...project,
     revision: project.revision + 1,

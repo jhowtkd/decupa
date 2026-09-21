@@ -190,6 +190,19 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
       }
     }
   }
+  let rhythm: SpeechTake["rhythm"];
+  if (value.rhythm !== undefined && value.rhythm !== null) {
+    if (!isRecord(value.rhythm)) throw new Error(`take ${id}.rhythm inválido`);
+    const profile = nonEmptyString(value.rhythm.profile, `take ${id}.rhythm.profile`);
+    if (!Array.isArray(value.rhythm.removed)) {
+      throw new Error(`take ${id}.rhythm.removed precisa ser um array`);
+    }
+    rhythm = {
+      profile,
+      removed: value.rhythm.removed.map((entry, i) =>
+        sourceRange(entry, `take ${id}.rhythm.removed[${i}]`, source.durationSeconds)),
+    };
+  }
   return {
     id,
     sourceId,
@@ -198,6 +211,7 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
     end,
     removed: value.removed as SpeechTake["removed"],
     protected: value.protected as SpeechTake["protected"],
+    ...(rhythm ? { rhythm } : {}),
   };
 }
 
@@ -671,6 +685,8 @@ export function backupPath(dir: string): string {
 /** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
 export type EditorialSnapshot = {
   template?: Project["template"];
+  /** Perfil de ritmo da montagem no momento da foto — desfazer restaura. */
+  rhythmProfile?: Project["assembly"]["rhythmProfile"];
   revision: number;
   input: Project["input"];
   scenes: Project["scenes"];
@@ -691,6 +707,8 @@ export async function writeHistorySnapshot(dir: string, project: Project): Promi
     corrections: project.corrections,
     proposal: project.proposal,
     ...(project.template!==undefined?{template:project.template}:{}),
+    ...(project.assembly.rhythmProfile!==undefined
+      ?{rhythmProfile:project.assembly.rhythmProfile}:{}),
   };
   await mkdir(join(dir, "history"), { recursive: true });
   await writeFile(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");

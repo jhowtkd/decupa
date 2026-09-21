@@ -58,7 +58,7 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
     corrections: snap.corrections,
     proposal: snap.proposal,
     template: structuredClone(snap.template ?? null),
-    assembly: { ...assembly, revision },
+    assembly: { ...assembly, revision, rhythmProfile: snap.rhythmProfile ?? null },
     previewRevision: null,
     finalApprovedRevision: null,
   };

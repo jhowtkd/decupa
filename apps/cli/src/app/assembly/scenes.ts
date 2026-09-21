@@ -352,6 +352,7 @@ function emptyAssembly(project: Project): Assembly {
     fps: project.assembly.fps,
     width: project.assembly.width,
     height: project.assembly.height,
+    rhythmProfile: project.assembly.rhythmProfile,
     sources: project.assembly.sources,
     tracks,
   };
