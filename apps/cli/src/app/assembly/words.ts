@@ -246,6 +246,33 @@ function invalidatePreview(project: Project): Project {
   };
 }
 
+/**
+ * Cortes por faixa da fonte vindos de uma proposta localizada (#64):
+ * vão ao `removed` de cada take, menos os protegidos — proposta nenhuma
+ * remove trecho protegido. Uma única invalidação por aplicação; sem
+ * cortes efetivos, o projeto volta intocado.
+ */
+export function applySpeechCuts(
+  project: Project,
+  updates: { sceneId: string; takeId: string; cuts: SourceRange[] }[],
+): Project {
+  let next = project;
+  let touched = false;
+  for (const { sceneId, takeId, cuts } of updates) {
+    if (!cuts.length) continue;
+    const scene = findScene(next, sceneId);
+    const take = findTake(scene, takeId);
+    const allowed = subtractRanges(cuts, take.protected);
+    if (!allowed.length) continue;
+    touched = true;
+    next = withTake(next, scene.id, take.id, {
+      ...take,
+      removed: normalizeRanges([...take.removed, ...allowed]),
+    });
+  }
+  return touched ? invalidatePreview(next) : next;
+}
+
 function applyRemoveRestore(
   project: Project,
   action: { sceneId: string; takeId: string; wordIds: string[] },

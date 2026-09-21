@@ -108,7 +108,7 @@ async function call(path, opts = {}) {
     }
     if (!res.ok) ui.error = body.error || ("erro " + res.status);
     else ui.error = null;
-    for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao"]) {
+    for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal"]) {
       if (Object.hasOwn(body, key)) state.set(key, body[key]);
     }
     if (body.project) {
