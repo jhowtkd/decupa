@@ -1,3 +1,4 @@
+import { deliverApproved, readDelivery } from "./delivery.ts";
 import { brollCandidates, candidateSupport } from "./broll.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -601,6 +602,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "resolve-status" && req.method === "GET") {
+        const project=await loadProject(dir); sendJson(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+      }
+      if (parts[1] === "resolve-drp" && req.method === "GET") {
+        const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
+        if (!delivery?.drpPath) throw new HttpError(404,"DRP não registrado");
+        await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
+      }
       if (parts[1] === "output" && req.method === "GET") {
         const revision = parts[2] ?? "";
         const kind = parts[3] ?? "";
@@ -1133,6 +1142,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if ((parts[1] === "deliver-resolve" || parts[1] === "export-drp") && req.method === "POST") {
+        const expected=requireRevision(body);const project=await loadProject(dir);
+        if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        try {
+          const delivery=await deliverApproved(project,dir,deps.exec,new AbortController().signal,{exportDrp:parts[1]==="export-drp",newCopy:body.newCopy===true});
+          sendJson(res,{project:await loadProject(dir),delivery});
+        } catch(error) {throw new HttpError(409,error instanceof Error?error.message:String(error));}
+        return true;
+      }
       if (parts[1] === "export" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const loaded = await loadProject(dir);
