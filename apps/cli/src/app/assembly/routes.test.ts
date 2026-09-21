@@ -1151,3 +1151,45 @@ it("template gera candidata sem mudar montagem; aceite muda revisão e recusa st
  expect(accepted.status).toBe(200);expect((await loadProject(dir)).template?.id).toBe(recipe.id);
  expect((await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})})).status).toBe(409);
 });
+
+it("relatório do template acompanha aceite/rejeição/desfazer (#68)",async()=>{
+ const {saveRecipe}=await import("../templates/store.ts");
+ const templatesRoot=await mkdtemp(join(tmpdir(),"template-library-"));
+ const rule=(id:string,enabled=true)=>({id,category:"narrative" as const,observation:"obs",instruction:`inst ${id}`,enabled,confidence:"observed" as const,evidence:[{start:0,end:1}]});
+ const recipe:import("../templates/types.ts").Recipe={id:"22222222-2222-4222-8222-222222222222",revision:1,name:"Evento",status:"draft",source:{path:"/tmp/reference.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[rule("r1"),rule("r2"),rule("r3",false)]};
+ await saveRecipe(templatesRoot,recipe,null);await saveRecipe(templatesRoot,{...recipe,status:"approved"},1);
+ const proposeBody=()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",animationNotes:[{id:"n1",description:"lower third",destination:"Resolve"}],selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[{ruleId:"r1",status:"applied",reason:"regra seguida",sceneIds:["s1"]},{ruleId:"r2",status:"unavailable",reason:"material sem variação"}],explanation:"receita"});
+ const {base,dir}=await boot([],{templatesRoot,allowPaidModel:true,proposeSend:async()=>proposeBody()});
+ const p=await loadProject(dir);p.assembly=fixtureAssembly();p.assembly.revision=p.revision;p.analyses=[{sourceId:"a",key:"k",status:"ready",speech:[{id:"u",sourceId:"a",start:0,end:1,text:"tema"}],visual:[],words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]}}];
+ p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.tracks.forEach(t=>t.clips=[]);
+ await saveProject(dir,p.revision,()=>p);
+ type Report={recipe:{id:string;revision:number}|null;rules:{ruleId:string;status:string;sceneIds:string[]|null}[];animations:{id:string;sceneId:string;durationFrames:number}[]};
+ const getReport=async()=>((await (await fetch(base+"/project")).json()) as {templateReport:Report}).templateReport;
+ // Projeto sem template: relatório vazio e explícito.
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+ // Proposta rejeitada não deixa relatório nem receita.
+ const first=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ expect(first.status).toBe(200);const d1=await first.json() as any;
+ const cur=await loadProject(dir);
+ expect((await fetch(base+"/project/template-reject",{method:"POST",body:JSON.stringify({baseRevision:cur.revision,proposalId:d1.templateProposal.id})})).status).toBe(200);
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+ expect((await loadProject(dir)).template).toBeFalsy();
+ // Nova proposta aceita: relatório congela receita+revisão, cobre regras
+ // ativas (não a desabilitada), cenas navegáveis e animação como handoff.
+ const cur2=await loadProject(dir);
+ const second=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:cur2.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ const d2=await second.json() as any;
+ const accepted=await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:cur2.revision,proposalId:d2.templateProposal.id})});
+ expect(accepted.status).toBe(200);
+ const report=await getReport();
+ expect(report.recipe).toEqual({id:recipe.id,revision:1,name:"Evento"});
+ expect(report.rules.map(r=>r.ruleId)).toEqual(["r1","r2"]);
+ expect(report.rules[0]).toMatchObject({status:"applied",reason:"regra seguida",sceneIds:["s1"]});
+ expect(report.rules[1]).toMatchObject({status:"unavailable",sceneIds:null});
+ expect(report.animations).toEqual([{id:"n1",description:"lower third",destination:"Resolve",sceneId:"s1",startFrame:0,durationFrames:25}]);
+ // Desfazer restaura projeto sem template e sem relatório.
+ const cur3=await loadProject(dir);
+ const undo=await fetch(base+"/project/undo",{method:"POST",body:JSON.stringify({baseRevision:cur3.revision,revision:cur3.revision-1})});
+ expect(undo.status).toBe(200);
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+});

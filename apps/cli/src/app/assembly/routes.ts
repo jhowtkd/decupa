@@ -31,6 +31,7 @@ import {
   RHYTHM_PROFILES, type RhythmProposal,
 } from "./rhythm.ts";
 import { renderAssembly } from "./render.ts";
+import { buildTemplateReport } from "./template-report.ts";
 import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
@@ -586,6 +587,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           supportSwap: await readSupportSwap(),
           rhythmProposal: await readRhythmProposal(),
           rhythmProfiles: RHYTHM_PROFILES,
+          // Relatório da receita aceita (#68): leitura local, sem análise paga.
+          templateReport: buildTemplateReport(project),
           brollCandidates: candidates,
           verificacao: await readVerification(dir, project.revision),
           ...snapshot(),

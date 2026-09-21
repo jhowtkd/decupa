@@ -37,6 +37,9 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
     assembly: { ...assembly, revision },
     proposal: valid,
     template: valid.template === undefined ? p.template : structuredClone(valid.template),
+    // Relatório da receita aceita (#68): proposta de template substitui
+    // (inclusive sem template, que limpa); proposta comum preserva.
+    templateReport: valid.template === undefined ? p.templateReport : valid.templateReport ?? [],
     previewRevision: null,
     finalApprovedRevision: null,
   };
@@ -58,6 +61,7 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
     corrections: snap.corrections,
     proposal: snap.proposal,
     template: structuredClone(snap.template ?? null),
+    templateReport: structuredClone(snap.templateReport ?? undefined),
     assembly: { ...assembly, revision, rhythmProfile: snap.rhythmProfile ?? null },
     previewRevision: null,
     finalApprovedRevision: null,

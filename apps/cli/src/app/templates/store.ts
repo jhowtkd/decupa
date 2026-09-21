@@ -75,6 +75,8 @@ export function validateTemplateReport(raw:unknown,recipe:Recipe|null):import(".
  const seen=new Set<string>();
  return raw.map(r=>{
   if(!record(r)||typeof r.ruleId!=="string"||seen.has(r.ruleId)||!rules.some(rule=>rule.id===r.ruleId)||!["applied","adapted","unavailable"].includes(String(r.status))||!text(r.reason))throw Error("relatório do template inválido");
-  seen.add(r.ruleId);return {ruleId:r.ruleId,status:r.status as "applied"|"adapted"|"unavailable",reason:r.reason};
+  const sceneIds=r.sceneIds;
+  if(sceneIds!==undefined&&(!Array.isArray(sceneIds)||sceneIds.length>200||sceneIds.some(id=>typeof id!=="string"||!id.trim())))throw Error("relatório do template inválido");
+  seen.add(r.ruleId);return {ruleId:r.ruleId,status:r.status as "applied"|"adapted"|"unavailable",reason:r.reason,...(sceneIds?{sceneIds:[...new Set(sceneIds as string[])]}:{})};
  });
 }
