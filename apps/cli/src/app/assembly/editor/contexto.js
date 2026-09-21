@@ -154,8 +154,7 @@ export function mountStage({ state, api, player }) {
     document.getElementById("deliveryMeta").replaceChildren(
       chip(project.previewRevision == null ? "prévia pendente" : "prévia " + project.previewRevision),
       chip(Math.round(montageDuration(project)) + "s"),
-      chip(project.assembly.width + "×" + project.assembly.height
-        + " @ " + project.assembly.fps.num + "/" + project.assembly.fps.den),
+      chip(formatLabel(project.assembly)),
     );
     // Notas de transição ("atualizando…") também viram chips.
     const noteEl = document.getElementById("previewNote");
@@ -419,12 +418,66 @@ export function mountContexto({ state, api, player }) {
   delivery.setAttribute("aria-label", "Entrega");
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<ul id="deliveryChecklist" class="plain"></ul>'
+    + '<p class="muted" id="formatLine"></p>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
+    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
   root.appendChild(delivery);
+
+  // Escolha de formato: visível (linha + chip) e editável por diálogo —
+  // muda a revisão e invalida prévia/aprovação via /project/settings.
+  const formatDialog = document.createElement("dialog");
+  formatDialog.id = "formatDialog";
+  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
+    + '<label>Usar formato de <select id="formatSource"></select></label>'
+    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
+    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
+    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
+    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
+    + '<button type="button" id="closeFormat">Fechar</button></div>';
+  document.body.appendChild(formatDialog);
+  document.getElementById("editFormat").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sel = document.getElementById("formatSource");
+    sel.replaceChildren(new Option("Personalizado", ""));
+    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
+      sel.appendChild(new Option(s.name, s.id));
+    }
+    sel.value = "";
+    document.getElementById("formatWidth").value = p.assembly.width;
+    document.getElementById("formatHeight").value = p.assembly.height;
+    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
+    formatDialog.showModal();
+  };
+  document.getElementById("closeFormat").onclick = () => formatDialog.close();
+  document.getElementById("saveFormat").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sourceId = document.getElementById("formatSource").value;
+    let body;
+    if (sourceId) {
+      body = { baseRevision: p.revision, sourceId };
+    } else {
+      const rawFps = document.getElementById("formatFps").value.trim();
+      const split = rawFps.split("/");
+      const fps = split.length === 2
+        ? { num: Number(split[0]), den: Number(split[1]) }
+        : { num: Number(rawFps) * 1000, den: 1000 };
+      body = {
+        baseRevision: p.revision,
+        width: Number(document.getElementById("formatWidth").value),
+        height: Number(document.getElementById("formatHeight").value),
+        fps,
+      };
+    }
+    const { res } = await api.call("/project/settings", {
+      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
+    });
+    if (res.ok) formatDialog.close();
+  };
   const exportUi = { status: "idle", error: null, revision: null };
   let resolveDelivery=null;
   let resolveRevision=null;
@@ -478,6 +531,14 @@ export function mountContexto({ state, api, player }) {
         ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
         : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
     }
+    const formatLine = document.getElementById("formatLine");
+    const canvasOwner = project.assembly.canvasSourceId
+      ? project.assembly.sources.find((item) => item.id === project.assembly.canvasSourceId)
+      : null;
+    formatLine.textContent = "Formato: " + formatLabel(project.assembly)
+      + (project.assembly.canvasManual
+        ? canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — personalizado"
+        : canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — padrão do projeto");
     const rev = project.finalApprovedRevision;
     const formats = approved ? [
       { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },

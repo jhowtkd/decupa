@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -85,5 +85,27 @@ export default async function setup(): Promise<void> {
       "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
       "-timecode", "01:00:00;00", "-c:v", "mpeg4", "-c:a", "aac", tcDf,
     ]);
+  }
+
+  // Retrato nativo e landscape com metadado de rotação (displaymatrix)
+  // — cobrem a escolha de formato do projeto.
+  const vertical = join(FIXTURES, "vertical-360x640.mov");
+  if (!(await exists(vertical))) {
+    await ff([
+      "-f", "lavfi", "-i", "testsrc=size=360x640:rate=25:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-c:v", "mpeg4", "-c:a", "aac", vertical,
+    ]);
+  }
+  const rotated = join(FIXTURES, "rotated-90.mov");
+  if (!(await exists(rotated))) {
+    const src = rotated + ".src.mov";
+    await ff([
+      "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-c:v", "mpeg4", "-c:a", "aac", src,
+    ]);
+    await ff(["-display_rotation:v:0", "90", "-i", src, "-map", "0", "-c", "copy", rotated]);
+    await rm(src);
   }
 }

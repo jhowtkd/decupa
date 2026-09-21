@@ -212,6 +212,9 @@ export function validateAssembly(value: unknown): Assembly {
   const clipIds = new Set<string>();
   const tracks = value.tracks.map((track, i) => validateTrack(track, i, clipIds));
   const fps = rate(value.fps, "montagem.fps");
+  if (value.canvasSourceId !== undefined && value.canvasSourceId !== null) {
+    nonEmptyString(value.canvasSourceId, "montagem.canvasSourceId");
+  }
   const assembly: Assembly = {
     version: 1,
     revision: nonNegativeInt(value.revision, "montagem.revision"),
@@ -219,9 +222,20 @@ export function validateAssembly(value: unknown): Assembly {
     fps,
     width,
     height,
+    canvasSourceId: value.canvasSourceId as string | null | undefined,
+    canvasManual: value.canvasManual === undefined
+      ? undefined
+      : booleanField(value.canvasManual, "montagem.canvasManual"),
     sources,
     tracks,
   };
+  // Migração: projeto antigo com vídeo registra a fonte do formato sem
+  // recalcular dimensões — o formato gravado segue até ação explícita.
+  if (assembly.canvasSourceId === undefined) {
+    const principal = sources.find((s) => s.role === "speech" && s.hasVideo)
+      ?? sources.find((s) => s.hasVideo);
+    if (principal) assembly.canvasSourceId = principal.id;
+  }
 
   for (const track of tracks) {
     for (const clip of track.clips) {
