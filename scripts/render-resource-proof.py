@@ -55,6 +55,54 @@ def swap_usage() -> str:
         return f"indisponível: {exc}"
 
 
+def _ps_table() -> tuple[dict[int, list[int]], dict[int, str]]:
+    """(filhos por ppid, stat por pid). Falha de ps devolve vazios."""
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,stat="],
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        return {}, {}
+    children: dict[int, list[int]] = {}
+    states: dict[int, str] = {}
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+        states[pid] = parts[2]
+    return children, states
+
+
+def _descendants(root_pid: int, children: dict[int, list[int]]) -> set[int]:
+    """PID raiz + descendentes via ppid (inclui sessões próprias)."""
+    found: set[int] = set()
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in found:
+            continue
+        found.add(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def tree_pids(root_pid: int) -> set[int]:
+    """PID raiz + descendentes via ppid (inclui sessões próprias)."""
+    children, _states = _ps_table()
+    return _descendants(root_pid, children)
+
+
+def _ps_alive(pid: int, states: dict[int, str]) -> bool:
+    state = states.get(pid)
+    return state is not None and not state.startswith("Z")
+
+
 def sample_tree(root_pid: int) -> tuple[int, float]:
     """Soma RSS (bytes) e %CPU do PID e descendentes via ppid. Perdidos = 0."""
     try:
@@ -92,28 +140,79 @@ def sample_tree(root_pid: int) -> tuple[int, float]:
     return total_rss, total_cpu
 
 
-def terminate_group(pid: int) -> None:
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
+def _signal_tree(pids: set[int], sig: int) -> None:
+    for pid in pids:
         try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            return
-    deadline = time.monotonic() + KILL_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(pid, 0)
-        except (ProcessLookupError, PermissionError):
-            return
-        time.sleep(0.1)
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, sig)
         except (ProcessLookupError, PermissionError):
             pass
+
+
+def _tree_dead_ps(proc, pid: int, targets: set[int], states: dict[int, str]) -> bool:
+    # O filho direto vira zumbi até wait(): para ele vale poll().
+    if proc is not None:
+        if proc.poll() is None and _ps_alive(pid, states):
+            return False
+    elif _ps_alive(pid, states):
+        return False
+    return not any(_ps_alive(t, states) for t in targets if t != pid)
+
+
+def _stopped_or_dead(pid: int, states: dict[int, str]) -> bool:
+    state = states.get(pid)
+    return state is None or state.startswith("Z") or state.startswith("T")
+
+
+def terminate_tree(pid: int, proc=None) -> None:
+    """Encerra a árvore inteira do ensaio, inclusive sessões próprias (ex.
+    SpawnExecutor, que cria grupo novo). Primeiro aquieta tudo com SIGSTOP
+    até nenhum pid novo aparecer — parado não forka, então o snapshot
+    estabiliza; depois SIGTERM + SIGCONT, espera, e SIGKILL nos restantes
+    (KILL pega parado sem CONT). O grupo do raiz cobre reparentados do
+    grupo; os pids cobrem o resto. Nunca pkill global. Nunca deixa parado:
+    finally devolve SIGCONT."""
+    known: set[int] = set()
+    stop_deadline = time.monotonic() + KILL_GRACE_SECONDS
+    while time.monotonic() < stop_deadline:
+        children, states = _ps_table()
+        before = set(known)
+        known |= _descendants(pid, children)
+        _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGSTOP)
+        if known == before and all(_stopped_or_dead(t, states) for t in known):
+            break
+        time.sleep(0.05)
+    try:
+        _signal_tree(known, signal.SIGTERM)
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        _signal_tree(known, signal.SIGCONT)
+        try:
+            os.killpg(pid, signal.SIGCONT)
+        except (ProcessLookupError, PermissionError):
+            pass
+        deadline = time.monotonic() + KILL_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            children, states = _ps_table()
+            known |= _descendants(pid, children)
+            if _tree_dead_ps(proc, pid, known, states):
+                return
+            _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGTERM)
+            time.sleep(0.05)
+        for _ in range(20):
+            children, states = _ps_table()
+            known |= _descendants(pid, children)
+            if _tree_dead_ps(proc, pid, known, states):
+                return
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            _signal_tree({t for t in known if _ps_alive(t, states)}, signal.SIGKILL)
+            time.sleep(0.05)
+    finally:
+        _signal_tree(known, signal.SIGCONT)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -148,13 +247,13 @@ def main() -> int:
             peak_rss = max(peak_rss, rss)
             cpu_samples.append(round(cpu, 2))
             if rss > ceiling:
-                terminate_group(proc.pid)
+                terminate_tree(proc.pid, proc)
                 stopped_for_memory = True
                 break
             time.sleep(SAMPLE_INTERVAL)
     except KeyboardInterrupt:
         interrupted = True
-        terminate_group(proc.pid)
+        terminate_tree(proc.pid, proc)
     proc.wait()
     wall = time.monotonic() - start
     result = {
