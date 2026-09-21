@@ -69,11 +69,13 @@ def deliver(request, resolve, emit):
     manager = resolve.GetProjectManager()
     require(manager is not None, 'ProjectManager indisponível')
     mode = request.get('mode', 'create')
+    if mode != 'create':
+        require(isinstance(request.get('resolveProjectId'), str) and bool(request['resolveProjectId'].strip()), 'entrega sem identidade do Resolve; solicite outra cópia')
     current = manager.GetCurrentProject()
     # Resolve exposes no reliable unsaved-change getter in the installed API.
     # Do not close or auto-save another user's project to make room.
     if current is not None:
-        same = mode != 'create' and callable(getattr(current, 'GetName', None)) and current.GetName() == request['projectName']
+        same = mode != 'create' and callable(getattr(current, 'GetName', None)) and current.GetName() == request['projectName'] and current.GetUniqueId() == request['resolveProjectId']
         require(same, 'Salve e feche o projeto atual no Resolve antes de continuar.')
     name = request['projectName']
     if mode == 'create':
@@ -109,13 +111,15 @@ def deliver(request, resolve, emit):
     else:
         project = current or manager.LoadProject(name)
         require(project is not None, 'projeto registrado não encontrado; solicite outra cópia')
+        project_id = project.GetUniqueId()
+        require(project_id == request['resolveProjectId'], 'identidade do projeto Resolve diferente; solicite outra cópia')
     drp = request.get('drpPath')
     if drp:
         require(manager.ExportProject(name, drp), 'falha ao exportar DRP')
         require(Path(drp).is_file() and Path(drp).stat().st_size > 0, 'DRP não foi gravado')
         emit({'stage': 'exported', 'projectName': name})
     require(resolve.OpenPage('edit'), 'projeto salvo, mas não foi possível abrir a página Edit')
-    return {'ok': True, 'projectName': name, 'verified': mode == 'create', **({'drpPath': drp} if drp else {})}
+    return {'ok': True, 'projectName': name, 'resolveProjectId': project_id, 'verified': mode == 'create', **({'drpPath': drp} if drp else {})}
 
 
 def connect():

@@ -1135,12 +1135,26 @@ it("template gera candidata sem mudar montagem; aceite muda revisão e recusa st
  const templatesRoot=await mkdtemp(join(tmpdir(),"template-library-"));
  const recipe:import("../templates/types.ts").Recipe={id:"11111111-1111-4111-8111-111111111111",revision:1,name:"Evento",status:"draft",source:{path:"/tmp/reference.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[]};
  await saveRecipe(templatesRoot,recipe,null);await saveRecipe(templatesRoot,{...recipe,status:"approved"},1);
- const {base,dir}=await boot([],{templatesRoot,allowPaidModel:true,proposeSend:async()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[],explanation:"receita"})});
+ let visualCalls=0;
+ const {base,dir,clip}=await boot([],{templatesRoot,allowPaidVisual:true,describeClient:{send:async()=>{visualCalls++;return JSON.stringify({spans:[{id:"v",start:0,end:3,text:"palco",confidence:"observed",tags:[]}]});}},executor:{run:async(call)=>{
+   const pattern=call.args.at(-1)!;
+   expect(pattern).toContain("%03d");
+   for(let i=0;i<3;i++)await writeFile(pattern.replace("%03d",String(i).padStart(3,"0")),"frame");
+   return {code:0,stdout:"",stderr:""};
+ }},allowPaidModel:true,proposeSend:async()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[],explanation:"receita"})});
  const p=await loadProject(dir);p.assembly=fixtureAssembly();p.assembly.revision=p.revision;p.analyses=[{sourceId:"a",key:"k",status:"ready",speech:[{id:"u",sourceId:"a",start:0,end:1,text:"tema"}],visual:[],words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]}}];
- p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.tracks.forEach(t=>t.clips=[]);
+ p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.sources[0]!.path=clip;p.assembly.tracks.forEach(t=>t.clips=[]);
  await saveProject(dir,p.revision,()=>p);
  const r=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
  expect(r.status).toBe(200);const data=await r.json() as any;
+ expect(visualCalls).toBe(1);
+ const analyzed=(await loadProject(dir)).analyses[0]!;
+ expect(analyzed.speech).toEqual(p.analyses[0]!.speech);
+ expect(analyzed.visualCoverage.missing).toEqual([]);
+ expect(analyzed.visual).toHaveLength(1);
+ const again=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ expect(again.status).toBe(200);expect(visualCalls).toBe(1);
+ Object.assign(data,await again.json());
  expect((await loadProject(dir)).scenes).toHaveLength(0);
  const accepted=await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})});
  expect(accepted.status).toBe(200);expect((await loadProject(dir)).template?.id).toBe(recipe.id);

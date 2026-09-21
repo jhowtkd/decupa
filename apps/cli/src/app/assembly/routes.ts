@@ -996,12 +996,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const {gen,signal}=begin("proposing");
         try {
           for(const source of project.assembly.sources.filter(s=>s.included)) {
-            if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
+            const existing=project.analyses.find(a=>a.sourceId===source.id);
+            const needsVisual=source.hasVideo&&(!existing||visualCoverage(existing.visual,source.durationSeconds).missing.length>0);
+            if(existing?.status==="ready"&&!needsVisual)continue;
             operation={stage:"analyzing",sourceId:source.id};
-            if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
-            const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
+            if(needsVisual&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
+            const analysis=existing?.status==="ready"?structuredClone(existing):await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
+            if(!needsVisual&&existing){analysis.visual=existing.visual;analysis.visualCoverage=existing.visualCoverage;}
             if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
-            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            if(needsVisual){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
             project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
           }
           const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});

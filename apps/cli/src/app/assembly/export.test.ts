@@ -227,3 +227,25 @@ it("exporta quando o project.json da mesma revisão está íntegro", async () =>
   const dest = await exportApproved(project, dir);
   expect(dest).toContain("exports");
 });
+
+it("restaura handoff Markdown ausente, alterado ou sem hash no manifest", async () => {
+  const { readFile, unlink } = await import("node:fs/promises");
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir);
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  const path = join(dest, "handoff.md");
+  const expected = await readFile(path, "utf8");
+  for (const damage of ["missing", "changed", "legacy"]) {
+    if (damage === "missing") await unlink(path);
+    if (damage === "changed") await writeFile(path, "corrompido");
+    if (damage === "legacy") {
+      const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8"));
+      delete manifest.handoffMarkdown;
+      await writeFile(join(dest, "manifest.json"), JSON.stringify(manifest));
+    }
+    expect(await exportApproved(project, dir)).toBe(dest);
+    expect(await readFile(path, "utf8")).toBe(expected);
+    expect(JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")).handoffMarkdown).toMatch(/^[a-f0-9]{64}$/);
+  }
+});

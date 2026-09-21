@@ -72,7 +72,7 @@ class Checks(unittest.TestCase):
     def test_delivery(self):
         events=[]; self.r['drpPath']=str(Path(self.tmp.name)/'project.drp')
         result=d.deliver(self.r,self.api,events.append)
-        self.assertTrue(result['verified']); self.assertEqual(self.api.events,['create','import','save'])
+        self.assertEqual(result['resolveProjectId'],'created-project'); self.assertTrue(result['verified']); self.assertEqual(self.api.events,['create','import','save'])
         self.assertLess([e['stage'] for e in events].index('created'),[e['stage'] for e in events].index('imported'))
     def test_errors(self):
         for failure in ['collision','import','marker','save','export']:
@@ -101,7 +101,23 @@ class Checks(unittest.TestCase):
         self.r['assembly']['sources'][0]['fps']={'num':60,'den':1}
         self.assertTrue(d.deliver(self.r,self.api,lambda e:None)['verified'])
     def test_reopen_does_not_import_or_save(self):
-        self.r['mode']='open'
+        self.r['mode']='open'; self.r['resolveProjectId']='created-project'
         result=d.deliver(self.r,self.api,lambda e:None)
         self.assertTrue(result['ok']);self.assertEqual(self.api.events,['load'])
+    def test_replacement_or_legacy_project_is_rejected(self):
+        for mode in ['open', 'export']:
+            for current in [False, True]:
+                for identity in [None, 'another-project']:
+                    with self.subTest(mode=mode, current=current, identity=identity):
+                        api=API(self.r); api.current=api if current else None
+                        self.r.update(mode=mode, resolveProjectId=identity, drpPath=str(Path(self.tmp.name)/'wrong.drp'))
+                        with self.assertRaises(RuntimeError): d.deliver(self.r,api,lambda e:None)
+                        self.assertFalse(Path(self.r['drpPath']).exists())
+                        self.assertNotIn('save', api.events)
+    def test_export_verified_identity(self):
+        self.r.update(mode='export', resolveProjectId='created-project', drpPath=str(Path(self.tmp.name)/'right.drp'))
+        self.api.current=self.api
+        result=d.deliver(self.r,self.api,lambda e:None)
+        self.assertEqual(result['resolveProjectId'],'created-project')
+        self.assertTrue(Path(self.r['drpPath']).is_file())
 if __name__=='__main__': unittest.main()

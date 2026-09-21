@@ -8,7 +8,7 @@ import type {Project} from "./types.ts";
 import {exportApproved} from "./export.ts";
 import {buildHandoff} from "./handoff.ts";
 import {loadProject} from "./store.ts";
-export type DeliveryRecord={operationId:string;revision:number;assemblySha256:string;status:"running"|"ready"|"error";stage:string;projectName:string;pid:number;error?:string;drpPath?:string;previousReady?:DeliveryRecord;created?:boolean};
+export type DeliveryRecord={operationId:string;revision:number;assemblySha256:string;status:"running"|"ready"|"error";stage:string;projectName:string;resolveProjectId?:string;pid:number;error?:string;drpPath?:string;previousReady?:DeliveryRecord;created?:boolean};
 const active=new Set<string>();
 const recordPath=(dir:string,rev:number)=>join(dir,"deliveries",String(rev),"resolve-delivery.json");
 async function atomic(path:string,value:unknown){const temp=path+"."+randomUUID();await writeFile(temp,JSON.stringify(value,null,2));await rename(temp,path);}
@@ -35,10 +35,11 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   const dest=await exportApproved(project,dir);
   const root=join(dir,"deliveries",String(project.revision));await mkdir(root,{recursive:true});
   const same=previous?.status==="ready"&&!options.newCopy;
+  if(same&&!previous.resolveProjectId)throw Error("Entrega sem identidade do Resolve; solicite uma nova cópia.");
   if(same)previousReady=previous;
   const operationId=randomUUID();
   const mode=options.exportDrp?"export":same?"open":"create";
-  record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",created:false,projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
+  record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",created:false,projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady,resolveProjectId:previousReady.resolveProjectId}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
   if(same&&previous.assemblySha256!==record.assemblySha256)throw Error("montagem difere da entrega registrada");
   activeOperationId=operationId;active.add(operationId);await atomic(recordPath(dir,project.revision),record);
   const requestPath=join(root,`request-${operationId}.json`);
@@ -50,6 +51,8 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   await saveChain;
   const last=result.stdout.trim().split("\n").at(-1);const output=last?JSON.parse(last):null;
   if(result.code!==0||!output?.ok||output.projectName!==record.projectName||(mode==="create"&&output.verified!==true))throw Error(output?.error||"Ponte do Resolve não confirmou a entrega.");
+  if(typeof output.resolveProjectId!=="string"||!output.resolveProjectId.trim()||(same&&output.resolveProjectId!==previous.resolveProjectId))throw Error("Identidade do projeto Resolve difere da entrega registrada.");
+  record.resolveProjectId=output.resolveProjectId;
   if(drpPath){if(output.drpPath!==drpPath||(await stat(drpPath)).size===0)throw Error("DRP não foi gravado");record.drpPath=drpPath;}
   delete record.previousReady;
   record={...record,status:"ready",stage:drpPath?"exported":"saved"};await atomic(recordPath(dir,project.revision),record);
