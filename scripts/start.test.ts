@@ -69,6 +69,7 @@ it("abre o Decupa com um comando, exige provedor antes de GET /project e encerra
   const pathVazio = await mkdtemp(join(tmpdir(), "decupa path-"));
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
+  for (const key of ["DECUPA_COMPANY_API_KEY", "ZAI_API_KEY", "GEMINI_API_KEY", "MINIMAX_API_KEY", "DECUPA_API_KEY"]) delete env[key];
   env.PATH = pathVazio;
   env.HOME = pathVazio;
   env.USERPROFILE = pathVazio;
