@@ -776,7 +776,7 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
     describeClient: {
       async send() {
         return JSON.stringify({
-          spans: [{ start: 0, end: 1, text: "pessoa falando", confidence: "observed", tags: [] }],
+          spans: [{ start: 0, end: 3, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
       },
     },

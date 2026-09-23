@@ -132,7 +132,7 @@ export function createLimitedQueue(limit: number): LimitedQueue {
     async run<T>(work: () => Promise<T> | T, opts?: QueueRunOptions): Promise<T> {
       if (opts?.signal?.aborted) throw cancelled(opts.signal.reason);
       const runUnkeyed = async (): Promise<T> => {
-        await acquire(opts?.key ? undefined : opts?.signal);
+        await acquire(opts?.signal);
         try {
           return await work();
         } finally {

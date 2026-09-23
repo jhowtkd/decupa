@@ -1214,6 +1214,43 @@ describe("runPreparation", () => {
     }
   });
 
+  it("cancelar remove o proxy que ainda aguarda a fila global", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes();
+    const visual = fakes.blockDescribe();
+    let releaseHolder!: () => void;
+    const holder = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holding = mediaWork.run(() => holder);
+    const aborter = new AbortController();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai cancelar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(aborter.signal),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBe(0);
+        expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+      }, { timeout: 5000 });
+      aborter.abort();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(mediaWork.waiting).toBe(0);
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      aborter.abort();
+      visual.release();
+      releaseHolder();
+      await holding.catch(() => undefined);
+      await run.catch(() => undefined);
+    }
+  });
+
   it("interrompe os artefatos de prévia antes de devolver falha visual", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
     const fakes = makeFakes({ failVisual: true });

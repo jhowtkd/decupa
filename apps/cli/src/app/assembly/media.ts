@@ -136,6 +136,7 @@ export async function ensureThumbnail(
 ): Promise<string | null> {
   await verifySourceIdentity(source);
   if (!source.hasVideo) return null;
+  opts.signal?.throwIfAborted();
   return mediaWork.run(async () => {
     opts.signal?.throwIfAborted();
     try {
@@ -145,7 +146,7 @@ export async function ensureThumbnail(
     }
     await mkdir(playbackDir(dir, source.sha256), { recursive: true });
     return buildThumbnail(source, dir, source.path, exec, opts);
-  }, { key: thumbnailPath(dir, source.sha256) });
+  }, { key: thumbnailPath(dir, source.sha256), signal: opts.signal });
 }
 
 /** Proxy H.264/AAC validado por probe; exportação continua usando o original. */
@@ -157,10 +158,11 @@ export async function ensurePlayback(
 ): Promise<{ videoPath: string; thumbnailPath: string | null }> {
   await verifySourceIdentity(source);
   const proxy = proxyPath(dir, source.sha256);
+  opts.signal?.throwIfAborted();
   // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.
   const videoPath = await mediaWork.run(async () => {
     opts.signal?.throwIfAborted();
     return (await proxyIsValid(proxy, source)) ? proxy : await buildProxy(source, dir, exec, opts);
-  }, { key: proxy });
+  }, { key: proxy, signal: opts.signal });
   return { videoPath, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
 }
