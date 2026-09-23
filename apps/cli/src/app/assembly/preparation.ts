@@ -42,7 +42,7 @@ export type PreparationControl = {
   isCurrent: () => boolean;
 };
 
-const IMAGE_PENDING_NOTE = "áudio pronto, imagem em análise";
+const PREVIEW_IMAGE_PENDING_NOTE = "prévia aguardando proxy e waveform";
 const TERMINAL = new Set(["ready", "attention", "interrupted", "cancelled"]);
 
 class CancelledExit extends Error {
@@ -321,6 +321,8 @@ export async function runPreparation(
           preparation: p.preparation ? patchSource(p.preparation, sourceId, patch) : p.preparation,
         }));
       };
+      let imagesDone: Promise<void> | undefined;
+      let imageFinished = true;
 
       if (req.mode !== "preview") {
         const imageJobs: Promise<void>[] = [];
@@ -341,12 +343,13 @@ export async function runPreparation(
           // autorizou a transcrição. Promessa sempre observada.
           const image = Promise.resolve().then(async () => {
             try {
-              const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal });
               await buildPeaks(deps.exec, {
                 proxyPath: videoPath,
                 sha256: source.sha256,
                 outPath: peaksPath(dir, source.sha256),
                 durationSeconds: source.durationSeconds,
+                signal,
               });
             } catch {
               // Sem waveform a faixa segue só com os blocos.
@@ -385,27 +388,12 @@ export async function runPreparation(
           }
         }
 
-        const imagesDone = Promise.all(imageJobs);
-        let imageFinished = false;
-        void imagesDone.then(() => {
+        const mediaArtifactsDone = Promise.all(imageJobs).then(() => undefined);
+        imagesDone = mediaArtifactsDone;
+        imageFinished = false;
+        void mediaArtifactsDone.then(() => {
           imageFinished = true;
         });
-        if (!imageFinished) {
-          await save((p) => ({
-            ...p,
-            preparation: p.preparation
-              ? { ...p.preparation, note: IMAGE_PENDING_NOTE }
-              : p.preparation,
-          }));
-        }
-        await imagesDone;
-        await save((p) => ({
-          ...p,
-          preparation: p.preparation
-            ? { ...p.preparation, note: undefined }
-            : p.preparation,
-        }));
-
         await atStage("visual");
         for (const source of targets) {
           checkAlive();
@@ -530,6 +518,19 @@ export async function runPreparation(
         if (current.preparation?.id !== id) throw new ObsoleteExit();
       }
 
+      // Proxy e peaks só servem à prévia: a descrição extrai frames do
+      // original e a proposta só depende da cobertura persistida.
+      if (imagesDone) {
+        if (!imageFinished) {
+          await save((p) => ({
+            ...p,
+            preparation: p.preparation
+              ? { ...p.preparation, note: PREVIEW_IMAGE_PENDING_NOTE }
+              : p.preparation,
+          }));
+        }
+        await imagesDone;
+      }
       await atStage("preview");
       checkAlive();
       try {
