@@ -282,6 +282,10 @@ async function buildAnalysis(
       undefined,
       opts.speech,
       opts.signal,
+      // A análise da montagem é fala: unidades, palavras e cobertura. O índice
+      // MediaPipe não entra em nada que ela grave (`visual` sai sempre vazio),
+      // então o proxy a 4 fps e o sidecar só atrasariam a transcrição na tela.
+      { visual: false },
     );
     if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {
