@@ -41,6 +41,16 @@ export interface PipelineJob {
   signal?: AbortSignal;
 }
 
+export interface IngestOptions {
+  /**
+   * Proxy a 4 fps + índice MediaPipe. Ligado por padrão porque a revisão da
+   * limpeza marca olhar desviado, mão no rosto e sem rosto a partir desse
+   * índice. A montagem desliga: ela nunca lê `visual_index.json`, e os dois
+   * passos custam ~113 s até a transcrição aparecer na tela.
+   */
+  visual?: boolean;
+}
+
 /** Worker residente no serviço HTTP; sem ele o ingest cai no CLI `condense-prep`. */
 export type IngestSpeech = {
   worker: NonNullable<TranscribeDeps["worker"]>;
@@ -227,7 +237,9 @@ export async function runIngest(
   tracer?: Tracer,
   speech?: IngestSpeech,
   signal?: AbortSignal,
+  opts: IngestOptions = {},
 ): Promise<{ warning?: string }> {
+  const wantsVisual = opts.visual ?? true;
   const activeTracer = tracer ?? createTracer();
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
@@ -283,6 +295,10 @@ export async function runIngest(
     }, "a medição do índice");
     return false;
   });
+
+  // Visual desligado sai antes da etapa: sem span no tracer, sem onStage
+  // ("visual" nunca chega a quem mostra progresso) e sem aviso de visão.
+  if (!wantsVisual) return {};
 
   const warning = await activeTracer.run("visual", async () => {
     onStage("visual");
