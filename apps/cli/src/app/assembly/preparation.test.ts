@@ -1214,6 +1214,37 @@ describe("runPreparation", () => {
     }
   });
 
+  it("interrompe os artefatos de prévia antes de devolver falha visual", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes({ failVisual: true });
+    const proxy = fakes.blockProxy();
+    const visual = fakes.blockDescribe();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai falhar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      visual.release();
+      const done = await run;
+      expect(done.preparation?.status).toBe("interrupted");
+      expect(fakes.calls.propose).toBe(0);
+      expect(fakes.calls.render).toBe(0);
+      expect(fakes.proxyInFlight()).toBe(0);
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      proxy.release();
+      visual.release();
+      await run.catch(() => undefined);
+    }
+  });
+
   it("sem opt-in pago o visual não descreve", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
     expect(base.permissions).toEqual({ model: false, visual: false });

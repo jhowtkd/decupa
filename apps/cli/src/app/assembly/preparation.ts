@@ -192,15 +192,25 @@ export async function runPreparation(
 
     const id = `prep-${baseRevision}-${req.mode}-${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
     const { signal } = control;
+    const imageAbort = new AbortController();
+    const imageSignal = AbortSignal.any([signal, imageAbort.signal]);
+    const imageJobs: Promise<void>[] = [];
+    let imagesDone: Promise<void> | undefined;
+    let imageFinished = true;
     const checkAlive = (): void => {
       if (signal.aborted) throw new CancelledExit();
       if (!control.isCurrent()) throw new ObsoleteExit();
+    };
+    const settleImageJobs = async (): Promise<void> => {
+      imageAbort.abort();
+      await Promise.all(imageJobs).catch(() => undefined);
     };
 
     const markTerminal = async (
       status: "ready" | "attention" | "interrupted" | "cancelled",
       error?: string,
     ): Promise<Project> => {
+      await settleImageJobs();
       try {
         const fresh = await loadProject(dir);
         if (fresh.preparation?.id !== id) return fresh;
@@ -321,11 +331,8 @@ export async function runPreparation(
           preparation: p.preparation ? patchSource(p.preparation, sourceId, patch) : p.preparation,
         }));
       };
-      let imagesDone: Promise<void> | undefined;
-      let imageFinished = true;
 
       if (req.mode !== "preview") {
-        const imageJobs: Promise<void>[] = [];
         for (const source of targets) {
           checkAlive();
           await markSource(source.id, { media: "running" });
@@ -343,13 +350,13 @@ export async function runPreparation(
           // autorizou a transcrição. Promessa sempre observada.
           const image = Promise.resolve().then(async () => {
             try {
-              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal });
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal });
               await buildPeaks(deps.exec, {
                 proxyPath: videoPath,
                 sha256: source.sha256,
                 outPath: peaksPath(dir, source.sha256),
                 durationSeconds: source.durationSeconds,
-                signal,
+                signal: imageSignal,
               });
             } catch {
               // Sem waveform a faixa segue só com os blocos.
