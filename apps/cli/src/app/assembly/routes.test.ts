@@ -31,6 +31,10 @@ function indexingExec(): Executor {
   return {
     async run(call) {
       const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      const output = call.args.at(-1);
+      if (call.command === "ffmpeg" && output?.includes("%03d")) {
+        await writeFile(output.replace("%03d", "000"), "frame");
+      }
       if (work && call.args.includes("index")) {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
@@ -772,7 +776,7 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
     describeClient: {
       async send() {
         return JSON.stringify({
-          spans: [{ start: 0, end: 1, text: "pessoa falando", confidence: "observed", tags: [] }],
+          spans: [{ start: 0, end: 3, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
       },
     },

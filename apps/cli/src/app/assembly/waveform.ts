@@ -23,6 +23,7 @@ export type BuildPeaksOpts = {
   outPath: string;
   buckets?: number;
   durationSeconds?: number;
+  signal?: AbortSignal;
 };
 
 /**
@@ -61,6 +62,7 @@ export async function buildPeaks(
         "-vn", "-ar", String(PEAKS_SAMPLE_RATE), "-ac", "1",
         "-c:a", "pcm_s16le", "-f", "s16le", tmp,
       ],
+      signal: opts.signal,
     });
     if (result.code !== 0) {
       await unlink(tmp).catch(() => undefined);

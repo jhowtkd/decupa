@@ -28,7 +28,7 @@ export interface LimitedQueue {
   readonly maxInFlight: number;
   readonly waiting: number;
   readonly maxWaiting: number;
-  run<T>(work: () => Promise<T> | T, opts?: QueueRunOptions): Promise<T>;
+  run<T>(work: (signal?: AbortSignal) => Promise<T> | T, opts?: QueueRunOptions): Promise<T>;
   map<T, R>(
     items: readonly T[],
     mapper: (item: T, index: number) => Promise<R> | R,
@@ -43,6 +43,13 @@ type Waiter = {
   onAbort?: () => void;
 };
 
+type SharedWork = {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  consumers: number;
+  started: boolean;
+};
+
 export function createLimitedQueue(limit: number): LimitedQueue {
   if (!Number.isInteger(limit) || limit < 1) {
     throw new Error("limite de concorrência precisa ser um inteiro >= 1");
@@ -52,7 +59,7 @@ export function createLimitedQueue(limit: number): LimitedQueue {
   let maxInFlight = 0;
   let maxWaiting = 0;
   const waiters: Waiter[] = [];
-  const shared = new Map<string, Promise<unknown>>();
+  const shared = new Map<string, SharedWork>();
 
   const markStart = (): void => {
     inFlight += 1;
@@ -129,28 +136,55 @@ export function createLimitedQueue(limit: number): LimitedQueue {
     get maxWaiting() {
       return maxWaiting;
     },
-    async run<T>(work: () => Promise<T> | T, opts?: QueueRunOptions): Promise<T> {
+    async run<T>(work: (signal?: AbortSignal) => Promise<T> | T, opts?: QueueRunOptions): Promise<T> {
       if (opts?.signal?.aborted) throw cancelled(opts.signal.reason);
-      const runUnkeyed = async (): Promise<T> => {
-        await acquire(opts?.key ? undefined : opts?.signal);
+      const runUnkeyed = async (signal?: AbortSignal, onStart?: () => void): Promise<T> => {
+        await acquire(signal);
+        onStart?.();
         try {
-          return await work();
+          return await work(signal);
         } finally {
           release();
         }
       };
       if (opts?.key) {
         const key = opts.key;
-        let pending = shared.get(key) as Promise<T> | undefined;
+        let pending = shared.get(key);
         if (!pending) {
-          pending = runUnkeyed().finally(() => {
-            shared.delete(key);
+          const controller = new AbortController();
+          let created!: SharedWork;
+          const promise = runUnkeyed(controller.signal, () => {
+            created.started = true;
+          }).finally(() => {
+            if (shared.get(key) === created) shared.delete(key);
           });
-          shared.set(key, pending);
+          created = { promise, controller, consumers: 0, started: false };
+          shared.set(key, created);
+          pending = created;
         }
-        return follow(pending, opts.signal);
+        pending.consumers += 1;
+        let value!: T;
+        let failure: unknown;
+        let failed = false;
+        try {
+          value = await follow(pending.promise as Promise<T>, opts.signal);
+        } catch (error) {
+          failed = true;
+          failure = error;
+        }
+        pending.consumers -= 1;
+        const lastConsumer = pending.consumers === 0;
+        if (lastConsumer) {
+          if (!pending.started && shared.get(key) === pending) shared.delete(key);
+          pending.controller.abort();
+          if (failed && opts.signal?.aborted && pending.started) {
+            await pending.promise.catch(() => undefined);
+          }
+        }
+        if (failed) throw failure;
+        return value;
       }
-      return runUnkeyed();
+      return runUnkeyed(opts?.signal);
     },
     map<T, R>(
       items: readonly T[],

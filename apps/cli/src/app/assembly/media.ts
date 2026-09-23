@@ -136,16 +136,17 @@ export async function ensureThumbnail(
 ): Promise<string | null> {
   await verifySourceIdentity(source);
   if (!source.hasVideo) return null;
-  return mediaWork.run(async () => {
-    opts.signal?.throwIfAborted();
+  opts.signal?.throwIfAborted();
+  return mediaWork.run(async (signal) => {
+    signal?.throwIfAborted();
     try {
       if ((await stat(thumbnailPath(dir, source.sha256))).size > 0) return thumbnailPath(dir, source.sha256);
     } catch {
       // Extração direta: uma miniatura não precisa transcodificar o vídeo inteiro.
     }
     await mkdir(playbackDir(dir, source.sha256), { recursive: true });
-    return buildThumbnail(source, dir, source.path, exec, opts);
-  }, { key: thumbnailPath(dir, source.sha256) });
+    return buildThumbnail(source, dir, source.path, exec, { ...opts, signal });
+  }, { key: thumbnailPath(dir, source.sha256), signal: opts.signal });
 }
 
 /** Proxy H.264/AAC validado por probe; exportação continua usando o original. */
@@ -157,10 +158,13 @@ export async function ensurePlayback(
 ): Promise<{ videoPath: string; thumbnailPath: string | null }> {
   await verifySourceIdentity(source);
   const proxy = proxyPath(dir, source.sha256);
+  opts.signal?.throwIfAborted();
   // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.
-  const videoPath = await mediaWork.run(async () => {
-    opts.signal?.throwIfAborted();
-    return (await proxyIsValid(proxy, source)) ? proxy : await buildProxy(source, dir, exec, opts);
-  }, { key: proxy });
+  const videoPath = await mediaWork.run(async (signal) => {
+    signal?.throwIfAborted();
+    return (await proxyIsValid(proxy, source))
+      ? proxy
+      : await buildProxy(source, dir, exec, { ...opts, signal });
+  }, { key: proxy, signal: opts.signal });
   return { videoPath, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
 }

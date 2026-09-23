@@ -74,6 +74,28 @@ describe("createLimitedQueue", () => {
     expect(runs).toBe(1);
   });
 
+  it("primeiro cancelado preserva trabalho compartilhado para seguidor ativo", async () => {
+    const queue = createLimitedQueue(1);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const holder = queue.run(() => held);
+    const controller = new AbortController();
+    let runs = 0;
+    const work = async () => {
+      runs += 1;
+      return "shared";
+    };
+    const first = queue.run(work, { key: "job-a", signal: controller.signal });
+    await delay(5);
+    const follower = queue.run(work, { key: "job-a" });
+    controller.abort();
+    await expect(first).rejects.toBeInstanceOf(CancelledError);
+    release();
+    await expect(follower).resolves.toBe("shared");
+    await expect(holder).resolves.toBeUndefined();
+    expect(runs).toBe(1);
+  });
+
   it("recusa limite menor que 1", () => {
     expect(() => createLimitedQueue(0)).toThrow(/limite/);
   });
