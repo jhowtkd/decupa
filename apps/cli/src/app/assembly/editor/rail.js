@@ -19,7 +19,10 @@ export function sourceProgress(project, source) {
       return { tone: "ready", label: "Análise concluída", detail: "" };
     }
     if (prep.status !== "running") return { tone: "error", label: "Preparação interrompida", detail: stages.error || "Retome para concluir as etapas pendentes." };
-    return { tone: "pending", label: "Na fila", detail: stages.audio === "ready" ? "Transcrição disponível" : "" };
+    // Áudio já salvo: o rótulo é visível, não só o tooltip. A etapa visual
+    // pode continuar; a transcrição não espera por ela.
+    if (stages.audio === "ready") return { tone: "pending", label: "Transcrição disponível", detail: "" };
+    return { tone: "pending", label: "Na fila", detail: "" };
   }
   if (analysis?.status === "error") return { tone: "error", label: "Falha na análise", detail: analysis.error || "" };
   if (analysis) return { tone: "pending", label: "Transcrição disponível", detail: "" };
