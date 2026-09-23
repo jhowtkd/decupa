@@ -75,11 +75,13 @@ function makeFakes(opts: FakeOpts = {}): {
   blockAudio: () => { release: () => void };
   blockFfmpeg: () => { release: () => void };
   blockProxy: () => { release: () => void };
+  blockProxyTeardown: () => { release: () => void };
   blockWaveform: () => { release: () => void };
   blockDescribe: () => { release: () => void };
   proxyFinished: () => boolean;
   waveformFinished: () => boolean;
   proxyInFlight: () => number;
+  proxyTeardownWaiting: () => boolean;
   waveformInFlight: () => number;
   describeBeforeProxy: () => boolean;
   liveExec: () => number;
@@ -92,11 +94,13 @@ function makeFakes(opts: FakeOpts = {}): {
   let audioGate: Promise<void> | null = null;
   let ffmpegGate: Promise<void> | null = null;
   let proxyGate: Promise<void> | null = null;
+  let proxyTeardownGate: Promise<void> | null = null;
   let waveformGate: Promise<void> | null = null;
   let describeGate: Promise<void> | null = null;
   let proxyDone = false;
   let waveformDone = false;
   let proxyFlight = 0;
+  let proxyTeardownWaiting = false;
   let waveformFlight = 0;
   let sawDescribeBeforeProxy = false;
   let frameFlight = 0;
@@ -228,7 +232,17 @@ function makeFakes(opts: FakeOpts = {}): {
             isProxy ? proxyGate : null,
             isWave ? waveformGate : null,
           ]);
-          if (stopped) return stopped;
+          if (stopped) {
+            if (isProxy && proxyTeardownGate) {
+              proxyTeardownWaiting = true;
+              try {
+                await proxyTeardownGate;
+              } finally {
+                proxyTeardownWaiting = false;
+              }
+            }
+            return stopped;
+          }
           if (dest && !dest.startsWith("-")) {
             if (isProxy && opts.validProxy) await cp(CLIP, dest);
             else await writeFile(dest, `clip-${calls.ffmpeg}`);
@@ -349,6 +363,11 @@ function makeFakes(opts: FakeOpts = {}): {
       proxyGate = opened.promise;
       return { release: opened.release };
     },
+    blockProxyTeardown: () => {
+      const opened = openGate();
+      proxyTeardownGate = opened.promise;
+      return { release: opened.release };
+    },
     blockWaveform: () => {
       const opened = openGate();
       waveformGate = opened.promise;
@@ -362,6 +381,7 @@ function makeFakes(opts: FakeOpts = {}): {
     proxyFinished: () => proxyDone,
     waveformFinished: () => waveformDone,
     proxyInFlight: () => proxyFlight,
+    proxyTeardownWaiting: () => proxyTeardownWaiting,
     waveformInFlight: () => waveformFlight,
     describeBeforeProxy: () => sawDescribeBeforeProxy,
     liveExec: () => live.size,
@@ -1211,6 +1231,46 @@ describe("runPreparation", () => {
       aborter.abort();
       proxy.release();
       visual.release();
+    }
+  });
+
+  it("cancelar o último consumidor espera o teardown do proxy", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes();
+    const proxy = fakes.blockProxy();
+    const teardown = fakes.blockProxyTeardown();
+    const visual = fakes.blockDescribe();
+    const aborter = new AbortController();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai cancelar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(aborter.signal),
+    );
+    let settled = false;
+    void run.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      aborter.abort();
+      await vi.waitFor(() => {
+        expect(fakes.proxyTeardownWaiting()).toBe(true);
+      }, { timeout: 5000 });
+      expect(settled).toBe(false);
+      expect(fakes.liveExec()).toBeGreaterThan(0);
+      teardown.release();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      aborter.abort();
+      proxy.release();
+      teardown.release();
+      visual.release();
+      await run.catch(() => undefined);
     }
   });
 

@@ -163,15 +163,26 @@ export function createLimitedQueue(limit: number): LimitedQueue {
           pending = created;
         }
         pending.consumers += 1;
+        let value!: T;
+        let failure: unknown;
+        let failed = false;
         try {
-          return await follow(pending.promise as Promise<T>, opts.signal);
-        } finally {
-          pending.consumers -= 1;
-          if (pending.consumers === 0) {
-            if (!pending.started && shared.get(key) === pending) shared.delete(key);
-            pending.controller.abort();
+          value = await follow(pending.promise as Promise<T>, opts.signal);
+        } catch (error) {
+          failed = true;
+          failure = error;
+        }
+        pending.consumers -= 1;
+        const lastConsumer = pending.consumers === 0;
+        if (lastConsumer) {
+          if (!pending.started && shared.get(key) === pending) shared.delete(key);
+          pending.controller.abort();
+          if (failed && opts.signal?.aborted && pending.started) {
+            await pending.promise.catch(() => undefined);
           }
         }
+        if (failed) throw failure;
+        return value;
       }
       return runUnkeyed(opts?.signal);
     },
