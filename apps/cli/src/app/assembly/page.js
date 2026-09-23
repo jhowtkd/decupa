@@ -9,7 +9,10 @@ import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
 
-const state = createState({ project: null, operation: null, selection: new Set(), playhead: null, watched: { revision: null, ended: false } });
+const state = createState({
+  project: null, operation: null, selection: new Set(), playhead: null,
+  watched: { revision: null, ended: false }, stage: "materiais", transcriptNotice: "",
+});
 const ui = { importing: false, busy: false, label: null, error: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
@@ -319,8 +322,20 @@ function showInspector(show = true) {
   inspectTool.setAttribute("aria-expanded", String(show));
   document.body.classList.toggle("inspector-open", show);
 }
-function setStage(stage) {
+function applyTranscriptNotice(text) {
+  const el = document.getElementById("transcriptNotice");
+  if (!el) return;
+  const notice = text || "";
+  el.textContent = notice;
+  el.hidden = notice.length === 0;
+  if (notice) el.title = notice;
+  else el.removeAttribute("title");
+}
+function applyStageDom(stage) {
   if (!STAGE_TARGET[stage]) return;
+  // Trocar a etapa mostra a transcrição, mas não tira o foco de quem
+  // já estava num controle (papel, inclusão, outra etapa).
+  const focus = document.activeElement;
   document.body.dataset.stage = stage;
   for (const el of document.querySelectorAll("#stages [data-stage]")) {
     if (el.dataset.stage === stage) el.setAttribute("aria-current", "page");
@@ -336,7 +351,18 @@ function setStage(stage) {
   (stage === "entrega" ? document.getElementById("center") : inspector).appendChild(delivery);
   delivery.hidden = stage !== "entrega";
   showInspector(false);
+  if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
+    && document.activeElement !== focus) {
+    focus.focus({ preventScroll: true });
+  }
 }
+function setStage(stage) {
+  if (!STAGE_TARGET[stage]) return;
+  if (state.get("stage") === stage) applyStageDom(stage);
+  else state.set("stage", stage);
+}
+state.subscribe("stage", applyStageDom);
+state.subscribe("transcriptNotice", applyTranscriptNotice);
 document.getElementById("stages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-stage]");
   if (button) setStage(button.dataset.stage);

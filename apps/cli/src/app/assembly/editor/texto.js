@@ -252,15 +252,41 @@ function visualSourceName(p, visualId) {
   return visualId;
 }
 
-function renderTranscript(p) {
-  const running = p.preparation && p.preparation.status === "running";
+/** Etapas em que o usuário já está trabalhando: a transcrição não troca o foco. */
+const ACTIVE_EDIT_STAGES = new Set(["edicao", "revisao", "entrega"]);
+
+function projectWithWords(project) {
+  if (!project?.assembly?.sources || !Array.isArray(project.analyses)) return null;
+  return Array.isArray(project.corrections) ? project : { ...project, corrections: [] };
+}
+
+/** Fontes incluídas que já têm palavras no documento (ordem da montagem). */
+function sourcesWithTranscript(project) {
+  const safe = projectWithWords(project);
+  if (!safe) return [];
+  return safe.assembly.sources.filter((source) => {
+    if (source.included === false) return false;
+    const analysis = safe.analyses.find((item) => item.sourceId === source.id);
+    if (!analysis || !Array.isArray(analysis.words) || analysis.words.length === 0) return false;
+    return effectiveWords(safe, source.id).length > 0;
+  });
+}
+
+/**
+ * Documento da transcrição (antes da proposta de cenas). O marcador
+ * "· parcial" permanece enquanto a preparação está em andamento.
+ * Cada fonte entra com as palavras dela assim que essa fonte é salva.
+ */
+export function transcriptHtml(project) {
+  const running = project.preparation && project.preparation.status === "running";
   let html = "";
-  for (const source of p.assembly.sources) {
-    const analysis = p.analyses.find((item) => item.sourceId === source.id);
+  for (const source of project.assembly.sources) {
+    const analysis = project.analyses.find((item) => item.sourceId === source.id);
     const statusText = analysis ? analysis.status : "na fila";
-    html += '<section class="doc-source"><h2>' + esc(source.name) + " · " + esc(statusText)
+    html += '<section class="doc-source" data-source="' + esc(source.id) + '"><h2>'
+      + esc(source.name) + " · " + esc(statusText)
       + (running ? ' <span class="parcial">· parcial</span>' : "") + "</h2>";
-    const words = effectiveWords(p, source.id);
+    const words = effectiveWords(project, source.id);
     if (!words.length) {
       html += '<p class="muted">transcrição ainda não disponível.</p>';
     } else {
@@ -269,6 +295,30 @@ function renderTranscript(p) {
     html += "</section>";
   }
   return html;
+}
+
+/**
+ * O que fazer quando o snapshot do projeto muda durante a preparação.
+ * Materiais (ou etapa ainda não escolhida) abre a etapa de texto sozinha
+ * na primeira fonte com palavras. Edição, revisão e entrega ficam onde
+ * estão; o aviso nomeia cada fonte já salva.
+ * @param {string | undefined} stage
+ * @param {object | null | undefined} previous
+ * @param {object | null | undefined} next
+ * @returns {{ stage: string, transcriptNotice: string }}
+ */
+export function partialTranscriptView(stage, previous, next) {
+  const current = stage || "materiais";
+  if (!next) return { stage: current, transcriptNotice: "" };
+  const preparing = next.preparation?.status === "running";
+  const ready = sourcesWithTranscript(next);
+  const known = new Set(sourcesWithTranscript(previous).map((source) => source.id));
+  const arrived = preparing ? ready.filter((source) => !known.has(source.id)) : [];
+  const nextStage = !ACTIVE_EDIT_STAGES.has(current) && arrived.length > 0 ? "edicao" : current;
+  const notice = preparing && ready.length > 0
+    ? "Transcrição disponível · " + ready.map((source) => source.name || source.id).join(", ")
+    : "";
+  return { stage: nextStage, transcriptNotice: notice };
 }
 
 function wordButton(scene, takeId, word, selection, extraClass = "", extraAttrs = "") {
@@ -405,7 +455,7 @@ function renderCenter(p, selection) {
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
   // não afeta a delegação.
   texto.innerHTML = '<div class="measure">'
-    + (p.scenes.length === 0 ? renderTranscript(p) : renderProse(p, selection))
+    + (p.scenes.length === 0 ? transcriptHtml(p) : renderProse(p, selection))
     + "</div>";
   if (scroller) scroller.scrollTop = top;
   if (focusedKey) {

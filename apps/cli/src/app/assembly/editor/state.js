@@ -1,7 +1,11 @@
 // Store mínimo do editor texto-centrado (Task 4).
 // Chaves canônicas (a UI toda usa estas): "project", "operation",
 // "selection" (Set de `sceneId\0takeId\0wordId`), "playhead" (segundos
-// na montagem ou null), "watched" (`{revision, ended}`).
+// na montagem ou null), "watched" (`{revision, ended}`),
+// "stage" (`materiais` | `edicao` | `revisao` | `entrega`),
+// "transcriptNotice" (aviso visível quando a transcrição parcial chega).
+import { partialTranscriptView } from "./texto.js";
+
 export function createState(initial = {}) {
   const values = { ...initial };
   const listeners = new Map();
@@ -10,6 +14,18 @@ export function createState(initial = {}) {
     const subs = listeners.get(key);
     // oxlint-disable-next-line no-useless-spread -- cópia intencional: um ouvinte pode se remover durante o notify.
     if (subs) for (const fn of [...subs]) fn(value);
+  }
+  function applyTranscript(stage, previous, next) {
+    const view = partialTranscriptView(stage, previous, next);
+    const notice = view.transcriptNotice || "";
+    if (notice !== (values.transcriptNotice || "")) {
+      values.transcriptNotice = notice;
+      notify("transcriptNotice", notice);
+    }
+    if (view.stage !== (values.stage || "materiais")) {
+      values.stage = view.stage;
+      notify("stage", view.stage);
+    }
   }
   return {
     get(key) {
@@ -24,6 +40,7 @@ export function createState(initial = {}) {
       }
       if (key === "project") {
         const prev = values.project;
+        const stage = values.stage || "materiais";
         const prevRev = prev ? prev.revision : undefined;
         const nextRev = value ? value.revision : undefined;
         values[key] = value;
@@ -34,6 +51,14 @@ export function createState(initial = {}) {
           values.watched = { revision: null, ended: false };
           notify("watched", values.watched);
         }
+        applyTranscript(stage, prev, value);
+        return;
+      }
+      if (key === "stage") {
+        if (values.stage === value) return;
+        values.stage = value;
+        notify("stage", value);
+        applyTranscript(value, values.project, values.project);
         return;
       }
       values[key] = value;
