@@ -60,6 +60,74 @@ describe("runIngest", () => {
     expect(stages).toEqual(["transcribing", "indexing", "visual"]);
   });
 
+  it.each([
+    ["default", undefined],
+    ["explícito", true],
+  ] as const)("mantém proxy, sidecar, saída e ordem com visual %s", async (_label, visual) => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-visual-"));
+    const exec = new FakeExecutor({ stdout: JSON.stringify({ video: "x", fps: 4, units: [] }) });
+    const stages: string[] = [];
+    const opts = visual === undefined ? undefined : { visual };
+    await runIngest(
+      { ...job, workDir: dir },
+      exec,
+      (stage) => stages.push(stage),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      opts,
+    );
+
+    expect(stages).toEqual(["transcribing", "indexing", "visual"]);
+    expect(exec.calls.some((call) => call.command === "ffmpeg" && call.args.includes(
+      "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
+    ))).toBe(true);
+    expect(exec.calls.some((call) => call.command === "uv" && call.args.includes("run")
+      && call.args.includes("python") && call.args.includes("visual_index.py"))).toBe(true);
+    expect(await readFile(join(dir, "out", "visual_index.json"), "utf8"))
+      .toBe(JSON.stringify({ video: "x", fps: 4, units: [] }));
+  });
+
+  it("visual desligado não chama proxy/sidecar, não sinaliza etapa nem grava aviso ou índice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-no-visual-"));
+    const calls: ExecCall[] = [];
+    const exec: Executor = {
+      async run(call) {
+        calls.push(call);
+        if (call.command === "ffmpeg" || call.command === "uv"
+          || call.args.includes("visual_index.py")
+          || call.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease")) {
+          return { code: 1, stdout: "", stderr: "MediaPipe não está instalado" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const stages: string[] = [];
+    const sink = collectSink();
+    const result = await runIngest(
+      { ...job, workDir: dir },
+      exec,
+      (stage) => stages.push(stage),
+      undefined,
+      createTracer(sink),
+      undefined,
+      undefined,
+      { visual: false },
+    );
+
+    expect(calls.some((call) => call.args.includes("condense-prep"))).toBe(true);
+    expect(calls.some((call) => call.command === "python3" && call.args.includes("index"))).toBe(true);
+    expect(calls.every((call) => call.env?.CLAUDE_PROJECT_DIR === dir)).toBe(true);
+    expect(calls.some((call) => call.command === "ffmpeg")).toBe(false);
+    expect(calls.some((call) => call.args.includes("visual_index.py"))).toBe(false);
+    expect(stages).toEqual(["transcribing", "indexing"]);
+    expect(sink.events.some((event) => event.stage === "visual")).toBe(false);
+    expect(result).toEqual({});
+    await expect(readFile(join(dir, "out", "visual_index.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("passa CLAUDE_PROJECT_DIR para o motor em toda chamada", async () => {
     // Sem diretório por job, dois vídeos no mesmo cwd se sobrescrevem.
     const exec = new FakeExecutor();

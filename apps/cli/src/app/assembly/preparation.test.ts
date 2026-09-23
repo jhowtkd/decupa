@@ -61,11 +61,13 @@ type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; 
 function makeFakes(opts: FakeOpts = {}): {
   deps: PreparationDeps;
   calls: Calls;
+  execCalls: ExecCall[];
   blockPropose: () => { release: (json: string) => void; gate: Promise<string> };
   blockAudio: () => { release: () => void };
   blockFfmpeg: () => { release: () => void };
 } {
   const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
+  const execCalls: ExecCall[] = [];
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
   let audioGate: Promise<void> | null = null;
   let ffmpegGate: Promise<void> | null = null;
@@ -81,6 +83,7 @@ function makeFakes(opts: FakeOpts = {}): {
     gaps: [],
   });
   const exec = async (call: ExecCall): Promise<ExecResult> => {
+    execCalls.push(call);
     if (call.command === "pnpm" || call.args.includes("condense-prep")) {
       calls.ingest += 1;
       if (audioGate) await audioGate;
@@ -200,6 +203,7 @@ function makeFakes(opts: FakeOpts = {}): {
   return {
     deps,
     calls,
+    execCalls,
     blockPropose: () => {
       let release!: (json: string) => void;
       const gatePromise = new Promise<string>((resolve) => {
@@ -863,6 +867,48 @@ describe("runPreparation", () => {
     expect(done.preparation?.status).toBe("ready");
     expect(done.preparation?.note).toBeUndefined();
     expect(done.previewArtifact).toBeTruthy();
+  });
+
+  it("análise de áudio não dispara ingest visual e salva fala/palavras sem cobertura", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, execCalls, blockFfmpeg } = makeFakes({ withWords: true });
+    const { release } = blockFfmpeg();
+    const running = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+
+    let mid: Project;
+    await vi.waitFor(async () => {
+      mid = await loadProject(dir);
+      expect(mid.preparation?.sources.fala?.audio).toBe("ready");
+    }, { timeout: 5000 });
+
+    expect(execCalls.some((call) => call.args.includes(
+      "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
+    ))).toBe(false);
+    expect(execCalls.some((call) => call.command === "uv" && call.args.includes("run")
+      && call.args.includes("python") && call.args.includes("visual_index.py"))).toBe(false);
+    const analysis = mid!.analyses.find((item) => item.sourceId === "fala");
+    expect(analysis?.speech).toEqual([{
+      id: "fala:u0",
+      sourceId: "fala",
+      start: 0,
+      end: 1.2,
+      text: "fala transcrito",
+    }]);
+    expect(analysis?.words.map(({ text, start, end }) => ({ text, start, end }))).toEqual([
+      { text: "olá", start: 0.1, end: 0.5 },
+      { text: "tema", start: 0.6, end: 1 },
+    ]);
+    expect(analysis?.visual).toEqual([]);
+    expect(analysis?.visualCoverage).toEqual({ requested: [], returned: [], missing: [] });
+
+    release();
+    await running;
   });
 });
 
