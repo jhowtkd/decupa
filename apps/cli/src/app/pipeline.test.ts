@@ -211,6 +211,27 @@ describe("runIngest", () => {
     expect(JSON.parse(await readFile(join(dirA, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
     expect(JSON.parse(await readFile(join(dirB, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
   });
+
+  it("manda --no-visual-survey na chamada spawnada de index", async () => {
+    // Survey do motor (cena, contact sheet, movimento) não é o sidecar
+    // visual_index.py. Limpeza e montagem chegam aqui pelo mesmo runIngest.
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const indexes = exec.calls.filter((c) =>
+      c.command === "python3"
+      && c.args[1] === "index"
+      && c.args[0]?.endsWith(join("scripts", "condense.py")),
+    );
+    expect(indexes).toHaveLength(1);
+    const index = indexes[0]!;
+    expect(isAbsolute(index.args[0]!)).toBe(true);
+    expect(index.args.slice(1)).toEqual([
+      "index",
+      job.videoPath,
+      join(job.workDir, "transcript.json"),
+      "--no-visual-survey",
+    ]);
+  });
 });
 
 describe("runPlan", () => {

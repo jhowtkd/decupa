@@ -49,7 +49,11 @@ def _print_result(result) -> int:
 
 def cmd_index(args: argparse.Namespace) -> int:
     ctx = RunContext(session_kind="cli")
-    result = condense_index({"video_path": args.video, "transcript_path": args.transcript}, ctx)
+    result = condense_index({
+        "video_path": args.video,
+        "transcript_path": args.transcript,
+        "visual_survey": args.visual_survey,
+    }, ctx)
     return _print_result(result)
 
 
@@ -92,6 +96,8 @@ def main() -> int:
     p_index = sub.add_parser("index", help="mede o vídeo — disfluência, pausas, orçamento de corte")
     p_index.add_argument("video")
     p_index.add_argument("transcript")
+    p_index.add_argument("--no-visual-survey", dest="visual_survey", action="store_false",
+                         help="pula cortes de cena, contact sheet e análise de movimento")
     p_index.set_defaults(func=cmd_index)
 
     p_plan = sub.add_parser("plan", help="transforma keep-list em pontos de corte")

@@ -277,7 +277,7 @@ export async function runIngest(
     }
     await must(exec, {
       command: "python3",
-      args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
+      args: [CONDENSE, "index", job.videoPath, transcriptPath(job), "--no-visual-survey"],
       env: envFor(job),
       onLine,
     }, "a medição do índice");
