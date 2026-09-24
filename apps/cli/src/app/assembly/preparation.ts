@@ -350,7 +350,7 @@ export async function runPreparation(
           // autorizou a transcrição. Promessa sempre observada.
           const image = Promise.resolve().then(async () => {
             try {
-              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal });
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal, detectHardware: true });
               await buildPeaks(deps.exec, {
                 proxyPath: videoPath,
                 sha256: source.sha256,
