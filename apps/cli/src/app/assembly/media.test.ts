@@ -1,4 +1,4 @@
-import { access, copyFile, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -199,3 +199,79 @@ it("pedidos simultâneos de reprodução compartilham o mesmo proxy", async () =
   await Promise.all(Array.from({ length: 4 }, () => ensurePlayback(source, dir, exec)));
   expect(exec.calls.filter((call) => call.args.at(-1)?.endsWith(".tmp.mp4"))).toHaveLength(1);
 });
+
+it("com detectHardware, o proxy usa o perfil comprovado do projeto sem refazer a prova", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-hw-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  await mkdir(join(dir, "hardware-proof"), { recursive: true });
+  await writeFile(join(dir, "hardware-proof", "profile.json"), `${JSON.stringify({ profile: "videotoolbox", version: 2 })}\n`);
+  const exec = copyingExec();
+  await ensurePlayback(source, dir, exec, { detectHardware: true });
+  const proxyCalls = exec.calls.filter((call) => call.args.at(-1)?.endsWith(".tmp.mp4"));
+  expect(proxyCalls).toHaveLength(1);
+  expect(proxyCalls[0]!.args).toContain("h264_videotoolbox");
+  expect(proxyCalls[0]!.args.indexOf("-hwaccel")).toBeLessThan(proxyCalls[0]!.args.indexOf("-i"));
+  expect(proxyCalls[0]!.args).toContain("-threads");
+  // Nenhuma prova de hardware nova: o perfil veio do cache do projeto.
+  expect(exec.calls.some((call) => call.args.some((arg) => arg.includes("hardware-proof")))).toBe(false);
+});
+
+it("encode de hardware que falha cai para software e publica proxy válido", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-hwfail-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const calls: ExecCall[] = [];
+  const exec: Executor = {
+    async run(call) {
+      calls.push(call);
+      const output = call.args.at(-1)!;
+      if (call.args.includes("h264_videotoolbox")) return { code: 1, stdout: "", stderr: "vt indisponível" };
+      if (output.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), output);
+      else if (output.endsWith(".tmp.jpg")) await writeFile(output, "miniatura");
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const result = await ensurePlayback(source, dir, exec, { profile: "videotoolbox" });
+  expect(result.videoPath).toBe(proxyPath(dir, source.sha256));
+  const proxyCalls = calls.filter((call) => call.args.at(-1)?.endsWith(".tmp.mp4"));
+  expect(proxyCalls.map((call) => call.args.includes("libx264"))).toEqual([false, true]);
+  const info = await probe(result.videoPath);
+  expect(info.hasVideo).toBe(true);
+});
+
+it("cancelar durante o encode de hardware não dispara o fallback de software", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-hwcancel-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const ac = new AbortController();
+  const calls: ExecCall[] = [];
+  const exec: Executor = {
+    async run(call) {
+      calls.push(call);
+      ac.abort();
+      return { code: 1, stdout: "", stderr: "interrompido" };
+    },
+  };
+  await expect(ensurePlayback(source, dir, exec, { profile: "videotoolbox", signal: ac.signal })).rejects.toThrow();
+  expect(calls.filter((call) => call.args.includes("libx264"))).toHaveLength(0);
+  await expect(access(proxyPath(dir, source.sha256))).rejects.toThrow();
+});
+
+it("detectHardware sem perfil em cache faz a prova fora da fila e não trava", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-prove-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const exec = copyingExec();
+  const inner = exec.run.bind(exec);
+  exec.run = async (call) => (call.args.includes("-encoders")
+    ? { code: 0, stdout: " V..... libx264            libx264 H.264\n", stderr: "" }
+    : inner(call));
+  const result = await ensurePlayback(source, dir, exec, { detectHardware: true });
+  expect(result.videoPath).toBe(proxyPath(dir, source.sha256));
+  await access(join(dir, "hardware-proof", "profile.json"));
+}, 20000);

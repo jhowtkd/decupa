@@ -603,7 +603,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!source) throw new HttpError(404, "fonte não cadastrada");
         if (url.searchParams.get("view") === "playback") {
           try {
-            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec, { detectHardware: true });
             await serveMedia(req, res, videoPath);
           } catch (err) {
             throw mediaError(err);
