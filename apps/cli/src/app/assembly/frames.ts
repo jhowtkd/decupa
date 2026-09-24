@@ -30,13 +30,17 @@ export async function extractVisualFrames(
   const tempDir = await mkdtemp(join(tmpdir(), "decupa-frames-"));
   try {
     const pattern = join(tempDir, "frame-%03d.jpg");
-    // Ordem output-seek (`-i` antes de `-ss`): manter como está para os
-    // timestamps dos frames continuarem alinhados ao contrato das janelas.
+    // Busca precisa na entrada (`-ss` + `-accurate_seek` antes de `-i`): o
+    // FFmpeg pula direto para o keyframe anterior à janela em vez de
+    // decodificar o vídeo desde o início a cada janela. Os frames saem nos
+    // mesmos segundos da busca na saída — o teste de alinhamento prova isso
+    // em CFR, VFR, início não zero, GOP longo e rotação.
     const result = await exec.run({
       command: "ffmpeg",
       args: [
-        "-n", "-i", source.path,
-        "-ss", String(window.fetchStart),
+        "-n",
+        "-ss", String(window.fetchStart), "-accurate_seek",
+        "-i", source.path,
         "-t", String(window.end - window.fetchStart),
         "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
         "-an", "-q:v", "5", pattern,
