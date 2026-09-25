@@ -22,6 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = Path(os.environ.get("VE_PLUGIN_ROOT", REPO_ROOT / "work" / "video-agent-kit-plugin"))
 sys.path.insert(0, str(PLUGIN_ROOT / "mcp"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     from ve_tools.condense import condense_index, condense_plan, condense_qc, condense_render
@@ -76,6 +77,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
+    # Corte duro concatena por cópia do vídeo (ver scripts/concat_copy.py).
+    from ve_tools import condense as engine
+    import concat_copy
+
+    concat_copy.install(engine)
     ctx = RunContext(session_kind="cli")
     result = condense_render(
         {"video_path": args.video, "output_path": args.out, "join": args.join}, ctx,
