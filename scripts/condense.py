@@ -80,12 +80,13 @@ def cmd_render(args: argparse.Namespace) -> int:
     # Corte duro concatena por cópia do vídeo (ver scripts/concat_copy.py).
     from ve_tools import condense as engine
     import concat_copy
-    import segment_vt
+    import segment_cut
 
-    # Segmentos em VideoToolbox no macOS (ver scripts/segment_vt.py); a junção
-    # só copia o vídeo se nenhum segmento precisou cair para libx264.
-    segment_vt.install(engine)
-    concat_copy.install(engine, should_copy=lambda: not segment_vt.state["mixed"])
+    # Segmentos começando em zero (sem deriva) e em VideoToolbox quando a
+    # origem é HEVC no macOS (ver scripts/segment_cut.py); a junção só copia o
+    # vídeo se nenhum segmento precisou cair para libx264.
+    segment_cut.install(engine, hard_join=args.join == "hard")
+    concat_copy.install(engine, should_copy=lambda: not segment_cut.state["mixed"])
     ctx = RunContext(session_kind="cli")
     result = condense_render(
         {"video_path": args.video, "output_path": args.out, "join": args.join}, ctx,
