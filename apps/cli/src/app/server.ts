@@ -19,7 +19,7 @@ import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
+  audioProxyPath, ensureAudioProxy, indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
   SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
@@ -293,7 +293,12 @@ async function startCleanupApp(opts: {
     if (pendingKeepList !== keepList) await planning;
   }
 
+  // Proxy só de áudio para os botões "ouvir": gerado em paralelo ao ingest,
+  // a página passa a usá-lo quando o poll avisa (`audio: true`).
+  let audioReady = false;
+
   async function ingest(): Promise<void> {
+    void ensureAudioProxy(pipelineJob, exec).then((ok) => { audioReady = ok; }, () => {});
     try {
       await preflight(pipelineJob, exec);
       const ingestResult = await runIngest(
@@ -349,6 +354,16 @@ async function startCleanupApp(opts: {
         return;
       }
 
+      if (url.pathname === "/media/audio") {
+        if (!audioReady) {
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+          res.end("proxy de áudio ainda não existe");
+          return;
+        }
+        await serveMedia(req, res, audioProxyPath(pipelineJob), "audio/mp4");
+        return;
+      }
+
       if (url.pathname === "/media") {
         try {
           await serveMedia(req, res, input);
@@ -373,6 +388,7 @@ async function startCleanupApp(opts: {
             stage: current.stage, error: current.error, warning: current.warning,
             progress: current.progress,
             keepList: current.keepList, review: current.review,
+            audio: audioReady,
           });
           return;
         }

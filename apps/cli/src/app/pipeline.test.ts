@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { collectSink, createTracer } from "@decupa/trace";
 import {
+  audioProxyPath,
   DEFAULT_ENGINE,
+  ensureAudioProxy,
   enginePatchError,
   FakeExecutor,
   makeTriageProxy,
@@ -613,4 +618,38 @@ describe("probeFps orienta para OTIO (ICE3-04)", () => {
     const exec = new FakeExecutor({ stdout: "30000/1001\n" });
     await expect(probeFps(job, exec, { allowDropFrame: true })).resolves.toBeCloseTo(29.97, 2);
   });
+});
+
+describe("ensureAudioProxy", () => {
+  const run = promisify(execFile);
+  const probeJson = async (path: string) => JSON.parse((await run("ffprobe", [
+    "-v", "error", "-show_entries", "stream=codec_type,start_time:format=duration", "-of", "json", path,
+  ])).stdout) as { streams: { codec_type: string; start_time: string }[]; format: { duration: string } };
+
+  it("gera um m4a só de áudio, começando no zero da fonte, e reaproveita o existente", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-audio-"));
+    const job = { id: "j1", videoPath: join(FIXTURES, "clip.mp4"), workDir: dir };
+    expect(await ensureAudioProxy(job, new SpawnExecutor())).toBe(true);
+    const info = await probeJson(audioProxyPath(job));
+    expect(info.streams.map((s) => s.codec_type)).toEqual(["audio"]);
+    expect(Number(info.streams[0]!.start_time)).toBe(0);
+    expect(Math.abs(Number(info.format.duration) - 3)).toBeLessThan(0.1);
+
+    const calls: ExecCall[] = [];
+    const counting: Executor = { async run(call) { calls.push(call); return { code: 0, stdout: "", stderr: "" }; } };
+    expect(await ensureAudioProxy(job, counting)).toBe(true);
+    expect(calls).toHaveLength(0);
+  }, 60_000);
+
+  it("fonte sem áudio devolve false e não deixa arquivo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-audio-mute-"));
+    const video = join(dir, "mudo.mp4");
+    await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", video]);
+    const job = { id: "j1", videoPath: video, workDir: dir };
+    expect(await ensureAudioProxy(job, new SpawnExecutor())).toBe(false);
+    await expect(readFile(audioProxyPath(job))).rejects.toThrow();
+    const leftovers = (await readdir(dir)).filter((n) => n.startsWith("playback"));
+    expect(leftovers).toEqual([]);
+  }, 60_000);
 });
