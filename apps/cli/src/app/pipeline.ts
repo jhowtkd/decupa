@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectSilence } from "@decupa/acoustics";
@@ -214,6 +214,35 @@ export const planPath = (job: PipelineJob) => join(job.workDir, "out", "condense
 export const indexPath = (job: PipelineJob) => join(job.workDir, "out", "speech_index.json");
 export const visualIndexPath = (job: PipelineJob) => join(job.workDir, "out", "visual_index.json");
 export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-proxy.mp4");
+export const audioProxyPath = (job: PipelineJob) => join(job.workDir, "playback.m4a");
+
+/**
+ * Proxy só de áudio para os botões "ouvir" da revisão. O player da página é
+ * invisível: tocar o original obrigava o navegador a baixar e decodificar o
+ * vídeo inteiro (no DJI, 2,7 GB de HEVC 10-bit) só para ouvir um trecho. AAC
+ * de 128 kb/s começando no mesmo zero da fonte: ~1–2 s e poucos MB. Publicação
+ * atômica; fonte sem áudio (ou falha) devolve false e a página segue no original.
+ */
+export async function ensureAudioProxy(job: PipelineJob, exec: Executor): Promise<boolean> {
+  const out = audioProxyPath(job);
+  if (await stat(out).then((s) => s.size > 0, () => false)) return true;
+  const tmp = join(job.workDir, `playback.${process.pid}.tmp.m4a`);
+  const made = await exec.run({
+    command: "ffmpeg",
+    args: [
+      "-v", "error", "-y", "-i", job.videoPath,
+      "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "128k",
+      "-movflags", "+faststart", tmp,
+    ],
+    signal: job.signal,
+  });
+  if (made.code !== 0 || !(await stat(tmp).then((s) => s.size > 0, () => false))) {
+    await unlink(tmp).catch(() => {});
+    return false;
+  }
+  await rename(tmp, out);
+  return true;
+}
 
 async function transcriptHasNoSegments(job: PipelineJob): Promise<boolean> {
   try {

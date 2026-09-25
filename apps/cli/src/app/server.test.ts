@@ -1,9 +1,10 @@
 import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
-import { FakeExecutor, SpawnExecutor } from "./pipeline.ts";
+import { FakeExecutor, SpawnExecutor, type Executor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -352,6 +353,54 @@ describe("startApp", () => {
     const ranged = await fetch(`${base}/media`, { headers: { Range: "bytes=0-3" } });
     expect(ranged.status).toBe(206);
     expect(await ranged.text()).toBe("abcd");
+  });
+
+  it("serve o proxy só de áudio em /media/audio quando o ingest o gera, e avisa no poll", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-app-audio-"));
+    const input = join(dir, "v.mp4");
+    await copyFile(join(FIXTURES, "clip.mp4"), input);
+    const exec: Executor = {
+      async run(call) {
+        // Só o proxy de áudio "funciona"; o resto do ingest pode falhar à vontade.
+        const out = call.args.at(-1) ?? "";
+        if (call.command === "ffmpeg" && out.endsWith(".tmp.m4a")) {
+          await writeFile(out, "m4a-falso");
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: "fake" };
+      },
+    };
+    const app = await startApp({ input, port: 0, executor: exec, workDir: join(dir, "w") });
+    stop = app.close;
+    const base = `http://127.0.0.1:${app.port}`;
+    const html = await (await fetch(`${base}/`)).text();
+    const jobId = /"([0-9a-f-]{36})"/.exec(html)![1];
+    let audio = false;
+    for (let i = 0; i < 100 && !audio; i += 1) {
+      audio = (await (await fetch(`${base}/jobs/${jobId}`)).json() as { audio?: boolean }).audio === true;
+      if (!audio) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(audio).toBe(true);
+    const res = await fetch(`${base}/media/audio`, { headers: { Range: "bytes=0-3" } });
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-type")).toBe("audio/mp4");
+    expect(await res.text()).toBe("m4a-");
+    // O original continua disponível no mesmo lugar.
+    expect((await fetch(`${base}/media`, { headers: { Range: "bytes=0-3" } })).status).toBe(206);
+  });
+
+  it("sem proxy de áudio, /media/audio responde 404 e o poll diz audio: false", async () => {
+    const { base } = await boot();
+    expect((await fetch(`${base}/media/audio`)).status).toBe(404);
+    const html = await (await fetch(`${base}/`)).text();
+    const jobId = /"([0-9a-f-]{36})"/.exec(html)![1];
+    expect(((await (await fetch(`${base}/jobs/${jobId}`)).json()) as { audio?: boolean }).audio).toBe(false);
+  });
+
+  it("a página toca o proxy de áudio só quando o servidor avisa", async () => {
+    const page = await readFile(join(dirname(fileURLToPath(import.meta.url)), "page.html"), "utf8");
+    expect(page).toContain('if (j.audio) audioSrc = "/media/audio";');
+    expect(page).toContain('player.src = audioSrc ?? "/media";');
   });
 
   it("keep anexa visual_in_point quando visual_index.json existe", async () => {
