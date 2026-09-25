@@ -103,12 +103,17 @@ describe("createFileCoordinator", () => {
     const clock = { t: 1 };
     const stale = createFileCoordinator(root, { limit: 1, leaseMs: 20, pollMs: 5, now: () => clock.t });
     let published = "";
+    // A execução velha só termina depois que a nova tomou a vaga e rodou:
+    // sem depender de 80 ms de relógio real, que num runner lento passavam
+    // antes de a nova conseguir roubar o lease.
+    let freshRan!: () => void;
+    const freshTookOver = new Promise<void>((resolve) => { freshRan = resolve; });
     const abandoned = watchAbandoned(stale.run({
       id: "clip",
       stage: "encode",
       build: async () => {
         clock.t += 100;
-        await delay(80);
+        await freshTookOver;
         published = "stale-result";
         return { leaked: true };
       },
@@ -118,7 +123,10 @@ describe("createFileCoordinator", () => {
     const result = await fresh.run({
       id: "clip",
       stage: "encode",
-      build: async () => ({ leaked: false }),
+      build: async () => {
+        freshRan();
+        return { leaked: false };
+      },
     });
     expect(result).toEqual({ leaked: false });
     await abandoned;
