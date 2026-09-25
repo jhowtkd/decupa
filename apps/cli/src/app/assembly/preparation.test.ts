@@ -1113,11 +1113,12 @@ describe("runPreparation", () => {
           visual: "pending",
         });
         expect(mid.preparation?.note).toBeUndefined();
+        // O estado "running" é salvo antes de o processo de áudio nascer.
+        expect(fakes.liveExec()).toBeGreaterThan(0);
       }, { timeout: 5000 });
       expect(fakes.calls.describe).toBe(0);
       expect(fakes.calls.propose).toBe(0);
       expect(fakes.calls.render).toBe(0);
-      expect(fakes.liveExec()).toBeGreaterThan(0);
       audio.release();
 
       await vi.waitFor(() => {

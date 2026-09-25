@@ -795,8 +795,12 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
     }),
   });
   expect(started.status).toBe(202);
+  // Consulta até ver a preparação em voo (prazo generoso para runner lento) e
+  // mais algumas vezes depois: nenhuma consulta pode tratá-la como reinício.
   let sawRunning = false;
-  for (let i = 0; i < 25; i += 1) {
+  let pollsAfterRunning = 0;
+  const deadline = Date.now() + 15_000;
+  while (pollsAfterRunning < 10 && Date.now() < deadline) {
     const poll = (await (await fetch(`${base}/project`)).json()) as {
       project: { preparation: { status: string; error?: string } | null };
     };
@@ -804,6 +808,7 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
       expect(poll.project.preparation.error ?? "").not.toContain("servidor reiniciado");
       if (poll.project.preparation.status === "running") sawRunning = true;
     }
+    if (sawRunning) pollsAfterRunning += 1;
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
   expect(sawRunning).toBe(true);

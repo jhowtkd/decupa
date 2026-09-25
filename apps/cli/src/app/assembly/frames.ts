@@ -73,7 +73,9 @@ export async function extractVisualFrames(
       );
     }
 
-    return Promise.all(names.map(async (name, index) => ({
+    // `return await`: sem o await, o `finally` abaixo apagaria o diretório
+    // enquanto as leituras ainda estão em voo.
+    return await Promise.all(names.map(async (name, index) => ({
       sourceSecond: window.fetchStart + index,
       dataUrl: "data:image/jpeg;base64," +
         (await readFile(join(tempDir, name))).toString("base64"),
