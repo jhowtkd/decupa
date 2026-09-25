@@ -42,6 +42,11 @@ it("extrai JPEGs a 1 FPS e etiqueta cada frame pelo segundo da fonte", async () 
   );
   expect(seen[0]?.args).toEqual(expect.arrayContaining(["-ss", "19", "-t", "3"]));
   expect(seen[0]?.args.find((arg) => arg.includes("fps=1"))).toContain("fps=1");
+  // Teto de threads de decodificação por janela, aplicado na entrada.
+  const args = seen[0]!.args;
+  expect(args[args.indexOf("-threads") + 1]).toBe("2");
+  expect(args.indexOf("-threads")).toBeLessThan(args.indexOf("-i"));
+  expect(args[args.indexOf("-filter_threads") + 1]).toBe("1");
   // Diretório efêmero sob o tmpdir do sistema, com prefixo próprio.
   const pattern = seen[0]?.args.at(-1);
   expect(typeof pattern === "string" && dirname(pattern)).toMatch(/decupa-frames-/);

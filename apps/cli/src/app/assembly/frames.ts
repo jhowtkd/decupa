@@ -39,10 +39,15 @@ export async function extractVisualFrames(
       command: "ffmpeg",
       args: [
         "-n",
+        // Até 2 threads de decodificação por janela (a fila roda 2 janelas):
+        // sem teto, cada FFmpeg ocupa quase todos os núcleos e a carga do Mac
+        // passava de 20 na preparação. Os JPEGs não mudam com o número de threads.
+        "-threads", "2",
         "-ss", String(window.fetchStart), "-accurate_seek",
         "-i", source.path,
         "-t", String(window.end - window.fetchStart),
         "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+        "-filter_threads", "1",
         "-an", "-q:v", "5", pattern,
       ],
       signal: opts?.signal,
