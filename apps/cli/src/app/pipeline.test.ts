@@ -14,6 +14,7 @@ import {
   runPlan,
   runTriage,
   SpawnExecutor,
+  visualProxyArgs,
   type ExecCall,
   type Executor,
 } from "./pipeline.ts";
@@ -188,6 +189,45 @@ describe("runIngest", () => {
     expect(isAbsolute(prep.args[1]!)).toBe(true);
     expect(prep.cwd).toBeDefined();
     expect(isAbsolute(prep.cwd!)).toBe(true);
+  });
+
+  it("proxy visual decodifica em hardware só quando pedido e mantém o libx264", () => {
+    const hw = visualProxyArgs("/in.mp4", "/out.mp4", true);
+    expect(hw.indexOf("-hwaccel")).toBeLessThan(hw.indexOf("-i"));
+    expect(hw[hw.indexOf("-hwaccel") + 1]).toBe("videotoolbox");
+    expect(hw[hw.indexOf("-c:v") + 1]).toBe("libx264");
+    const sw = visualProxyArgs("/in.mp4", "/out.mp4", false);
+    expect(sw).not.toContain("-hwaccel");
+    expect(sw.slice(sw.indexOf("-i"))).toEqual(hw.slice(hw.indexOf("-i")));
+  });
+
+  it("decodificação por hardware que falha refaz o proxy visual em software", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-visual-hw-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const proxyCalls: ExecCall[] = [];
+    const exec: Executor = {
+      async run(call: ExecCall) {
+        if (call.command === "ffmpeg" && call.args.some((a) => a.startsWith("fps=4"))) {
+          proxyCalls.push(call);
+          if (call.args.includes("-hwaccel")) return { code: 1, stdout: "", stderr: "vt indisponível" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {},
+      undefined, undefined, undefined, undefined, { hwDecode: true });
+    expect(proxyCalls.map((c) => c.args.includes("-hwaccel"))).toEqual([true, false]);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("sem hwDecode o proxy visual não pede hardware", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-visual-sw-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const exec = new FakeExecutor();
+    await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {},
+      undefined, undefined, undefined, undefined, { hwDecode: false });
+    const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.some((a) => a.startsWith("fps=4")));
+    expect(proxy!.args).not.toContain("-hwaccel");
   });
 
   it("grava visual_index.json quando o sidecar devolve JSON", async () => {
