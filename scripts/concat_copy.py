@@ -42,7 +42,7 @@ def concat_video_copy(segments: list[dict[str, Any]], output_path: Path | str, *
     return None if proc.returncode == 0 else (proc.stderr or "").strip()[-1500:] or "ffmpeg falhou"
 
 
-def install(engine: Any) -> bool:
+def install(engine: Any, should_copy: Callable[[], bool] = lambda: True) -> bool:
     """Troca `engine._concat_hard` pela versão por cópia, com fallback.
 
     DECUPA_CONCAT_REENCODE=1 mantém a concatenação original (comparação A/B).
@@ -55,6 +55,8 @@ def install(engine: Any) -> bool:
         return False
 
     def concat_hard(segments: list[dict[str, Any]], output_path: Path, *, crf: int) -> str | None:
+        if not should_copy():
+            return original(segments, output_path, crf=crf)
         error = concat_video_copy(segments, output_path, crf=crf)
         if error is None:
             return None
