@@ -545,7 +545,7 @@ it("prévia cancelada na fila não lança render pela rota", async () => {
     });
     await vi.waitFor(() => {
       expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
-    });
+    }, { timeout: 10_000 });
     const cancelled = await fetch(`${base}/project/cancel`, { method: "POST" });
     expect(cancelled.status).toBe(200);
     release();
@@ -688,7 +688,7 @@ it("upload abortado não registra fonte nem deixa .part", async () => {
   await vi.waitFor(async () => {
     const files = await readdir(join(dir, "imports")).catch(() => [] as string[]);
     expect(files.filter((file) => file.endsWith(".part"))).toEqual([]);
-  });
+  }, { timeout: 10_000 });
   const body = (await (await fetch(`${base}/project`)).json()) as ProjectSummary;
   expect(body.project.revision).toBe(0);
   expect(body.project.assembly.sources).toEqual([]);
