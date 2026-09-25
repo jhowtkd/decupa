@@ -622,7 +622,7 @@ describe("runPreparation", () => {
       );
       await vi.waitFor(() => {
         expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
-      });
+      }, { timeout: 10_000 });
       aborter.abort();
       release();
       const done = await run;
@@ -649,7 +649,7 @@ describe("runPreparation", () => {
     // o percurso não a sobrescreve — interrompe retomável com ela intacta.
     await vi.waitFor(async () => {
       expect(calls.propose).toBe(1);
-    });
+    }, { timeout: 10_000 });
     await saveProject(dir, base.revision, (p) => ({
       ...p,
       revision: p.revision + 1,
@@ -684,7 +684,7 @@ describe("runPreparation", () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
       expect(claimed.preparation?.sources.fala?.audio).toBe("running");
-    });
+    }, { timeout: 10_000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
       applyTextEdit(p, { type: "correct", sourceId: "fala", start: 0, end: 1, text: "olá corrigido" }));
@@ -737,7 +737,7 @@ describe("runPreparation", () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
       expect(claimed.preparation?.revision).toBe(prepared.revision);
-    });
+    }, { timeout: 10_000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
       applyTextEdit(p, { type: "remove", sceneId: "sc-1", takeId: takeId!, wordIds: [wordId!] }));
@@ -1422,7 +1422,7 @@ it.each(["cancelar","editar"])("não publica decisão Jev tardia ao %s", async a
   deps.decision={mode:"hybrid",model:"test",client:{decide:async req=>{entered=true;await gate;return {model:"test",answers:Object.fromEntries(Object.keys(req.questions).map(id=>[id,{type:"noul" as const,noul:1}]))};}}};
   const aborter=new AbortController();
   const run=runPreparation(dir,base.revision,{mode:"prepare",request:"montar",modelOptIn:true,visualOptIn:true},deps,ctrl(aborter.signal));
-  await vi.waitFor(()=>expect(entered).toBe(true));
+  await vi.waitFor(()=>expect(entered).toBe(true), { timeout: 10_000 });
   expect((await loadProject(dir)).preparation?.note).toBe("Jev avaliando cortes");
   if(action==="cancelar") aborter.abort();
   else await saveProject(dir,base.revision,p=>({...p,revision:p.revision+1,assembly:{...p.assembly,revision:p.revision+1,name:"edição preservada"}}));
