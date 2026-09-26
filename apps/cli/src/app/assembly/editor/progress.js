@@ -3,11 +3,17 @@
 // watchedState (watched.js) e no servidor.
 import { clock } from "./format.js";
 
+/** Teto do anel enquanto o gate não libera: 100% só com status.watched. */
+const UNWATCHED_MAX = 0.99;
+
 export function watchProgress(until, duration, watched) {
   if (watched) return { ratio: 1, label: "vista até o fim" };
   if (!Number.isFinite(duration) || !(duration > 0)) return { ratio: 0, label: "" };
   const at = Math.min(Math.max(Number.isFinite(until) ? until : 0, 0), duration);
-  return { ratio: at / duration, label: "vista até " + clock(at) + " de " + clock(duration) };
+  const ratio = Math.min(at / duration, UNWATCHED_MAX);
+  // "1:13 de 1:13" leria como vista inteira: sem o gate, falta o final.
+  if (clock(at) === clock(duration)) return { ratio, label: "falta assistir ao final" };
+  return { ratio, label: "vista até " + clock(at) + " de " + clock(duration) };
 }
 
 export function reviewView(project, status, progress) {
