@@ -1,6 +1,10 @@
 import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { hashFile } from "@decupa/media";
@@ -120,6 +124,44 @@ it("grava timeline, referência e manifest na pasta da revisão", async () => {
   expect(manifest.reference).toBe(project.previewArtifact!.sha256);
   const again = await exportApproved(project, dir);
   expect(again).toBe(dest);
+});
+
+it("exporta a mídia importada com nome original e timecode real", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 12);
+  const stored = join(dir, "d3a82b67.MP4");
+  await promisify(execFile)("ffmpeg", [
+    "-v", "error", "-y", "-i", project.assembly.sources[0]!.path,
+    "-c", "copy", "-timecode", "01:00:00:00", stored,
+  ]);
+  const source = project.assembly.sources[0]!;
+  source.path = stored;
+  source.name = "DJI_original.MP4";
+  source.sha256 = await hashFile(stored);
+  // Como na importação (routes.ts): o timecode da mídia é lido uma vez e fica
+  // na fonte; a exportação usa esse valor, não relê o arquivo.
+  const { parseSourceTimecode } = await import("./timecode.ts");
+  source.timecode = parseSourceTimecode("01:00:00:00", source.fps);
+  project.assembly.tracks[0]!.clips[0]!.sourceStartSeconds = 0.5;
+  project.previewArtifact!.assemblySha256 = createHash("sha256")
+    .update(JSON.stringify(project.assembly)).digest("hex");
+  await createProject(dir, project);
+
+  const dest = await exportApproved(project, dir);
+  const { readFile, unlink } = await import("node:fs/promises");
+  const doc = JSON.parse(await readFile(join(dest, "timeline.otio"), "utf8"));
+  const clip = doc.tracks.children[0].children[0];
+  const alias = join(dest, "media", "0", source.name);
+  expect(clip.media_reference.name).toBe(source.name);
+  expect(fileURLToPath(clip.media_reference.target_url)).toBe(alias);
+  expect(clip.media_reference.available_range.start_time.value).toBe(90000);
+  expect(clip.source_range.start_time.value).toBe(90013);
+  expect(await hashFile(alias)).toBe(source.sha256);
+  expect(project.assembly.sources[0]!.path).toBe(stored);
+
+  await unlink(alias);
+  await expect(exportApproved(project, dir)).resolves.toBe(dest);
+  expect(await hashFile(alias)).toBe(source.sha256);
 });
 
 it("copia exatamente o mp4 assistido sem renderizar", async () => {

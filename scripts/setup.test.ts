@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it } from "vitest";
@@ -41,7 +41,7 @@ it("instala uma vez, repete e preserva alteração posterior", async () => {
   const patch = git(["diff"]);
   git(["restore", "lexicon.txt"]);
   await mkdir(join(root, "scripts/engine"), { recursive: true });
-  await writeFile(join(root, "scripts/engine/pt-br-lexicon.patch"), patch);
+  await writeFile(join(root, "scripts/engine/local-engine.patch"), patch);
   const { installEngine } = await import("./setup.mjs");
   await installEngine(root, { pin, remote });
   await installEngine(root, { pin, remote });
@@ -53,6 +53,22 @@ it("instala uma vez, repete e preserva alteração posterior", async () => {
   const { installEngineOrKeep } = await import("./setup.mjs");
   await expect(installEngineOrKeep(root, { pin, remote })).resolves.toBe("kept");
   expect(await readFile(file, "utf8")).toBe("my edit\n");
+});
+
+it("instala o bundle real sem remoto, repete e preserva WIP", async () => {
+  const root = await mkdtemp(join(tmpdir(), "Decupa Bundle "));
+  await cp(join(process.cwd(), "scripts/engine"), join(root, "scripts/engine"), { recursive: true });
+  const { installEngine } = await import("./setup.mjs");
+  await installEngine(root);
+  await installEngine(root);
+  const engine = join(root, "work/video-agent-kit-plugin");
+  const diff = execFileSync("git", ["-C", engine, "diff", "--binary", "HEAD"]);
+  expect(diff).toEqual(await readFile(join(root, "scripts/engine/local-engine.patch")));
+  expect(await readFile(join(engine, "LICENSE"), "utf8")).toContain("MIT License");
+  const file = join(engine, "mcp/ve_tools/render.py");
+  await writeFile(file, "# alteração do usuário\n");
+  await expect(installEngine(root)).rejects.toThrow(/modificado/);
+  expect(await readFile(file, "utf8")).toBe("# alteração do usuário\n");
 });
 
 it("propaga falha do subprocesso", async () => {

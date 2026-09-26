@@ -17,7 +17,6 @@ export function run(command, args, cwd) {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PIN = 'd9fe30076c00ce2968d570622dd22ba068337568';
-const REMOTE = 'https://github.com/jhowtkd/video-agent-kit-plugin.git';
 const exists = path => access(path).then(() => true, () => false);
 
 /**
@@ -25,9 +24,9 @@ const exists = path => access(path).then(() => true, () => false);
  * PT-BR aplicado. Nunca usa force/reset/stash/checkout forçado: um motor
  * existente incompatível é reportado e preservado intacto.
  */
-export async function installEngine(root, { pin = PIN, remote = REMOTE } = {}) {
+export async function installEngine(root, { pin = PIN, remote = join(root, 'scripts/engine/video-agent-kit.bundle') } = {}) {
   const engine = join(root, 'work/video-agent-kit-plugin');
-  const patch = join(root, 'scripts/engine/pt-br-lexicon.patch');
+  const patch = join(root, 'scripts/engine/local-engine.patch');
   if (await exists(engine)) {
     let head;
     try {

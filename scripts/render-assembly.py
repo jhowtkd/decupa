@@ -172,7 +172,7 @@ def main() -> int:
     except ImportError as exc:
         print(
             f"[ERROR] não achei o motor em {plugin_root} (mcp/ve_tools/render.py). "
-            f"Clone jhowtkd/video-agent-kit-plugin lá, ou aponte VE_PLUGIN_ROOT. ({exc})",
+            f"Execute node scripts/setup.mjs para instalar o motor incluído. ({exc})",
             file=sys.stderr,
         )
         return 1

@@ -30,7 +30,7 @@ try:
 except ImportError as exc:
     print(
         f"[ERROR] não achei o motor em {PLUGIN_ROOT} (mcp/ve_tools/condense.py). "
-        f"Clone jhowtkd/video-agent-kit-plugin lá, ou aponte VE_PLUGIN_ROOT. ({exc})",
+        f"Execute node scripts/setup.mjs para instalar o motor incluído. ({exc})",
         file=sys.stderr,
     )
     raise SystemExit(1)

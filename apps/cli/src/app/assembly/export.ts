@@ -2,8 +2,8 @@ import { buildHandoff } from "./handoff.ts";
 import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { copyFile, link, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { buildOtio } from "./otio.ts";
@@ -106,7 +106,10 @@ async function exportedFileSha(path: string): Promise<string | null> {
  * hashes dos arquivos reais conferem com o manifest e o MP4 tem
  * integridade (probe). Não basta a existência do manifest.
  */
-async function exportedDirValid(dest: string): Promise<boolean> {
+async function exportedDirValid(
+  dest: string,
+  aliases: { relativePath: string; sourcePath: string; sha256: string }[] = [],
+): Promise<boolean> {
   try {
     const manifest = JSON.parse(
       await readFile(join(dest, "manifest.json"), "utf8"),
@@ -134,6 +137,14 @@ async function exportedDirValid(dest: string): Promise<boolean> {
     }
     const refSha = await exportedFileSha(join(dest, "reference.mp4"));
     if (refSha !== manifest.reference) return false;
+    for (const alias of aliases) {
+      const [linked, original] = await Promise.all([
+        stat(join(dest, alias.relativePath)), stat(alias.sourcePath),
+      ]);
+      if (linked.size !== original.size) return false;
+      if ((linked.dev !== original.dev || linked.ino !== original.ino)
+        && await exportedFileSha(join(dest, alias.relativePath)) !== alias.sha256) return false;
+    }
     const info = await probe(join(dest, "reference.mp4")).catch(() => null);
     if (!info || (!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
       return false;
@@ -260,12 +271,23 @@ export async function exportApproved(project: Project, dir: string): Promise<str
   const lock = await acquireExportLock(dir, project.revision);
   try {
     const snapshot = structuredClone(project.assembly);
-    for (const source of snapshot.sources) {
+    const aliases: { relativePath: string; sourcePath: string; sha256: string }[] = [];
+    for (const [index, source] of snapshot.sources.entries()) {
       const resolved = await realpath(source.path);
       if (!isAbsolute(resolved)) {
         throw new Error(`fonte ${source.id} precisa de caminho absoluto`);
       }
       source.path = resolved;
+      if (basename(resolved) !== source.name) {
+        // O Resolve procura o basename do target_url; uploads usam UUID no disco.
+        if (source.name.length > 255 || /[/\\\0]/.test(source.name)
+          || source.name === "." || source.name === "..") {
+          throw new Error(`nome original inválido na fonte ${source.id}`);
+        }
+        const relativePath = join("media", String(index), source.name);
+        aliases.push({ relativePath, sourcePath: resolved, sha256: source.sha256 });
+        source.path = join(dest, relativePath);
+      }
     }
     const otioText = `${buildOtio(snapshot)}\n`;
     const otioSha = createHash("sha256").update(otioText, "utf8").digest("hex");
@@ -286,7 +308,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         && existing.handoff === handoffSha
         && existing.instrucoes === instructionsSha
         && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
-      if (matchesExpected && (await exportedDirValid(dest))) {
+      if (matchesExpected && (await exportedDirValid(dest, aliases))) {
         return dest;
       }
     } catch {
@@ -309,6 +331,15 @@ export async function exportApproved(project: Project, dir: string): Promise<str
       } satisfies VerificationRecord)}\n`, "utf8");
       await writeFile(join(tmp,"handoff.json"),handoffText);
       await writeFile(join(tmp,"handoff.md"),`# Handoff — revisão ${project.revision}\n\n`+buildHandoff(project).map(n=>`- ${n.sceneId} · frame ${n.startFrame}, ${n.durationFrames} frames · ${n.destination}: ${n.description}`).join("\n"));
+      for (const alias of aliases) {
+        const target = join(tmp, alias.relativePath);
+        await mkdir(dirname(target), { recursive: true });
+        try {
+          await link(alias.sourcePath, target);
+        } catch {
+          await copyFile(alias.sourcePath, target);
+        }
+      }
       const manifest = {
         handoff: handoffSha,
         instrucoes: instructionsSha,
@@ -334,7 +365,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         verificacao: "pendente",
       };
       await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-      if (!(await exportedDirValid(tmp))) {
+      if (!(await exportedDirValid(tmp, aliases))) {
         throw new Error("substituta inválida ao gravar a exportação");
       }
     } catch (err) {
@@ -362,7 +393,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
             && existing.handoff === handoffSha
             && existing.instrucoes === instructionsSha
             && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
-          if (same && (await exportedDirValid(dest))) return dest;
+          if (same && (await exportedDirValid(dest, aliases))) return dest;
         } catch {
           // Manifest ilegível: destino inconsistente abaixo.
         }

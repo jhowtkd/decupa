@@ -60,14 +60,18 @@ export function selectFrameRate(
 
 /**
  * Etiqueta de timecode gravada na mídia: tag do stream de vídeo
- * (`-timecode` do ffmpeg) com fallback para a tag do container.
+ * (`-timecode` do ffmpeg), depois a de qualquer outro stream (a trilha `tmcd`
+ * que MOV de câmera/celular carrega à parte) e por fim a tag do container.
  * Lixo/"" viram null — a exportação decide se o valor é legível.
  */
 export function readTimecode(
   video: FfprobeStream | undefined,
   formatTags: Record<string, string | undefined> | undefined,
+  streams: FfprobeStream[] = [],
 ): string | null {
-  const raw = video?.tags?.timecode ?? formatTags?.timecode;
+  const raw = video?.tags?.timecode
+    ?? streams.find((stream) => stream.tags?.timecode)?.tags?.timecode
+    ?? formatTags?.timecode;
   return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
 }
 
@@ -109,7 +113,6 @@ export async function probe(path: string): Promise<MediaInfo> {
   const durationSeconds = Number(parsed.format?.duration ?? 0);
 
   const frameRate = selectFrameRate(video?.r_frame_rate, video?.avg_frame_rate);
-
   return {
     path,
     durationMs: Math.round(durationSeconds * 1000),
@@ -123,7 +126,7 @@ export async function probe(path: string): Promise<MediaInfo> {
     videoCodec: video?.codec_name ?? null,
     audioCodec: audio?.codec_name ?? null,
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : null,
-    timecode: readTimecode(video, parsed.format?.tags),
+    timecode: readTimecode(video, parsed.format?.tags, streams),
     rotation: readRotation(video),
   };
 }

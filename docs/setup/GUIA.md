@@ -1,13 +1,13 @@
 # Instalar o Decupa em outro computador
 
-Referência: branch `feat/setup-simplificado`, atualizada em 14/09/2026. Registre o commit instalado com `git rev-parse HEAD`. Repositório: https://github.com/jhowtkd/decupa.
+Distribuição com motor incluído, atualizada em 22/09/2026. Em clone Git, registre `git rev-parse HEAD`; no ZIP, consulte `BUNDLE.txt`. Repositório do app: https://github.com/jhowtkd/decupa.
 Este guia instala o código existente; não é um instalador nem uma certificação de compatibilidade.
 O prompt para entregar ao agente está em [PROMPT-AGENTE.md](PROMPT-AGENTE.md).
 O resultado do aceite real por plataforma está na [evidência de 14/09/2026](../superpowers/evidence/2026-09-14-setup-simplificado.md).
 
 ## 1. Instalar e abrir: dois comandos
 
-Na raiz do clone do Decupa:
+Extraia o ZIP inteiro em uma pasta dedicada (ou use um clone atualizado). Na raiz do Decupa:
 
 ```bash
 node scripts/setup.mjs
@@ -18,7 +18,7 @@ node scripts/start.mjs --project "/caminho/absoluto/Meu Projeto"
 
 1. Confere os pré-requisitos da tabela abaixo e aponta links oficiais quando falta algo.
 2. Instala o pnpm 10.32.1 **local** em `work/setup-tools` (usando o npm que acompanha o Node; nenhuma ferramenta global é alterada) e instala as dependências JS com `pnpm install --frozen-lockfile`.
-3. Instala o motor de condense em `work/video-agent-kit-plugin` no commit pinado `d9fe30076c00ce2968d570622dd22ba068337568`, com o patch PT-BR aplicado. Nunca usa force/reset/stash: motor existente é preservado (seção 5).
+3. Instala o motor de condense em `work/video-agent-kit-plugin` no commit pinado `d9fe30076c00ce2968d570622dd22ba068337568`, a partir de `scripts/engine/video-agent-kit.bundle`, com `local-engine.patch` (PT-BR e correções locais de render). Não acessa outro repositório GitHub. Nunca usa force/reset/stash: motor existente é preservado (seção 5).
 4. Instala Python 3.11/3.12 via uv e cria os três ambientes isolados (seção 4).
 5. Testa o motor (`condense.py --help`) e roda o diagnóstico local (`doctor --local`), que dispensa chave de IA.
 6. Baixa e carrega os modelos padrão de fala (Whisper small, VAD e alinhamento PT-BR) e visão (MediaPipe). Só declara sucesso se todos carregarem.
@@ -35,7 +35,7 @@ Caminhos absolutos e com espaços funcionam — os scripts não passam por shell
 
 ## 2. O que preparar antes
 
-- Acesso do usuário aos repositórios `jhowtkd/decupa` e `jhowtkd/video-agent-kit-plugin`.
+- ZIP completo do Decupa, incluindo `scripts/engine/`, ou acesso ao repositório `jhowtkd/decupa`. O motor já está incluído; não exige conta/token GitHub para o motor.
 - Pasta de instalação e pasta separada para projetos.
 - Um vídeo curto de fala PT-BR autorizado para validação local.
 - Provedor de IA: na máquina do funcionário, defina `DECUPA_COMPANY_API_KEY` (e `DECUPA_COMPANY_PRESET` se não for Z.ai) **antes** do setup — o formulário é pulado. Sem isso, a primeira abertura pede a chave no app. Nunca envie a chave no prompt.

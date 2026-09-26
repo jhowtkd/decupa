@@ -795,13 +795,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           sendJson(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
           return true;
         }
-        const project = await mutate(baseRevision, async (project) => {
+        const sources: Source[] = [];
+        for (const path of picked.paths) sources.push(await sourceFromFile(path, "pending"));
+        // A seleção e o probe podem demorar; acrescente ao estado atual sob o lock.
+        await saveProject(dir, baseRevision, (project) => {
           let next = project;
-          for (const path of picked.paths) {
-            next = addSource(next, await sourceFromFile(path, nextSourceId(next)));
+          for (const source of sources) {
+            next = addSource(next, { ...source, id: nextSourceId(next) });
           }
           return bump(applyCanvasPolicy(next));
         });
+        const project = await loadProject(dir);
         sendJson(res, { project, ...snapshot() });
         return true;
       }

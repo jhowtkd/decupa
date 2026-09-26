@@ -160,3 +160,10 @@ it("checklist de importação lista fps, timecode e rotação por fonte", () => 
   const support = settings.sources.find((s) => s.startsWith("- b"))!;
   expect(support).toContain("90");
 });
+
+it("timecode drop-frame real do DJI (22:13:52;25) vira o quadro certo e rótulo inexistente é ilegível", async () => {
+  const { parseSourceTimecode } = await import("./timecode.ts");
+  const rate = { num: 30000, den: 1001 };
+  expect(parseSourceTimecode("22:13:52;25", rate).frames).toBe(2398585);
+  expect(parseSourceTimecode("00:01:00;01", rate).frames).toBeNull();
+});
