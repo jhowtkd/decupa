@@ -8,6 +8,8 @@ import { mountRail, preparationView } from "/editor/rail.js";
 import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
+import { idleStatus, stepperState, versionLabel } from "/editor/topbar.js";
+import { ICON } from "/editor/icons.js";
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
@@ -30,10 +32,11 @@ function project() {
   return state.get("project");
 }
 
-function setStatus(text, busy) {
+function setStatus(text, busy, tone = "") {
   const statusEl = document.getElementById("status");
   if (!statusEl) return;
   statusEl.textContent = text;
+  statusEl.dataset.tone = tone;
   statusEl.classList.toggle("busy", !!busy);
   if (busy) statusEl.setAttribute("aria-busy", "true");
   else statusEl.removeAttribute("aria-busy");
@@ -44,7 +47,7 @@ function renderStatus() {
   const previewBusy = previewInflight || previewPending;
   if (state.get("previewBusy") !== previewBusy) state.set("previewBusy", previewBusy);
   if (ui.error) {
-    setStatus(ui.error, false);
+    setStatus(ui.error, false, "error");
     return;
   }
   if (ui.label) {
@@ -56,7 +59,7 @@ function renderStatus() {
   if (p?.preparation) {
     const view = preparationView(p, operation);
     if (view.busy || view.tone === "error" || p.preparation.status === "cancelled") {
-      setStatus(view.title, view.busy);
+      setStatus(view.title, view.busy, view.tone === "error" ? "error" : "");
       return;
     }
   }
@@ -65,7 +68,7 @@ function renderStatus() {
     return;
   }
   if (operation?.stage === "error") {
-    setStatus("Erro: " + (operation.error || "falha no processamento"), false);
+    setStatus("Erro: " + (operation.error || "falha no processamento"), false, "error");
     return;
   }
   if (previewInflight || previewPending) {
@@ -77,7 +80,8 @@ function renderStatus() {
     return;
   }
   if (p) {
-    setStatus("revisão " + p.revision, false);
+    const idle = idleStatus(p);
+    setStatus(idle.text, false, idle.tone);
     return;
   }
   setStatus("carregando…", true);
@@ -331,6 +335,16 @@ function applyTranscriptNotice(text) {
   if (notice) el.title = notice;
   else el.removeAttribute("title");
 }
+/** Pílula de etapas: ✓ nas feitas, cadeado na entrega travada, ponto na atual (CSS). */
+function paintStages() {
+  for (const item of stepperState(project(), state.get("stage"))) {
+    const button = document.querySelector('#stages [data-stage="' + item.id + '"]');
+    if (!button) continue;
+    button.classList.toggle("is-done", item.done);
+    button.classList.toggle("is-locked", item.locked);
+    button.querySelector(".step-mark").innerHTML = item.done ? ICON.check : item.locked ? ICON.lock : "";
+  }
+}
 function applyStageDom(stage) {
   if (!STAGE_TARGET[stage]) return;
   // A etapa não remonta a bancada: texto e monitor ficam onde estão; só a
@@ -348,6 +362,7 @@ function applyStageDom(stage) {
   if (delivery) delivery.hidden = !entrega;
   if (stage === "revisao" && narrowViewport.matches) showMonitor(true);
   document.getElementById(STAGE_TARGET[stage])?.scrollIntoView({ block: "nearest" });
+  paintStages();
   if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
     && document.activeElement !== focus) {
     focus.focus({ preventScroll: true });
@@ -392,10 +407,14 @@ setStage("materiais");
 state.subscribe("project", (p) => {
   if (!p) return;
   renderStatus();
+  paintStages();
   // 202 de prepare/adjust/prepare-resume trazem preparation running e caem
   // aqui: o polling retoma sem fiação extra nos módulos.
   poller.schedule();
   document.getElementById("projectName").textContent = p.assembly.name && p.assembly.name !== p.id ? p.assembly.name : "Montagem principal";
+  const pill = document.getElementById("versionPill");
+  pill.textContent = versionLabel(p);
+  pill.hidden = false;
 });
 
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });
