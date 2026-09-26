@@ -1,19 +1,24 @@
-// Aprovação da prévia (pura, só exibição): quanto da prévia atual foi visto
-// e o que o cartão de revisão diz. O gate de verdade continua em
-// watchedState (watched.js) e no servidor.
+// Aprovação da prévia (pura, só exibição): quanto da prévia atual foi tocado
+// de fato (a cobertura de playback.js) e o que o cartão de revisão diz. O gate
+// de verdade continua em watchedState (watched.js) e no servidor.
 import { clock } from "./format.js";
 
 /** Teto do anel enquanto o gate não libera: 100% só com status.watched. */
 const UNWATCHED_MAX = 0.99;
 
-export function watchProgress(until, duration, watched) {
+/**
+ * Anel e texto a partir dos segundos cobertos (não da posição mais distante:
+ * um seek para a frente não conta). O trecho coberto pode não começar no zero,
+ * então o texto diz quanto foi visto, não "até onde".
+ */
+export function watchProgress(covered, duration, watched) {
   if (watched) return { ratio: 1, label: "vista até o fim" };
   if (!Number.isFinite(duration) || !(duration > 0)) return { ratio: 0, label: "" };
-  const at = Math.min(Math.max(Number.isFinite(until) ? until : 0, 0), duration);
-  const ratio = Math.min(at / duration, UNWATCHED_MAX);
-  // "1:13 de 1:13" leria como vista inteira: sem o gate, falta o final.
-  if (clock(at) === clock(duration)) return { ratio, label: "falta assistir ao final" };
-  return { ratio, label: "vista até " + clock(at) + " de " + clock(duration) };
+  const seen = Math.min(Math.max(Number.isFinite(covered) ? covered : 0, 0), duration);
+  const ratio = Math.min(seen / duration, UNWATCHED_MAX);
+  // "1:13 de 1:13" leria como vista inteira: sem o gate, falta um trecho.
+  if (clock(seen) === clock(duration)) return { ratio, label: "falta assistir um trecho" };
+  return { ratio, label: clock(seen) + " de " + clock(duration) + " vistos" };
 }
 
 export function reviewView(project, status, progress) {
