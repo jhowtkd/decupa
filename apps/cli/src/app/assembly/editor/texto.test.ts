@@ -6,6 +6,9 @@ import {
   menuActionsFor,
   needsEmptyGuide,
   sceneHeaderActions,
+  sceneMenuItems,
+  sceneRangeLabel,
+  textoMetaView,
 } from "./texto.js";
 
 type Sel = { removed?: boolean; protected?: boolean; takeId?: string };
@@ -145,4 +148,33 @@ it("docSignature no modo transcrito inclui status e nome da fonte", () => {
   expect(docSignature(flipped)).not.toBe(docSignature(base));
   const renamed = docProject({ scenes: [], assembly: { sources: [{ id: "a", name: "b.mp4" }] }, analyses: [{ sourceId: "a", status: "ready", words }] });
   expect(docSignature(renamed)).not.toBe(docSignature(base));
+});
+
+const cenas = {
+  scenes: [
+    { id: "s1", takes: [{ start: 0.4, end: 25.2, removed: [{ start: 11, end: 14.5 }] }] },
+    { id: "s2", takes: [{ start: 32.1, end: 54.8, removed: [] }, { start: 56.2, end: 66.4, removed: [] }] },
+  ],
+};
+
+it("sceneRangeLabel usa o tempo da montagem, relógio m:ss e duração com vírgula", () => {
+  expect(sceneRangeLabel(cenas, cenas.scenes[0])).toBe("0:00 – 0:21 · 21,3 s");
+  expect(sceneRangeLabel(cenas, cenas.scenes[1])).toBe("0:21 – 0:54 · 32,9 s");
+});
+
+it("sceneMenuItems junta mover/ajustar/apoio/apagar num menu só", () => {
+  const middle = sceneMenuItems(1, 3, true);
+  expect(middle.map((i: { action: string }) => i.action)).toEqual(["up", "down", "ajustar", "apoio", "delete"]);
+  expect(middle.every((i: { disabled: boolean }) => !i.disabled)).toBe(true);
+  expect(middle.at(-1)).toMatchObject({ label: "Apagar cena", danger: true });
+  const first = sceneMenuItems(0, 3, false);
+  expect(first.map((i: { action: string }) => i.action)).toEqual(["up", "down", "ajustar", "delete"]);
+  expect(first[0]).toMatchObject({ label: "Mover para cima", disabled: true });
+});
+
+it("textoMetaView resume cenas ou avisa a transcrição parcial", () => {
+  expect(textoMetaView(3, false, 73.12)).toEqual({ hidden: false, accent: false, text: "3 cenas · 1:13,1" });
+  expect(textoMetaView(1, false, 21.3).text).toBe("1 cena · 0:21,3");
+  expect(textoMetaView(0, true, 0)).toEqual({ hidden: false, accent: true, text: "Transcrição parcial" });
+  expect(textoMetaView(0, false, 0).hidden).toBe(true);
 });

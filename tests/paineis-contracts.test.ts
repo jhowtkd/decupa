@@ -72,3 +72,14 @@ it("rail: lista compacta com menu por material, papel 'Fala + apoio' e sem jarg�
   const templates = await read("../apps/cli/src/app/assembly/editor/templates.js");
   expect(templates).toContain('getElementById("templateSlot")');
 });
+
+it("texto: prosa em serifa, sem glifos nos controles de cena, menus por classe", async () => {
+  const texto = await read(TEXTO);
+  for (const glyph of ["↥", "↧", "✕", "✂", "🎬"]) expect(texto).not.toContain(glyph);
+  expect(texto).toContain("data-scene-menu");
+  expect(texto).toContain("data-include-zone");
+  expect(texto).not.toContain("menu.style.cssText");
+  const css = await read(CSS);
+  expect(css).toMatch(/\.prose\s*\{[^}]*var\(--serif\)/);
+  expect(css).toContain(".float-menu");
+});
