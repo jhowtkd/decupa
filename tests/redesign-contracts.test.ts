@@ -56,6 +56,14 @@ it("inspetor estreito tem abrir/fechar + reduced-motion", async () => {
   expect(css).toContain("prefers-reduced-motion");
 });
 
+it("nenhuma concatenação presa dentro de literal de aspas simples", async () => {
+  // '<p>x: " + expr + "</p>' renderiza o código em vez do valor.
+  for (const file of [PAGEJS, RAIL, CONTEXTO, TEXTO, SEQ]) {
+    const src = await read(file);
+    expect(src.match(/'[^'\n]*" \+ [^'\n]*\+ "[^'\n]*'/)?.[0], file).toBeUndefined();
+  }
+});
+
 it("etapa ativa: o aria-current que o JS grava é o que o CSS destaca", async () => {
   const pagejs = await read(PAGEJS);
   const css = await read(CSS);

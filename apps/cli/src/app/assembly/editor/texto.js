@@ -687,7 +687,7 @@ export function mountTexto({ state, api, player }) {
     const summary = speechSummary(proposal);
     box.innerHTML = '<p class="muted">' + esc(summary.scope) + " · " + esc(summary.duration) + "</p>"
       + '<p>' + esc(proposal.before.text) + "</p>"
-      + '<p class="muted">cortes: " + (summary.cuts.length ? "" : "nenhum") + "</p>'
+      + '<p class="muted">cortes: ' + (summary.cuts.length ? "" : "nenhum") + "</p>"
       + "<ul class=\"plain\">" + summary.cuts.map((cut) => "<li>" + esc(cut) + "</li>").join("") + "</ul>"
       + (summary.protected ? '<p class="muted">' + esc(summary.protected) + "</p>" : "");
     applyRow.hidden = false;
