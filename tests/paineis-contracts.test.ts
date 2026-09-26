@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 
 const HTML = "../apps/cli/src/app/assembly/page.html";
@@ -140,4 +141,29 @@ it("entrega: sem emoji, arquivos por deliveryFormats, status sem ' · ' solto", 
   expect(contexto).toContain(">Montagem preparada para o DaVinci</h2>");
   expect(contexto).toContain('id="formatOrigin"');
   expect(contexto).toContain("formatOrigin(project.assembly)");
+});
+
+it("limpar: casca de três cartões, maiúscula inicial e faixa da fonte pura", async () => {
+  const html = await read("../apps/cli/src/app/page.html");
+  for (const id of ["topbar", "steps", "side", "center", "monitor-card", "monitor", "strip", "triage", "player"]) {
+    expect(html, id).toContain(`id="${id}"`);
+  }
+  for (const label of [">Cancelar<", ">Sugerir cortes<", "Exportar<svg", ">Aplicar<", ">Descartar<"]) {
+    expect(html).toContain(label);
+  }
+  for (const old of [">cancelar<", ">sugerir cortes<", ">aplicar<", ">descartar<", "⚠"]) expect(html).not.toContain(old);
+  const src = html.slice(html.indexOf("// <strip-model>"), html.indexOf("// </strip-model>"));
+  const stripModel = runInNewContext(src + "; stripModel");
+  const kept = new Map([["u1", true], ["u2", false], ["u3", true]]);
+  const segs = stripModel([
+    { id: "u1", start: 0, end: 2, flags: [] },
+    { id: "u2", start: 2, end: 5, flags: [] },
+    { id: "u3", start: 5, end: 10, flags: [{ message: "olhou pro monitor" }] },
+  ], kept, 10);
+  expect(segs).toEqual([
+    { id: "u1", left: 0, width: 20, kept: true, flagged: false },
+    { id: "u2", left: 20, width: 30, kept: false, flagged: false },
+    { id: "u3", left: 50, width: 50, kept: true, flagged: true },
+  ]);
+  expect(stripModel([], kept, 0)).toEqual([]);
 });
