@@ -1,2 +1,0 @@
-[     265ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:7791/favicon.ico:0
-[   28977ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:7791/jobs/245aac31-f24f-4f45-92df-53a806b2759d/export:0
