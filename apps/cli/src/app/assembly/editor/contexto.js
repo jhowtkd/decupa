@@ -162,8 +162,8 @@ export function mountStage({ state, api, player }) {
       : project.scenes.length ? "A prévia ainda não está pronta" : "Materiais prontos para começar";
     document.getElementById("emptyMessage").textContent = !hasMedia
       ? "Importe os materiais, conte o que você quer no briefing e monte seu primeiro corte."
-      : prep?.status === "running" ? "Acompanhe as etapas acima. Você pode consultar os materiais e a transcrição enquanto isso."
-      : prep && ["interrupted", "attention"].includes(prep.status) ? "Veja o material com falha acima e retome a preparação. A transcrição concluída continua disponível em Texto."
+      : prep?.status === "running" ? "Acompanhe as etapas abaixo. A transcrição já aparece no texto enquanto isso."
+      : prep && ["interrupted", "attention"].includes(prep.status) ? "Veja o material com falha no rail e retome a preparação. A transcrição concluída continua no texto."
       : "Confira o briefing e clique em Montar vídeo. Para assistir a uma fonte, escolha Original ou sua miniatura.";
     document.getElementById("importFromStage").hidden = hasMedia;
     setDisabled(document.getElementById("refreshPreview"), !project.scenes.length);

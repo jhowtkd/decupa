@@ -110,3 +110,16 @@ it("sequência: rótulo em português, desfazer no cabeçalho do texto, sem altu
   expect(seq).not.toContain("min-height:154px");
   expect(seq).toContain("clock(t)");
 });
+
+it("estados: vazio com briefing no monitor, preparação com etapas e custo visível", async () => {
+  const texto = await read(TEXTO);
+  expect(texto).toContain("Seu próximo vídeo começa aqui");
+  const rail = await read(RAIL);
+  expect(rail).toContain("function placeBriefing(");
+  expect(rail).toContain('className = "step-state"');
+  expect(rail).toContain("Usa o provedor configurado · pode haver cobrança");
+  expect(rail).not.toContain('(done ? "✓ " : "")');
+  expect(await read(PAGEJS)).toContain('classList.toggle("is-empty"');
+  const css = await read(CSS);
+  expect(css).toContain("body.is-empty");
+});

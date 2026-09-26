@@ -284,6 +284,20 @@ export function mountRail({ state, api, player }) {
   document.body.appendChild(briefingDialog);
   document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
+  const briefingForm = document.getElementById("briefingForm");
+  const inlineBriefing = document.getElementById("monitorBriefing");
+  inlineBriefing.innerHTML = '<h2 class="briefing-title">Briefing</h2>';
+  /** Projeto vazio: o briefing sai do diálogo e fica ao lado da área de importar. */
+  function placeBriefing(project) {
+    const empty = project.assembly.sources.length === 0;
+    inlineBriefing.hidden = !empty;
+    if (empty && briefingForm.parentElement !== inlineBriefing) {
+      if (briefingDialog.open) briefingDialog.close();
+      inlineBriefing.appendChild(briefingForm);
+    } else if (!empty && briefingForm.parentElement !== briefingDialog) {
+      briefingDialog.insertBefore(briefingForm, briefingDialog.querySelector(".dialog-actions"));
+    }
+  }
   const newProject = document.getElementById("newProject");
   newProject.onclick = async () => {
     newProject.disabled = true;
@@ -300,10 +314,12 @@ export function mountRail({ state, api, player }) {
 
   const preparation = document.getElementById("activity");
   preparation.innerHTML = '<div class="activity-heading"><span class="activity-indicator" aria-hidden="true"></span>'
-    + '<div><h1 id="prepSummary" aria-live="polite"></h1><p id="opLine" class="muted" aria-live="polite"></p></div>'
-    + '<div class="activity-actions"><button type="button" id="resume">Retomar preparação</button>'
-    + '<button type="button" id="stopPreparation" class="danger" hidden>Cancelar preparação</button></div></div>'
-    + '<ol id="prepList" class="preparation-steps"></ol><div id="prepError"></div>';
+    + '<div><h1 id="prepSummary" aria-live="polite"></h1><p id="opLine" aria-live="polite"></p></div></div>'
+    + '<div id="prepBar" class="prep-bar" aria-hidden="true"></div>'
+    + '<ol id="prepList" class="preparation-steps"></ol><div id="prepError"></div>'
+    + '<div class="activity-actions"><p class="consent">Usa o provedor configurado · pode haver cobrança</p>'
+    + '<button type="button" id="resume" class="small">Retomar preparação</button>'
+    + '<button type="button" id="stopPreparation" class="danger small" hidden>Cancelar preparação</button></div>';
   const prepare = document.createElement("button");
   prepare.id = "prepare";
   prepare.type = "button";
@@ -448,7 +464,8 @@ export function mountRail({ state, api, player }) {
       label.textContent = sourceStatusText(status);
       label.title = status.detail;
     }
-    preparation.hidden = !prep;
+    // Pronta, a preparação sai de cena: o cartão de revisão assume.
+    preparation.hidden = !prep || prep.status === "ready";
     if (!prep) return;
     const view = preparationView(project, state.get("operation"));
     preparation.dataset.tone = view.tone;
@@ -456,21 +473,35 @@ export function mountRail({ state, api, player }) {
     document.getElementById("opLine").textContent = view.detail;
     document.getElementById("stopPreparation").hidden = !view.busy;
     document.getElementById("resume").hidden = view.busy || prep.status === "ready";
-    const steps = document.getElementById("prepList");
-    steps.replaceChildren();
     const keys = prep.mode === "preview" ? ["preview"] : Object.keys(PREP_STAGES);
+    const steps = document.getElementById("prepList");
+    const bar = document.getElementById("prepBar");
+    steps.replaceChildren();
+    bar.replaceChildren();
+    const included = project.assembly.sources.filter((source) => source.included);
+    const active = included.find((source) => Object.values(prep.sources[source.id] || {}).includes("running"));
     for (const key of keys) {
-      const li = document.createElement("li");
       const sourceStage = ["media", "audio", "visual"].includes(key);
-      const included = project.assembly.sources.filter((source) => source.included);
       const done = sourceStage ? included.length > 0 && included.every((source) => prep.sources[source.id]?.[key] === "ready")
         : key === "proposal" ? project.scenes.length > 0 && ["preview"].includes(prep.stage)
         : project.previewRevision === project.revision;
       const status = done ? "ready" : key === prep.stage ? (view.busy ? "running" : "error") : "pending";
+      const li = document.createElement("li");
       li.className = status;
-      li.textContent = (done ? "✓ " : "") + PREP_STAGES[key];
-      li.title = STAGE_LABEL[status];
+      li.innerHTML = '<span class="step-icon">'
+        + (status === "ready" ? ICON.ok : status === "running" ? ICON.spinner : status === "error" ? ICON.alert : ICON.circle)
+        + "</span>";
+      const label = document.createElement("span");
+      label.className = "step-label";
+      label.textContent = PREP_STAGES[key];
+      const stateText = document.createElement("span");
+      stateText.className = "step-state";
+      stateText.textContent = STAGE_LABEL[status] + (status === "running" && active && sourceStage ? " · " + active.name : "");
+      li.append(label, stateText);
       steps.appendChild(li);
+      const seg = document.createElement("span");
+      seg.className = status;
+      bar.appendChild(seg);
     }
     const error = document.getElementById("prepError");
     error.textContent = view.tone === "error"
@@ -534,7 +565,8 @@ export function mountRail({ state, api, player }) {
 
   function render(project) {
     if (!project) return;
-    if (!briefingDialog.open) {
+    placeBriefing(project);
+    if (!briefingDialog.open && !briefingForm.contains(document.activeElement)) {
       document.getElementById("kind").value = project.input.kind;
       document.getElementById("inputText").value = project.input.text;
       document.getElementById("target").value = String(project.input.targetSeconds);

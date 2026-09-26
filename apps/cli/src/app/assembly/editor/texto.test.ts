@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   acceptedFormatsLabel,
+  analysisStatusLabel,
   docSignature,
   emptyGuideHtml,
   menuActionsFor,
@@ -10,6 +11,7 @@ import {
   sceneMenuItems,
   sceneRangeLabel,
   textoMetaView,
+  transcriptHtml,
 } from "./texto.js";
 
 type Sel = { removed?: boolean; protected?: boolean; takeId?: string };
@@ -210,4 +212,24 @@ it("textoMetaView resume cenas ou avisa a transcrição parcial", () => {
   expect(textoMetaView(1, false, 21.3).text).toBe("1 cena · 0:21,3");
   expect(textoMetaView(0, true, 0)).toEqual({ hidden: false, accent: true, text: "Transcrição parcial" });
   expect(textoMetaView(0, false, 0).hidden).toBe(true);
+});
+
+it("status da análise em português, sem o enum cru", () => {
+  expect(analysisStatusLabel("ready")).toBe("transcrita");
+  expect(analysisStatusLabel("partial")).toBe("parcial");
+  expect(analysisStatusLabel("error")).toBe("com erro");
+  expect(analysisStatusLabel(undefined)).toBe("na fila");
+});
+
+it("transcrição por fonte usa o rótulo traduzido", () => {
+  const html = transcriptHtml({
+    preparation: { status: "running" },
+    assembly: { sources: [{ id: "a", name: "fala.mp4" }] },
+    analyses: [{ sourceId: "a", status: "partial", words: [] }],
+    corrections: [],
+  });
+  expect(html).toContain("fala.mp4");
+  expect(html).toContain(">parcial<");
+  expect(html).not.toContain("partial");
+  expect(html).toContain("Transcrição ainda não disponível.");
 });

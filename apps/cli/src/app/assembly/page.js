@@ -418,6 +418,7 @@ setStage("materiais");
 
 state.subscribe("project", (p) => {
   if (!p) return;
+  document.body.classList.toggle("is-empty", p.assembly.sources.length === 0);
   renderStatus();
   paintStages();
   // 202 de prepare/adjust/prepare-resume trazem preparation running e caem

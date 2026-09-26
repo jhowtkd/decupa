@@ -269,17 +269,18 @@ export function acceptedFormatsLabel(accept) {
  * @param {string} accept
  */
 export function emptyGuideHtml(accept) {
-  return '<section data-empty-guide aria-label="Como começar">'
-    + "<h1>Monte seu vídeo em 3 passos</h1>"
-    + "<ol>"
-    + "<li><strong>Importe</strong> seus vídeos e áudios.</li>"
-    + "<li><strong>Selecione e arrume o texto</strong> para montar as cenas.</li>"
-    + "<li><strong>Revise e entregue</strong>: confira a prévia e exporte o resultado.</li>"
-    + "</ol>"
-    + '<p class="muted">Formatos aceitos: ' + esc(acceptedFormatsLabel(accept)) + ".</p>"
-    + '<p><button type="button" class="primary" data-empty-import>Importar mídia</button></p>'
-    + '<p class="muted">Ou arraste os arquivos para esta área.</p>'
-    + "</section>";
+  return '<section class="empty-guide" data-empty-guide aria-label="Como começar">'
+    + '<div class="empty-hero"><span class="empty-icon">' + ICON.importMedia + "</span>"
+    + "<h1>Seu próximo vídeo começa aqui</h1>"
+    + "<p>Solte vídeos e áudios nesta área ou escolha os arquivos no computador.</p>"
+    + '<button type="button" class="primary big" data-empty-import>' + ICON.plus + "Importar mídia</button>"
+    + '<p class="empty-foot">Formatos aceitos: ' + esc(acceptedFormatsLabel(accept))
+    + " · os originais ficam neste computador</p></div>"
+    + '<ol class="empty-steps" aria-label="Como funciona">'
+    + '<li><span class="num is-current">1</span><strong>Importe</strong><span>Importe seus vídeos e áudios.</span></li>'
+    + '<li><span class="num">2</span><strong>Arrume pelo texto</strong><span>Selecione e arrume o texto para montar as cenas.</span></li>'
+    + '<li><span class="num">3</span><strong>Revise e entregue</strong><span>Confira a prévia e exporte o resultado.</span></li>'
+    + "</ol></section>";
 }
 
 /* ---- Render (os dois documentos do spec, portados do bootstrap) ---- */
@@ -324,26 +325,27 @@ function sourcesWithTranscript(project) {
   });
 }
 
+/** Status da análise por fonte, em português (o enum do servidor não vai para a tela). */
+export function analysisStatusLabel(status) {
+  return { ready: "transcrita", partial: "parcial", error: "com erro" }[status] || "na fila";
+}
+
 /**
- * Documento da transcrição (antes da proposta de cenas). O marcador
- * "· parcial" permanece enquanto a preparação está em andamento.
+ * Documento da transcrição (antes da proposta de cenas). Enquanto a
+ * preparação roda, a pílula "Transcrição parcial" do cabeçalho avisa.
  * Cada fonte entra com as palavras dela assim que essa fonte é salva.
  */
 export function transcriptHtml(project) {
-  const running = project.preparation && project.preparation.status === "running";
   let html = "";
   for (const source of project.assembly.sources) {
     const analysis = project.analyses.find((item) => item.sourceId === source.id);
-    const statusText = analysis ? analysis.status : "na fila";
-    html += '<section class="doc-source" data-source="' + esc(source.id) + '"><h2>'
-      + esc(source.name) + " · " + esc(statusText)
-      + (running ? ' <span class="parcial">· parcial</span>' : "") + "</h2>";
+    html += '<section class="doc-source" data-source="' + esc(source.id) + '">'
+      + '<header class="doc-head"><h2>' + esc(source.name) + '</h2><span class="pill">'
+      + esc(analysisStatusLabel(analysis?.status)) + "</span></header>";
     const words = effectiveWords(project, source.id);
-    if (!words.length) {
-      html += '<p class="muted">transcrição ainda não disponível.</p>';
-    } else {
-      html += '<p class="prose">' + words.map((w) => esc(w.text)).join(" ") + "</p>";
-    }
+    html += words.length
+      ? '<p class="prose is-draft">' + words.map((w) => esc(w.text)).join(" ") + "</p>"
+      : '<p class="muted">Transcrição ainda não disponível.</p>';
     html += "</section>";
   }
   return html;
