@@ -83,3 +83,13 @@ it("texto: prosa em serifa, sem glifos nos controles de cena, menus por classe",
   expect(css).toMatch(/\.prose\s*\{[^}]*var\(--serif\)/);
   expect(css).toContain(".float-menu");
 });
+
+it("prévia: cartão de revisão com anel de progresso e aprovar travado com cadeado", async () => {
+  const contexto = await read(CONTEXTO);
+  expect(contexto).toContain('from "./progress.js"');
+  expect(contexto).toContain('id="watchRing"');
+  expect(contexto).toContain('classList.toggle("is-locked"');
+  expect(contexto).toContain("watchedState(project, watched).canApprove");
+  expect(contexto).not.toContain("▰");
+  expect(contexto).not.toContain('className = "stage-footer"');
+});

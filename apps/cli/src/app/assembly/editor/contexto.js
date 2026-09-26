@@ -5,6 +5,8 @@
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
 import { deliveryChecklist, exportView, formatLabel, resolveView } from "./rail.js";
+import { ICON } from "./icons.js";
+import { reviewView, watchProgress } from "./progress.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -29,33 +31,33 @@ export function mountStage({ state, api, player }) {
   const meta = document.createElement("div");
   meta.className = "preview-meta";
   meta.id = "deliveryMeta";
-  const fresh = document.createElement("p");
-  fresh.className = "muted";
-  fresh.id = "freshChip";
-  fresh.setAttribute("aria-live", "polite");
-  const hint = document.createElement("p");
-  hint.className = "muted";
-  hint.textContent = "Assista à prévia atual antes de aprovar.";
-  const row = document.createElement("div");
-  row.className = "row";
-  row.innerHTML = '<button type="button" id="refreshPreview">Atualizar prévia</button>'
-    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button>';
-  const header = document.createElement("div");
-  header.className = "stage-header";
-  header.innerHTML = '<div class="view-tabs"><button type="button" id="montageView" aria-pressed="true">Montagem</button>'
-    + '<button type="button" id="originalView" aria-pressed="false">Original</button></div><span id="viewLabel" class="muted">Prévia da montagem</span>';
-  const screen = document.createElement("div");
-  screen.className = "preview-screen";
   const empty = document.createElement("div");
   empty.className = "preview-empty";
-  empty.innerHTML = '<span class="empty-mark" aria-hidden="true">▰</span><h1 id="emptyTitle">Seu próximo vídeo começa aqui</h1>'
+  empty.innerHTML = '<span class="empty-mark">' + ICON.importMedia + '</span><h1 id="emptyTitle">Seu próximo vídeo começa aqui</h1>'
     + '<p id="emptyMessage">Importe os materiais, conte o que você quer no briefing e monte seu primeiro corte.</p>'
     + '<button type="button" id="importFromStage" class="primary">Importar mídia</button>';
-  screen.append(previewPlayer, empty);
-  const footer = document.createElement("div");
-  footer.className = "stage-footer";
-  footer.append(note, meta, fresh, hint, row);
-  stage.append(header, screen, footer);
+  const overlay = document.createElement("div");
+  overlay.className = "preview-overlay";
+  overlay.innerHTML = '<span id="viewLabel" class="pill mono preview-label">Prévia da montagem</span>'
+    + '<div class="view-tabs" role="group" aria-label="Fonte do monitor">'
+    + '<button type="button" id="montageView" aria-pressed="true">Montagem</button>'
+    + '<button type="button" id="originalView" aria-pressed="false">Original</button></div>';
+  const screen = document.createElement("div");
+  screen.className = "preview-screen";
+  screen.append(previewPlayer, empty, overlay);
+  const review = document.createElement("div");
+  review.className = "sub review-card";
+  review.id = "reviewCard";
+  review.innerHTML = '<div class="review-head">'
+    + '<svg class="ring" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">'
+    + '<circle class="ring-track" cx="22" cy="22" r="19"></circle>'
+    + '<circle id="watchRing" class="ring-fill" cx="22" cy="22" r="19" transform="rotate(-90 22 22)"></circle>'
+    + '<text id="watchPct" class="ring-pct" x="22" y="26" text-anchor="middle"></text></svg>'
+    + '<div class="review-text"><span id="reviewTitle" class="review-title"></span>'
+    + '<span id="freshChip" aria-live="polite"></span></div></div>'
+    + '<div class="review-actions"><button type="button" id="refreshPreview" class="quiet small">Atualizar prévia</button>'
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
+  stage.append(screen, note, meta, review);
   document.getElementById("importFromStage").onclick = () => document.getElementById("filePicker").click();
   document.getElementById("montageView").onclick = () => {
     previewPlayer.removeAttribute("data-source");
@@ -72,6 +74,10 @@ export function mountStage({ state, api, player }) {
   // quando vista até o fim (perto do fim ou evento ended). Troca de src,
   // seek para trás ou revisão nova resetam.
   let lastTime = 0;
+  // Até onde a prévia atual foi vista (só exibição): volta junto com o
+  // assistido num seek para trás ou troca de src.
+  let furthest = 0;
+  const RING = 2 * Math.PI * 19;
   function isPreviewSrc(project) {
     return !!project && project.previewRevision != null
       && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
@@ -89,10 +95,16 @@ export function mountStage({ state, api, player }) {
   function resetWatched() {
     state.set("watched", { revision: null, ended: false });
     lastTime = previewPlayer.currentTime || 0;
+    furthest = previewPlayer.currentTime || 0;
   }
   previewPlayer.addEventListener("timeupdate", () => {
     if (!Number.isFinite(previewPlayer.currentTime)) return;
-    lastTime = previewPlayer.currentTime;
+    // O timeupdate chega antes do seeked. Sem esta comparação o salto para
+    // trás já teria sobrescrito lastTime e o assistido não reiniciaria.
+    if (previewPlayer.currentTime < lastTime - 0.25) resetWatched();
+    else lastTime = previewPlayer.currentTime;
+    if (isPreviewSrc(state.get("project"))) furthest = Math.max(furthest, previewPlayer.currentTime);
+    paintReview(state.get("project"));
     if (nearEnd()) markWatched();
   });
   previewPlayer.addEventListener("ended", markWatched);
@@ -103,21 +115,29 @@ export function mountStage({ state, api, player }) {
   });
   previewPlayer.addEventListener("loadstart", () => {
     lastTime = 0;
+    furthest = 0;
     state.set("watched", { revision: null, ended: false });
   });
 
-  /** Chip de frescor + gate do botão aprovar (Task 9). */
-  function renderFreshness(project) {
+  /** Cartão de revisão: anel do visto, texto do gate e aprovar travado (Task 9). */
+  function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const chip = document.getElementById("freshChip");
-    if (chip) chip.textContent = !project.scenes.length ? "" : project.previewRevision == null
-      ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada") : status.label;
-    setDisabled(document.getElementById("approveFinal"), !status.canApprove || state.get("view") === "original");
+    const view = reviewView(project, status, watchProgress(furthest, previewPlayer.duration, status.watched));
+    document.getElementById("reviewTitle").textContent = view.title;
+    document.getElementById("freshChip").textContent = project.previewRevision == null
+      ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada")
+      : view.detail;
+    document.getElementById("watchRing").style.strokeDasharray = (view.ratio * RING).toFixed(1) + " " + RING.toFixed(1);
+    document.getElementById("watchPct").textContent = Math.round(view.ratio * 100) + "%";
+    const approve = document.getElementById("approveFinal");
+    const locked = !status.canApprove || state.get("view") === "original";
+    setDisabled(approve, locked);
+    approve.classList.toggle("is-locked", locked);
+    approve.innerHTML = (locked ? ICON.lock : ICON.check) + "Aprovar prévia assistida";
   }
 
   function renderPreview(project) {
-    hint.textContent = "Assista à prévia atual antes de aprovar. " + (project?.scenes||[]).flatMap(s=>(s.animationNotes||[]).map(n=>"Pendente no handoff: "+n.description+" ("+n.destination+")")).join(" · ");
     if (!project) return;
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
@@ -128,7 +148,7 @@ export function mountStage({ state, api, player }) {
     const hasPreview = project.previewRevision != null || previewPlayer.hasAttribute("data-rev");
     previewPlayer.hidden = !original && !hasPreview;
     empty.hidden = !previewPlayer.hidden;
-    footer.hidden = !project.scenes.length || original;
+    review.hidden = !project.scenes.length || original;
     document.getElementById("montageView").setAttribute("aria-pressed", String(!original));
     document.getElementById("originalView").setAttribute("aria-pressed", String(original));
     document.getElementById("originalView").disabled = project.assembly.sources.length === 0;
@@ -147,7 +167,7 @@ export function mountStage({ state, api, player }) {
       : "Confira o briefing e clique em Montar vídeo. Para assistir a uma fonte, escolha Original ou sua miniatura.";
     document.getElementById("importFromStage").hidden = hasMedia;
     setDisabled(document.getElementById("refreshPreview"), !project.scenes.length);
-    renderFreshness(project);
+    paintReview(project);
     if (original) return;
     if (!project.scenes.length) { previewPlayer.hidden = true; empty.hidden = false; return; }
     // Metadados da prévia em linha de chips mono (Task 4).
@@ -174,6 +194,7 @@ export function mountStage({ state, api, player }) {
         previewPlayer.currentTime = time;
         // Troca de src invalida o "assistido" (o loadstart cobre o resto).
         state.set("watched", { revision: null, ended: false });
+        furthest = 0;
         lastTime = Number.isFinite(time) ? time : 0;
       }
       lastPreviewRev = project.previewRevision;
@@ -194,7 +215,7 @@ export function mountStage({ state, api, player }) {
       previewPlayer.removeAttribute("data-rev");
       note(true, chip("sem prévia"));
     }
-    renderFreshness(project);
+    paintReview(project);
     // Atualizar prévia renderiza no servidor: bloqueia o segundo clique.
     setDisabled(
       document.getElementById("refreshPreview"),
@@ -239,7 +260,7 @@ export function mountStage({ state, api, player }) {
   state.subscribe("previewBusy", () => renderPreview(state.get("project")));
   state.subscribe("operation", () => renderPreview(state.get("project")));
   state.subscribe("view", () => renderPreview(state.get("project")));
-  state.subscribe("watched", () => renderFreshness(state.get("project")));
+  state.subscribe("watched", () => paintReview(state.get("project")));
   renderPreview(state.get("project"));
 }
 
