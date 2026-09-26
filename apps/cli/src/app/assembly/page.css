@@ -171,6 +171,9 @@ textarea, input[type="text"], input[type="number"] { width: 100%; }
 .step-mark:empty { display: none; }
 #stages [aria-current="page"] .step-mark { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 #stages [aria-current="page"] .step-mark > svg { display: none; }
+/* A etapa atual vira ponto, mas o cadeado da entrega travada continua visível. */
+#stages [aria-current="page"].is-locked .step-mark { display: inline-flex; width: auto; height: auto; border-radius: 0; background: none; }
+#stages [aria-current="page"].is-locked .step-mark > svg { display: inline; }
 #stages .is-done .step-mark { color: var(--green); }
 .topbar-actions { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 #status { height: 32px; padding: 0 14px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }

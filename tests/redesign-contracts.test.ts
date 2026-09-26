@@ -78,3 +78,12 @@ it("etapa ativa: o aria-current que o JS grava é o que o CSS destaca", async ()
   expect(css).toContain(`#stages [aria-current="${value}"]`);
   expect(html).toContain(`data-stage="materiais" aria-current="${value}"`);
 });
+
+it("entrega atual travada: o cadeado fica visível e o nome diz que está travada", async () => {
+  const css = await read(CSS);
+  const js = await read(PAGEJS);
+  expect(css).toContain('#stages [aria-current="page"].is-locked .step-mark { display: inline-flex; width: auto; height: auto; border-radius: 0; background: none; }');
+  expect(css).toContain('#stages [aria-current="page"].is-locked .step-mark > svg { display: inline; }');
+  expect(js).toContain('className = "sr"');
+  expect(js).toContain('textContent = " travada"');
+});

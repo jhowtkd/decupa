@@ -335,7 +335,7 @@ function applyTranscriptNotice(text) {
   if (notice) el.title = notice;
   else el.removeAttribute("title");
 }
-/** Pílula de etapas: ✓ nas feitas, cadeado na entrega travada, ponto na atual (CSS). */
+/** Pílula de etapas: ✓ nas feitas, cadeado na entrega travada (também na atual), ponto na atual (CSS). */
 function paintStages() {
   for (const item of stepperState(project(), state.get("stage"))) {
     const button = document.querySelector('#stages [data-stage="' + item.id + '"]');
@@ -343,6 +343,18 @@ function paintStages() {
     button.classList.toggle("is-done", item.done);
     button.classList.toggle("is-locked", item.locked);
     button.querySelector(".step-mark").innerHTML = item.done ? ICON.check : item.locked ? ICON.lock : "";
+    // O cadeado é decorativo. O nome acessível é que diz que a etapa está travada.
+    let lockedName = button.querySelector(":scope > .sr");
+    if (item.locked) {
+      if (!lockedName) {
+        lockedName = document.createElement("span");
+        lockedName.className = "sr";
+        lockedName.textContent = " travada";
+        button.append(lockedName);
+      }
+    } else if (lockedName) {
+      lockedName.remove();
+    }
   }
 }
 function applyStageDom(stage) {
