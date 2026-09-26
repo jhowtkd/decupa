@@ -344,6 +344,8 @@ body.is-empty #texto > .measure { max-width: none; flex: 1; display: flex; }
 #freshChip:empty { display: none; }
 .review-actions { display: flex; gap: 8px; }
 .review-actions #approveFinal { flex: 1; }
+/* Versão atual já aprovada: estado final, sem o cadeado do gate. */
+#approveFinal.is-approved:disabled { opacity: 1; background: var(--green-tint); color: var(--green); box-shadow: none; }
 
 /* == monitor: preparação == */
 #activity { padding: 16px; border-radius: var(--radius-sub); background: var(--card-2); display: flex; flex-direction: column; gap: 14px; }

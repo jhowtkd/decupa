@@ -6,7 +6,7 @@ import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
 import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
-import { reviewView, watchProgress } from "./progress.js";
+import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -131,10 +131,11 @@ export function mountStage({ state, api, player }) {
     document.getElementById("watchRing").style.strokeDasharray = (view.ratio * RING).toFixed(1) + " " + RING.toFixed(1);
     document.getElementById("watchPct").textContent = Math.round(view.ratio * 100) + "%";
     const approve = document.getElementById("approveFinal");
-    const locked = !status.canApprove || state.get("view") === "original";
-    setDisabled(approve, locked);
-    approve.classList.toggle("is-locked", locked);
-    approve.innerHTML = (locked ? ICON.lock : ICON.check) + "Aprovar prévia assistida";
+    const button = approveButtonView(project, status, state.get("view") === "original");
+    setDisabled(approve, button.disabled);
+    approve.classList.toggle("is-locked", button.locked);
+    approve.classList.toggle("is-approved", button.approved);
+    approve.innerHTML = (button.icon === "lock" ? ICON.lock : ICON.check) + button.label;
   }
 
   function renderPreview(project) {

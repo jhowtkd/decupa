@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { reviewView, watchProgress } from "./progress.js";
+import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 
 const p = (over: Record<string, unknown> = {}) => ({
   revision: 15, previewRevision: 15, finalApprovedRevision: null, scenes: [{ id: "s1" }], ...over,
@@ -40,4 +40,18 @@ it("sem o gate liberado, o anel não chega a 100% nem diz que viu tudo", () => {
   // O 100% e o "vista até o fim" ficam para quando status.watched é verdadeiro.
   expect(watchProgress(73, 73.12, true)).toEqual({ ratio: 1, label: "vista até o fim" });
   expect(watchProgress(72.4, 73.12, false)).toEqual({ ratio: 0.99, label: "vista até 1:12 de 1:13" });
+});
+
+it("approveButtonView: versão atual já aprovada mostra Aprovada, sem cadeado", () => {
+  const locked = { canApprove: false };
+  // Depois do reload o assistido zera, mas o servidor diz que a v15 está aprovada.
+  expect(approveButtonView(p({ finalApprovedRevision: 15 }), locked, false))
+    .toEqual({ label: "Aprovada", disabled: true, locked: false, icon: "check", approved: true });
+  expect(approveButtonView(p({ finalApprovedRevision: 15 }), locked, true)).toMatchObject({ label: "Aprovada", locked: false });
+  // Aprovação de versão antiga não conta: volta o gate de sempre.
+  expect(approveButtonView(p({ revision: 16, finalApprovedRevision: 15 }), locked, false))
+    .toEqual({ label: "Aprovar prévia assistida", disabled: true, locked: true, icon: "lock", approved: false });
+  expect(approveButtonView(p(), { canApprove: true }, false))
+    .toEqual({ label: "Aprovar prévia assistida", disabled: false, locked: false, icon: "check", approved: false });
+  expect(approveButtonView(p(), { canApprove: true }, true)).toMatchObject({ disabled: true, locked: true, icon: "lock" });
 });

@@ -35,3 +35,16 @@ export function reviewView(project, status, progress) {
     ratio: progress.ratio,
   };
 }
+
+/**
+ * Botão de aprovar (puro). Com a versão atual já aprovada no servidor, diz
+ * "Aprovada" sem cadeado (o assistido zera no reload, a aprovação não).
+ * Senão segue o gate canApprove de watchedState, e trava no Original.
+ */
+export function approveButtonView(project, status, original) {
+  const approved = project != null && project.finalApprovedRevision != null
+    && project.finalApprovedRevision === project.revision;
+  if (approved) return { label: "Aprovada", disabled: true, locked: false, icon: "check", approved: true };
+  const locked = !status.canApprove || original;
+  return { label: "Aprovar prévia assistida", disabled: locked, locked, icon: locked ? "lock" : "check", approved: false };
+}
