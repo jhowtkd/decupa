@@ -18,13 +18,17 @@ export function sourceProgress(project, source) {
   if (stages) {
     const failed = ["media", "audio", "visual"].find((key) => stages[key] === "error");
     const running = ["media", "audio", "visual"].find((key) => stages[key] === "running");
+    const done = stages.media === "ready" && stages.audio === "ready" && (!source.hasVideo || stages.visual === "ready");
+    // Cancelar é escolha do usuário e é o estado terminal: neutro, mesmo que
+    // uma etapa tenha falhado antes. A falha fica como diagnóstico no detalhe.
+    if (prep.status === "cancelled" && !done) {
+      return { tone: "cancelled", label: "Cancelada", detail: failed
+        ? PREP_STAGES[failed] + " falhou antes de cancelar: " + (stages.error || "sem detalhe") + ". Retome para tentar de novo."
+        : "Retome para concluir as etapas pendentes." };
+    }
     if (failed) return { tone: "error", label: PREP_STAGES[failed] + ": falhou", detail: stages.error || "Retome a preparação para tentar novamente." };
     if (running && prep.status === "running") return { tone: "running", label: PREP_STAGES[running] + "…", detail: "" };
-    if (stages.media === "ready" && stages.audio === "ready" && (!source.hasVideo || stages.visual === "ready")) {
-      return { tone: "ready", label: "Análise concluída", detail: "" };
-    }
-    // Cancelar é escolha do usuário, não falha: neutro, e retomar conclui o resto.
-    if (prep.status === "cancelled") return { tone: "cancelled", label: "Cancelada", detail: "Retome para concluir as etapas pendentes." };
+    if (done) return { tone: "ready", label: "Análise concluída", detail: "" };
     if (prep.status !== "running") return { tone: "error", label: "Preparação interrompida", detail: stages.error || "Retome para concluir as etapas pendentes." };
     // Áudio já salvo: o rótulo é visível, não só o tooltip. A etapa visual
     // pode continuar; a transcrição não espera por ela.

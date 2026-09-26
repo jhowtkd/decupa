@@ -136,6 +136,28 @@ it("preparação cancelada: material e resumo neutros; interrompida e atenção 
   expect(preparationView(at("attention"), null)).toMatchObject({ tone: "error", title: "A montagem precisa de atenção" });
 });
 
+it("cancelada prevalece sobre falha anterior: sem vermelho, o erro fica só no detalhe", () => {
+  const falhou = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
+  const pronta = { id: "b", name: "fala.mp4", included: true, hasVideo: true };
+  const p = {
+    assembly: { sources: [falhou, pronta] }, analyses: [],
+    preparation: { status: "cancelled", stage: "visual", sources: {
+      a: { media: "ready", audio: "ready", visual: "error", error: "intervalo inválido" },
+      b: { media: "ready", audio: "ready", visual: "ready" },
+    } },
+  };
+  expect(sourceProgress(p, falhou)).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(sourceProgress(p, falhou).detail).toContain("intervalo inválido");
+  expect(sourceProgress(p, pronta)).toMatchObject({ tone: "ready" });
+  expect(preparationView(p, null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  // Sem cancelar, a mesma falha continua sendo falha.
+  const interrompida = { ...p, preparation: { ...p.preparation, status: "interrupted" } };
+  expect(sourceProgress(interrompida, falhou)).toMatchObject({ tone: "error", label: "Analisar imagens: falhou" });
+});
+
 it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
  const {resolveView}=await import("./rail.js");
  expect(resolveView({status:"running",stage:"imported"},true)).toMatchObject({disabled:true,statusText:"Verificando timeline importada…"});
