@@ -178,6 +178,9 @@ it("marcar: cartões, rótulo honesto do apagar, cores do tema e marca mais pró
   expect(html).not.toContain(">Desfazer<");
   for (const old of ["#f2c230", "#63be97", "#e4e9e5", "#5d7480", "#232c31"]) expect(html.toLowerCase()).not.toContain(old);
   expect(html).toContain('class="card');
+  // Cada marca da lista é um botão (foco e teclado), não um <li> clicável.
+  expect(html).toContain('go.className = "mark-go"');
+  expect(html).not.toContain('li.addEventListener("click"');
   const src = html.slice(html.indexOf("// <nearest>"), html.indexOf("// </nearest>"));
   const nearestIndex = runInNewContext(src + "; nearestIndex");
   expect(nearestIndex([420, 1180, 5020], 5280)).toBe(2);

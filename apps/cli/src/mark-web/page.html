@@ -54,13 +54,14 @@
   #marks-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
   .marks-head { padding: 0 6px; }
   #marks { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; font: 13px var(--mono); }
-  #marks li { display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; cursor: pointer; }
-  #marks li:hover { background: var(--tint); }
+  #marks .mark-go, #marks .empty { display: flex; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 10px; border-radius: 10px; }
+  #marks .mark-go { justify-content: flex-start; background: transparent; color: inherit; font: 13px var(--mono); font-variant-numeric: tabular-nums; }
+  #marks .mark-go:hover:not(:disabled) { background: var(--tint); }
   #marks .n { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: var(--radius-pill); background: rgb(255 255 255 / .08); font-size: 11px; font-weight: 700; }
-  #marks li.current { background: var(--accent-tint); box-shadow: inset 0 0 0 1px rgb(240 202 110 / .35); color: var(--accent); }
+  #marks li.current .mark-go { background: var(--accent-tint); box-shadow: inset 0 0 0 1px rgb(240 202 110 / .35); color: var(--accent); }
   #marks li.current .n { background: var(--accent); color: var(--on-accent); }
   #marks .delta { margin-left: auto; font: 11px var(--sans-ui); color: #D9C08A; }
-  #marks .empty { color: var(--muted); cursor: default; }
+  #marks .empty { color: var(--muted); }
   .blind { margin: 0; padding: 12px 14px; border-radius: var(--radius-sub); background: rgb(255 255 255 / .03); font-size: 12px; line-height: 1.5; color: var(--muted); }
   .readout { display: flex; align-items: flex-end; gap: 32px; }
   .readout .big { font: 600 44px/1 var(--mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -303,6 +304,8 @@ function fmtMark(ms) {
 
 function renderMarks() {
   const list = el("marks");
+  // O foco numa marca sobrevive ao redesenho da lista (cursor mudou, lista refeita).
+  const focused = document.activeElement?.closest?.("#marks .mark-go")?.dataset.index;
   list.replaceChildren();
   if (marks.length === 0) {
     const empty = document.createElement("li");
@@ -314,22 +317,36 @@ function renderMarks() {
   const nearest = nearestIndex(marks, cursorMs);
   marks.forEach((ms, i) => {
     const li = document.createElement("li");
+    // Cada marca é um botão: leva o cursor até ela, com foco e teclado.
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "mark-go";
+    go.dataset.index = String(i);
     const n = document.createElement("span");
     n.className = "n";
     n.textContent = String(i + 1);
     const t = document.createElement("span");
     t.textContent = fmtMark(ms);
-    li.append(n, t);
+    go.append(n, t);
+    let label = "Ir para a marca " + (i + 1) + ", " + fmtMark(ms);
     if (i === nearest) {
       li.className = "current";
       const d = document.createElement("span");
       d.className = "delta";
       d.textContent = "mais próxima · " + fmtDelta(ms - cursorMs);
-      li.append(d);
+      go.append(d);
+      label += ", mais próxima do cursor";
     }
-    li.addEventListener("click", () => setCursor(ms));
+    go.setAttribute("aria-label", label);
+    go.addEventListener("click", (ev) => {
+      setCursor(ms);
+      // Clique de mouse não prende o foco: o Enter seguinte volta a marcar.
+      if (ev.detail > 0) document.activeElement?.blur?.();
+    });
+    li.append(go);
     list.append(li);
   });
+  if (focused != null) list.querySelector('[data-index="' + focused + '"]')?.focus();
 }
 
 function render() {
@@ -432,6 +449,8 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault(); save(); return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Enter e espaço num botão da lista de marcas acionam o botão, não o atalho global.
+  if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element && e.target.closest("#marks .mark-go")) return;
 
   switch (e.key) {
     case " ": if (!el("mark").disabled) { e.preventDefault(); toggleLoop(); } break;
