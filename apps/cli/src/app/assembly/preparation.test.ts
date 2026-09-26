@@ -44,6 +44,8 @@ async function sourceFrom(
   };
 }
 
+const PREVIEW_WAIT_NOTE = "prévia aguardando proxy e waveform";
+
 type FakeOpts = {
   failAudioFor?: string;
   failRender?: boolean;
@@ -55,20 +57,89 @@ type FakeOpts = {
   withWords?: boolean;
   /** Proposta enlatada alternativa (padrão: cena nova sc-1 via speechId). */
   proposalJson?: string;
+  /** Proxy com o clipe real, para o probe aceitar e o waveform chegar a rodar. */
+  validProxy?: boolean;
+  /** Segura cada extração de frames até `frames.release`. */
+  paceFrames?: boolean;
+  /** Segura cada request visual até `describes.release`. */
+  paceDescribes?: boolean;
 };
 type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; describe: number };
+type Pace = { inFlight: () => number; max: () => number; release: () => void };
 
 function makeFakes(opts: FakeOpts = {}): {
   deps: PreparationDeps;
   calls: Calls;
+  execCalls: ExecCall[];
   blockPropose: () => { release: (json: string) => void; gate: Promise<string> };
   blockAudio: () => { release: () => void };
   blockFfmpeg: () => { release: () => void };
+  blockProxy: () => { release: () => void };
+  blockProxyTeardown: () => { release: () => void };
+  blockWaveform: () => { release: () => void };
+  blockDescribe: () => { release: () => void };
+  proxyFinished: () => boolean;
+  waveformFinished: () => boolean;
+  proxyInFlight: () => number;
+  proxyTeardownWaiting: () => boolean;
+  waveformInFlight: () => number;
+  describeBeforeProxy: () => boolean;
+  liveExec: () => number;
+  frames: Pace;
+  describes: Pace;
 } {
   const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
+  const execCalls: ExecCall[] = [];
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
   let audioGate: Promise<void> | null = null;
   let ffmpegGate: Promise<void> | null = null;
+  let proxyGate: Promise<void> | null = null;
+  let proxyTeardownGate: Promise<void> | null = null;
+  let waveformGate: Promise<void> | null = null;
+  let describeGate: Promise<void> | null = null;
+  let proxyDone = false;
+  let waveformDone = false;
+  let proxyFlight = 0;
+  let proxyTeardownWaiting = false;
+  let waveformFlight = 0;
+  let sawDescribeBeforeProxy = false;
+  let frameFlight = 0;
+  let frameMax = 0;
+  let describeFlight = 0;
+  let describeMax = 0;
+  const frameReleasers: Array<() => void> = [];
+  const describeReleasers: Array<() => void> = [];
+  const live = new Set<object>();
+
+  const releaseAll = (releasers: Array<() => void>): void => {
+    for (const resolve of releasers.splice(0)) resolve();
+  };
+  const holdSlot = (releasers: Array<() => void>): Promise<void> =>
+    new Promise((resolve) => {
+      releasers.push(resolve);
+    });
+  const killed = (): ExecResult => ({ code: 1, stdout: "", stderr: "killed" });
+  const waitOrKill = async (
+    signal: AbortSignal | undefined,
+    gates: Array<Promise<void> | null>,
+  ): Promise<ExecResult | null> => {
+    if (signal?.aborted) return killed();
+    const pending = gates.filter((item): item is Promise<void> => item != null);
+    if (pending.length === 0) return null;
+    if (!signal) {
+      await Promise.all(pending);
+      return null;
+    }
+    return await new Promise((resolve) => {
+      const finish = (result: ExecResult | null) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+      const onAbort = () => finish(killed());
+      signal.addEventListener("abort", onAbort, { once: true });
+      Promise.all(pending).then(() => finish(null), () => finish(null));
+    });
+  };
   const proposalJson = JSON.stringify({
     scenes: [
       {
@@ -81,6 +152,10 @@ function makeFakes(opts: FakeOpts = {}): {
     gaps: [],
   });
   const exec = async (call: ExecCall): Promise<ExecResult> => {
+    execCalls.push(call);
+    const token = {};
+    live.add(token);
+    try {
     if (call.command === "pnpm" || call.args.includes("condense-prep")) {
       calls.ingest += 1;
       if (audioGate) await audioGate;
@@ -129,16 +204,57 @@ function makeFakes(opts: FakeOpts = {}): {
       const dest = call.args[call.args.length - 1];
       // Extração de frames: um JPEG por segundo solicitado, no padrão de saída.
       if (dest && dest.includes("%03d")) {
-        const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
-        for (let i = 0; i < seconds; i += 1) {
-          await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+        frameFlight += 1;
+        frameMax = Math.max(frameMax, frameFlight);
+        try {
+          if (opts.paceFrames) {
+            const stopped = await waitOrKill(call.signal, [holdSlot(frameReleasers)]);
+            if (stopped) return stopped;
+          }
+          const seconds = Number(call.args[call.args.indexOf("-t") + 1]!);
+          for (let i = 0; i < seconds; i += 1) {
+            await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
+          }
+          return { code: 0, stdout: "", stderr: "" };
+        } finally {
+          frameFlight -= 1;
         }
-        return { code: 0, stdout: "", stderr: "" };
       }
-      const playback = call.args.includes("scale='min(960,iw)':-2")
-        || call.args.includes("-vframes")
-        || call.args.includes("pcm_s16le");
-      if (playback && ffmpegGate) await ffmpegGate;
+      const isProxy = call.args.includes("scale='min(960,iw)':-2");
+      const isWave = call.args.includes("pcm_s16le");
+      const isThumb = call.args.includes("-vframes");
+      if (isProxy || isWave || isThumb) {
+        if (isProxy) proxyFlight += 1;
+        if (isWave) waveformFlight += 1;
+        try {
+          const stopped = await waitOrKill(call.signal, [
+            ffmpegGate,
+            isProxy ? proxyGate : null,
+            isWave ? waveformGate : null,
+          ]);
+          if (stopped) {
+            if (isProxy && proxyTeardownGate) {
+              proxyTeardownWaiting = true;
+              try {
+                await proxyTeardownGate;
+              } finally {
+                proxyTeardownWaiting = false;
+              }
+            }
+            return stopped;
+          }
+          if (dest && !dest.startsWith("-")) {
+            if (isProxy && opts.validProxy) await cp(CLIP, dest);
+            else await writeFile(dest, `clip-${calls.ffmpeg}`);
+          }
+          if (isProxy) proxyDone = true;
+          if (isWave) waveformDone = true;
+          return { code: 0, stdout: "", stderr: "" };
+        } finally {
+          if (isProxy) proxyFlight -= 1;
+          if (isWave) waveformFlight -= 1;
+        }
+      }
       if (dest && !dest.startsWith("-")) {
         await writeFile(dest, `clip-${calls.ffmpeg}`);
       }
@@ -153,6 +269,9 @@ function makeFakes(opts: FakeOpts = {}): {
       return { code: 0, stdout: "", stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };
+    } finally {
+      live.delete(token);
+    }
   };
   const proposeSend = async (): Promise<string> => {
     calls.propose += 1;
@@ -169,8 +288,17 @@ function makeFakes(opts: FakeOpts = {}): {
     describeClient: {
       model: "fake-visual",
       providerKey: "fake",
-      send: async (content: unknown[]): Promise<string> => {
+      send: async (content: unknown[], signal?: AbortSignal): Promise<string> => {
         calls.describe += 1;
+        if (!proxyDone) sawDescribeBeforeProxy = true;
+        describeFlight += 1;
+        describeMax = Math.max(describeMax, describeFlight);
+        try {
+        const stopped = await waitOrKill(signal, [
+          describeGate,
+          opts.paceDescribes ? holdSlot(describeReleasers) : null,
+        ]);
+        if (stopped) throw new Error("descrição visual cancelada");
         if (opts.failVisual) throw new Error("visual provider unavailable");
         if (opts.describeImpl) {
           const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
@@ -194,12 +322,23 @@ function makeFakes(opts: FakeOpts = {}): {
         return JSON.stringify({
           spans: [{ start: 0, end, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
+        } finally {
+          describeFlight -= 1;
+        }
       },
     },
+  };
+  const openGate = (): { release: () => void; promise: Promise<void> } => {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { release, promise };
   };
   return {
     deps,
     calls,
+    execCalls,
     blockPropose: () => {
       let release!: (json: string) => void;
       const gatePromise = new Promise<string>((resolve) => {
@@ -210,18 +349,51 @@ function makeFakes(opts: FakeOpts = {}): {
       return slot;
     },
     blockAudio: () => {
-      let release!: () => void;
-      audioGate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return { release };
+      const opened = openGate();
+      audioGate = opened.promise;
+      return { release: opened.release };
     },
     blockFfmpeg: () => {
-      let release!: () => void;
-      ffmpegGate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return { release };
+      const opened = openGate();
+      ffmpegGate = opened.promise;
+      return { release: opened.release };
+    },
+    blockProxy: () => {
+      const opened = openGate();
+      proxyGate = opened.promise;
+      return { release: opened.release };
+    },
+    blockProxyTeardown: () => {
+      const opened = openGate();
+      proxyTeardownGate = opened.promise;
+      return { release: opened.release };
+    },
+    blockWaveform: () => {
+      const opened = openGate();
+      waveformGate = opened.promise;
+      return { release: opened.release };
+    },
+    blockDescribe: () => {
+      const opened = openGate();
+      describeGate = opened.promise;
+      return { release: opened.release };
+    },
+    proxyFinished: () => proxyDone,
+    waveformFinished: () => waveformDone,
+    proxyInFlight: () => proxyFlight,
+    proxyTeardownWaiting: () => proxyTeardownWaiting,
+    waveformInFlight: () => waveformFlight,
+    describeBeforeProxy: () => sawDescribeBeforeProxy,
+    liveExec: () => live.size,
+    frames: {
+      inFlight: () => frameFlight,
+      max: () => frameMax,
+      release: () => releaseAll(frameReleasers),
+    },
+    describes: {
+      inFlight: () => describeFlight,
+      max: () => describeMax,
+      release: () => releaseAll(describeReleasers),
     },
   };
 }
@@ -450,7 +622,7 @@ describe("runPreparation", () => {
       );
       await vi.waitFor(() => {
         expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
-      });
+      }, { timeout: 10_000 });
       aborter.abort();
       release();
       const done = await run;
@@ -477,7 +649,7 @@ describe("runPreparation", () => {
     // o percurso não a sobrescreve — interrompe retomável com ela intacta.
     await vi.waitFor(async () => {
       expect(calls.propose).toBe(1);
-    });
+    }, { timeout: 10_000 });
     await saveProject(dir, base.revision, (p) => ({
       ...p,
       revision: p.revision + 1,
@@ -512,7 +684,7 @@ describe("runPreparation", () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
       expect(claimed.preparation?.sources.fala?.audio).toBe("running");
-    });
+    }, { timeout: 10_000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
       applyTextEdit(p, { type: "correct", sourceId: "fala", start: 0, end: 1, text: "olá corrigido" }));
@@ -565,7 +737,7 @@ describe("runPreparation", () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
       expect(claimed.preparation?.revision).toBe(prepared.revision);
-    });
+    }, { timeout: 10_000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
       applyTextEdit(p, { type: "remove", sceneId: "sc-1", takeId: takeId!, wordIds: [wordId!] }));
@@ -839,7 +1011,7 @@ describe("runPreparation", () => {
     ).rejects.toThrow("nada a ajustar");
   });
 
-  it("análise de áudio começa com waveform pendente e registra o estado", async () => {
+  it("áudio fica pronto com proxy pendente; a nota de prévia só aparece depois da proposta", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
     const { deps, calls, blockFfmpeg } = makeFakes();
     const { release } = blockFfmpeg();
@@ -855,15 +1027,390 @@ describe("runPreparation", () => {
     }, { timeout: 5000 });
     await vi.waitFor(async () => {
       const mid = await loadProject(dir);
-      expect(mid.preparation?.note).toBe("áudio pronto, imagem em análise");
       expect(mid.preparation?.sources.fala?.audio).toBe("ready");
     }, { timeout: 5000 });
+    await vi.waitFor(async () => {
+      const mid = await loadProject(dir);
+      expect(mid.preparation?.note).toBe(PREVIEW_WAIT_NOTE);
+      expect(mid.preparation?.stage).toBe("proposal");
+      expect(mid.scenes).toHaveLength(1);
+      expect(mid.preparation?.sources.fala?.audio).toBe("ready");
+      expect(mid.preparation?.sources.fala?.visual).toBe("ready");
+    }, { timeout: 10000 });
+    expect(calls.propose).toBeGreaterThan(0);
+    expect(calls.describe).toBeGreaterThan(0);
+    expect(calls.render).toBe(0);
     release();
     const done = await running;
     expect(done.preparation?.status).toBe("ready");
+    expect(done.preparation?.stage).toBe("preview");
     expect(done.preparation?.note).toBeUndefined();
     expect(done.previewArtifact).toBeTruthy();
+    expect(calls.render).toBe(1);
   });
+
+  it("análise de áudio não dispara ingest visual e salva fala/palavras sem cobertura", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, execCalls, blockFfmpeg } = makeFakes({ withWords: true });
+    const { release } = blockFfmpeg();
+    const running = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+
+    let mid: Project;
+    await vi.waitFor(async () => {
+      mid = await loadProject(dir);
+      expect(mid.preparation?.sources.fala?.audio).toBe("ready");
+    }, { timeout: 5000 });
+
+    expect(execCalls.some((call) => call.args.includes(
+      "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
+    ))).toBe(false);
+    expect(execCalls.some((call) => call.command === "uv" && call.args.includes("run")
+      && call.args.includes("python") && call.args.includes("visual_index.py"))).toBe(false);
+    const analysis = mid!.analyses.find((item) => item.sourceId === "fala");
+    expect(analysis?.speech).toEqual([{
+      id: "fala:u0",
+      sourceId: "fala",
+      start: 0,
+      end: 1.2,
+      text: "fala transcrito",
+    }]);
+    expect(analysis?.words.map(({ text, start, end }) => ({ text, start, end }))).toEqual([
+      { text: "olá", start: 0.1, end: 0.5 },
+      { text: "tema", start: 0.6, end: 1 },
+    ]);
+
+    release();
+    await running;
+  });
+  it("visual e proposta correm antes do proxy; o render espera proxy e waveform", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes({ withWords: true, validProxy: true });
+    const audio = fakes.blockAudio();
+    const proxy = fakes.blockProxy();
+    const waveform = fakes.blockWaveform();
+    const visual = fakes.blockDescribe();
+    const running = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(),
+    );
+    try {
+      await vi.waitFor(async () => {
+        const mid = await loadProject(dir);
+        expect(mid.preparation?.status).toBe("running");
+        expect(mid.preparation?.stage).toBe("audio");
+        expect(mid.preparation?.sources.fala).toMatchObject({
+          media: "ready",
+          audio: "running",
+          visual: "pending",
+        });
+        expect(mid.preparation?.note).toBeUndefined();
+        // O estado "running" é salvo antes de o processo de áudio nascer.
+        expect(fakes.liveExec()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      expect(fakes.calls.describe).toBe(0);
+      expect(fakes.calls.propose).toBe(0);
+      expect(fakes.calls.render).toBe(0);
+      audio.release();
+
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyFinished()).toBe(false);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      expect(fakes.describeBeforeProxy()).toBe(true);
+      const atVisual = await loadProject(dir);
+      expect(atVisual.preparation?.stage).toBe("visual");
+      expect(atVisual.preparation?.note).toBeUndefined();
+      expect(atVisual.preparation?.sources.fala).toMatchObject({
+        media: "ready",
+        audio: "ready",
+        visual: "running",
+      });
+      expect(fakes.calls.propose).toBe(0);
+      expect(fakes.calls.render).toBe(0);
+      visual.release();
+
+      await vi.waitFor(async () => {
+        const mid = await loadProject(dir);
+        const analysis = mid.analyses.find((item) => item.sourceId === "fala");
+        expect(analysis?.words.map((word) => word.text)).toEqual(["olá", "tema"]);
+        expect(analysis?.visual.length).toBeGreaterThan(0);
+        expect(mid.preparation?.sources.fala?.visual).toBe("ready");
+        expect(fakes.proxyFinished()).toBe(false);
+      }, { timeout: 5000 });
+
+      await vi.waitFor(async () => {
+        const mid = await loadProject(dir);
+        expect(mid.scenes).toHaveLength(1);
+        expect(mid.preparation?.note).toBe(PREVIEW_WAIT_NOTE);
+        expect(mid.preparation?.stage).toBe("proposal");
+        expect(mid.preparation?.status).toBe("running");
+        expect(fakes.proxyFinished()).toBe(false);
+        expect(fakes.waveformFinished()).toBe(false);
+      }, { timeout: 5000 });
+      expect(fakes.calls.propose).toBeGreaterThan(0);
+      expect(fakes.calls.render).toBe(0);
+
+      proxy.release();
+      await vi.waitFor(() => {
+        expect(fakes.proxyFinished()).toBe(true);
+        expect(fakes.waveformInFlight()).toBeGreaterThan(0);
+        expect(fakes.waveformFinished()).toBe(false);
+      }, { timeout: 5000 });
+      expect(fakes.calls.render).toBe(0);
+      const waitingPreview = await loadProject(dir);
+      expect(waitingPreview.preparation?.note).toBe(PREVIEW_WAIT_NOTE);
+      expect(waitingPreview.preparation?.stage).toBe("proposal");
+      expect(waitingPreview.previewArtifact).toBeNull();
+
+      waveform.release();
+      const done = await running;
+      expect(fakes.waveformFinished()).toBe(true);
+      expect(fakes.calls.render).toBe(1);
+      expect(done.preparation?.status).toBe("ready");
+      expect(done.preparation?.stage).toBe("preview");
+      expect(done.preparation?.note).toBeUndefined();
+      expect(done.preparation?.sources.fala).toMatchObject({
+        media: "ready",
+        audio: "ready",
+        visual: "ready",
+      });
+      expect(done.previewArtifact?.relativePath).toMatch(/reference\.mp4$/);
+    } finally {
+      audio.release();
+      visual.release();
+      proxy.release();
+      waveform.release();
+      await running.catch(() => undefined);
+    }
+  });
+
+  it("cancelar o visual que começou antes das imagens encerra os subprocessos", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes();
+    const proxy = fakes.blockProxy();
+    const visual = fakes.blockDescribe();
+    const aborter = new AbortController();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai cancelar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(aborter.signal),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+        expect(fakes.proxyFinished()).toBe(false);
+      }, { timeout: 5000 });
+      expect(fakes.describeBeforeProxy()).toBe(true);
+      const mid = await loadProject(dir);
+      expect(mid.preparation?.stage).toBe("visual");
+      expect(mid.preparation?.sources.fala?.visual).toBe("running");
+      expect(mid.preparation?.sources.fala?.audio).toBe("ready");
+      expect(fakes.liveExec()).toBeGreaterThan(0);
+      aborter.abort();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(done.scenes).toHaveLength(0);
+      expect(fakes.calls.propose).toBe(0);
+      expect(fakes.calls.render).toBe(0);
+      await vi.waitFor(() => {
+        expect(fakes.liveExec()).toBe(0);
+      }, { timeout: 5000 });
+    } finally {
+      aborter.abort();
+      proxy.release();
+      visual.release();
+    }
+  });
+
+  it("cancelar o último consumidor espera o teardown do proxy", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes();
+    const proxy = fakes.blockProxy();
+    const teardown = fakes.blockProxyTeardown();
+    const visual = fakes.blockDescribe();
+    const aborter = new AbortController();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai cancelar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(aborter.signal),
+    );
+    let settled = false;
+    void run.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      aborter.abort();
+      await vi.waitFor(() => {
+        expect(fakes.proxyTeardownWaiting()).toBe(true);
+      }, { timeout: 5000 });
+      expect(settled).toBe(false);
+      expect(fakes.liveExec()).toBeGreaterThan(0);
+      teardown.release();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      aborter.abort();
+      proxy.release();
+      teardown.release();
+      visual.release();
+      await run.catch(() => undefined);
+    }
+  });
+
+  it("cancelar remove o proxy que ainda aguarda a fila global", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes();
+    const visual = fakes.blockDescribe();
+    let releaseHolder!: () => void;
+    const holder = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holding = mediaWork.run(() => holder);
+    const aborter = new AbortController();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai cancelar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(aborter.signal),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBe(0);
+        expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+      }, { timeout: 5000 });
+      aborter.abort();
+      const done = await run;
+      expect(done.preparation?.status).toBe("cancelled");
+      expect(mediaWork.waiting).toBe(0);
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      aborter.abort();
+      visual.release();
+      releaseHolder();
+      await holding.catch(() => undefined);
+      await run.catch(() => undefined);
+    }
+  });
+
+  it("interrompe os artefatos de prévia antes de devolver falha visual", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const fakes = makeFakes({ failVisual: true });
+    const proxy = fakes.blockProxy();
+    const visual = fakes.blockDescribe();
+    const run = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "vai falhar", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.calls.describe).toBeGreaterThan(0);
+        expect(fakes.proxyInFlight()).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+      visual.release();
+      const done = await run;
+      expect(done.preparation?.status).toBe("interrupted");
+      expect(fakes.calls.propose).toBe(0);
+      expect(fakes.calls.render).toBe(0);
+      expect(fakes.proxyInFlight()).toBe(0);
+      expect(fakes.liveExec()).toBe(0);
+    } finally {
+      proxy.release();
+      visual.release();
+      await run.catch(() => undefined);
+    }
+  });
+
+  it("sem opt-in pago o visual não descreve", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    expect(base.permissions).toEqual({ model: false, visual: false });
+    const { deps, calls } = makeFakes();
+    deps.describeClient = undefined;
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: false },
+      deps,
+      ctrl(),
+    );
+    expect(calls.describe).toBe(0);
+    expect(done.permissions).toEqual({ model: true, visual: false });
+    expect(done.preparation?.sources.fala?.visual).toBe("pending");
+    expect(done.analyses.find((item) => item.sourceId === "fala")?.visual ?? []).toEqual([]);
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.scenes).toHaveLength(1);
+  });
+
+  it("visual não estoura o pool de frames nem de requests", async () => {
+    const base = await seed(dir, [["longa.mp4", "fala", "speech", 61]]);
+    const fakes = makeFakes({
+      paceFrames: true,
+      paceDescribes: true,
+      describeImpl: (start, end) => ({ spans: [{ start, end, text: `janela-${start}` }] }),
+    });
+    const running = runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      fakes.deps,
+      ctrl(),
+    );
+    let releaseFrames = false;
+    let releaseDescribes = false;
+    const pump = setInterval(() => {
+      if (releaseFrames) fakes.frames.release();
+      if (releaseDescribes) fakes.describes.release();
+    }, 5);
+    try {
+      await vi.waitFor(() => {
+        expect(fakes.frames.inFlight()).toBe(2);
+      }, { timeout: 5000 });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(fakes.frames.max()).toBe(2);
+      expect(fakes.frames.inFlight()).toBe(2);
+      releaseFrames = true;
+      await vi.waitFor(() => {
+        expect(fakes.describes.inFlight()).toBe(2);
+      }, { timeout: 5000 });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(fakes.describes.max()).toBe(2);
+      expect(fakes.describes.inFlight()).toBe(2);
+      releaseDescribes = true;
+      const done = await running;
+      expect(fakes.calls.describe).toBe(4);
+      expect(fakes.frames.max()).toBeLessThanOrEqual(2);
+      expect(fakes.describes.max()).toBeLessThanOrEqual(2);
+      expect(done.preparation?.sources.fala?.visual).toBe("ready");
+      expect(done.preparation?.status).toBe("ready");
+    } finally {
+      clearInterval(pump);
+      fakes.frames.release();
+      fakes.describes.release();
+      await running.catch(() => undefined);
+    }
+  }, 20_000);
 });
 
 it.each(["cancelar","editar"])("não publica decisão Jev tardia ao %s", async action => {
@@ -875,7 +1422,7 @@ it.each(["cancelar","editar"])("não publica decisão Jev tardia ao %s", async a
   deps.decision={mode:"hybrid",model:"test",client:{decide:async req=>{entered=true;await gate;return {model:"test",answers:Object.fromEntries(Object.keys(req.questions).map(id=>[id,{type:"noul" as const,noul:1}]))};}}};
   const aborter=new AbortController();
   const run=runPreparation(dir,base.revision,{mode:"prepare",request:"montar",modelOptIn:true,visualOptIn:true},deps,ctrl(aborter.signal));
-  await vi.waitFor(()=>expect(entered).toBe(true));
+  await vi.waitFor(()=>expect(entered).toBe(true), { timeout: 10_000 });
   expect((await loadProject(dir)).preparation?.note).toBe("Jev avaliando cortes");
   if(action==="cancelar") aborter.abort();
   else await saveProject(dir,base.revision,p=>({...p,revision:p.revision+1,assembly:{...p.assembly,revision:p.revision+1,name:"edição preservada"}}));

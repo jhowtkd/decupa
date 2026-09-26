@@ -106,6 +106,26 @@ function validateSource(value: unknown, index: number, seen: Set<string>): Sourc
     if (n < 0) throw new Error(`fonte ${id}.${key} não pode ser negativo`);
     source[key] = n;
   }
+  if (value.timecode !== undefined && value.timecode !== null) {
+    const tc = value.timecode;
+    if (!isRecord(tc)) throw new Error(`fonte ${id}.timecode precisa ser um objeto`);
+    source.timecode = {
+      raw: nonEmptyString(tc.raw, `fonte ${id}.timecode.raw`),
+      frames: tc.frames === null ? null : nonNegativeInt(tc.frames, `fonte ${id}.timecode.frames`),
+      dropFrame: booleanField(tc.dropFrame, `fonte ${id}.timecode.dropFrame`),
+    };
+  } else if (value.timecode === null) {
+    source.timecode = null;
+  }
+  if (value.rotation !== undefined && value.rotation !== null) {
+    const deg = safeInt(value.rotation, `fonte ${id}.rotation`);
+    if (![0, 90, 180, 270].includes(deg)) {
+      throw new Error(`fonte ${id}.rotation precisa ser 0, 90, 180 ou 270`);
+    }
+    source.rotation = deg;
+  } else if (value.rotation === null) {
+    source.rotation = null;
+  }
   return source;
 }
 
@@ -192,6 +212,9 @@ export function validateAssembly(value: unknown): Assembly {
   const clipIds = new Set<string>();
   const tracks = value.tracks.map((track, i) => validateTrack(track, i, clipIds));
   const fps = rate(value.fps, "montagem.fps");
+  if (value.canvasSourceId !== undefined && value.canvasSourceId !== null) {
+    nonEmptyString(value.canvasSourceId, "montagem.canvasSourceId");
+  }
   const assembly: Assembly = {
     version: 1,
     revision: nonNegativeInt(value.revision, "montagem.revision"),
@@ -199,9 +222,25 @@ export function validateAssembly(value: unknown): Assembly {
     fps,
     width,
     height,
+    canvasSourceId: value.canvasSourceId as string | null | undefined,
+    canvasManual: value.canvasManual === undefined
+      ? undefined
+      : booleanField(value.canvasManual, "montagem.canvasManual"),
+    rhythmProfile: value.rhythmProfile === undefined || value.rhythmProfile === null
+      ? value.rhythmProfile as string | null | undefined
+      : nonEmptyString(value.rhythmProfile, "montagem.rhythmProfile"),
     sources,
     tracks,
   };
+  // Migração: projeto antigo com vídeo registra a fonte do formato sem
+  // recalcular dimensões — o formato gravado segue até ação explícita.
+  // Regra histórica: o canvas vinha sempre da primeira fonte com vídeo
+  // (applyCanvasFrom), independente de papel — a fala principal só vale
+  // para projetos novos.
+  if (assembly.canvasSourceId === undefined) {
+    const principal = sources.find((s) => s.hasVideo);
+    if (principal) assembly.canvasSourceId = principal.id;
+  }
 
   for (const track of tracks) {
     for (const clip of track.clips) {

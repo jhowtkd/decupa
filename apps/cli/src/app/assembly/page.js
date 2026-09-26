@@ -1,3 +1,4 @@
+import { mountTemplates } from "/editor/templates.js";
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
@@ -8,7 +9,10 @@ import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
 
-const state = createState({ project: null, operation: null, selection: new Set(), playhead: null, watched: { revision: null, ended: false } });
+const state = createState({
+  project: null, operation: null, selection: new Set(), playhead: null,
+  watched: { revision: null, ended: false }, stage: "materiais", transcriptNotice: "",
+});
 const ui = { importing: false, busy: false, label: null, error: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
@@ -107,7 +111,7 @@ async function call(path, opts = {}) {
     }
     if (!res.ok) ui.error = body.error || ("erro " + res.status);
     else ui.error = null;
-    for (const key of ["undoRevision", "brollCandidates"]) {
+    for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
       if (Object.hasOwn(body, key)) state.set(key, body[key]);
     }
     if (body.project) {
@@ -306,6 +310,7 @@ async function importFiles(files) {
 mountStage({ state, api, player });
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
+mountTemplates({state,api});
 mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
@@ -317,8 +322,20 @@ function showInspector(show = true) {
   inspectTool.setAttribute("aria-expanded", String(show));
   document.body.classList.toggle("inspector-open", show);
 }
-function setStage(stage) {
+function applyTranscriptNotice(text) {
+  const el = document.getElementById("transcriptNotice");
+  if (!el) return;
+  const notice = text || "";
+  el.textContent = notice;
+  el.hidden = notice.length === 0;
+  if (notice) el.title = notice;
+  else el.removeAttribute("title");
+}
+function applyStageDom(stage) {
   if (!STAGE_TARGET[stage]) return;
+  // Trocar a etapa mostra a transcrição, mas não tira o foco de quem
+  // já estava num controle (papel, inclusão, outra etapa).
+  const focus = document.activeElement;
   document.body.dataset.stage = stage;
   for (const el of document.querySelectorAll("#stages [data-stage]")) {
     if (el.dataset.stage === stage) el.setAttribute("aria-current", "page");
@@ -334,11 +351,24 @@ function setStage(stage) {
   (stage === "entrega" ? document.getElementById("center") : inspector).appendChild(delivery);
   delivery.hidden = stage !== "entrega";
   showInspector(false);
+  if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
+    && document.activeElement !== focus) {
+    focus.focus({ preventScroll: true });
+  }
 }
+function setStage(stage) {
+  if (!STAGE_TARGET[stage]) return;
+  if (state.get("stage") === stage) applyStageDom(stage);
+  else state.set("stage", stage);
+}
+state.subscribe("stage", applyStageDom);
+state.subscribe("transcriptNotice", applyTranscriptNotice);
 document.getElementById("stages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-stage]");
   if (button) setStage(button.dataset.stage);
 });
+// Ação principal do rail (revisar/entregar) navega sem chamada paga.
+window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
 const toolTexto = document.querySelector('[data-tool="texto"]');
 toolTexto.addEventListener("click", () => {
   if (document.body.dataset.stage !== "edicao") { setStage("edicao"); return; }
@@ -351,6 +381,8 @@ toolTexto.addEventListener("click", () => {
 inspectTool.setAttribute("aria-controls", "contexto");
 inspectTool.onclick = () => showInspector(inspector.hidden);
 document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
+const narrowViewport = matchMedia("(max-width: 1100px)");
+narrowViewport.addEventListener("change", () => { showInspector(false); });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
     showInspector(false); inspectTool.focus();

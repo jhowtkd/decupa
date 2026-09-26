@@ -1,3 +1,5 @@
+import { buildHandoff } from "./handoff.ts";
+import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -30,7 +32,66 @@ type ExportManifest = {
   timeline?: unknown;
   reference?: unknown;
   sources?: unknown;
+  handoff?: unknown;
+  instrucoes?: unknown;
+  verificacao?: unknown;
 };
+
+/** Registro de conferência da importação (verificacao.json da entrega). */
+export type VerificationRecord = {
+  status: "pendente" | "confirmada";
+  revision: number;
+  artefato?: { timeline?: string; reference?: string };
+  origem?: string | null;
+  confirmadaEm?: string;
+};
+
+/**
+ * Estado de conferência da revisão exportada. Diretórios de entrega são
+ * por revisão: conteúdo novo nunca herda a confirmação da anterior.
+ */
+export async function readVerification(dir: string, revision: number): Promise<VerificationRecord | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(join(dir, "exports", String(revision), "verificacao.json"), "utf8"),
+    ) as VerificationRecord;
+    if (!parsed || parsed.revision !== revision) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Confirmação manual da conferência de importação: exige entrega íntegra
+ * da revisão atual e grava revisão, artefato e origem (sempre "manual").
+ */
+export async function confirmImportVerification(project: Project, dir: string): Promise<VerificationRecord> {
+  const dest = join(dir, "exports", String(project.revision));
+  let manifest: ExportManifest | null;
+  try {
+    manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as ExportManifest;
+  } catch {
+    manifest = null;
+  }
+  if (!manifest || manifest.revision !== project.revision || !(await exportedDirValid(dest))) {
+    throw new Error(`sem entrega íntegra da revisão ${project.revision}: exporte antes de confirmar`);
+  }
+  const record: VerificationRecord = {
+    status: "confirmada",
+    revision: project.revision,
+    artefato: {
+      timeline: typeof manifest.timeline === "string" ? manifest.timeline : undefined,
+      reference: typeof manifest.reference === "string" ? manifest.reference : undefined,
+    },
+    origem: "manual",
+    confirmadaEm: new Date().toISOString(),
+  };
+  await writeFile(join(dest, "verificacao.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  manifest.verificacao = "confirmada";
+  await writeFile(join(dest, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return record;
+}
 
 async function exportedFileSha(path: string): Promise<string | null> {
   try {
@@ -55,6 +116,22 @@ async function exportedDirValid(dest: string): Promise<boolean> {
     }
     const otioSha = await exportedFileSha(join(dest, "timeline.otio"));
     if (otioSha !== manifest.timeline) return false;
+    if (manifest.handoff !== undefined && await exportedFileSha(join(dest, "handoff.json")) !== manifest.handoff) return false;
+    if (manifest.instrucoes !== undefined && await exportedFileSha(join(dest, "importar-no-resolve.txt")) !== manifest.instrucoes) return false;
+    // verificacao.json não pode usar hash fixo (a confirmação manual muda o
+    // conteúdo depois): valida forma e identidade — objeto com a revisão do
+    // manifest e status reconhecido.
+    try {
+      const verificacao = JSON.parse(
+        await readFile(join(dest, "verificacao.json"), "utf8"),
+      ) as { revision?: unknown; status?: unknown };
+      if (verificacao.revision !== manifest.revision
+        || typeof verificacao.status !== "string" || verificacao.status === "") {
+        return false;
+      }
+    } catch {
+      return false;
+    }
     const refSha = await exportedFileSha(join(dest, "reference.mp4"));
     if (refSha !== manifest.reference) return false;
     const info = await probe(join(dest, "reference.mp4")).catch(() => null);
@@ -97,10 +174,38 @@ async function acquireExportLock(dir: string, revision: number): Promise<string>
  * `previewArtifact` em vez de renderizar outro vídeo. Sem Executor de
  * propósito — exportação nunca renderiza.
  */
+/**
+ * Texto que acompanha a entrega: formato exato, passo a passo do Resolve
+ * gratuito e o que conferir por fonte (timecode, taxa, rotação).
+ */
+export function importInstructions(project: Project): string {
+  const assembly = project.assembly;
+  const settings = davinciImportSettings(assembly);
+  const fps = `${assembly.fps.num}/${assembly.fps.den}`;
+  return [
+    "Decupa — conferir a entrega no DaVinci Resolve (versão gratuita)",
+    "",
+    `Revisão ${project.revision} · montagem "${assembly.name}"`,
+    `Formato da timeline: ${assembly.width}×${assembly.height} (${orientationOf(assembly)}) @ ${fps} fps (${settings.timelineFrameRate})`,
+    "",
+    "Passo a passo:",
+    ...settings.procedure.map((step, index) => `${index + 1}. ${step}`),
+    "",
+    "Mídia esperada por fonte:",
+    ...sourceChecklist(assembly),
+    "",
+    "Verificação de importação: pendente — após importar e conferir, use",
+    "o botão \"Confirmar conferência\" na Entrega para registrar a",
+    "conferência manual desta revisão.",
+    "",
+  ].join("\n");
+}
+
 export async function exportApproved(project: Project, dir: string): Promise<string> {
   if (project.finalApprovedRevision !== project.revision) {
     throw new Error("aprovação final desatualizada");
   }
+  assertTimecodesReadable(project.assembly);
   const artifact = project.previewArtifact;
   if (!artifact || artifact.revision !== project.revision) {
     throw new Error("prévia desatualizada: gere a prévia da revisão atual");
@@ -164,6 +269,10 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     }
     const otioText = `${buildOtio(snapshot)}\n`;
     const otioSha = createHash("sha256").update(otioText, "utf8").digest("hex");
+    const handoffText = JSON.stringify({projectId:project.id,revision:project.revision,items:buildHandoff(project)},null,2)+"\n";
+    const handoffSha = createHash("sha256").update(handoffText).digest("hex");
+    const instructionsText = importInstructions(project);
+    const instructionsSha = createHash("sha256").update(instructionsText, "utf8").digest("hex");
     const sourceShas = Object.fromEntries(
       snapshot.sources.map((s) => [s.id, s.sha256]),
     );
@@ -174,6 +283,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         existing.revision === project.revision
         && existing.timeline === otioSha
         && existing.reference === refSha
+        && existing.handoff === handoffSha
+        && existing.instrucoes === instructionsSha
         && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
       if (matchesExpected && (await exportedDirValid(dest))) {
         return dest;
@@ -189,11 +300,38 @@ export async function exportApproved(project: Project, dir: string): Promise<str
       const otioPath = join(tmp, "timeline.otio");
       await writeFile(otioPath, otioText, "utf8");
       await copyFile(reference, join(tmp, "reference.mp4"));
+      await writeFile(join(tmp, "importar-no-resolve.txt"), instructionsText, "utf8");
+      await writeFile(join(tmp, "verificacao.json"), `${JSON.stringify({
+        status: "pendente",
+        revision: project.revision,
+        artefato: { timeline: otioSha, reference: refSha },
+        origem: null,
+      } satisfies VerificationRecord)}\n`, "utf8");
+      await writeFile(join(tmp,"handoff.json"),handoffText);
+      await writeFile(join(tmp,"handoff.md"),`# Handoff — revisão ${project.revision}\n\n`+buildHandoff(project).map(n=>`- ${n.sceneId} · frame ${n.startFrame}, ${n.durationFrames} frames · ${n.destination}: ${n.description}`).join("\n"));
       const manifest = {
+        handoff: handoffSha,
+        instrucoes: instructionsSha,
         revision: project.revision,
         timeline: otioSha,
         reference: refSha,
         sources: sourceShas,
+        formato: {
+          width: snapshot.width,
+          height: snapshot.height,
+          orientation: orientationOf(snapshot),
+          fps: snapshot.fps,
+        },
+        midia: snapshot.sources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          fps: source.fps,
+          width: source.width,
+          height: source.height,
+          rotation: source.rotation ?? 0,
+          timecode: source.timecode ?? null,
+        })),
+        verificacao: "pendente",
       };
       await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
       if (!(await exportedDirValid(tmp))) {
@@ -221,6 +359,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
             existing.revision === project.revision
             && existing.timeline === otioSha
             && existing.reference === refSha
+            && existing.handoff === handoffSha
+            && existing.instrucoes === instructionsSha
             && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
           if (same && (await exportedDirValid(dest))) return dest;
         } catch {

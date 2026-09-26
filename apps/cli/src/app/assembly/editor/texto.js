@@ -183,7 +183,12 @@ export function docSignature(p) {
         word.id + "," + (word.display || word.text)
         + (word.removed ? "-r" : "") + (word.protected ? "-p" : "") + (word.corrected ? "-c" : ""),
       ).join(";"),
-    ).join("|"),
+    ).join("|")
+    // Apoios fazem parte da assinatura: troca de apoio muda scene.support
+    // sem tocar palavras — sem isso o chip continuaria exibindo o antigo.
+    + ":s" + (scene.support || []).map((entry) =>
+      entry.visualId + "@" + entry.offsetFrames + "+" + entry.durationFrames,
+    ).join(","),
   ).join("||");
 }
 
@@ -238,15 +243,50 @@ function sourceName(p, id) {
   return found ? found.name : id;
 }
 
-function renderTranscript(p) {
-  const running = p.preparation && p.preparation.status === "running";
+/** Nome da fonte de um trecho visual: visualId → span na análise → fonte. */
+function visualSourceName(p, visualId) {
+  for (const analysis of p.analyses || []) {
+    const span = (analysis.visual || []).find((item) => item.id === visualId);
+    if (span) return sourceName(p, span.sourceId);
+  }
+  return visualId;
+}
+
+/** Etapas em que o usuário já está trabalhando: a transcrição não troca o foco. */
+const ACTIVE_EDIT_STAGES = new Set(["edicao", "revisao", "entrega"]);
+
+function projectWithWords(project) {
+  if (!project?.assembly?.sources || !Array.isArray(project.analyses)) return null;
+  return Array.isArray(project.corrections) ? project : { ...project, corrections: [] };
+}
+
+/** Fontes incluídas que já têm palavras no documento (ordem da montagem). */
+function sourcesWithTranscript(project) {
+  const safe = projectWithWords(project);
+  if (!safe) return [];
+  return safe.assembly.sources.filter((source) => {
+    if (source.included === false) return false;
+    const analysis = safe.analyses.find((item) => item.sourceId === source.id);
+    if (!analysis || !Array.isArray(analysis.words) || analysis.words.length === 0) return false;
+    return effectiveWords(safe, source.id).length > 0;
+  });
+}
+
+/**
+ * Documento da transcrição (antes da proposta de cenas). O marcador
+ * "· parcial" permanece enquanto a preparação está em andamento.
+ * Cada fonte entra com as palavras dela assim que essa fonte é salva.
+ */
+export function transcriptHtml(project) {
+  const running = project.preparation && project.preparation.status === "running";
   let html = "";
-  for (const source of p.assembly.sources) {
-    const analysis = p.analyses.find((item) => item.sourceId === source.id);
+  for (const source of project.assembly.sources) {
+    const analysis = project.analyses.find((item) => item.sourceId === source.id);
     const statusText = analysis ? analysis.status : "na fila";
-    html += '<section class="doc-source"><h2>' + esc(source.name) + " · " + esc(statusText)
+    html += '<section class="doc-source" data-source="' + esc(source.id) + '"><h2>'
+      + esc(source.name) + " · " + esc(statusText)
       + (running ? ' <span class="parcial">· parcial</span>' : "") + "</h2>";
-    const words = effectiveWords(p, source.id);
+    const words = effectiveWords(project, source.id);
     if (!words.length) {
       html += '<p class="muted">transcrição ainda não disponível.</p>';
     } else {
@@ -255,6 +295,30 @@ function renderTranscript(p) {
     html += "</section>";
   }
   return html;
+}
+
+/**
+ * O que fazer quando o snapshot do projeto muda durante a preparação.
+ * Materiais (ou etapa ainda não escolhida) abre a etapa de texto sozinha
+ * na primeira fonte com palavras. Edição, revisão e entrega ficam onde
+ * estão; o aviso nomeia cada fonte já salva.
+ * @param {string | undefined} stage
+ * @param {object | null | undefined} previous
+ * @param {object | null | undefined} next
+ * @returns {{ stage: string, transcriptNotice: string }}
+ */
+export function partialTranscriptView(stage, previous, next) {
+  const current = stage || "materiais";
+  if (!next) return { stage: current, transcriptNotice: "" };
+  const preparing = next.preparation?.status === "running";
+  const ready = sourcesWithTranscript(next);
+  const known = new Set(sourcesWithTranscript(previous).map((source) => source.id));
+  const arrived = preparing ? ready.filter((source) => !known.has(source.id)) : [];
+  const nextStage = !ACTIVE_EDIT_STAGES.has(current) && arrived.length > 0 ? "edicao" : current;
+  const notice = preparing && ready.length > 0
+    ? "Transcrição disponível · " + ready.map((source) => source.name || source.id).join(", ")
+    : "";
+  return { stage: nextStage, transcriptNotice: notice };
 }
 
 function wordButton(scene, takeId, word, selection, extraClass = "", extraAttrs = "") {
@@ -278,8 +342,8 @@ function chipHtml(p, scene, support, index) {
   return '<button type="button" class="chip-apoio"'
     + ' data-scene="' + esc(scene.id) + '" data-support="' + index + '"'
     + ' title="apoio em ' + at.toFixed(1) + "s da montagem · " + dur.toFixed(1) + 's"'
-    + ' aria-label="Apoio ' + esc(sourceName(p, support.visualId)) + ", seleciona a cena" + '"'
-    + ">🎬 " + esc(sourceName(p, support.visualId)) + " · " + dur.toFixed(1) + "s</button>";
+    + ' aria-label="Apoio ' + esc(visualSourceName(p, support.visualId)) + ", seleciona a cena" + '"'
+    + ">🎬 " + esc(visualSourceName(p, support.visualId)) + " · " + dur.toFixed(1) + "s</button>";
 }
 
 function renderProse(p, selection) {
@@ -306,7 +370,13 @@ function renderProse(p, selection) {
       + (down.disabled ? " disabled" : "")
       + ' aria-label="Mover cena ' + (index + 1) + ' para baixo">↧</button>'
       + '<button type="button" class="quiet" data-scene-action="delete" data-scene="' + esc(scene.id) + '"'
-      + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button></p>';
+      + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button>'
+      + '<button type="button" class="quiet" data-scene-action="ajustar" data-scene="' + esc(scene.id) + '"'
+      + ' aria-label="Ajustar fala da cena ' + (index + 1) + '"'
+      + ' title="Pedir ajuste localizado a uma fala desta cena">✂</button>'
+      + (scene.support.length ? '<button type="button" class="quiet" data-scene-action="apoio"'
+        + ' data-scene="' + esc(scene.id) + '" aria-label="Trocar apoio da cena ' + (index + 1) + '"'
+        + ' title="Trocar um apoio desta cena por outro candidato">🎬</button>' : "") + "</p>";
     if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
     if (scene.gaps.length) {
       html += '<p class="warn">lacunas: ' + esc(scene.gaps.join("; ")) + "</p>";
@@ -385,7 +455,7 @@ function renderCenter(p, selection) {
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
   // não afeta a delegação.
   texto.innerHTML = '<div class="measure">'
-    + (p.scenes.length === 0 ? renderTranscript(p) : renderProse(p, selection))
+    + (p.scenes.length === 0 ? transcriptHtml(p) : renderProse(p, selection))
     + "</div>";
   if (scroller) scroller.scrollTop = top;
   if (focusedKey) {
@@ -489,6 +559,8 @@ export function mountTexto({ state, api, player }) {
     }
     lastSig = sig;
     renderCenter(p, selection());
+    paintProposalBanner(p, state.get("speechProposal"));
+    paintSupportSwap(state.get("supportSwap"));
   }
 
   function findWord(btn) {
@@ -576,6 +648,228 @@ export function mountTexto({ state, api, player }) {
   }
 
   /** "Corrigir": mesmo POST da antiga barra global, com o texto do campo inline. */
+  // Ajuste localizado de fala (#64): seleção explícita da fala + pedido;
+  // a comparação mostra cortes e o impacto de duração antes de aplicar.
+  const speechDialog = document.createElement("dialog");
+  speechDialog.id = "speechDialog";
+  speechDialog.innerHTML = '<h1>Ajustar fala</h1>'
+    + '<label>Fala <select id="speechPick"></select></label>'
+    + '<label>Pedido <input id="speechRequest" type="text"'
+    + ' placeholder="ex.: tire as gagueiras e os preenchimentos"></label>'
+    + '<div class="row"><button type="button" class="primary" id="proposeSpeech">Propor ajuste</button>'
+    + '<button type="button" id="closeSpeech">Fechar</button></div>'
+    + '<div id="speechDiff" aria-live="polite"></div>'
+    + '<div class="row" id="speechApplyRow" hidden>'
+    + '<button type="button" class="primary" id="acceptSpeech">Aplicar ajuste</button>'
+    + '<button type="button" id="rejectSpeech">Recusar proposta</button></div>';
+  document.body.appendChild(speechDialog);
+
+  function speechSummary(proposal) {
+    const delta = proposal.before.durationSeconds - proposal.after.durationSeconds;
+    return {
+      scope: `fala ${proposal.scope.speechId} · cenas ${proposal.scope.sceneIds.join(", ")}`,
+      duration: `${proposal.before.durationSeconds.toFixed(1)}s → ${proposal.after.durationSeconds.toFixed(1)}s (corta ${delta.toFixed(1)}s)`,
+      cuts: proposal.cuts.map((cut) =>
+        `${cut.start.toFixed(1)}s–${cut.end.toFixed(1)}s` + (cut.reason ? ` — ${cut.reason}` : "")),
+      protected: proposal.skippedProtected > 0
+        ? `${proposal.skippedProtected} trecho(s) protegido(s) preservado(s)` : "",
+    };
+  }
+
+  function paintSpeechDiff(proposal) {
+    const box = speechDialog.querySelector("#speechDiff");
+    const applyRow = speechDialog.querySelector("#speechApplyRow");
+    if (!proposal) {
+      box.replaceChildren();
+      applyRow.hidden = true;
+      return;
+    }
+    const summary = speechSummary(proposal);
+    box.innerHTML = '<p class="muted">' + esc(summary.scope) + " · " + esc(summary.duration) + "</p>"
+      + '<p>' + esc(proposal.before.text) + "</p>"
+      + '<p class="muted">cortes: " + (summary.cuts.length ? "" : "nenhum") + "</p>'
+      + "<ul class=\"plain\">" + summary.cuts.map((cut) => "<li>" + esc(cut) + "</li>").join("") + "</ul>"
+      + (summary.protected ? '<p class="muted">' + esc(summary.protected) + "</p>" : "");
+    applyRow.hidden = false;
+  }
+
+  function openSpeechDialog(sceneId) {
+    const p = state.get("project");
+    if (!p) return;
+    const scene = p.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const sel = speechDialog.querySelector("#speechPick");
+    sel.replaceChildren();
+    for (const take of scene.takes) {
+      if (!take.speechId) continue;
+      const analysis = p.analyses.find((item) => item.sourceId === take.sourceId);
+      const speech = analysis?.speech.find((item) => item.id === take.speechId);
+      const label = `${sourceName(p, take.sourceId)} · ${take.start.toFixed(1)}–${take.end.toFixed(1)}s`
+        + ` — "${(speech?.text || "").slice(0, 60)}"`;
+      sel.appendChild(new Option(label, `${take.sourceId}\u0000${take.speechId}`));
+    }
+    paintSpeechDiff(state.get("speechProposal"));
+    speechDialog.showModal();
+  }
+
+  speechDialog.querySelector("#closeSpeech").onclick = () => speechDialog.close();
+  speechDialog.querySelector("#proposeSpeech").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
+    const request = speechDialog.querySelector("#speechRequest").value.trim();
+    const { res } = await api.call("/project/speech-proposal", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: p.revision,
+        sourceId: picked[0], speechId: picked[1],
+        request,
+      }),
+      label: "Propondo ajuste…",
+    });
+    if (res.ok) paintSpeechDiff(state.get("speechProposal"));
+  };
+  speechDialog.querySelector("#acceptSpeech").onclick = async () => {
+    const p = state.get("project");
+    const proposal = state.get("speechProposal");
+    if (!p || !proposal) return;
+    const { res } = await api.call("/project/speech-accept", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Aplicando ajuste…",
+    });
+    if (res.ok) { speechDialog.close(); }
+  };
+  speechDialog.querySelector("#rejectSpeech").onclick = async () => {
+    const p = state.get("project");
+    const proposal = state.get("speechProposal");
+    if (!p || !proposal) return;
+    const { res } = await api.call("/project/speech-reject", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Recusando proposta…",
+    });
+    if (res.ok) { paintSpeechDiff(null); }
+  };
+
+  /** Banner de proposta pendente no topo do texto (sobrevive a reload). */
+  function paintProposalBanner(p, proposal) {
+    const el = root();
+    if (!el) return;
+    el.querySelector(".speech-proposal")?.remove();
+    if (!proposal) return;
+    const summary = speechSummary(proposal);
+    const banner = document.createElement("div");
+    banner.className = "speech-proposal warn";
+    banner.innerHTML = "<strong>Ajuste de fala pendente</strong> — "
+      + esc(summary.scope) + " · " + esc(summary.duration)
+      + ' <button type="button" data-speech-apply="1">Aplicar</button>'
+      + ' <button type="button" data-speech-reject="1">Recusar</button>';
+    el.prepend(banner);
+  }
+  state.subscribe("speechProposal", (proposal) => {
+    paintSpeechDiff(proposal);
+    paintProposalBanner(state.get("project"), proposal);
+  });
+
+  // Troca localizada de apoio (#65): diálogo lista os apoios da cena e os
+  // candidatos com origem + evidência; aceitar aplica só a troca escolhida.
+  const supportDialog = document.createElement("dialog");
+  supportDialog.id = "supportDialog";
+  supportDialog.innerHTML = '<h1>Trocar apoio</h1>'
+    + '<div id="supportCurrent"></div>'
+    + '<div id="supportCandidates"></div>'
+    + '<div class="row"><button type="button" id="closeSupport">Fechar</button></div>';
+  document.body.appendChild(supportDialog);
+  let swapSceneId = null;
+
+  function openSupportDialog(sceneId) {
+    const p = state.get("project");
+    if (!p) return;
+    const scene = p.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    swapSceneId = sceneId;
+    const current = supportDialog.querySelector("#supportCurrent");
+    const list = supportDialog.querySelector("#supportCandidates");
+    current.innerHTML = "<p class=\"muted\">apoios da cena " + esc(scene.id) + ":</p>"
+      + '<ul class="plain">'
+      + scene.support.map((entry, i) =>
+        "<li>" + esc(visualSourceName(p, entry.visualId)) + " · "
+        + (entry.durationFrames / (p.assembly.fps.num / p.assembly.fps.den)).toFixed(1) + "s "
+        + '<button type="button" data-swap-support="' + i + '">buscar candidatos</button></li>').join("")
+      + "</ul>";
+    list.replaceChildren();
+    supportDialog.showModal();
+  }
+
+  supportDialog.addEventListener("click", async (ev) => {
+    const close = ev.target.closest("#closeSupport");
+    if (close) { supportDialog.close(); return; }
+    const pick = ev.target.closest("[data-swap-support]");
+    const candidate = ev.target.closest("[data-swap-candidate]");
+    const reject = ev.target.closest("[data-swap-reject]");
+    const p = state.get("project");
+    if (!p) return;
+    if (pick) {
+      const { res } = await api.call("/project/support-swap", {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: p.revision,
+          sceneId: swapSceneId,
+          supportIndex: Number(pick.dataset.swapSupport),
+          request: "",
+        }),
+        label: "Buscando candidatos…",
+      });
+      void res;
+    } else if (candidate) {
+      const proposal = state.get("supportSwap");
+      if (!proposal) return;
+      await api.call("/project/support-swap-accept", {
+        method: "POST",
+        body: JSON.stringify({
+          baseRevision: p.revision, proposalId: proposal.id,
+          candidateId: candidate.dataset.swapCandidate,
+        }),
+        label: "Trocando apoio…",
+      });
+      // Troca aplicada: a proposta some e a lista de candidatos ficaria
+      // velha — fecha o diálogo; os chips já repintam pela assinatura.
+      supportDialog.close();
+    } else if (reject) {
+      const proposal = state.get("supportSwap");
+      if (!proposal) return;
+      await api.call("/project/support-swap-reject", {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+        label: "Recusando troca…",
+      });
+      supportDialog.close();
+    }
+  });
+
+  /** Preenche candidatos/gap da proposta de troca no diálogo. */
+  function paintSupportSwap(proposal) {
+    if (!supportDialog.open) return;
+    const list = supportDialog.querySelector("#supportCandidates");
+    if (!proposal) { list.replaceChildren(); return; }
+    let html = '<p class="muted">atual: ' + esc(proposal.current.sourceName || proposal.current.sourceId)
+      + " " + proposal.current.sourceStart.toFixed(1) + "–" + proposal.current.sourceEnd.toFixed(1) + "s"
+      + (proposal.current.evidence ? ' — "' + esc(proposal.current.evidence) + '"' : "") + "</p>";
+    if (proposal.gap) html += '<p class="warn">' + esc(proposal.gap) + "</p>";
+    html += '<ul class="plain">' + proposal.candidates.map((candidate) =>
+      "<li><button type=\"button\" data-swap-candidate=\"" + esc(candidate.id) + "\">"
+      + esc(candidate.sourceId) + " " + candidate.start.toFixed(1) + "–" + candidate.end.toFixed(1) + "s"
+      + " · " + esc(candidate.description)
+      + (candidate.fullCoverage ? "" : ' <span class="warn">corta no fim</span>')
+      + "</button></li>").join("") + "</ul>";
+    if (proposal.candidates.length || proposal.gap) {
+      html += '<button type="button" data-swap-reject="1">Manter apoio atual</button>';
+    }
+    list.innerHTML = html;
+  }
+  state.subscribe("supportSwap", paintSupportSwap);
+
   async function submitCorrection(text) {
     const p = state.get("project");
     if (!p) return;
@@ -691,6 +985,14 @@ export function mountTexto({ state, api, player }) {
     const p = state.get("project");
     if (!p) return;
     const { sceneAction, scene } = btn.dataset;
+    if (sceneAction === "ajustar") {
+      openSpeechDialog(scene);
+      return;
+    }
+    if (sceneAction === "apoio") {
+      openSupportDialog(scene);
+      return;
+    }
     if (sceneAction === "delete") {
       await api.call("/project/edit", {
         method: "POST",
@@ -719,6 +1021,20 @@ export function mountTexto({ state, api, player }) {
     const importCta = ev.target.closest("[data-empty-import]");
     if (importCta && el.contains(importCta)) {
       document.getElementById("filePicker")?.click();
+      return;
+    }
+    const speechAction = ev.target.closest("[data-speech-apply],[data-speech-reject]");
+    if (speechAction && el.contains(speechAction)) {
+      const proposal = state.get("speechProposal");
+      const p = state.get("project");
+      if (proposal && p) {
+        void api.call(proposal && speechAction.hasAttribute("data-speech-apply")
+          ? "/project/speech-accept" : "/project/speech-reject", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+          label: speechAction.hasAttribute("data-speech-apply") ? "Aplicando ajuste…" : "Recusando proposta…",
+        });
+      }
       return;
     }
     const sceneBtn = ev.target.closest("[data-scene-action]");

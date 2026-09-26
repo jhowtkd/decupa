@@ -4,7 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, exportView } from "./rail.js";
+import { deliveryChecklist, exportView, formatLabel, resolveView } from "./rail.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -117,6 +117,7 @@ export function mountStage({ state, api, player }) {
   }
 
   function renderPreview(project) {
+    hint.textContent = "Assista à prévia atual antes de aprovar. " + (project?.scenes||[]).flatMap(s=>(s.animationNotes||[]).map(n=>"Pendente no handoff: "+n.description+" ("+n.destination+")")).join(" · ");
     if (!project) return;
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
@@ -153,8 +154,7 @@ export function mountStage({ state, api, player }) {
     document.getElementById("deliveryMeta").replaceChildren(
       chip(project.previewRevision == null ? "prévia pendente" : "prévia " + project.previewRevision),
       chip(Math.round(montageDuration(project)) + "s"),
-      chip(project.assembly.width + "×" + project.assembly.height
-        + " @ " + project.assembly.fps.num + "/" + project.assembly.fps.den),
+      chip(formatLabel(project.assembly)),
     );
     // Notas de transição ("atualizando…") também viram chips.
     const noteEl = document.getElementById("previewNote");
@@ -418,13 +418,183 @@ export function mountContexto({ state, api, player }) {
   delivery.setAttribute("aria-label", "Entrega");
   delivery.innerHTML = "<h1>Entrega</h1>"
     + '<ul id="deliveryChecklist" class="plain"></ul>'
+    + '<p class="muted" id="formatLine"></p>'
+    + '<p class="muted" id="verifyLine"></p>'
     + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" id="export">Exportar revisão</button></div>'
+    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button><button type="button" id="confirmImport" hidden>Confirmar conferência</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
   root.appendChild(delivery);
+
+  // Controle de ritmo (#66): escolha do perfil é etapa anterior à
+  // prévia/aprovação — a proposta compara pausas e oferece amostra
+  // auditável do mesmo trecho antes e depois, sem chamada paga.
+  const rhythm = document.createElement("section");
+  rhythm.setAttribute("aria-label", "Ritmo");
+  rhythm.innerHTML = "<h1>Ritmo</h1>"
+    + '<p class="muted" id="rhythmCurrent"></p>'
+    + '<div class="row" id="rhythmChoices"></div>';
+  root.insertBefore(rhythm, delivery);
+
+  const rhythmDialog = document.createElement("dialog");
+  rhythmDialog.id = "rhythmDialog";
+  rhythmDialog.innerHTML = '<h1>Ritmo do corte</h1>'
+    + '<p class="muted" id="rhythmProfileDesc"></p>'
+    + '<p id="rhythmSummary"></p>'
+    + '<ul id="rhythmPauses" class="plain"></ul>'
+    + '<p class="muted" id="rhythmUnaligned"></p>'
+    + '<div class="row"><label>Antes <video id="rhythmAntes" controls width="240" muted></video></label>'
+    + '<label>Depois <video id="rhythmDepois" controls width="240" muted></video></label></div>'
+    + '<div class="row"><button type="button" class="primary" id="acceptRhythm">Aplicar ritmo</button>'
+    + '<button type="button" id="rejectRhythm">Rejeitar</button>'
+    + '<button type="button" id="closeRhythm">Fechar</button></div>';
+  document.body.appendChild(rhythmDialog);
+
+  function paintRhythm() {
+    const p = state.get("project");
+    const proposal = state.get("rhythmProposal");
+    const profiles = state.get("rhythmProfiles") || {};
+    document.getElementById("rhythmCurrent").textContent = !p
+      ? ""
+      : p.assembly.rhythmProfile
+        ? `Perfil aplicado: ${profiles[p.assembly.rhythmProfile]?.name || p.assembly.rhythmProfile} — trocar não acumula cortes.`
+        : "Nenhum perfil aplicado — escolha para ouvir a comparação.";
+    const choices = document.getElementById("rhythmChoices");
+    if (!p) { choices.textContent = ""; return; }
+    if (!choices.childElementCount) {
+      for (const profile of Object.values(profiles)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = profile.name;
+        button.onclick = () => {
+          const current = state.get("project");
+          if (!current) return;
+          void api.call("/project/rhythm-proposal", {
+            method: "POST",
+            body: JSON.stringify({ baseRevision: current.revision, profileId: profile.id }),
+            label: `Comparando ritmo ${profile.name}…`,
+          });
+        };
+        choices.appendChild(button);
+      }
+    }
+    if (!proposal) { if (rhythmDialog.open) rhythmDialog.close(); return; }
+    const profile = profiles[proposal.profileId];
+    document.getElementById("rhythmProfileDesc").textContent = profile
+      ? `${profile.name}: ${profile.description}` : proposal.profileId;
+    document.getElementById("rhythmSummary").textContent =
+      `Fala total: ${proposal.beforeSeconds.toFixed(1)}s → ${proposal.afterSeconds.toFixed(1)}s `
+      + `(${proposal.takes.reduce((t, take) => t + take.removedSeconds, 0).toFixed(1)}s de pausas retiradas).`;
+    const list = document.getElementById("rhythmPauses");
+    list.replaceChildren();
+    for (const take of proposal.takes) {
+      for (const pause of take.pauses) {
+        const li = document.createElement("li");
+        li.textContent = `pausa em ${pause.start.toFixed(2)}s (${pause.duration.toFixed(2)}s) → sobra ${pause.keep.toFixed(2)}s`
+          + (pause.protectedPart ? " · trecho protegido preservado" : "");
+        list.appendChild(li);
+      }
+    }
+    document.getElementById("rhythmUnaligned").textContent = proposal.unaligned.length
+      ? `Sem alinhamento de palavras: ${proposal.unaligned.length} fonte(s) ignorada(s), sem microcortes — alinhe para incluir.`
+      : "";
+    for (const which of ["antes", "depois"]) {
+      const el = document.getElementById(which === "antes" ? "rhythmAntes" : "rhythmDepois");
+      el.src = proposal.sample ? `/project/rhythm-sample/${proposal.id}/${which}` : "";
+      el.style.visibility = proposal.sample ? "visible" : "hidden";
+    }
+    if (!rhythmDialog.open) rhythmDialog.showModal();
+  }
+  state.subscribe("rhythmProposal", paintRhythm);
+  state.subscribe("project", paintRhythm);
+  document.getElementById("closeRhythm").onclick = () => rhythmDialog.close();
+  document.getElementById("acceptRhythm").onclick = () => {
+    const p = state.get("project");
+    const proposal = state.get("rhythmProposal");
+    if (!p || !proposal) return;
+    void api.call("/project/rhythm-accept", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
+      label: "Aplicando ritmo…",
+    });
+  };
+  document.getElementById("rejectRhythm").onclick = () => {
+    const proposal = state.get("rhythmProposal");
+    if (!proposal) return;
+    void api.call("/project/rhythm-reject", {
+      method: "POST",
+      body: JSON.stringify({ proposalId: proposal.id }),
+      label: "Rejeitando ritmo…",
+    });
+  };
+
+  // Escolha de formato: visível (linha + chip) e editável por diálogo —
+  // muda a revisão e invalida prévia/aprovação via /project/settings.
+  const formatDialog = document.createElement("dialog");
+  formatDialog.id = "formatDialog";
+  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
+    + '<label>Usar formato de <select id="formatSource"></select></label>'
+    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
+    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
+    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
+    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
+    + '<button type="button" id="closeFormat">Fechar</button></div>';
+  document.body.appendChild(formatDialog);
+  document.getElementById("editFormat").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sel = document.getElementById("formatSource");
+    sel.replaceChildren(new Option("Personalizado", ""));
+    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
+      sel.appendChild(new Option(s.name, s.id));
+    }
+    sel.value = "";
+    document.getElementById("formatWidth").value = p.assembly.width;
+    document.getElementById("formatHeight").value = p.assembly.height;
+    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
+    formatDialog.showModal();
+  };
+  document.getElementById("closeFormat").onclick = () => formatDialog.close();
+  // Confirmação manual da conferência (#63): exige entrega da revisão
+  // atual; grava revisão+artefato+origem manual no verificacao.json.
+  document.getElementById("confirmImport").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    void api.call("/project/verify-import", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision }),
+      label: "Confirmando conferência…",
+    });
+  };
+  document.getElementById("saveFormat").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sourceId = document.getElementById("formatSource").value;
+    let body;
+    if (sourceId) {
+      body = { baseRevision: p.revision, sourceId };
+    } else {
+      const rawFps = document.getElementById("formatFps").value.trim();
+      const split = rawFps.split("/");
+      const fps = split.length === 2
+        ? { num: Number(split[0]), den: Number(split[1]) }
+        : { num: Number(rawFps) * 1000, den: 1000 };
+      body = {
+        baseRevision: p.revision,
+        width: Number(document.getElementById("formatWidth").value),
+        height: Number(document.getElementById("formatHeight").value),
+        fps,
+      };
+    }
+    const { res } = await api.call("/project/settings", {
+      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
+    });
+    if (res.ok) formatDialog.close();
+  };
   const exportUi = { status: "idle", error: null, revision: null };
+  let resolveDelivery=null;
+  let resolveRevision=null;
 
   /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
   function renderCorrections(project) {
@@ -475,18 +645,48 @@ export function mountContexto({ state, api, player }) {
         ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
         : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
     }
+    const formatLine = document.getElementById("formatLine");
+    const canvasOwner = project.assembly.canvasSourceId
+      ? project.assembly.sources.find((item) => item.id === project.assembly.canvasSourceId)
+      : null;
+    formatLine.textContent = "Formato: " + formatLabel(project.assembly)
+      + (project.assembly.canvasManual
+        ? canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — personalizado"
+        : canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — padrão do projeto");
+    // Estado da conferência: exportar nunca confirma; revisão nova
+    // não herda a confirmação (verificacao.json é por revisão).
+    const verifyLine = document.getElementById("verifyLine");
+    const confirmImportButton = document.getElementById("confirmImport");
+    const verificacao = state.get("verificacao");
+    if (!verificacao) {
+      verifyLine.textContent = "Conferência de importação: sem entrega da revisão atual.";
+      confirmImportButton.hidden = true;
+    } else if (verificacao.status === "confirmada") {
+      verifyLine.textContent = `Conferência de importação: confirmada (revisão ${verificacao.revision}, confirmação manual).`;
+      confirmImportButton.hidden = true;
+    } else {
+      verifyLine.textContent = `Conferência de importação: pendente — importe a revisão ${verificacao.revision} no Resolve e confira a timeline.`;
+      confirmImportButton.hidden = false;
+    }
     const rev = project.finalApprovedRevision;
     const formats = approved ? [
       { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
       { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
+      { id: "instrucoes", label: "Instruções de conferência (.txt)", href: "/project/output/" + rev + "/instrucoes", file: "importar-no-resolve.txt" },
+      { id: "verificacao", label: "verificacao.json", href: "/project/output/" + rev + "/verificacao", file: "verificacao.json" },
     ] : null;
+    if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
+    const nativeView=resolveView(resolveDelivery,approved);
     const exportButton = document.getElementById("export");
-    exportButton.textContent = view.buttonLabel;
+    exportButton.textContent = nativeView.buttonLabel;
     exportButton.classList.toggle("is-loading", view.loading);
-    setDisabled(exportButton, view.disabled);
+    setDisabled(exportButton, nativeView.disabled);
+    document.getElementById("exportDrp").hidden=resolveDelivery?.status!=="ready";
+    document.getElementById("resolveNewCopy").hidden=!nativeView.newCopy;
+    setDisabled(document.getElementById("exportTimeline"),view.disabled);
     const exportStatus = document.getElementById("exportStatus");
-    exportStatus.textContent = view.statusText;
+    exportStatus.textContent = (nativeView.statusText||view.statusText)+" · O .drp depende dos arquivos de mídia originais.";
     exportStatus.className = "muted export-" + view.tone;
     for (const format of view.formats || []) {
       const link = document.createElement("a");
@@ -496,11 +696,13 @@ export function mountContexto({ state, api, player }) {
       link.setAttribute("download", format.file);
       downloads.appendChild(link);
     }
+    if(resolveDelivery?.drpPath){const link=document.createElement("a");link.href="/project/resolve-drp";link.textContent="Baixar projeto .drp";link.download="projeto.drp";downloads.appendChild(link);}
     const history = document.getElementById("versionHistory");
     history.replaceChildren(
       chip("revisão " + project.revision),
       chip(project.previewRevision != null ? "prévia " + project.previewRevision : "sem prévia"),
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
+      chip("formato " + formatLabel(project.assembly)),
     );
   }
 
@@ -540,7 +742,7 @@ export function mountContexto({ state, api, player }) {
     }),
     label: "Ajustando montagem…",
   });
-  document.getElementById("export").onclick = async () => {
+  document.getElementById("exportTimeline").onclick = async () => {
     const project = state.get("project");
     exportUi.status = "running";
     exportUi.error = null;
@@ -564,6 +766,29 @@ export function mountContexto({ state, api, player }) {
     }
     renderDelivery(state.get("project"));
   };
+
+  async function deliverResolve(newCopy=false, exportDrp=false) {
+    const project=state.get("project");resolveRevision=project.revision;
+    resolveDelivery={status:"running",stage:"connecting"};renderDelivery(project);
+    let stopped=false;
+    async function poll(){
+      if(stopped)return;
+      try{const response=await fetch("/project/resolve-status");const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
+      if(!stopped)setTimeout(poll,1000);
+    }
+    setTimeout(poll,500);
+    try{
+      const {res,body}=await api.call(exportDrp?"/project/export-drp":"/project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
+      if(res.ok)resolveDelivery=body.delivery;
+      else {const response=await fetch("/project/resolve-status");const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
+      if(res.ok){exportUi.status="done";exportUi.revision=project.revision;}
+    }catch(error){resolveDelivery={status:"error",error:error.message};}
+    finally{stopped=true;renderDelivery(state.get("project"));}
+  }
+  document.getElementById("export").onclick=()=>deliverResolve();
+  document.getElementById("resolveNewCopy").onclick=()=>deliverResolve(true);
+  document.getElementById("exportDrp").onclick=()=>deliverResolve(false,true);
+  fetch("/project/resolve-status").then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
 
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));

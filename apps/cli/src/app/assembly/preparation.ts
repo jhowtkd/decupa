@@ -42,7 +42,7 @@ export type PreparationControl = {
   isCurrent: () => boolean;
 };
 
-const IMAGE_PENDING_NOTE = "áudio pronto, imagem em análise";
+const PREVIEW_IMAGE_PENDING_NOTE = "prévia aguardando proxy e waveform";
 const TERMINAL = new Set(["ready", "attention", "interrupted", "cancelled"]);
 
 class CancelledExit extends Error {
@@ -192,15 +192,25 @@ export async function runPreparation(
 
     const id = `prep-${baseRevision}-${req.mode}-${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
     const { signal } = control;
+    const imageAbort = new AbortController();
+    const imageSignal = AbortSignal.any([signal, imageAbort.signal]);
+    const imageJobs: Promise<void>[] = [];
+    let imagesDone: Promise<void> | undefined;
+    let imageFinished = true;
     const checkAlive = (): void => {
       if (signal.aborted) throw new CancelledExit();
       if (!control.isCurrent()) throw new ObsoleteExit();
+    };
+    const settleImageJobs = async (): Promise<void> => {
+      imageAbort.abort();
+      await Promise.all(imageJobs).catch(() => undefined);
     };
 
     const markTerminal = async (
       status: "ready" | "attention" | "interrupted" | "cancelled",
       error?: string,
     ): Promise<Project> => {
+      await settleImageJobs();
       try {
         const fresh = await loadProject(dir);
         if (fresh.preparation?.id !== id) return fresh;
@@ -323,7 +333,6 @@ export async function runPreparation(
       };
 
       if (req.mode !== "preview") {
-        const imageJobs: Promise<void>[] = [];
         for (const source of targets) {
           checkAlive();
           await markSource(source.id, { media: "running" });
@@ -341,12 +350,13 @@ export async function runPreparation(
           // autorizou a transcrição. Promessa sempre observada.
           const image = Promise.resolve().then(async () => {
             try {
-              const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal, detectHardware: true });
               await buildPeaks(deps.exec, {
                 proxyPath: videoPath,
                 sha256: source.sha256,
                 outPath: peaksPath(dir, source.sha256),
                 durationSeconds: source.durationSeconds,
+                signal: imageSignal,
               });
             } catch {
               // Sem waveform a faixa segue só com os blocos.
@@ -385,27 +395,12 @@ export async function runPreparation(
           }
         }
 
-        const imagesDone = Promise.all(imageJobs);
-        let imageFinished = false;
-        void imagesDone.then(() => {
+        const mediaArtifactsDone = Promise.all(imageJobs).then(() => undefined);
+        imagesDone = mediaArtifactsDone;
+        imageFinished = false;
+        void mediaArtifactsDone.then(() => {
           imageFinished = true;
         });
-        if (!imageFinished) {
-          await save((p) => ({
-            ...p,
-            preparation: p.preparation
-              ? { ...p.preparation, note: IMAGE_PENDING_NOTE }
-              : p.preparation,
-          }));
-        }
-        await imagesDone;
-        await save((p) => ({
-          ...p,
-          preparation: p.preparation
-            ? { ...p.preparation, note: undefined }
-            : p.preparation,
-        }));
-
         await atStage("visual");
         for (const source of targets) {
           checkAlive();
@@ -530,6 +525,19 @@ export async function runPreparation(
         if (current.preparation?.id !== id) throw new ObsoleteExit();
       }
 
+      // Proxy e peaks só servem à prévia: a descrição extrai frames do
+      // original e a proposta só depende da cobertura persistida.
+      if (imagesDone) {
+        if (!imageFinished) {
+          await save((p) => ({
+            ...p,
+            preparation: p.preparation
+              ? { ...p.preparation, note: PREVIEW_IMAGE_PENDING_NOTE }
+              : p.preparation,
+          }));
+        }
+        await imagesDone;
+      }
       await atStage("preview");
       checkAlive();
       try {

@@ -22,9 +22,12 @@ export async function detectSilence(opts: {
   const filter = `silencedetect=noise=${thresholdDb}dB:d=${minDurationMs / 1000}`;
 
   // ffmpeg sai com código 0 aqui, mas o log vai para stderr mesmo em -v info.
+  // -vn desliga o vídeo: silencedetect só lê áudio. Sem isso o ffmpeg
+  // decodifica o quadro inteiro e joga fora.
   const { stderr } = await run("ffmpeg", [
     "-v", "info",
     "-i", opts.input,
+    "-vn",
     "-af", filter,
     "-f", "null", "-",
   ], { maxBuffer: 64 * 1024 * 1024 });

@@ -1,3 +1,5 @@
+import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
+import { validateAnimationNotes } from "./handoff.ts";
 import { validateDecisionReport } from "./assembly-decisions.ts";
 import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -188,6 +190,19 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
       }
     }
   }
+  let rhythm: SpeechTake["rhythm"];
+  if (value.rhythm !== undefined && value.rhythm !== null) {
+    if (!isRecord(value.rhythm)) throw new Error(`take ${id}.rhythm inválido`);
+    const profile = nonEmptyString(value.rhythm.profile, `take ${id}.rhythm.profile`);
+    if (!Array.isArray(value.rhythm.removed)) {
+      throw new Error(`take ${id}.rhythm.removed precisa ser um array`);
+    }
+    rhythm = {
+      profile,
+      removed: value.rhythm.removed.map((entry, i) =>
+        sourceRange(entry, `take ${id}.rhythm.removed[${i}]`, source.durationSeconds)),
+    };
+  }
   return {
     id,
     sourceId,
@@ -196,6 +211,7 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
     end,
     removed: value.removed as SpeechTake["removed"],
     protected: value.protected as SpeechTake["protected"],
+    ...(rhythm ? { rhythm } : {}),
   };
 }
 
@@ -369,6 +385,7 @@ function validateSceneShape(
     visualEvidenceIds,
     support: Array.isArray(value.support) ? value.support as Project["scenes"][number]["support"] : [],
     gaps: Array.isArray(value.gaps) ? value.gaps.map(String) : [],
+    ...(value.animationNotes !== undefined ? {animationNotes: validateAnimationNotes(value.animationNotes)} : {}),
   };
 }
 
@@ -423,7 +440,13 @@ function validateV2(value: Record<string, unknown>): Project {
   if (isRecord(value.proposal) && value.proposal.decisionReport !== undefined) {
     value.proposal.decisionReport = validateDecisionReport(value.proposal.decisionReport);
   }
+  if (isRecord(value.proposal) && value.proposal.template !== undefined) {
+    value.proposal.template=approvedSnapshot(value.proposal.template);
+    value.proposal.templateReport=validateTemplateReport(value.proposal.templateReport??[],value.proposal.template as Project["template"]??null);
+  }
   return {
+    ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
+    ...(value.templateReport!==undefined?{templateReport:validateTemplateReport(value.templateReport,approvedSnapshot(value.template))}:{}),
     version: 2,
     id: value.id,
     revision: value.revision as number,
@@ -627,6 +650,8 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
       analyses,
       corrections,
       proposal: next.proposal ?? current.proposal,
+      template: next.template === undefined ? current.template : next.template,
+      templateReport: next.templateReport === undefined ? current.templateReport : next.templateReport,
       previewRevision: next.previewRevision ?? current.previewRevision,
       finalApprovedRevision: next.finalApprovedRevision ?? current.finalApprovedRevision,
       preparation: next.preparation ?? current.preparation,
@@ -640,6 +665,8 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     analyses,
     corrections,
     proposal: next.proposal !== base.proposal ? next.proposal : current.proposal,
+    template: next.template !== base.template ? next.template : current.template,
+    templateReport: next.templateReport !== base.templateReport ? next.templateReport : current.templateReport,
     previewRevision: next.previewRevision !== base.previewRevision
       ? next.previewRevision
       : current.previewRevision,
@@ -660,6 +687,11 @@ export function backupPath(dir: string): string {
 
 /** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
 export type EditorialSnapshot = {
+  template?: Project["template"];
+  /** Relatório da receita aceita — desfazer restaura junto do template. */
+  templateReport?: Project["templateReport"];
+  /** Perfil de ritmo da montagem no momento da foto — desfazer restaura. */
+  rhythmProfile?: Project["assembly"]["rhythmProfile"];
   revision: number;
   input: Project["input"];
   scenes: Project["scenes"];
@@ -679,6 +711,10 @@ export async function writeHistorySnapshot(dir: string, project: Project): Promi
     scenes: project.scenes,
     corrections: project.corrections,
     proposal: project.proposal,
+    ...(project.template!==undefined?{template:project.template}:{}),
+    ...(project.templateReport!==undefined?{templateReport:project.templateReport}:{}),
+    ...(project.assembly.rhythmProfile!==undefined
+      ?{rhythmProfile:project.assembly.rhythmProfile}:{}),
   };
   await mkdir(join(dir, "history"), { recursive: true });
   await writeFile(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");

@@ -22,6 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = Path(os.environ.get("VE_PLUGIN_ROOT", REPO_ROOT / "work" / "video-agent-kit-plugin"))
 sys.path.insert(0, str(PLUGIN_ROOT / "mcp"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     from ve_tools.condense import condense_index, condense_plan, condense_qc, condense_render
@@ -49,7 +50,11 @@ def _print_result(result) -> int:
 
 def cmd_index(args: argparse.Namespace) -> int:
     ctx = RunContext(session_kind="cli")
-    result = condense_index({"video_path": args.video, "transcript_path": args.transcript}, ctx)
+    result = condense_index({
+        "video_path": args.video,
+        "transcript_path": args.transcript,
+        "visual_survey": args.visual_survey,
+    }, ctx)
     return _print_result(result)
 
 
@@ -72,6 +77,16 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
+    # Corte duro concatena por cópia do vídeo (ver scripts/concat_copy.py).
+    from ve_tools import condense as engine
+    import concat_copy
+    import segment_cut
+
+    # Segmentos começando em zero (sem deriva) e em VideoToolbox quando a
+    # origem é HEVC no macOS (ver scripts/segment_cut.py); a junção só copia o
+    # vídeo se nenhum segmento precisou cair para libx264.
+    segment_cut.install(engine, hard_join=args.join == "hard")
+    concat_copy.install(engine, should_copy=lambda: not segment_cut.state["mixed"])
     ctx = RunContext(session_kind="cli")
     result = condense_render(
         {"video_path": args.video, "output_path": args.out, "join": args.join}, ctx,
@@ -92,6 +107,8 @@ def main() -> int:
     p_index = sub.add_parser("index", help="mede o vídeo — disfluência, pausas, orçamento de corte")
     p_index.add_argument("video")
     p_index.add_argument("transcript")
+    p_index.add_argument("--no-visual-survey", dest="visual_survey", action="store_false",
+                         help="pula cortes de cena, contact sheet e análise de movimento")
     p_index.set_defaults(func=cmd_index)
 
     p_plan = sub.add_parser("plan", help="transforma keep-list em pontos de corte")

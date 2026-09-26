@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { collectSink, createTracer } from "@decupa/trace";
 import {
+  audioProxyPath,
   DEFAULT_ENGINE,
+  ensureAudioProxy,
   enginePatchError,
   FakeExecutor,
   makeTriageProxy,
@@ -14,6 +19,7 @@ import {
   runPlan,
   runTriage,
   SpawnExecutor,
+  visualProxyArgs,
   type ExecCall,
   type Executor,
 } from "./pipeline.ts";
@@ -58,6 +64,74 @@ describe("runIngest", () => {
     const stages: string[] = [];
     await runIngest(job, exec, (s) => stages.push(s));
     expect(stages).toEqual(["transcribing", "indexing", "visual"]);
+  });
+
+  it.each([
+    ["default", undefined],
+    ["explícito", true],
+  ] as const)("mantém proxy, sidecar, saída e ordem com visual %s", async (_label, visual) => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-visual-"));
+    const exec = new FakeExecutor({ stdout: JSON.stringify({ video: "x", fps: 4, units: [] }) });
+    const stages: string[] = [];
+    const opts = visual === undefined ? undefined : { visual };
+    await runIngest(
+      { ...job, workDir: dir },
+      exec,
+      (stage) => stages.push(stage),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      opts,
+    );
+
+    expect(stages).toEqual(["transcribing", "indexing", "visual"]);
+    expect(exec.calls.some((call) => call.command === "ffmpeg" && call.args.includes(
+      "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
+    ))).toBe(true);
+    expect(exec.calls.some((call) => call.command === "uv" && call.args.includes("run")
+      && call.args.includes("python") && call.args.includes("visual_index.py"))).toBe(true);
+    expect(await readFile(join(dir, "out", "visual_index.json"), "utf8"))
+      .toBe(JSON.stringify({ video: "x", fps: 4, units: [] }));
+  });
+
+  it("visual desligado não chama proxy/sidecar, não sinaliza etapa nem grava aviso ou índice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-ingest-no-visual-"));
+    const calls: ExecCall[] = [];
+    const exec: Executor = {
+      async run(call) {
+        calls.push(call);
+        if (call.command === "ffmpeg" || call.command === "uv"
+          || call.args.includes("visual_index.py")
+          || call.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease")) {
+          return { code: 1, stdout: "", stderr: "MediaPipe não está instalado" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const stages: string[] = [];
+    const sink = collectSink();
+    const result = await runIngest(
+      { ...job, workDir: dir },
+      exec,
+      (stage) => stages.push(stage),
+      undefined,
+      createTracer(sink),
+      undefined,
+      undefined,
+      { visual: false },
+    );
+
+    expect(calls.some((call) => call.args.includes("condense-prep"))).toBe(true);
+    expect(calls.some((call) => call.command === "python3" && call.args.includes("index"))).toBe(true);
+    expect(calls.every((call) => call.env?.CLAUDE_PROJECT_DIR === dir)).toBe(true);
+    expect(calls.some((call) => call.command === "ffmpeg")).toBe(false);
+    expect(calls.some((call) => call.args.includes("visual_index.py"))).toBe(false);
+    expect(stages).toEqual(["transcribing", "indexing"]);
+    expect(sink.events.some((event) => event.stage === "visual")).toBe(false);
+    expect(result).toEqual({});
+    await expect(readFile(join(dir, "out", "visual_index.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("passa CLAUDE_PROJECT_DIR para o motor em toda chamada", async () => {
@@ -120,6 +194,45 @@ describe("runIngest", () => {
     expect(isAbsolute(prep.args[1]!)).toBe(true);
     expect(prep.cwd).toBeDefined();
     expect(isAbsolute(prep.cwd!)).toBe(true);
+  });
+
+  it("proxy visual decodifica em hardware só quando pedido e mantém o libx264", () => {
+    const hw = visualProxyArgs("/in.mp4", "/out.mp4", true);
+    expect(hw.indexOf("-hwaccel")).toBeLessThan(hw.indexOf("-i"));
+    expect(hw[hw.indexOf("-hwaccel") + 1]).toBe("videotoolbox");
+    expect(hw[hw.indexOf("-c:v") + 1]).toBe("libx264");
+    const sw = visualProxyArgs("/in.mp4", "/out.mp4", false);
+    expect(sw).not.toContain("-hwaccel");
+    expect(sw.slice(sw.indexOf("-i"))).toEqual(hw.slice(hw.indexOf("-i")));
+  });
+
+  it("decodificação por hardware que falha refaz o proxy visual em software", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-visual-hw-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const proxyCalls: ExecCall[] = [];
+    const exec: Executor = {
+      async run(call: ExecCall) {
+        if (call.command === "ffmpeg" && call.args.some((a) => a.startsWith("fps=4"))) {
+          proxyCalls.push(call);
+          if (call.args.includes("-hwaccel")) return { code: 1, stdout: "", stderr: "vt indisponível" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const result = await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {},
+      undefined, undefined, undefined, undefined, { hwDecode: true });
+    expect(proxyCalls.map((c) => c.args.includes("-hwaccel"))).toEqual([true, false]);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("sem hwDecode o proxy visual não pede hardware", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-visual-sw-"));
+    await writeFile(join(dir, "transcript.json"), "{}", "utf8");
+    const exec = new FakeExecutor();
+    await runIngest({ id: "j1", videoPath: "/vid/aula.mp4", workDir: dir }, exec, () => {},
+      undefined, undefined, undefined, undefined, { hwDecode: false });
+    const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.some((a) => a.startsWith("fps=4")));
+    expect(proxy!.args).not.toContain("-hwaccel");
   });
 
   it("grava visual_index.json quando o sidecar devolve JSON", async () => {
@@ -210,6 +323,27 @@ describe("runIngest", () => {
     expect(exec.calls.some((c) => c.args.includes("transcribe.py"))).toBe(false);
     expect(JSON.parse(await readFile(join(dirA, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
     expect(JSON.parse(await readFile(join(dirB, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
+  });
+
+  it("manda --no-visual-survey na chamada spawnada de index", async () => {
+    // Survey do motor (cena, contact sheet, movimento) não é o sidecar
+    // visual_index.py. Limpeza e montagem chegam aqui pelo mesmo runIngest.
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const indexes = exec.calls.filter((c) =>
+      c.command === "python3"
+      && c.args[1] === "index"
+      && c.args[0]?.endsWith(join("scripts", "condense.py")),
+    );
+    expect(indexes).toHaveLength(1);
+    const index = indexes[0]!;
+    expect(isAbsolute(index.args[0]!)).toBe(true);
+    expect(index.args.slice(1)).toEqual([
+      "index",
+      job.videoPath,
+      join(job.workDir, "transcript.json"),
+      "--no-visual-survey",
+    ]);
   });
 });
 
@@ -484,4 +618,38 @@ describe("probeFps orienta para OTIO (ICE3-04)", () => {
     const exec = new FakeExecutor({ stdout: "30000/1001\n" });
     await expect(probeFps(job, exec, { allowDropFrame: true })).resolves.toBeCloseTo(29.97, 2);
   });
+});
+
+describe("ensureAudioProxy", () => {
+  const run = promisify(execFile);
+  const probeJson = async (path: string) => JSON.parse((await run("ffprobe", [
+    "-v", "error", "-show_entries", "stream=codec_type,start_time:format=duration", "-of", "json", path,
+  ])).stdout) as { streams: { codec_type: string; start_time: string }[]; format: { duration: string } };
+
+  it("gera um m4a só de áudio, começando no zero da fonte, e reaproveita o existente", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-audio-"));
+    const job = { id: "j1", videoPath: join(FIXTURES, "clip.mp4"), workDir: dir };
+    expect(await ensureAudioProxy(job, new SpawnExecutor())).toBe(true);
+    const info = await probeJson(audioProxyPath(job));
+    expect(info.streams.map((s) => s.codec_type)).toEqual(["audio"]);
+    expect(Number(info.streams[0]!.start_time)).toBe(0);
+    expect(Math.abs(Number(info.format.duration) - 3)).toBeLessThan(0.1);
+
+    const calls: ExecCall[] = [];
+    const counting: Executor = { async run(call) { calls.push(call); return { code: 0, stdout: "", stderr: "" }; } };
+    expect(await ensureAudioProxy(job, counting)).toBe(true);
+    expect(calls).toHaveLength(0);
+  }, 60_000);
+
+  it("fonte sem áudio devolve false e não deixa arquivo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-audio-mute-"));
+    const video = join(dir, "mudo.mp4");
+    await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=1",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", video]);
+    const job = { id: "j1", videoPath: video, workDir: dir };
+    expect(await ensureAudioProxy(job, new SpawnExecutor())).toBe(false);
+    await expect(readFile(audioProxyPath(job))).rejects.toThrow();
+    const leftovers = (await readdir(dir)).filter((n) => n.startsWith("playback"));
+    expect(leftovers).toEqual([]);
+  }, 60_000);
 });

@@ -1,4 +1,17 @@
+import type { Recipe } from "../templates/types.ts";
 export type Rate = { num: number; den: number };
+
+/**
+ * Etiqueta de timecode da mídia tal como lida (ex.: "01:00:00:00" ou
+ * "01:00:00;00" drop-frame). `frames` é o número de quadros decorridos
+ * desde 00:00 na taxa da fonte — já com a contagem drop-frame aplicada;
+ * null quando a etiqueta existe mas não converte (inválida).
+ */
+export type SourceTimecode = {
+  raw: string;
+  frames: number | null;
+  dropFrame: boolean;
+};
 
 export type Source = {
   id: string;
@@ -18,6 +31,10 @@ export type Source = {
   /** Sentinelas baratas de identidade; ausentes em dados antigos. */
   size?: number;
   mtimeMs?: number;
+  /** Timecode de origem da mídia; ausente em fontes sem etiqueta. */
+  timecode?: SourceTimecode | null;
+  /** Rotação de exibição em graus (0/90/180/270); ausente/0 = sem rotação. */
+  rotation?: number | null;
 };
 
 export type Clip = {
@@ -38,6 +55,17 @@ export type Assembly = {
   fps: Rate;
   width: number;
   height: number;
+  /**
+   * Fonte cujas dimensões de exibição/fps definiram o canvas; `null` =
+   * decidido sem fonte (manual ou legado sem vídeo), `undefined` = ainda
+   * não escolhido — a próxima fonte com vídeo pode definir (ver
+   * applyCanvasPolicy).
+   */
+  canvasSourceId?: string | null;
+  /** Escolha de formato feita pelo usuário — nunca é sobrescrita em import. */
+  canvasManual?: boolean;
+  /** Perfil de ritmo aplicado à montagem (#66); `null`/ausente = sem ritmo. */
+  rhythmProfile?: string | null;
   sources: Source[];
   tracks: Track[];
 };
@@ -55,7 +83,13 @@ export type VisualSpan = Span & {
   tags: string[];
 };
 
+export type AnimationNote = {
+  id: string; description: string; destination: "Resolve" | "After Effects";
+  reference?: {templateId:string; revision:number; start:number; end:number};
+};
+
 export type Scene = {
+  animationNotes?: AnimationNote[];
   id: string;
   objective: string;
   rationale: string;
@@ -110,6 +144,12 @@ export type SpeechTake = SourceRange & {
   speechId: string | null;
   removed: SourceRange[];
   protected: SourceRange[];
+  /**
+   * Camada de ritmo (#66): o que o perfil atual removeu deste take.
+   * Trocar de perfil subtrai esta camada antes de somar a nova — nunca
+   * acumula remoções irreversíveis.
+   */
+  rhythm?: { profile: string; removed: SourceRange[] };
 };
 
 /** Correção de grafia: overlay de texto que não move a seleção de mídia. */
@@ -167,7 +207,11 @@ export type DecisionReport = {
   supports?: {sceneId:string; candidateId:string|null; outcome:"selected"|"none"|"fallback"; reason:string}[];
 };
 
+export type TemplateReport = {ruleId:string;status:"applied"|"adapted"|"unavailable";reason:string;sceneIds?:string[]}[];
+
 export type Proposal = {
+  template?: Recipe | null;
+  templateReport?: TemplateReport;
   decisionReport?: DecisionReport;
   id: string;
   baseRevision: number;
@@ -184,6 +228,9 @@ export type PreviewArtifact = {
 };
 
 export type Project = {
+  template?: Recipe | null;
+  /** Relatório da receita aceita — acompanha template; persiste até a próxima proposta de template. */
+  templateReport?: TemplateReport;
   version: 2;
   id: string;
   revision: number;

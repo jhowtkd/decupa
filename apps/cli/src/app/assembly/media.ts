@@ -2,7 +2,7 @@ import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hashFile, probe } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
-import { encoderFor, type HardwareProfile } from "./hardware.ts";
+import { detectHardwareProfile, encoderFor, type HardwareProfile } from "./hardware.ts";
 import { mediaWork } from "./media-work.ts";
 import type { Source } from "./types.ts";
 
@@ -10,7 +10,16 @@ export type MediaOpts = {
   signal?: AbortSignal;
   /** Perfil já comprovado: reutiliza o encoder sem redetectar hardware na fila. */
   profile?: HardwareProfile;
+  /**
+   * Sem `profile`, usa o perfil comprovado do projeto (mesma prova e mesmo
+   * cache `hardware-proof/` do render da prévia). Desligado, o proxy segue
+   * em software, como antes.
+   */
+  detectHardware?: boolean;
 };
+
+/** Bitrate do proxy de hardware: 960px de largura não precisa dos 8M do render. */
+const PROXY_HW_BITRATE = "4M";
 
 export function playbackDir(dir: string, sha256: string): string {
   return join(dir, "media", sha256);
@@ -62,19 +71,43 @@ async function proxyIsValid(path: string, source: Source): Promise<boolean> {
   }
 }
 
+/**
+ * Proxy no perfil pedido; se o encode de hardware falhar ou sair inválido,
+ * refaz em software — o proxy nunca fica indisponível por causa do hardware.
+ */
 async function buildProxy(
   source: Source,
   dir: string,
   exec: Executor,
   opts: MediaOpts = {},
 ): Promise<string> {
+  const profile = opts.profile ?? "software";
+  if (profile === "software") return buildProxyWith("software", source, dir, exec, opts);
+  try {
+    return await buildProxyWith(profile, source, dir, exec, opts);
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    if (!(err instanceof ProxyError)) throw err;
+    return buildProxyWith("software", source, dir, exec, opts);
+  }
+}
+
+class ProxyError extends Error {}
+
+async function buildProxyWith(
+  profile: HardwareProfile,
+  source: Source,
+  dir: string,
+  exec: Executor,
+  opts: MediaOpts,
+): Promise<string> {
   const outDir = playbackDir(dir, source.sha256);
   await mkdir(outDir, { recursive: true });
   const tmp = join(outDir, `proxy.${process.pid}.tmp.mp4`);
-  const { encoder, hwaccel } = encoderFor(opts.profile ?? "software");
+  const { encoder, hwaccel } = encoderFor(profile);
   const video = encoder === "libx264"
     ? ["-c:v", encoder]
-    : ["-c:v", encoder, "-b:v", "8M", ...(encoder === "h264_videotoolbox" ? ["-allow_sw", "0"] : [])];
+    : ["-c:v", encoder, "-b:v", PROXY_HW_BITRATE, ...(encoder === "h264_videotoolbox" ? ["-allow_sw", "0"] : [])];
   const args = ["-n",
     ...(hwaccel ? ["-hwaccel", hwaccel] : []),
     "-threads", "2", "-i", source.path,
@@ -85,13 +118,13 @@ async function buildProxy(
   const result = await exec.run({ command: "ffmpeg", args, signal: opts.signal });
   if (result.code !== 0) {
     await unlink(tmp).catch(() => {});
-    throw new Error(
+    throw new ProxyError(
       `proxy falhou para a fonte ${source.id}: ${(result.stdout + result.stderr).trim().slice(0, 300) || "sem saída"}`,
     );
   }
   if (!(await proxyIsValid(tmp, source))) {
     await unlink(tmp).catch(() => {});
-    throw new Error(`proxy inválido para a fonte ${source.id}: stream ou duração incompatível`);
+    throw new ProxyError(`proxy inválido para a fonte ${source.id}: stream ou duração incompatível`);
   }
   await rename(tmp, proxyPath(dir, source.sha256));
   return proxyPath(dir, source.sha256);
@@ -136,16 +169,17 @@ export async function ensureThumbnail(
 ): Promise<string | null> {
   await verifySourceIdentity(source);
   if (!source.hasVideo) return null;
-  return mediaWork.run(async () => {
-    opts.signal?.throwIfAborted();
+  opts.signal?.throwIfAborted();
+  return mediaWork.run(async (signal) => {
+    signal?.throwIfAborted();
     try {
       if ((await stat(thumbnailPath(dir, source.sha256))).size > 0) return thumbnailPath(dir, source.sha256);
     } catch {
       // Extração direta: uma miniatura não precisa transcodificar o vídeo inteiro.
     }
     await mkdir(playbackDir(dir, source.sha256), { recursive: true });
-    return buildThumbnail(source, dir, source.path, exec, opts);
-  }, { key: thumbnailPath(dir, source.sha256) });
+    return buildThumbnail(source, dir, source.path, exec, { ...opts, signal });
+  }, { key: thumbnailPath(dir, source.sha256), signal: opts.signal });
 }
 
 /** Proxy H.264/AAC validado por probe; exportação continua usando o original. */
@@ -157,10 +191,18 @@ export async function ensurePlayback(
 ): Promise<{ videoPath: string; thumbnailPath: string | null }> {
   await verifySourceIdentity(source);
   const proxy = proxyPath(dir, source.sha256);
+  opts.signal?.throwIfAborted();
+  // O perfil é resolvido FORA do slot: a prova de hardware também passa pela
+  // mediaWork, que não é reentrante — detectar dentro do job travaria a fila.
+  let profile = opts.profile;
+  if (profile == null && opts.detectHardware && source.hasVideo && !(await proxyIsValid(proxy, source))) {
+    profile = await detectHardwareProfile(source.path, join(dir, "hardware-proof"), exec, { signal: opts.signal });
+  }
   // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.
-  const videoPath = await mediaWork.run(async () => {
-    opts.signal?.throwIfAborted();
-    return (await proxyIsValid(proxy, source)) ? proxy : await buildProxy(source, dir, exec, opts);
-  }, { key: proxy });
+  const videoPath = await mediaWork.run(async (signal) => {
+    signal?.throwIfAborted();
+    if (await proxyIsValid(proxy, source)) return proxy;
+    return buildProxy(source, dir, exec, { ...opts, profile, signal });
+  }, { key: proxy, signal: opts.signal });
   return { videoPath, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
 }

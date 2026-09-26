@@ -204,6 +204,10 @@
 <script type="module">
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
+// Fonte do player invisível: o proxy só de áudio quando o servidor avisa que
+// ficou pronto; senão o original. Escolhida uma vez, na primeira reprodução,
+// para o arquivo nunca trocar no meio de uma leitura por faixa.
+let audioSrc = null;
 
 const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then((r) => r.json());
 const el = (id) => document.getElementById(id);
@@ -244,7 +248,7 @@ function playRanges(ranges) {
   const gen = ++playGen;
   const player = el("player");
   player.pause();
-  if (!player.src) player.src = "/media";
+  if (!player.src) player.src = audioSrc ?? "/media";
   return (async () => {
     for (const [start, end] of ranges) {
       if (gen !== playGen) return;
@@ -461,6 +465,7 @@ function readyFrom(j) {
 
 async function poll() {
   const j = await api("");
+  if (j.audio) audioSrc = "/media/audio";
   el("aviso").textContent = j.warning ?? "";
   if (j.stage === "error") {
     renderMessage("não deu para processar", j.error ?? "erro desconhecido");

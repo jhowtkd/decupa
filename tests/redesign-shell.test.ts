@@ -31,8 +31,11 @@ it("rail.js mantém briefing editável e montagem direta, sem confirmação de c
     expect(js).toContain(s);
   }
   expect(js).not.toContain("prepDialog");
-  expect(js).toContain('document.getElementById("prepare").onclick = prepareMontage');
+  // Ação principal decide entre navegar (revisar/entregar, grátis) e
+  // montar/preparar (POST pago) — #62: revisar nunca re-cobra.
+  expect(js).toContain('document.getElementById("prepare").onclick = prepareClick');
   expect(js).toContain('document.getElementById("resume").onclick = prepareMontage');
+  expect(js).toContain("decupa:set-stage");
   expect(js).toContain("modelOptIn: true, visualOptIn: true");
 });
 

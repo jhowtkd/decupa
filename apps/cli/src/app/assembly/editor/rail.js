@@ -19,7 +19,10 @@ export function sourceProgress(project, source) {
       return { tone: "ready", label: "Análise concluída", detail: "" };
     }
     if (prep.status !== "running") return { tone: "error", label: "Preparação interrompida", detail: stages.error || "Retome para concluir as etapas pendentes." };
-    return { tone: "pending", label: "Na fila", detail: stages.audio === "ready" ? "Transcrição disponível" : "" };
+    // Áudio já salvo: o rótulo é visível, não só o tooltip. A etapa visual
+    // pode continuar; a transcrição não espera por ela.
+    if (stages.audio === "ready") return { tone: "pending", label: "Transcrição disponível", detail: "" };
+    return { tone: "pending", label: "Na fila", detail: "" };
   }
   if (analysis?.status === "error") return { tone: "error", label: "Falha na análise", detail: analysis.error || "" };
   if (analysis) return { tone: "pending", label: "Transcrição disponível", detail: "" };
@@ -55,6 +58,18 @@ function setDisabled(el, value) {
     return;
   }
   el.disabled = !!value;
+}
+
+/**
+ * Rótulo do formato da entrega: dimensões, orientação e fps — espelha o
+ * manifest da exportação. Puro para teste sem DOM.
+ */
+export function formatLabel(assembly) {
+  if (!assembly) return "";
+  const orientation = assembly.width > assembly.height ? "horizontal"
+    : assembly.width < assembly.height ? "vertical" : "quadrado";
+  const fps = `${assembly.fps.num}/${assembly.fps.den}`;
+  return `${assembly.width}×${assembly.height} ${orientation} @ ${fps} fps`;
 }
 
 /**
@@ -131,6 +146,42 @@ const OP_STAGE_LABEL = {
 /** Rótulo pt-BR da etapa da operação (puro); desconhecida repassa crua. */
 export function stageLabel(stage) {
   return OP_STAGE_LABEL[stage] || String(stage);
+}
+
+/**
+ * Ação principal do projeto (pura): distingue montar, preparar, revisar
+ * e entregar. `stage` pede navegação gratuita — revisar/entregar nunca
+ * disparam chamada paga; montar/preparar chamam /project/prepare.
+ */
+export function primaryAction(project, operation) {
+  const assembly = project?.assembly;
+  const included = (assembly?.sources ?? []).filter((source) => source.included);
+  const prep = project?.preparation ?? null;
+  const busyStage = operation && ["analyzing", "preparing", "rendering", "proposing"].includes(operation.stage)
+    ? operation.stage : null;
+  if (busyStage) {
+    return { kind: "busy", label: stageLabel(busyStage) + "…", disabled: true, stage: null };
+  }
+  if (!included.length) {
+    return { kind: "montar", label: "Montar vídeo", disabled: true, stage: null };
+  }
+  const hasClips = (assembly?.tracks ?? []).some((track) => track.clips.length > 0);
+  if (hasClips && project.finalApprovedRevision === project.revision) {
+    return { kind: "entregar", label: "Abrir entrega", disabled: false, stage: "entrega" };
+  }
+  // Mídia incluída sem análise registrada na preparação atual precisa de
+  // preparação antes de revisar — a montagem existente ignora a fonte nova.
+  const needsPrep = prep && included.some((source) => !prep.sources[source.id]);
+  if (needsPrep) {
+    return { kind: "preparar", label: "Preparar montagem", disabled: false, stage: null };
+  }
+  if (hasClips || prep?.status === "ready") {
+    return { kind: "revisar", label: "Revisar montagem", disabled: false, stage: "revisao" };
+  }
+  if (prep && ["interrupted", "attention", "cancelled"].includes(prep.status)) {
+    return { kind: "preparar", label: "Retomar preparação", disabled: false, stage: null };
+  }
+  return { kind: "montar", label: "Montar vídeo", disabled: false, stage: null };
 }
 
 export function mountRail({ state, api, player }) {
@@ -261,21 +312,14 @@ export function mountRail({ state, api, player }) {
       const controls = document.createElement("div");
       controls.className = "controls";
       options.append(summary, controls);
-      const role = document.createElement("select");
-      role.dataset.sourceId = source.id;
-      role.setAttribute("aria-label", "categoria de " + source.name);
-      for (const value of Object.keys(ROLES)) {
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = ROLES[value];
-        if (source.role === value) opt.selected = true;
-        role.appendChild(opt);
+      const role = document.createElement("div");
+      role.className="role-switch";role.setAttribute("role","group");role.setAttribute("aria-label","Uso de "+source.name);
+      for(const value of ["speech","support"]){
+        const button=document.createElement("button");button.type="button";button.textContent=ROLES[value];
+        button.setAttribute("aria-pressed",String(source.role===value||source.role==="both"));
+        button.onclick=()=>api.call("/project/source-role",{method:"POST",body:JSON.stringify({baseRevision:state.get("project").revision,sourceIds:[source.id],role:value}),label:"Atualizando categoria…"});
+        role.append(button);
       }
-      role.addEventListener("change", () => api.call("/project/source-role", {
-        method: "POST",
-        body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: role.value }),
-        label: "Atualizando categoria…",
-      }));
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.textContent = source.included ? "Excluir" : "Incluir";
@@ -298,8 +342,8 @@ export function mountRail({ state, api, player }) {
       watch.className = "quiet";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
-      controls.append(role, toggle, relink, watch);
-      meta.append(name, chips, status);
+      controls.append(toggle, relink, watch);
+      meta.append(name, chips, role, status);
       li.append(box, preview, meta, options);
       list.appendChild(li);
     }
@@ -366,7 +410,11 @@ export function mountRail({ state, api, player }) {
       && project.preparation.status !== "ready"
     );
     const preparing = project.preparation && project.preparation.status === "running";
-    setDisabled(document.getElementById("prepare"), preparing || !project.assembly.sources.some((source) => source.included));
+    const action = primaryAction(project, state.get("operation"));
+    const prepareButton = document.getElementById("prepare");
+    prepareButton.textContent = action.label;
+    prepareButton.dataset.action = action.kind;
+    setDisabled(prepareButton, preparing || action.disabled);
     renderPreparation(project);
   }
 
@@ -399,6 +447,14 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Guardando briefing…",
   });
+  const prepareClick = () => {
+    const action = primaryAction(state.get("project"), state.get("operation"));
+    if (action.stage) {
+      window.dispatchEvent(new CustomEvent("decupa:set-stage", { detail: action.stage }));
+      return;
+    }
+    prepareMontage();
+  };
   const prepareMontage = () => api.call("/project/prepare", {
     method: "POST",
     body: JSON.stringify({
@@ -408,10 +464,20 @@ export function mountRail({ state, api, player }) {
     }),
     label: "Preparando montagem…",
   });
-  document.getElementById("prepare").onclick = prepareMontage;
+  document.getElementById("prepare").onclick = prepareClick;
   document.getElementById("resume").onclick = prepareMontage;
   state.subscribe("project", render);
   state.subscribe("operation", () => { if (state.get("project")) renderPreparation(state.get("project")); });
   render(state.get("project"));
 
+}
+
+export function resolveView(delivery, approved) {
+  const stages={connecting:"Conectando ao DaVinci…",created:"Importando montagem…",imported:"Verificando timeline importada…",verified:"Salvando projeto…",saved:"Projeto salvo",exported:"DRP exportado"};
+  return {
+    disabled:!approved||delivery?.status==="running",
+    buttonLabel:"Abrir montagem no DaVinci",
+    statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName+(delivery.error?" — "+delivery.error:""):delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
+    newCopy:delivery?.status==="error"&&delivery.created!==false,
+  };
 }

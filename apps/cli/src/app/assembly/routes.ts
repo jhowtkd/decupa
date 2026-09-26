@@ -1,3 +1,6 @@
+import { publishAtomic } from "@decupa/cache";
+import { loadRecipe } from "../templates/store.ts";
+import { deliverApproved, readDelivery } from "./delivery.ts";
 import { brollCandidates, candidateSupport } from "./broll.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -11,6 +14,8 @@ import { isCancelledError } from "@decupa/queue";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { originAllowed } from "../../http/origin.ts";
+import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
+import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
@@ -18,8 +23,15 @@ import { holdPreparation, isPreparationActive, runPreparation } from "./preparat
 import { describeSource, type VisualClient } from "./model.ts";
 import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
 import { visualCoverage } from "./visual.ts";
-import { exportApproved } from "./export.ts";
+import { confirmImportVerification, exportApproved, readVerification } from "./export.ts";
+import { applySpeechProposal, proposeSpeechAdjustment, type SpeechProposal } from "./speech-proposal.ts";
+import { applySupportSwap, buildSupportSwapProposal, type SupportSwapProposal } from "./support-swap.ts";
+import {
+  applyRhythmProposal, buildRhythmProposal, rhythmProfile, rhythmSampleAssembly,
+  RHYTHM_PROFILES, type RhythmProposal,
+} from "./rhythm.ts";
 import { renderAssembly } from "./render.ts";
+import { buildTemplateReport } from "./template-report.ts";
 import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
@@ -27,7 +39,7 @@ import {
 import { proposeScenes, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
-import type { Project, Rate, Source } from "./types.ts";
+import type { Project, Source } from "./types.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
@@ -57,6 +69,7 @@ export type AssemblyOperation = {
 } | null;
 
 export type AssemblyDeps = {
+  templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
   port: () => number;
@@ -192,6 +205,8 @@ async function sourceFromFile(path: string, id: string, displayName?: string): P
     name: displayName ?? basename(resolved),
     size,
     mtimeMs,
+    timecode: info.timecode ? parseSourceTimecode(info.timecode, info.frameRate) : null,
+    rotation: info.rotation,
   };
 }
 
@@ -351,27 +366,13 @@ function requireRevision(body: Record<string, unknown>): number {
   return n;
 }
 
-export function applyCanvasFrom(project: Project, source: Source): Project {
-  if (!source.hasVideo) return project;
-  const alreadyHasVideo = project.assembly.sources.some((item) => item.hasVideo);
-  if (alreadyHasVideo) return project;
-  const fps: Rate = source.fps ?? project.assembly.fps;
-  const width = source.width && source.width % 2 === 0 ? source.width : project.assembly.width;
-  const height = source.height && source.height % 2 === 0 ? source.height : project.assembly.height;
-  return {
-    ...project,
-    assembly: { ...project.assembly, fps, width, height },
-  };
-}
-
 function addSource(project: Project, source: Source): Project {
   if (project.assembly.sources.some((item) => item.path === source.path)) return project;
-  const withCanvas = applyCanvasFrom(project, source);
   return {
-    ...withCanvas,
+    ...project,
     assembly: {
-      ...withCanvas.assembly,
-      sources: [...withCanvas.assembly.sources, source],
+      ...project.assembly,
+      sources: [...project.assembly.sources, source],
     },
   };
 }
@@ -382,6 +383,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let cancelled = false;
   let controller: AbortController | null = null;
   const livePreviews = new Set<AbortController>();
+  const templateProposalPath=join(dir,"template-proposal.json");
+  const speechProposalPath=join(dir,"speech-proposal.json");
+  const supportSwapPath=join(dir,"support-swap.json");
+  const rhythmProposalPath=join(dir,"rhythm-proposal.json");
+  async function readTemplateProposal(){
+    try{return JSON.parse(await readFile(templateProposalPath,"utf8")) as import("./types.ts").Proposal;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
+  }
   const select = deps.selectFn ?? selectLocalFiles;
 
   function snapshot() {
@@ -436,7 +444,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
-      project = bump(project);
+      project = bump(applyCanvasPolicy(project));
       await saveProject(dir, expected, project);
     }
     return loadProject(dir);
@@ -503,6 +511,37 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
+      const readSpeechProposal = async (): Promise<SpeechProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(speechProposalPath, "utf8")) as SpeechProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.scope) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+      const readSupportSwap = async (): Promise<SupportSwapProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(supportSwapPath, "utf8")) as SupportSwapProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.scope) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+      const readRhythmProposal = async (): Promise<RhythmProposal | null> => {
+        try {
+          const parsed = JSON.parse(await readFile(rhythmProposalPath, "utf8")) as RhythmProposal;
+          if (!parsed || typeof parsed.id !== "string" || typeof parsed.baseRevision !== "number"
+            || !parsed.profileId) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+
       if (parts.length === 1 && req.method === "GET") {
         let project = await loadProject(dir);
         if (project.preparation?.status === "running" && !isPreparationActive(dir)) {
@@ -541,7 +580,19 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
-        sendJson(res, { project, undoRevision, brollCandidates: candidates, ...snapshot() });
+        sendJson(res, {
+          project, undoRevision,
+          templateProposal:await readTemplateProposal(),
+          speechProposal: await readSpeechProposal(),
+          supportSwap: await readSupportSwap(),
+          rhythmProposal: await readRhythmProposal(),
+          rhythmProfiles: RHYTHM_PROFILES,
+          // Relatório da receita aceita (#68): leitura local, sem análise paga.
+          templateReport: buildTemplateReport(project),
+          brollCandidates: candidates,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 
@@ -552,7 +603,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!source) throw new HttpError(404, "fonte não cadastrada");
         if (url.searchParams.get("view") === "playback") {
           try {
-            const { videoPath } = await ensurePlayback(source, dir, deps.exec);
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec, { detectHardware: true });
             await serveMedia(req, res, videoPath);
           } catch (err) {
             throw mediaError(err);
@@ -601,12 +652,24 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "resolve-status" && req.method === "GET") {
+        const project=await loadProject(dir); sendJson(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+      }
+      if (parts[1] === "resolve-drp" && req.method === "GET") {
+        const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
+        if (!delivery?.drpPath) throw new HttpError(404,"DRP não registrado");
+        await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
+      }
       if (parts[1] === "output" && req.method === "GET") {
         const revision = parts[2] ?? "";
         const kind = parts[3] ?? "";
-        const file = kind === "otio" ? "timeline.otio" : kind === "mp4" ? "reference.mp4" : "";
+        const file = kind === "otio" ? "timeline.otio"
+          : kind === "mp4" ? "reference.mp4"
+          : kind === "instrucoes" ? "importar-no-resolve.txt"
+          : kind === "verificacao" ? "verificacao.json" : "";
         if (!file) throw new HttpError(404, "saída desconhecida");
-        const type = kind === "otio" ? "application/json" : "video/mp4";
+        const type = kind === "otio" || kind === "verificacao" ? "application/json"
+          : kind === "instrucoes" ? "text/plain; charset=utf-8" : "video/mp4";
         const candidates = [join(dir, "exports", revision, file)];
         if (kind === "mp4") candidates.push(join(dir, `rev-${revision}`, "reference.mp4"));
         let served = false;
@@ -708,7 +771,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             const source = await sourceFromFile(stored, nextSourceId(loaded), name);
-            return bump(addSource(loaded, source));
+            return bump(applyCanvasPolicy(addSource(loaded, source)));
           });
         } catch (err) {
           await unlink(stored).catch(() => {});
@@ -737,7 +800,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           for (const path of picked.paths) {
             next = addSource(next, await sourceFromFile(path, nextSourceId(next)));
           }
-          return bump(next);
+          return bump(applyCanvasPolicy(next));
         });
         sendJson(res, { project, ...snapshot() });
         return true;
@@ -760,21 +823,48 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if (parts[1] === "settings" && req.method === "POST") {
         const baseRevision = requireRevision(body);
-        const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
-        const width = Number(body.width);
-        const height = Number(body.height);
-        if (!fpsRaw || !Number.isSafeInteger(fpsRaw.num) || !Number.isSafeInteger(fpsRaw.den)) {
-          throw new HttpError(400, "fps inválido");
-        }
-        const project = await mutate(baseRevision, (project) => bump({
-          ...project,
-          assembly: {
-            ...project.assembly,
-            fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
-            width,
-            height,
-          },
-        }));
+        const project = await mutate(baseRevision, (project) => {
+          const assembly = project.assembly;
+          const sourceId = body.sourceId === undefined ? undefined : String(body.sourceId);
+          if (sourceId !== undefined) {
+            const source = assembly.sources.find((item) => item.id === sourceId);
+            if (!source) throw new HttpError(404, "fonte não cadastrada");
+            if (!source.hasVideo) throw new HttpError(400, `fonte ${source.id} não tem vídeo`);
+            const canvas = canvasForSource(source, assembly);
+            return bump({
+              ...project,
+              assembly: {
+                ...assembly, ...canvas,
+                canvasSourceId: source.id,
+                canvasManual: true,
+              },
+            });
+          }
+          const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
+          const width = Number(body.width);
+          const height = Number(body.height);
+          if (!fpsRaw || !Number.isSafeInteger(fpsRaw.num) || !Number.isSafeInteger(fpsRaw.den)
+            || Number(fpsRaw.num) <= 0 || Number(fpsRaw.den) <= 0) {
+            throw new HttpError(400, "fps inválido");
+          }
+          if (!Number.isSafeInteger(width) || width <= 0 || width % 2 !== 0) {
+            throw new HttpError(400, "width precisa ser inteiro par positivo");
+          }
+          if (!Number.isSafeInteger(height) || height <= 0 || height % 2 !== 0) {
+            throw new HttpError(400, "height precisa ser inteiro par positivo");
+          }
+          return bump({
+            ...project,
+            assembly: {
+              ...assembly,
+              fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
+              width,
+              height,
+              canvasSourceId: null,
+              canvasManual: true,
+            },
+          });
+        });
         sendJson(res, { project, ...snapshot() });
         return true;
       }
@@ -968,6 +1058,42 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "template-proposal" && req.method === "POST") {
+        const expected=requireRevision(body);let project=await loadProject(dir);
+        if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        if(project.preparation?.status==="running")throw new HttpError(409,"Aguarde ou cancele a preparação atual.");
+        if(!deps.templatesRoot)throw new HttpError(409,"biblioteca de templates indisponível");
+        const template=body.templateId===null?null:await loadRecipe(deps.templatesRoot,String(body.templateId),Number(body.templateRevision));
+        if(template&&template.status!=="approved")throw new HttpError(409,"template não aprovado");
+        if(!deps.proposeSend||!(deps.allowPaidModel||project.permissions.model||body.modelOptIn===true))throw new HttpError(402,PAID_BLOCKED);
+        if(!project.assembly.sources.some(s=>s.included))throw new HttpError(409,"Importe os materiais do projeto primeiro.");
+        const {gen,signal}=begin("proposing");
+        try {
+          for(const source of project.assembly.sources.filter(s=>s.included)) {
+            if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
+            operation={stage:"analyzing",sourceId:source.id};
+            if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
+            const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
+            if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
+            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
+          }
+          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});
+          if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
+          await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
+          sendJson(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
+        }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}
+        return true;
+      }
+      if ((parts[1] === "template-accept" || parts[1] === "template-reject") && req.method === "POST") {
+        const expected=requireRevision(body);const proposal=await readTemplateProposal();
+        if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
+        let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return applyProposal(p,proposal);});
+        // Preserve a newer candidate if another generation finished concurrently.
+        if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
+        sendJson(res,{project,templateProposal:null,...snapshot()});return true;
+      }
       if (parts[1] === "propose" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const project = await mutate(baseRevision, async (project) => {
@@ -988,6 +1114,216 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return { ...project, proposal };
         });
         sendJson(res, { project, ...snapshot() });
+        return true;
+      }
+
+      // Ajuste localizado de fala (#64): proposta só cobre a fala
+      // escolhida; aceitar/rejeitar usam o arquivo sidecar e a revisão.
+      if (parts[1] === "speech-proposal" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sourceId = String(body.sourceId ?? "");
+        const speechId = String(body.speechId ?? "");
+        const request = String(body.request ?? "");
+        if (!sourceId || !speechId) {
+          throw new HttpError(400, "selecione a fala a ajustar");
+        }
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        // Permissão gravada no projeto conta como opt-in — o gate usa o
+        // estado carregado, não só a flag do processo.
+        if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
+          throw new HttpError(402, PAID_BLOCKED);
+        }
+        const { gen, signal } = begin("proposing");
+        try {
+          const proposal = await proposeSpeechAdjustment(
+            loaded, { sourceId, speechId }, request, deps.proposeSend, signal,
+          );
+          if (!stillCurrent(gen)) {
+            sendJson(res, { project: await loadProject(dir), ...snapshot() });
+            return true;
+          }
+          // A proposta espera o modelo fora da trava de mutação: se a revisão
+          // andou enquanto o modelo pensava, descarta em vez de publicar uma
+          // proposta já velha.
+          const latest = await loadProject(dir);
+          if (latest.revision !== proposal.baseRevision) {
+            operation = { stage: "ready" };
+            sendJson(res, { project: latest, speechProposal: null, ...snapshot() });
+            return true;
+          }
+          await publishAtomic(speechProposalPath, `${JSON.stringify(proposal)}\n`);
+          operation = { stage: "ready" };
+          sendJson(res, {
+            project: latest, speechProposal: proposal, ...snapshot(),
+          });
+        } catch (err) {
+          operation = { stage: "idle" };
+          const message = err instanceof Error ? err.message : String(err);
+          if (/fora do escopo|não encontrada|sem análise|não está na montagem|inválido|sem wordIds|sem lista/.test(message)) {
+            throw new HttpError(400, message);
+          }
+          throw err;
+        }
+        return true;
+      }
+
+      if (parts[1] === "speech-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSpeechProposal();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const project = await mutate(baseRevision, async (loaded) => {
+          await writeHistorySnapshot(dir, loaded);
+          return applySpeechProposal(loaded, proposal);
+        });
+        await unlink(speechProposalPath).catch(() => {});
+        sendJson(res, { project, speechProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "speech-reject" && req.method === "POST") {
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSpeechProposal();
+        // Rejeitar só exige a identidade da proposta: ela precisa continuar
+        // dispensável mesmo desatualizada (a recusa por revisão vale para
+        // aceitar, nunca para descartar).
+        if (!proposal || proposal.id !== proposalId) {
+          throw new HttpError(409, "proposta ausente");
+        }
+        await unlink(speechProposalPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sceneId = String(body.sceneId ?? "");
+        const supportIndex = Number(body.supportIndex);
+        const request = String(body.request ?? "");
+        if (!sceneId || !Number.isSafeInteger(supportIndex) || supportIndex < 0) {
+          throw new HttpError(400, "selecione o apoio a trocar");
+        }
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        let proposal: SupportSwapProposal;
+        try {
+          proposal = buildSupportSwapProposal(loaded, { sceneId, supportIndex }, request);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        await publishAtomic(supportSwapPath, `${JSON.stringify(proposal)}\n`);
+        sendJson(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const candidateId = String(body.candidateId ?? "");
+        const proposal = await readSupportSwap();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        let project: Project;
+        try {
+          project = await mutate(baseRevision, async (loaded) => {
+            await writeHistorySnapshot(dir, loaded);
+            return applySupportSwap(loaded, proposal, candidateId);
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/não é elegível|fora da proposta|não existe mais|não encontrada|inexistente/.test(message)) {
+            throw new HttpError(400, message);
+          }
+          throw err;
+        }
+        await unlink(supportSwapPath).catch(() => {});
+        sendJson(res, { project, supportSwap: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "support-swap-reject" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readSupportSwap();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        await unlink(supportSwapPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
+        return true;
+      }
+
+      // Controle de ritmo (#66): proposta determinística (sem modelo pago)
+      // — comparação por pausa + amostra auditável renderizada pela linha
+      // de prévia; aceitar/rejeitar seguem o fluxo de propostas localizadas.
+      if (parts[1] === "rhythm-proposal" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const loaded = await loadProject(dir);
+        if (loaded.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
+        }
+        let proposal: RhythmProposal;
+        try {
+          proposal = buildRhythmProposal(loaded, rhythmProfile(String(body.profileId ?? "")).id);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        }
+        await publishAtomic(rhythmProposalPath, `${JSON.stringify(proposal)}\n`);
+        sendJson(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "rhythm-sample" && req.method === "GET") {
+        const proposalId = parts[2] ?? "";
+        const which = parts[3] === "depois" ? "depois" : "antes";
+        const proposal = await readRhythmProposal();
+        const project = await loadProject(dir);
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== project.revision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const assembly = rhythmSampleAssembly(project, proposal, which);
+        if (!assembly) throw new HttpError(404, "amostra indisponível: a proposta não tem trecho com pausa");
+        const rendered = await renderAssembly(assembly, join(dir, "rhythm-samples"), deps.exec, {
+          profile: "software",
+        });
+        await serveMedia(req, res, rendered, "video/mp4");
+        return true;
+      }
+
+      if (parts[1] === "rhythm-accept" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readRhythmProposal();
+        if (!proposal || proposal.id !== proposalId || proposal.baseRevision !== baseRevision) {
+          throw new HttpError(409, "proposta ausente ou desatualizada");
+        }
+        const project = await mutate(baseRevision, async (loaded) => {
+          await writeHistorySnapshot(dir, loaded);
+          return applyRhythmProposal(loaded, proposal);
+        });
+        await unlink(rhythmProposalPath).catch(() => {});
+        sendJson(res, { project, rhythmProposal: null, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "rhythm-reject" && req.method === "POST") {
+        const proposalId = String(body.proposalId ?? "");
+        const proposal = await readRhythmProposal();
+        // Rejeitar dispensa a proposta pela identidade — desatualizada
+        // também sai (a recusa por revisão vale para aceitar).
+        if (!proposal || proposal.id !== proposalId) {
+          throw new HttpError(409, "proposta ausente");
+        }
+        await unlink(rhythmProposalPath).catch(() => {});
+        sendJson(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1133,6 +1469,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if ((parts[1] === "deliver-resolve" || parts[1] === "export-drp") && req.method === "POST") {
+        const expected=requireRevision(body);const project=await loadProject(dir);
+        if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
+        try {
+          const delivery=await deliverApproved(project,dir,deps.exec,new AbortController().signal,{exportDrp:parts[1]==="export-drp",newCopy:body.newCopy===true});
+          sendJson(res,{project:await loadProject(dir),delivery});
+        } catch(error) {throw new HttpError(409,error instanceof Error?error.message:String(error));}
+        return true;
+      }
       if (parts[1] === "export" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const loaded = await loadProject(dir);
@@ -1141,14 +1486,41 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           const dest = await exportApproved(loaded, dir);
-          sendJson(res, { project: loaded, path: dest, ...snapshot() });
+          sendJson(res, {
+            project: loaded, path: dest,
+            verificacao: await readVerification(dir, loaded.revision),
+            ...snapshot(),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante/.test(message)) {
+          if (/aprovação final|mídia ausente|substitu|absoluto|andamento|prévia|mudou durante|timecode ilegível/.test(message)) {
             throw new HttpError(409, message);
           }
           throw err;
         }
+        return true;
+      }
+
+      // Conferência de importação (#63): confirmação manual sobre a
+      // entrega íntegra da revisão atual. Exportar nunca confirma;
+      // revisão nova começa sem verificacao.json (não herda).
+      if (parts[1] === "verify-import" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const project = await mutate(baseRevision, async (loaded) => {
+          try {
+            await confirmImportVerification(loaded, dir);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (/entrega íntegra/.test(message)) throw new HttpError(409, message);
+            throw err;
+          }
+          return loaded;
+        });
+        sendJson(res, {
+          project,
+          verificacao: await readVerification(dir, project.revision),
+          ...snapshot(),
+        });
         return true;
       }
 

@@ -227,3 +227,77 @@ it("exporta quando o project.json da mesma revisão está íntegro", async () =>
   const dest = await exportApproved(project, dir);
   expect(dest).toContain("exports");
 });
+
+it("recusa fonte com timecode ilegível e nomeia a fonte", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 9);
+  project.assembly.sources[0]!.timecode = {
+    raw: "cozinha da tarde", frames: null, dropFrame: false,
+  };
+  await expect(exportApproved(project, dir)).rejects.toThrow(/timecode ilegível/);
+  await expect(exportApproved(project, dir)).rejects.toThrow(/fala\.mp4/);
+});
+
+it("manifest declara formato, mídia por fonte e verificação pendente", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 10);
+  project.assembly.sources[0]!.timecode = {
+    raw: "01:00:00:00", frames: 90000, dropFrame: false,
+  };
+  project.assembly.sources[1]!.rotation = 90;
+  const { createHash } = await import("node:crypto");
+  project.previewArtifact = {
+    ...project.previewArtifact!,
+    assemblySha256: createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),
+  };
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as {
+    formato: { width: number; height: number; orientation: string; fps: { num: number; den: number } };
+    midia: { id: string; name: string; timecode: unknown; rotation: number | null }[];
+    verificacao: string;
+    instrucoes: string;
+  };
+  expect(manifest.formato).toEqual({
+    width: 320, height: 240, orientation: "horizontal", fps: { num: 25, den: 1 },
+  });
+  expect(manifest.midia).toHaveLength(2);
+  expect(manifest.midia[0]).toMatchObject({
+    id: "a", name: "fala.mp4",
+    timecode: { raw: "01:00:00:00", frames: 90000, dropFrame: false },
+  });
+  expect(manifest.midia[1]).toMatchObject({ id: "b", rotation: 90 });
+  expect(manifest.verificacao).toBe("pendente");
+  expect(manifest.instrucoes).toMatch(/^[0-9a-f]{64}$/);
+
+  const instrucoes = await readFile(join(dest, "importar-no-resolve.txt"), "utf8");
+  expect(instrucoes).toContain("DaVinci Resolve");
+  expect(instrucoes).toContain("320×240");
+  expect(instrucoes).toContain("01:00:00:00");
+  expect(instrucoes).toContain("rotação 90°");
+  const verificacao = JSON.parse(await readFile(join(dest, "verificacao.json"), "utf8")) as {
+    status: string; revision: number; origem: string | null;
+    artefato: { timeline: string; reference: string };
+  };
+  expect(verificacao.status).toBe("pendente");
+  expect(verificacao.revision).toBe(10);
+  expect(verificacao.origem).toBeNull();
+  expect(verificacao.artefato.reference).toMatch(/^[0-9a-f]{64}$/);
+});
+
+it("reexport da mesma revisão não apaga verificacao.json registrada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 11);
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  const { writeFile: wf, readFile } = await import("node:fs/promises");
+  await wf(join(dest, "verificacao.json"),
+    JSON.stringify({ status: "manual", revision: 11, confirmedBy: "editor" }), "utf8");
+  const again = await exportApproved(project, dir);
+  expect(again).toBe(dest);
+  const verificacao = JSON.parse(await readFile(join(dest, "verificacao.json"), "utf8")) as {
+    status: string;
+  };
+  expect(verificacao.status).toBe("manual");
+});

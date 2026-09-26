@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectSilence } from "@decupa/acoustics";
@@ -39,6 +39,37 @@ export interface PipelineJob {
   videoPath: string;
   workDir: string;
   signal?: AbortSignal;
+}
+
+export interface IngestOptions {
+  /**
+   * Proxy a 4 fps + índice MediaPipe. Ligado por padrão porque a revisão da
+   * limpeza marca olhar desviado, mão no rosto e sem rosto a partir desse
+   * índice. A montagem desliga: ela nunca lê `visual_index.json`, e os dois
+   * passos custam ~113 s até a transcrição aparecer na tela.
+   */
+  visual?: boolean;
+  /**
+   * Decodifica a fonte com VideoToolbox ao gerar o proxy a 4 fps. Padrão:
+   * ligado no macOS. Se a decodificação por hardware falhar, refaz em software.
+   */
+  hwDecode?: boolean;
+}
+
+/**
+ * Argumentos do proxy visual a 4 fps. Só a DECODIFICAÇÃO vai para o hardware:
+ * codificar com h264_videotoolbox mudava as marcações do MediaPipe (8 de 43
+ * unidades no DJI de 293 s), enquanto decodificar em hardware e codificar com
+ * libx264 dá o mesmo índice visual (0 de 577 amostras diferentes), 40% mais rápido.
+ */
+export function visualProxyArgs(input: string, output: string, hwDecode: boolean): string[] {
+  return [
+    ...(hwDecode ? ["-hwaccel", "videotoolbox"] : []),
+    "-i", input,
+    "-vf", "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
+    "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
+    "-an", "-y", output,
+  ];
 }
 
 /** Worker residente no serviço HTTP; sem ele o ingest cai no CLI `condense-prep`. */
@@ -183,6 +214,35 @@ export const planPath = (job: PipelineJob) => join(job.workDir, "out", "condense
 export const indexPath = (job: PipelineJob) => join(job.workDir, "out", "speech_index.json");
 export const visualIndexPath = (job: PipelineJob) => join(job.workDir, "out", "visual_index.json");
 export const visualProxyPath = (job: PipelineJob) => join(job.workDir, "visual-proxy.mp4");
+export const audioProxyPath = (job: PipelineJob) => join(job.workDir, "playback.m4a");
+
+/**
+ * Proxy só de áudio para os botões "ouvir" da revisão. O player da página é
+ * invisível: tocar o original obrigava o navegador a baixar e decodificar o
+ * vídeo inteiro (no DJI, 2,7 GB de HEVC 10-bit) só para ouvir um trecho. AAC
+ * de 128 kb/s começando no mesmo zero da fonte: ~1–2 s e poucos MB. Publicação
+ * atômica; fonte sem áudio (ou falha) devolve false e a página segue no original.
+ */
+export async function ensureAudioProxy(job: PipelineJob, exec: Executor): Promise<boolean> {
+  const out = audioProxyPath(job);
+  if (await stat(out).then((s) => s.size > 0, () => false)) return true;
+  const tmp = join(job.workDir, `playback.${process.pid}.tmp.m4a`);
+  const made = await exec.run({
+    command: "ffmpeg",
+    args: [
+      "-v", "error", "-y", "-i", job.videoPath,
+      "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "128k",
+      "-movflags", "+faststart", tmp,
+    ],
+    signal: job.signal,
+  });
+  if (made.code !== 0 || !(await stat(tmp).then((s) => s.size > 0, () => false))) {
+    await unlink(tmp).catch(() => {});
+    return false;
+  }
+  await rename(tmp, out);
+  return true;
+}
 
 async function transcriptHasNoSegments(job: PipelineJob): Promise<boolean> {
   try {
@@ -227,7 +287,9 @@ export async function runIngest(
   tracer?: Tracer,
   speech?: IngestSpeech,
   signal?: AbortSignal,
+  opts: IngestOptions = {},
 ): Promise<{ warning?: string }> {
+  const wantsVisual = opts.visual ?? true;
   const activeTracer = tracer ?? createTracer();
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
@@ -277,17 +339,21 @@ export async function runIngest(
     }
     await must(exec, {
       command: "python3",
-      args: [CONDENSE, "index", job.videoPath, transcriptPath(job)],
+      args: [CONDENSE, "index", job.videoPath, transcriptPath(job), "--no-visual-survey"],
       env: envFor(job),
       onLine,
     }, "a medição do índice");
     return false;
   });
 
+  // Visual desligado sai antes da etapa: sem span no tracer, sem onStage
+  // ("visual" nunca chega a quem mostra progresso) e sem aviso de visão.
+  if (!wantsVisual) return {};
+
   const warning = await activeTracer.run("visual", async () => {
     onStage("visual");
     if (emptySpeech) return undefined;
-    return runVisualIndex(job, exec, onLine);
+    return runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin");
   });
   return warning ? { warning } : {};
 }
@@ -300,6 +366,7 @@ async function runVisualIndex(
   job: PipelineJob,
   exec: Executor,
   onLine?: (line: string) => void,
+  hwDecode = false,
 ): Promise<string | undefined> {
   const hasScript = await access(VISION_SCRIPT).then(() => true, () => false);
   if (!hasScript) return VISUAL_SKIP;
@@ -307,17 +374,14 @@ async function runVisualIndex(
   const proxy = visualProxyPath(job);
   const hasProxy = await access(proxy).then(() => true, () => false);
   if (!hasProxy) {
-    const made = await exec.run({
+    const encode = (hw: boolean) => exec.run({
       command: "ffmpeg",
-      args: [
-        "-i", job.videoPath,
-        "-vf", "fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease",
-        "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
-        "-an", "-y", proxy,
-      ],
+      args: visualProxyArgs(job.videoPath, proxy, hw),
       env: envFor(job),
       onLine,
     });
+    let made = await encode(hwDecode);
+    if (made.code !== 0 && hwDecode) made = await encode(false);
     if (made.code !== 0) return VISUAL_SKIP;
   }
 

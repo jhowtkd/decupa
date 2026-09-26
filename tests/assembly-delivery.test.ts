@@ -1,6 +1,7 @@
 import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { hashFile } from "../packages/media/src/hash.ts";
 import { startApp } from "../apps/cli/src/app/server.ts";
@@ -36,7 +37,12 @@ function indexingAndRender(): Executor {
 
 type DeliveryProject = {
   revision: number;
-  assembly: { sources: { id: string; included: boolean; path: string }[] };
+  assembly: {
+    sources: {
+      id: string; included: boolean; path: string;
+      timecode?: { raw: string; frames: number | null; dropFrame: boolean } | null;
+    }[];
+  };
   scenes: unknown[];
   previewRevision: number | null;
   previewArtifact: { revision: number; relativePath: string; sha256: string } | null;
@@ -180,11 +186,215 @@ it("entrega após aprovação: checklist completo e export concluído com saída
   expect(urls.length).toBeGreaterThan(0);
   const originals = new Set<string>();
   for (const source of ready.assembly.sources) {
-    originals.add(`file://${await realpath(source.path)}`);
+    originals.add(pathToFileURL(await realpath(source.path)).href);
   }
   for (const url of urls) {
     expect(originals.has(url)).toBe(true);
   }
   expect(otioText).not.toContain("proxy.mp4");
   expect(otioText).not.toMatch(/media\/[0-9a-f]{64}\//);
+});
+
+it("exporta timecode embutido (NDF e drop-frame) por fonte, com instruções", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-delivery-tc-"));
+  // Nomes com espaço/acento também passam pela probe real.
+  const speech = join(dir, "fala da aula #1.mov");
+  const support = join(dir, "apoio b-roll.mov");
+  await copyFile(join(FIXTURES, "tc-1h-25.mov"), speech);
+  await copyFile(join(FIXTURES, "tc-1h-2997df.mov"), support);
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech, support],
+    port: 0,
+    executor: indexingAndRender(),
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  const opened = await getProject(base);
+  // source.path é realpath'd (no macOS /var → /private/var): casa por nome.
+  const byName = new Map(opened.assembly.sources.map((s) => [basename(s.path), s]));
+  const fala = byName.get(basename(speech));
+  const broll = byName.get(basename(support));
+  // ffprobe lê o tmcd; 01:00:00:00@25 = 90000; DF 01:00:00;00@29.97 = 107892.
+  expect(fala?.timecode).toEqual({ raw: "01:00:00:00", frames: 90000, dropFrame: false });
+  expect(broll?.timecode).toEqual({ raw: "01:00:00;00", frames: 107892, dropFrame: true });
+
+  expect((await post(base, "/project/input", {
+    baseRevision: opened.revision,
+    kind: "brief", text: "contar o tema", targetSeconds: 2,
+  })).status).toBe(200);
+  const analyze = await post(base, "/project/analyze", {
+    sourceIds: opened.assembly.sources.map((s) => s.id),
+  });
+  const analyzed = await analyze.json() as {
+    project: { revision: number; analyses: { speech: { id: string }[] }[] };
+  };
+  const speechId = analyzed.project.analyses[0]?.speech[0]?.id;
+  expect((await post(base, "/project/propose", {
+    baseRevision: analyzed.project.revision,
+    proposal: {
+      id: "prop-tc", baseRevision: analyzed.project.revision,
+      changedSceneIds: ["s1"], explanation: "tc",
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema",
+        speechIds: [speechId], support: [], gaps: [],
+      }],
+    },
+  })).status).toBe(200);
+  const apply = await post(base, "/project/apply", {
+    baseRevision: analyzed.project.revision, proposalId: "prop-tc",
+  });
+  const applied = await apply.json() as { project: { revision: number } };
+  expect((await post(base, "/project/preview", {
+    baseRevision: applied.project.revision,
+  })).status).toBe(200);
+  const previewed = await getProject(base);
+  expect((await post(base, "/project/approve-final", {
+    baseRevision: previewed.revision,
+    watchedRevision: previewed.previewRevision,
+  })).status).toBe(200);
+
+  const ready = await getProject(base);
+  expect((await post(base, "/project/export", { baseRevision: ready.revision })).status).toBe(200);
+
+  // Manifest declara formato e cada fonte com seu timecode.
+  const manifest = JSON.parse(await readFile(
+    join(dir, "exports", String(ready.revision), "manifest.json"), "utf8",
+  )) as {
+    formato: { width: number; height: number; orientation: string; fps: { num: number } };
+    midia: { name: string; timecode: { raw: string; frames: number; dropFrame: boolean } | null }[];
+    verificacao: string;
+  };
+  expect(manifest.formato.orientation).toBe("horizontal");
+  const midiaByName = new Map(manifest.midia.map((m) => [m.name, m]));
+  expect(midiaByName.get("fala da aula #1.mov")?.timecode)
+    .toEqual({ raw: "01:00:00:00", frames: 90000, dropFrame: false });
+  expect(midiaByName.get("apoio b-roll.mov")?.timecode)
+    .toEqual({ raw: "01:00:00;00", frames: 107892, dropFrame: true });
+  expect(manifest.verificacao).toBe("pendente");
+
+  // OTIO: available_range começa no timecode convertido para a taxa da
+  // timeline (3600 s × 25 = 90000) — identidade de mídia preservada.
+  const otioText = await readFile(
+    join(dir, "exports", String(ready.revision), "timeline.otio"), "utf8",
+  );
+  const starts = [...otioText.matchAll(
+    /"available_range":\{"OTIO_SCHEMA":"TimeRange\.1","start_time":\{"OTIO_SCHEMA":"RationalTime\.1","value":(\d+)/g,
+  )].map((m) => Number(m[1]));
+  expect(starts).toEqual([90000, 90000]);
+
+  // Instruções de conferência servidas por fonte, verificação pendente.
+  const instrucoes = await fetch(`${base}/project/output/${ready.revision}/instrucoes`);
+  expect(instrucoes.status).toBe(200);
+  const txt = await instrucoes.text();
+  expect(txt).toContain("01:00:00:00");
+  expect(txt).toContain("01:00:00;00");
+  expect(txt).toMatch(/drop-frame/);
+  const verificacao = await fetch(`${base}/project/output/${ready.revision}/verificacao`);
+  expect(verificacao.status).toBe(200);
+  const vbody = await verificacao.json() as {
+    status: string; revision: number; origem: string | null;
+    artefato: { timeline: string; reference: string };
+  };
+  expect(vbody.status).toBe("pendente");
+  expect(vbody.revision).toBe(ready.revision);
+  expect(vbody.origem).toBeNull();
+  expect(vbody.artefato.reference).toBe(ready.previewArtifact!.sha256);
+});
+
+it("conferência de importação: exportar nunca confirma e revisão nova não herda (#63)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-delivery-verify-"));
+  const speech = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), speech);
+  const app = await startApp({
+    projectDir: dir,
+    inputs: [speech],
+    port: 0,
+    executor: indexingAndRender(),
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+
+  type View = DeliveryProject & {
+    verificacao?: { status: string; revision: number; origem: string } | null;
+  };
+  const view = async (): Promise<View> => {
+    const data = await (await fetch(`${base}/project`)).json() as {
+      project: DeliveryProject;
+      verificacao?: { status: string; revision: number; origem: string } | null;
+    };
+    return { ...data.project, verificacao: data.verificacao ?? null };
+  };
+
+  // Sem entrega: confirmar é recusado e editar/revisar seguem livres.
+  let p = await view();
+  expect(p.verificacao ?? null).toBeNull();
+  const early = await post(base, "/project/verify-import", { baseRevision: p.revision });
+  expect(early.status).toBe(409);
+  expect((await early.json() as { error: string }).error).toMatch(/exporte antes/);
+
+  expect((await post(base, "/project/input", {
+    baseRevision: p.revision, kind: "brief", text: "tema", targetSeconds: 2,
+  })).status).toBe(200);
+  const analyze = await post(base, "/project/analyze", {
+    sourceIds: p.assembly.sources.map((s) => s.id),
+  });
+  expect(analyze.status).toBe(200);
+  const analyzed = await analyze.json() as {
+    project: { revision: number; analyses: { speech: { id: string }[] }[] };
+  };
+  const speechId = analyzed.project.analyses[0]?.speech[0]?.id;
+  expect((await post(base, "/project/propose", {
+    baseRevision: analyzed.project.revision,
+    proposal: {
+      id: "prop-v", baseRevision: analyzed.project.revision,
+      changedSceneIds: ["s1"], explanation: "corte",
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema",
+        speechIds: [speechId], support: [], gaps: [],
+      }],
+    },
+  })).status).toBe(200);
+  const apply = await post(base, "/project/apply", {
+    baseRevision: analyzed.project.revision, proposalId: "prop-v",
+  });
+  const applied = await apply.json() as { project: { revision: number } };
+  expect((await post(base, "/project/preview", {
+    baseRevision: applied.project.revision,
+  })).status).toBe(200);
+  const previewed = await view();
+  expect((await post(base, "/project/approve-final", {
+    baseRevision: previewed.revision,
+    watchedRevision: previewed.previewRevision,
+  })).status).toBe(200);
+
+  // Exportar ≠ conferir: nasce pendente e sem origem.
+  p = await view();
+  expect((await post(base, "/project/export", { baseRevision: p.revision })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao?.status).toBe("pendente");
+  expect(p.verificacao?.revision).toBe(p.revision);
+
+  // Confirmar exige a revisão certa e grava origem manual.
+  expect((await post(base, "/project/verify-import", {
+    baseRevision: p.revision,
+  })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao?.status).toBe("confirmada");
+  expect(p.verificacao?.origem).toBe("manual");
+  // O arquivo da entrega também reflete a confirmação.
+  const file = await fetch(`${base}/project/output/${p.revision}/verificacao`);
+  expect((await file.json() as { status: string; origem: string }).status).toBe("confirmada");
+
+  // Conteúdo novo não herda a confirmação: revisão nova não tem entrega
+  // própria, então confirmar volta a ser recusado.
+  expect((await post(base, "/project/input", {
+    baseRevision: p.revision, kind: "brief", text: "tema novo", targetSeconds: 3,
+  })).status).toBe(200);
+  p = await view();
+  expect(p.verificacao ?? null).toBeNull();
+  expect((await post(base, "/project/verify-import", {
+    baseRevision: p.revision,
+  })).status).toBe(409);
 });

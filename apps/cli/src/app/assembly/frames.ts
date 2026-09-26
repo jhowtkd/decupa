@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Executor } from "../pipeline.ts";
 import type { Source } from "./types.ts";
@@ -20,23 +21,33 @@ export type VisualFrame = {
 export async function extractVisualFrames(
   source: Source,
   window: VisualWindow,
-  cacheDir: string,
   exec: Executor,
   opts?: { signal?: AbortSignal },
 ): Promise<VisualFrame[]> {
-  // Diretório efêmero por janela: o `finally` garante que o cache final fica limpo.
-  const tempDir = await mkdtemp(join(cacheDir, "frames-"));
+  // Diretório efêmero por janela no tmpdir: o `finally` garante limpeza e o
+  // caminho curto não estoura o limite de ~260 chars do Windows (o cache
+  // `analysis/<sha>/<sha>/visual-v4-<sha>` já consome ~200).
+  const tempDir = await mkdtemp(join(tmpdir(), "decupa-frames-"));
   try {
     const pattern = join(tempDir, "frame-%03d.jpg");
-    // Ordem output-seek (`-i` antes de `-ss`): manter como está para os
-    // timestamps dos frames continuarem alinhados ao contrato das janelas.
+    // Busca precisa na entrada (`-ss` + `-accurate_seek` antes de `-i`): o
+    // FFmpeg pula direto para o keyframe anterior à janela em vez de
+    // decodificar o vídeo desde o início a cada janela. Os frames saem nos
+    // mesmos segundos da busca na saída — o teste de alinhamento prova isso
+    // em CFR, VFR, início não zero, GOP longo e rotação.
     const result = await exec.run({
       command: "ffmpeg",
       args: [
-        "-n", "-i", source.path,
-        "-ss", String(window.fetchStart),
+        "-n",
+        // Até 2 threads de decodificação por janela (a fila roda 2 janelas):
+        // sem teto, cada FFmpeg ocupa quase todos os núcleos e a carga do Mac
+        // passava de 20 na preparação. Os JPEGs não mudam com o número de threads.
+        "-threads", "2",
+        "-ss", String(window.fetchStart), "-accurate_seek",
+        "-i", source.path,
         "-t", String(window.end - window.fetchStart),
         "-vf", "fps=1,scale='min(480,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+        "-filter_threads", "1",
         "-an", "-q:v", "5", pattern,
       ],
       signal: opts?.signal,
@@ -62,7 +73,9 @@ export async function extractVisualFrames(
       );
     }
 
-    return Promise.all(names.map(async (name, index) => ({
+    // `return await`: sem o await, o `finally` abaixo apagaria o diretório
+    // enquanto as leituras ainda estão em voo.
+    return await Promise.all(names.map(async (name, index) => ({
       sourceSecond: window.fetchStart + index,
       dataUrl: "data:image/jpeg;base64," +
         (await readFile(join(tempDir, name))).toString("base64"),

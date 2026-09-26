@@ -162,7 +162,9 @@ async function encode(
     const ok = Boolean(info?.hasVideo && (info.durationMs ?? 0) > 0);
     if (!ok) await unlink(output).catch(() => {});
     return ok;
-  }, { key: output });
+    // Sinal também na espera da fila: cancelar a preparação não pode deixar a
+    // prova parada na mediaWork segurando quem veio depois.
+  }, { key: output, signal });
 }
 
 export async function proveHardwareEncode(

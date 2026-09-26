@@ -79,6 +79,21 @@ export function effectiveWords(project: Project, sourceId: string): Word[] {
   return words.sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
+/** Compact only aligned word-free pauses; preserve acoustic handles and protected ranges. */
+export function tightenSpeechTake(project: Project, take: SpeechTake): SpeechTake {
+  const analysis=project.analyses.find(a=>a.sourceId===take.sourceId);
+  if(analysis?.wordsStatus!=="ready")return take;
+  const words=effectiveWords(project,take.sourceId).filter(w=>w.start<take.end&&w.end>take.start);
+  const cuts:SourceRange[]=[];
+  for(let i=1;i<words.length;i++){
+    const prev=words[i-1]!,next=words[i]!;
+    const start=Math.max(take.start,prev.end,prev.cutEnd??prev.end)+0.05;
+    const end=Math.min(take.end,next.start,next.cutStart??next.start)-0.05;
+    if(end-start>0.2)cuts.push({start,end});
+  }
+  return {...take,removed:normalizeRanges([...take.removed,...subtractRanges(cuts,take.protected)])};
+}
+
 function findScene(project: Project, sceneId: string): Scene {
   const scene = project.scenes.find((item) => item.id === sceneId);
   if (!scene) throw new Error(`cena não encontrada: ${sceneId}`);
@@ -207,7 +222,7 @@ function wordIntervalsInTake(
   return ranges;
 }
 
-function overlaps(range: SourceRange, list: SourceRange[]): boolean {
+export function overlaps(range: SourceRange, list: SourceRange[]): boolean {
   return list.some((item) => range.start < item.end && item.start < range.end);
 }
 
@@ -221,7 +236,7 @@ function withTake(project: Project, sceneId: string, takeId: string, next: Speec
   };
 }
 
-function invalidatePreview(project: Project): Project {
+export function invalidatePreview(project: Project): Project {
   return {
     ...project,
     revision: project.revision + 1,
@@ -229,6 +244,63 @@ function invalidatePreview(project: Project): Project {
     previewRevision: null,
     finalApprovedRevision: null,
   };
+}
+
+/**
+ * Cortes por faixa da fonte vindos de uma proposta localizada (#64):
+ * vão ao `removed` de cada take, menos os protegidos — proposta nenhuma
+ * remove trecho protegido. Uma única invalidação por aplicação; sem
+ * cortes efetivos, o projeto volta intocado.
+ */
+export function applySpeechCuts(
+  project: Project,
+  updates: { sceneId: string; takeId: string; cuts: SourceRange[] }[],
+): Project {
+  let next = project;
+  let touched = false;
+  for (const { sceneId, takeId, cuts } of updates) {
+    if (!cuts.length) continue;
+    const scene = findScene(next, sceneId);
+    const take = findTake(scene, takeId);
+    // Só conta como mudança o trecho que ainda não está removido — corte
+    // coberto por proteção ou por remoção anterior é no-op e não deve
+    // gerar revisão nem invalidar aprovação.
+    const allowed = subtractRanges(subtractRanges(cuts, take.protected), take.removed);
+    if (!allowed.length) continue;
+    touched = true;
+    next = withTake(next, scene.id, take.id, {
+      ...take,
+      removed: normalizeRanges([...take.removed, ...allowed]),
+    });
+  }
+  return touched ? invalidatePreview(next) : next;
+}
+
+/**
+ * Substituição localizada de apoio (#65): troca o item `index` de
+ * `scene.support` pelos entries do candidato, mantendo takes, cortes e os
+ * demais apoios. `visualEvidenceIds` ganha as evidências novas. Uma única
+ * invalidação — igual às outras edições de cena.
+ */
+export function replaceSceneSupport(
+  project: Project,
+  sceneId: string,
+  index: number,
+  entries: Scene["support"],
+): Project {
+  const scene = findScene(project, sceneId);
+  if (index < 0 || index >= scene.support.length) {
+    throw new Error(`apoio ${index} inexistente na cena ${sceneId}`);
+  }
+  const support = [...scene.support];
+  support.splice(index, 1, ...entries);
+  const visualEvidenceIds = [
+    ...new Set([...scene.visualEvidenceIds, ...entries.map((entry) => entry.visualId)]),
+  ];
+  const scenes = project.scenes.map((item) =>
+    item.id === sceneId ? { ...item, support, visualEvidenceIds } : item
+  );
+  return invalidatePreview({ ...project, scenes });
 }
 
 function applyRemoveRestore(

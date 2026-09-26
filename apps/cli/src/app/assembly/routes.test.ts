@@ -8,7 +8,8 @@ import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
 import { mediaWork } from "./media-work.ts";
-import { paidBlockedReason, PAID_BLOCKED, applyCanvasFrom, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
+import { applyCanvasPolicy } from "./canvas.ts";
+import { paidBlockedReason, PAID_BLOCKED, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { applyHistorySnapshot } from "./revisions.ts";
 import type { Project, Source } from "./types.ts";
@@ -30,6 +31,10 @@ function indexingExec(): Executor {
   return {
     async run(call) {
       const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+      const output = call.args.at(-1);
+      if (call.command === "ffmpeg" && output?.includes("%03d")) {
+        await writeFile(output.replace("%03d", "000"), "frame");
+      }
       if (work && call.args.includes("index")) {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
@@ -43,6 +48,7 @@ function indexingExec(): Executor {
 async function boot(
   selectPaths: string[] = [],
   extras: {
+    templatesRoot?: string;
     executor?: Executor;
     describeClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string> };
     allowPaidVisual?: boolean;
@@ -539,7 +545,7 @@ it("prévia cancelada na fila não lança render pela rota", async () => {
     });
     await vi.waitFor(() => {
       expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
-    });
+    }, { timeout: 10_000 });
     const cancelled = await fetch(`${base}/project/cancel`, { method: "POST" });
     expect(cancelled.status).toBe(200);
     release();
@@ -682,7 +688,7 @@ it("upload abortado não registra fonte nem deixa .part", async () => {
   await vi.waitFor(async () => {
     const files = await readdir(join(dir, "imports")).catch(() => [] as string[]);
     expect(files.filter((file) => file.endsWith(".part"))).toEqual([]);
-  });
+  }, { timeout: 10_000 });
   const body = (await (await fetch(`${base}/project`)).json()) as ProjectSummary;
   expect(body.project.revision).toBe(0);
   expect(body.project.assembly.sources).toEqual([]);
@@ -770,7 +776,7 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
     describeClient: {
       async send() {
         return JSON.stringify({
-          spans: [{ start: 0, end: 1, text: "pessoa falando", confidence: "observed", tags: [] }],
+          spans: [{ start: 0, end: 3, text: "pessoa falando", confidence: "observed", tags: [] }],
         });
       },
     },
@@ -789,8 +795,12 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
     }),
   });
   expect(started.status).toBe(202);
+  // Consulta até ver a preparação em voo (prazo generoso para runner lento) e
+  // mais algumas vezes depois: nenhuma consulta pode tratá-la como reinício.
   let sawRunning = false;
-  for (let i = 0; i < 25; i += 1) {
+  let pollsAfterRunning = 0;
+  const deadline = Date.now() + 15_000;
+  while (pollsAfterRunning < 10 && Date.now() < deadline) {
     const poll = (await (await fetch(`${base}/project`)).json()) as {
       project: { preparation: { status: string; error?: string } | null };
     };
@@ -798,6 +808,7 @@ it("GET /project não trata prepare em voo como reinício do servidor", async ()
       expect(poll.project.preparation.error ?? "").not.toContain("servidor reiniciado");
       if (poll.project.preparation.status === "running") sawRunning = true;
     }
+    if (sawRunning) pollsAfterRunning += 1;
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
   expect(sawRunning).toBe(true);
@@ -893,17 +904,21 @@ it("canvas vem do primeiro vídeo mesmo com áudio já cadastrado", () => {
     ...p,
     assembly: { ...p.assembly, sources: [audio] },
   };
-  const afterAudio = applyCanvasFrom(p, audio);
+  const afterAudio = applyCanvasPolicy(p);
   expect(afterAudio.assembly.width).toBe(320);
-  const afterVideo = applyCanvasFrom(afterAudio, video);
+  const afterVideo = applyCanvasPolicy({
+    ...afterAudio,
+    assembly: { ...afterAudio.assembly, sources: [audio, video] },
+  });
   expect(afterVideo.assembly.width).toBe(1920);
   expect(afterVideo.assembly.height).toBe(1080);
   expect(afterVideo.assembly.fps).toEqual({ num: 30000, den: 1001 });
+  expect(afterVideo.assembly.canvasSourceId).toBe("cam");
   const second = { ...video, id: "cam2", width: 640, height: 360, fps: { num: 25, den: 1 } };
-  const afterSecond = applyCanvasFrom({
+  const afterSecond = applyCanvasPolicy({
     ...afterVideo,
-    assembly: { ...afterVideo.assembly, sources: [audio, video] },
-  }, second);
+    assembly: { ...afterVideo.assembly, sources: [audio, video, second] },
+  });
   expect(afterSecond.assembly.width).toBe(1920);
   expect(afterSecond.assembly.fps).toEqual({ num: 30000, den: 1001 });
 });
@@ -1127,4 +1142,63 @@ it("novo projeto abre vazio e preserva projeto e mídia anteriores", async () =>
   expect(await readFile(join(dir,"project.json"),"utf8")).toBe(before);
   const html = await (await fetch(url)).text();
   expect(html).toContain('id="newProject"');
+});
+
+it("template gera candidata sem mudar montagem; aceite muda revisão e recusa stale",async()=>{
+ const {saveRecipe}=await import("../templates/store.ts");
+ const templatesRoot=await mkdtemp(join(tmpdir(),"template-library-"));
+ const recipe:import("../templates/types.ts").Recipe={id:"11111111-1111-4111-8111-111111111111",revision:1,name:"Evento",status:"draft",source:{path:"/tmp/reference.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[]};
+ await saveRecipe(templatesRoot,recipe,null);await saveRecipe(templatesRoot,{...recipe,status:"approved"},1);
+ const {base,dir}=await boot([],{templatesRoot,allowPaidModel:true,proposeSend:async()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[],explanation:"receita"})});
+ const p=await loadProject(dir);p.assembly=fixtureAssembly();p.assembly.revision=p.revision;p.analyses=[{sourceId:"a",key:"k",status:"ready",speech:[{id:"u",sourceId:"a",start:0,end:1,text:"tema"}],visual:[],words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]}}];
+ p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.tracks.forEach(t=>t.clips=[]);
+ await saveProject(dir,p.revision,()=>p);
+ const r=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ expect(r.status).toBe(200);const data=await r.json() as any;
+ expect((await loadProject(dir)).scenes).toHaveLength(0);
+ const accepted=await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})});
+ expect(accepted.status).toBe(200);expect((await loadProject(dir)).template?.id).toBe(recipe.id);
+ expect((await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:p.revision,proposalId:data.templateProposal.id})})).status).toBe(409);
+});
+
+it("relatório do template acompanha aceite/rejeição/desfazer (#68)",async()=>{
+ const {saveRecipe}=await import("../templates/store.ts");
+ const templatesRoot=await mkdtemp(join(tmpdir(),"template-library-"));
+ const rule=(id:string,enabled=true)=>({id,category:"narrative" as const,observation:"obs",instruction:`inst ${id}`,enabled,confidence:"observed" as const,evidence:[{start:0,end:1}]});
+ const recipe:import("../templates/types.ts").Recipe={id:"22222222-2222-4222-8222-222222222222",revision:1,name:"Evento",status:"draft",source:{path:"/tmp/reference.mp4",sha256:"a".repeat(64),durationSeconds:2},analysis:{status:"ready",stage:"complete"},rules:[rule("r1"),rule("r2"),rule("r3",false)]};
+ await saveRecipe(templatesRoot,recipe,null);await saveRecipe(templatesRoot,{...recipe,status:"approved"},1);
+ const proposeBody=()=>JSON.stringify({changedSceneIds:["s1"],scenes:[{id:"s1",objective:"abertura",rationale:"fala",animationNotes:[{id:"n1",description:"lower third",destination:"Resolve"}],selections:[{speechId:"u"}],support:[],gaps:[]}],templateReport:[{ruleId:"r1",status:"applied",reason:"regra seguida",sceneIds:["s1"]},{ruleId:"r2",status:"unavailable",reason:"material sem variação"}],explanation:"receita"});
+ const {base,dir}=await boot([],{templatesRoot,allowPaidModel:true,proposeSend:async()=>proposeBody()});
+ const p=await loadProject(dir);p.assembly=fixtureAssembly();p.assembly.revision=p.revision;p.analyses=[{sourceId:"a",key:"k",status:"ready",speech:[{id:"u",sourceId:"a",start:0,end:1,text:"tema"}],visual:[],words:[],wordsStatus:"missing",visualCoverage:{requested:[],returned:[],missing:[]}}];
+ p.assembly.sources=p.assembly.sources.filter(s=>s.id==="a");p.assembly.tracks.forEach(t=>t.clips=[]);
+ await saveProject(dir,p.revision,()=>p);
+ type Report={recipe:{id:string;revision:number}|null;rules:{ruleId:string;status:string;sceneIds:string[]|null}[];animations:{id:string;sceneId:string;durationFrames:number}[]};
+ const getReport=async()=>((await (await fetch(base+"/project")).json()) as {templateReport:Report}).templateReport;
+ // Projeto sem template: relatório vazio e explícito.
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+ // Proposta rejeitada não deixa relatório nem receita.
+ const first=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:p.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ expect(first.status).toBe(200);const d1=await first.json() as any;
+ const cur=await loadProject(dir);
+ expect((await fetch(base+"/project/template-reject",{method:"POST",body:JSON.stringify({baseRevision:cur.revision,proposalId:d1.templateProposal.id})})).status).toBe(200);
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+ expect((await loadProject(dir)).template).toBeFalsy();
+ // Nova proposta aceita: relatório congela receita+revisão, cobre regras
+ // ativas (não a desabilitada), cenas navegáveis e animação como handoff.
+ const cur2=await loadProject(dir);
+ const second=await fetch(base+"/project/template-proposal",{method:"POST",body:JSON.stringify({baseRevision:cur2.revision,templateId:recipe.id,templateRevision:1,modelOptIn:true})});
+ const d2=await second.json() as any;
+ const accepted=await fetch(base+"/project/template-accept",{method:"POST",body:JSON.stringify({baseRevision:cur2.revision,proposalId:d2.templateProposal.id})});
+ expect(accepted.status).toBe(200);
+ const report=await getReport();
+ expect(report.recipe).toEqual({id:recipe.id,revision:1,name:"Evento"});
+ expect(report.rules.map(r=>r.ruleId)).toEqual(["r1","r2"]);
+ expect(report.rules[0]).toMatchObject({status:"applied",reason:"regra seguida",sceneIds:["s1"]});
+ expect(report.rules[1]).toMatchObject({status:"unavailable",sceneIds:null});
+ expect(report.animations).toEqual([{id:"n1",description:"lower third",destination:"Resolve",sceneId:"s1",startFrame:0,durationFrames:25}]);
+ // Desfazer restaura projeto sem template e sem relatório.
+ const cur3=await loadProject(dir);
+ const undo=await fetch(base+"/project/undo",{method:"POST",body:JSON.stringify({baseRevision:cur3.revision,revision:cur3.revision-1})});
+ expect(undo.status).toBe(200);
+ expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
 });

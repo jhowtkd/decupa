@@ -4,6 +4,12 @@ import type { MediaInfo, Rate } from "./types.ts";
 
 const run = promisify(execFile);
 
+interface FfprobeSideData {
+  side_data_type?: string;
+  rotation?: number | string;
+  displaymatrix?: string;
+}
+
 interface FfprobeStream {
   codec_type?: string;
   codec_name?: string;
@@ -12,10 +18,12 @@ interface FfprobeStream {
   r_frame_rate?: string;
   avg_frame_rate?: string;
   sample_rate?: string;
+  tags?: Record<string, string | undefined>;
+  side_data_list?: FfprobeSideData[];
 }
 
 interface FfprobeOutput {
-  format?: { duration?: string };
+  format?: { duration?: string; tags?: Record<string, string | undefined> };
   streams?: FfprobeStream[];
 }
 
@@ -48,6 +56,36 @@ export function selectFrameRate(
   if (isSane(r)) return r;
   if (isSane(avg)) return avg;
   return null;
+}
+
+/**
+ * Etiqueta de timecode gravada na mídia: tag do stream de vídeo
+ * (`-timecode` do ffmpeg) com fallback para a tag do container.
+ * Lixo/"" viram null — a exportação decide se o valor é legível.
+ */
+export function readTimecode(
+  video: FfprobeStream | undefined,
+  formatTags: Record<string, string | undefined> | undefined,
+): string | null {
+  const raw = video?.tags?.timecode ?? formatTags?.timecode;
+  return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+}
+
+/**
+ * Rotação de exibição em graus: `side_data_list` (Display Matrix,
+ * `rotation` vira negativo no ffmpeg ≥5) ou a tag legada `rotate`.
+ * Valores que não são múltiplos de 90 viram null — meia-rotação
+ * arbitrária não muda o formato da entrega.
+ */
+export function readRotation(video: FfprobeStream | undefined): number | null {
+  const side = video?.side_data_list?.find(
+    (item) => item.rotation !== undefined || item.displaymatrix !== undefined,
+  );
+  const raw = side?.rotation ?? video?.tags?.rotate;
+  const degrees = Number(raw);
+  if (!Number.isFinite(degrees)) return null;
+  const normalized = ((Math.round(degrees) % 360) + 360) % 360;
+  return normalized % 90 === 0 ? normalized : null;
 }
 
 export async function probe(path: string): Promise<MediaInfo> {
@@ -85,5 +123,7 @@ export async function probe(path: string): Promise<MediaInfo> {
     videoCodec: video?.codec_name ?? null,
     audioCodec: audio?.codec_name ?? null,
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : null,
+    timecode: readTimecode(video, parsed.format?.tags),
+    rotation: readRotation(video),
   };
 }
