@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { idleStatus, stepperState, versionLabel } from "./topbar.js";
+import { idleStatus, stepperState, versionLabel, versionPill } from "./topbar.js";
 
 const base = { revision: 15, previewRevision: null as number | null, finalApprovedRevision: null as number | null,
   assembly: { sources: [] as { included: boolean }[] } };
@@ -36,9 +36,18 @@ it("aprovação de versão antiga não destrava a entrega", () => {
 });
 
 it("versão e status ocioso", () => {
-  expect(versionLabel(base)).toBe("v15");
-  expect(idleStatus(base)).toEqual({ text: "v15", tone: "" });
-  expect(idleStatus({ ...base, previewRevision: 15 })).toEqual({ text: "Prévia v15 pronta", tone: "ok" });
-  expect(idleStatus({ ...base, previewRevision: 15, finalApprovedRevision: 15 })).toEqual({ text: "v15 aprovada", tone: "ok" });
+  const withMedia = { ...base, assembly: { sources: [{ included: true }] } };
+  expect(versionLabel(withMedia)).toBe("v15");
+  expect(idleStatus(withMedia)).toEqual({ text: "v15", tone: "" });
+  expect(idleStatus({ ...withMedia, previewRevision: 15 })).toEqual({ text: "Prévia v15 pronta", tone: "ok" });
+  expect(idleStatus({ ...withMedia, previewRevision: 15, finalApprovedRevision: 15 })).toEqual({ text: "v15 aprovada", tone: "ok" });
   expect(idleStatus(null)).toEqual({ text: "carregando…", tone: "" });
+});
+
+it("sem material: status pede a importação e a pílula de versão some", () => {
+  const empty = { ...base, revision: 0 };
+  expect(idleStatus(empty)).toEqual({ text: "Importe um material para montar", tone: "" });
+  expect(versionPill(empty)).toEqual({ hidden: true, text: "" });
+  expect(versionPill({ ...base, assembly: { sources: [{ included: false }] } })).toEqual({ hidden: false, text: "v15" });
+  expect(versionPill(null)).toEqual({ hidden: true, text: "" });
 });

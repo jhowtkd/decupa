@@ -32,9 +32,19 @@ export function versionLabel(project) {
   return project ? "v" + project.revision : "";
 }
 
-/** Status ocioso: aprovada > prévia pronta > só a versão. */
+function hasMaterial(project) {
+  return (project?.assembly?.sources ?? []).length > 0;
+}
+
+/** Pílula de versão ao lado do projeto: só aparece depois do primeiro material. */
+export function versionPill(project) {
+  return hasMaterial(project) ? { hidden: false, text: versionLabel(project) } : { hidden: true, text: "" };
+}
+
+/** Status ocioso: sem material > aprovada > prévia pronta > só a versão. */
 export function idleStatus(project) {
   if (!project) return { text: "carregando…", tone: "" };
+  if (!hasMaterial(project)) return { text: "Importe um material para montar", tone: "" };
   const v = versionLabel(project);
   if (approvedNow(project)) return { text: v + " aprovada", tone: "ok" };
   if (project.previewRevision != null && project.previewRevision === project.revision) {

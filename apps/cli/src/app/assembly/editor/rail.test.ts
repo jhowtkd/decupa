@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, paintSceneCurrent, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -272,4 +272,21 @@ it("briefingSummary compara a duração com o alvo", () => {
   expect(briefingSummary({ text: "", targetSeconds: 60 }, 45).note).toBe("15 s abaixo do alvo");
   expect(briefingSummary({ text: "", targetSeconds: 60 }, 60.2).note).toBe("No alvo");
   expect(briefingSummary({ text: "x", targetSeconds: 60 }, null)).toMatchObject({ duration: null, note: "", fill: 0 });
+});
+
+it("preparationSteps: cancelada pelo usuário fica neutra; falha real continua Falhou", () => {
+  const preparation = { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "running" } } };
+  const running = project({
+    assembly: { sources: [{ id: "a", name: "fala.mp4", included: true }] },
+    previewRevision: null,
+    preparation,
+  });
+  expect(preparationSteps(running, true).map((step: { status: string; state: string }) => [step.status, step.state])).toEqual([
+    ["ready", "Concluída"], ["ready", "Concluída"], ["running", "Em andamento · fala.mp4"], ["pending", "Na fila"], ["pending", "Na fila"],
+  ]);
+  const stopped = (status: string) => ({ ...running, preparation: { ...preparation, status } });
+  expect(preparationSteps(stopped("cancelled"), false)[2]).toMatchObject({ key: "visual", status: "cancelled", state: "Cancelada" });
+  expect(preparationSteps(stopped("interrupted"), false)[2]).toMatchObject({ key: "visual", status: "error", state: "Falhou" });
+  expect(preparationSteps(stopped("attention"), false)[2]).toMatchObject({ status: "error", state: "Falhou" });
+  expect(preparationSteps(project(), false)).toEqual([]);
 });

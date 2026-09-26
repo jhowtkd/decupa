@@ -8,7 +8,7 @@ import { mountRail, preparationView } from "/editor/rail.js";
 import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
-import { idleStatus, stepperState, versionLabel } from "/editor/topbar.js";
+import { idleStatus, stepperState, versionPill } from "/editor/topbar.js";
 import { ICON } from "/editor/icons.js";
 
 const state = createState({
@@ -426,8 +426,9 @@ state.subscribe("project", (p) => {
   poller.schedule();
   document.getElementById("projectName").textContent = p.assembly.name && p.assembly.name !== p.id ? p.assembly.name : "Montagem principal";
   const pill = document.getElementById("versionPill");
-  pill.textContent = versionLabel(p);
-  pill.hidden = false;
+  const version = versionPill(p);
+  pill.textContent = version.text;
+  pill.hidden = version.hidden;
 });
 
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });

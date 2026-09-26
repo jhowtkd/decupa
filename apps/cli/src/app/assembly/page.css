@@ -358,6 +358,7 @@ body.is-empty #texto > .measure { max-width: none; flex: 1; display: flex; }
 .prep-bar .ready { background: var(--green); }
 .prep-bar .running { background: var(--accent); }
 .prep-bar .error { background: var(--red); }
+.prep-bar .cancelled { background: var(--faint); }
 .preparation-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .preparation-steps li { display: flex; flex-direction: row; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: var(--muted); }
 .step-icon { display: inline-flex; }
@@ -368,6 +369,9 @@ body.is-empty #texto > .measure { max-width: none; flex: 1; display: flex; }
 .preparation-steps .running .step-icon, .preparation-steps .running .step-state { color: var(--accent); }
 .preparation-steps .running .step-state { font-weight: 500; }
 .preparation-steps .error { color: var(--red); }
+/* Cancelada pelo usuário: neutra, sem o vermelho da falha. */
+.preparation-steps .cancelled { color: var(--ink); }
+.preparation-steps .cancelled .step-icon, .preparation-steps .cancelled .step-state { color: var(--muted); }
 .preparation-steps .pending .step-icon { color: #3A3D44; }
 #prepError { font-size: 12px; color: var(--muted); }
 #prepError:empty { display: none; }

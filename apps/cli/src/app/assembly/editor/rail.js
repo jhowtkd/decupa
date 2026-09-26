@@ -7,7 +7,7 @@ import { montageDuration, retainedDuration } from "./montage.js";
 // original do page.js monolítico, mantendo o comentário de comportamento.
 const ROLES = { speech: "Fala", support: "Apoio", both: "Fala + apoio" };
 const ROLE_META = { speech: "fala", support: "apoio", both: "fala + apoio" };
-const STAGE_LABEL = { pending: "Na fila", running: "Em andamento", ready: "Concluída", error: "Falhou" };
+const STAGE_LABEL = { pending: "Na fila", running: "Em andamento", ready: "Concluída", error: "Falhou", cancelled: "Cancelada" };
 const PREP_STAGES = { media: "Verificar arquivos", audio: "Transcrever áudio", visual: "Analisar imagens", proposal: "Montar cenas", preview: "Renderizar prévia" };
 
 export function sourceProgress(project, source) {
@@ -56,6 +56,28 @@ export function preparationView(project, operation) {
     detail: busy ? (active ? active.name + " · " : "") + (prep.note || `${done} de ${sources.length} mídias analisadas`)
       : failed ? failed.name + " · " + sourceProgress(project, failed).detail
       : prep?.error || operation?.error || "Confira a prévia antes de aprovar a entrega." };
+}
+
+/**
+ * Etapas da preparação (pura). A etapa em que a preparação parou diz
+ * "Falhou"; se foi o usuário que cancelou (status do servidor), "Cancelada".
+ */
+export function preparationSteps(project, busy) {
+  const prep = project.preparation;
+  if (!prep) return [];
+  const keys = prep.mode === "preview" ? ["preview"] : Object.keys(PREP_STAGES);
+  const included = project.assembly.sources.filter((source) => source.included);
+  const active = included.find((source) => Object.values(prep.sources?.[source.id] || {}).includes("running"));
+  const stopped = prep.status === "cancelled" ? "cancelled" : "error";
+  return keys.map((key) => {
+    const sourceStage = ["media", "audio", "visual"].includes(key);
+    const done = sourceStage ? included.length > 0 && included.every((source) => prep.sources?.[source.id]?.[key] === "ready")
+      : key === "proposal" ? project.scenes.length > 0 && ["preview"].includes(prep.stage)
+      : project.previewRevision === project.revision;
+    const status = done ? "ready" : key === prep.stage ? (busy ? "running" : stopped) : "pending";
+    const state = STAGE_LABEL[status] + (status === "running" && active && sourceStage ? " · " + active.name : "");
+    return { key, label: PREP_STAGES[key], status, state };
+  });
 }
 
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
@@ -473,19 +495,12 @@ export function mountRail({ state, api, player }) {
     document.getElementById("opLine").textContent = view.detail;
     document.getElementById("stopPreparation").hidden = !view.busy;
     document.getElementById("resume").hidden = view.busy || prep.status === "ready";
-    const keys = prep.mode === "preview" ? ["preview"] : Object.keys(PREP_STAGES);
     const steps = document.getElementById("prepList");
     const bar = document.getElementById("prepBar");
     steps.replaceChildren();
     bar.replaceChildren();
-    const included = project.assembly.sources.filter((source) => source.included);
-    const active = included.find((source) => Object.values(prep.sources[source.id] || {}).includes("running"));
-    for (const key of keys) {
-      const sourceStage = ["media", "audio", "visual"].includes(key);
-      const done = sourceStage ? included.length > 0 && included.every((source) => prep.sources[source.id]?.[key] === "ready")
-        : key === "proposal" ? project.scenes.length > 0 && ["preview"].includes(prep.stage)
-        : project.previewRevision === project.revision;
-      const status = done ? "ready" : key === prep.stage ? (view.busy ? "running" : "error") : "pending";
+    for (const step of preparationSteps(project, view.busy)) {
+      const { status } = step;
       const li = document.createElement("li");
       li.className = status;
       li.innerHTML = '<span class="step-icon">'
@@ -493,10 +508,10 @@ export function mountRail({ state, api, player }) {
         + "</span>";
       const label = document.createElement("span");
       label.className = "step-label";
-      label.textContent = PREP_STAGES[key];
+      label.textContent = step.label;
       const stateText = document.createElement("span");
       stateText.className = "step-state";
-      stateText.textContent = STAGE_LABEL[status] + (status === "running" && active && sourceStage ? " · " + active.name : "");
+      stateText.textContent = step.state;
       li.append(label, stateText);
       steps.appendChild(li);
       const seg = document.createElement("span");
