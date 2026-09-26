@@ -36,6 +36,8 @@ it("casca: tokens dos painéis e grade topo/rail/centro/monitor", async () => {
   }
   expect(css).toMatch(/grid-template:\s*"topbar topbar topbar" 48px\s*"rail center monitor" minmax\(0, 1fr\)/);
   expect(css).not.toContain("#tools");
+  const narrow = css.slice(css.indexOf("@media (max-width: 700px)"));
+  expect(narrow).toContain(".topbar-project, .topbar-actions { flex: 1 1 100%; }");
 });
 
 it("casca: etapa não remonta a bancada; entrega mora no cartão central", async () => {

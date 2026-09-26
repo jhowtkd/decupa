@@ -372,6 +372,9 @@ dialog h1 { margin: 0 0 12px; font-size: 17px; }
 @media (max-width: 700px) {
   body { display: flex; flex-direction: column; height: auto; min-height: 100dvh; overflow: auto; }
   #topbar { flex-wrap: wrap; gap: 8px; }
+  /* Cada grupo numa linha: na mesma linha o menu do projeto cobre o Monitor. */
+  .topbar-project, .topbar-actions { flex: 1 1 100%; }
+  .topbar-actions { flex-wrap: wrap; justify-content: flex-start; }
   #stages { order: 3; width: 100%; overflow-x: auto; }
   #rail { max-height: 320px; }
   #center { min-height: 70vh; }
