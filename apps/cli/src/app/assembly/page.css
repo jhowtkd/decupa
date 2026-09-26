@@ -186,6 +186,7 @@ summary { cursor: pointer; color: var(--muted); }
   padding: 0 1px; margin: 0; color: inherit; font-weight: 400; cursor: pointer;
 }
 .word:hover { background: var(--bg-2); }
+.word.ativa { background: #2d2a20; color: var(--accent); }
 .word[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .word.riscado { text-decoration: line-through; color: var(--muted); background: var(--removed); }
 .riscado { text-decoration: line-through; opacity: .55; }

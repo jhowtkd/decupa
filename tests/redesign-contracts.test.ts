@@ -64,6 +64,11 @@ it("nenhuma concatenação presa dentro de literal de aspas simples", async () =
   }
 });
 
+it("palavra tocando no texto tem destaque no CSS", async () => {
+  expect(await read(TEXTO)).toContain('btn.classList.toggle("ativa"');
+  expect(await read(CSS)).toMatch(/\.word\.ativa\s*\{/);
+});
+
 it("etapa ativa: o aria-current que o JS grava é o que o CSS destaca", async () => {
   const pagejs = await read(PAGEJS);
   const css = await read(CSS);
