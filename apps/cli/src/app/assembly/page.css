@@ -36,7 +36,7 @@ button, label, input, textarea, select { font-family: var(--sans-ui); }
 #stages { grid-area: stages; display: flex; align-items: stretch; gap: 12px; padding: 0 30px; border-bottom: 1px solid var(--line); }
 #stages button { height: 100%; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 400; border-bottom: 2px solid transparent; }
 #stages small { font: 10px var(--mono); margin-right: 4px; }
-#stages [aria-current="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+#stages [aria-current="page"] { border-bottom-color: var(--accent); color: var(--accent); }
 #tools { grid-area: tools; display: flex; flex-direction: column; gap: 8px; padding: 10px 5px; background: var(--panel); border-right: 1px solid var(--line); }
 #tools button { padding: 6px 0; height: 58px; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; font-weight: 400; border: 0; background: transparent; color: var(--muted); }
 #tools button span { font-size: 22px; line-height: 1.1; }

@@ -55,3 +55,13 @@ it("inspetor estreito tem abrir/fechar + reduced-motion", async () => {
   expect(css).toContain(".only-narrow");
   expect(css).toContain("prefers-reduced-motion");
 });
+
+it("etapa ativa: o aria-current que o JS grava é o que o CSS destaca", async () => {
+  const pagejs = await read(PAGEJS);
+  const css = await read(CSS);
+  const html = await read(HTML);
+  const value = pagejs.match(/setAttribute\("aria-current", "([^"]+)"\)/)?.[1];
+  expect(value).toBeTruthy();
+  expect(css).toContain(`#stages [aria-current="${value}"]`);
+  expect(html).toContain(`data-stage="materiais" aria-current="${value}"`);
+});
