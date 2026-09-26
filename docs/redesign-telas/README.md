@@ -64,3 +64,20 @@ node work/ui-screens/serve.ts   # limpar 7791 · montar 7792 · marcar 7793
 - A faixa de sequência do editor virou timeline com régua e playhead (task 7 do redesign; ver print [03-montar-editor.png](depois/03-montar-editor.png)).
 - Na primeira carga da montagem o thumbnail devolve 409 transitório (proxy sendo gerado); recarregar resolve.
 - O app de montagem auto-renderiza a prévia e faz bump de revisão sozinho ao abrir.
+
+## Painéis flutuantes (2026-09-26, direção A)
+
+Terceira passada, escolhida no canvas "Redesign da interface do editor" (https://claude.ai/artifact/9GJCiT7iy7JMVuvgJ6qhwV): texto e vídeo juntos, três cartões flutuantes, etapas numa pílula no topo, uma navegação só. Artboards de referência em [paineis-flutuantes/](paineis-flutuantes/); plano em `docs/superpowers/plans/2026-09-26-decupa-paineis-flutuantes.md`.
+
+Prints a 1440×900 (o mesmo nome com `-390` é a tela estreita, onde o monitor vira gaveta pelo botão "Monitor"):
+
+| Print | Tela |
+|---|---|
+| `png/paineis-final-montar.png` | Montagem em edição |
+| `png/paineis-final-montar-vazia.png` | Montagem vazia, com o briefing ao lado |
+| `png/paineis-final-montar-preparando.png` | Montagem preparando, com a transcrição parcial no texto |
+| `png/paineis-final-montar-entrega.png` | Entrega com a conferência pendente |
+| `png/paineis-final-limpar.png` | Limpar fala |
+| `png/paineis-final-marcar.png` | Marcar fronteiras |
+
+Desvios conhecidos do canvas: a faixa da fonte no Limpar mostra trechos, não onda (não há endpoint de picos no Limpar); o aviso às cegas do Marcar diz "palpite de posição", porque a tela não pode citar sugestão; preparação e entrega não têm mock no harness e foram conferidas em servidores de prova (preparação com fala e análise visual falsas; entrega numa cópia aprovada do fixture).

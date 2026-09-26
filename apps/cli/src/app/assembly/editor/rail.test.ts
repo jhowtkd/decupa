@@ -66,7 +66,7 @@ it("em progresso: desabilitado com spinner e rótulo próprios", () => {
 it("concluído: rótulo e mensagem de conclusão distinguíveis", () => {
   expect(exportView({ status: "done", error: null }, true)).toEqual({
     disabled: false, loading: false, tone: "done",
-    buttonLabel: "Exportado ✓", statusText: "Exportado ✓ — links abaixo.",
+    buttonLabel: "Exportado", statusText: "Exportado. Os arquivos estão abaixo.",
   });
 });
 

@@ -180,3 +180,15 @@ it("marcar: cartões, rótulo honesto do apagar, cores do tema e marca mais pró
   expect(nearestIndex([420, 1180], 800)).toBe(0);
   expect(nearestIndex([], 100)).toBe(-1);
 });
+
+it("varredura: nenhuma superfície servida usa emoji ou glifo como ícone", async () => {
+  const files = [HTML, CSS, PAGEJS, RAIL, TEXTO, CONTEXTO, SEQ,
+    "../apps/cli/src/app/assembly/editor/templates.js",
+    "../apps/cli/src/app/page.html",
+    "../apps/cli/src/mark-web/page.html"];
+  const banned = ["▰", "▱", "☷", "⎌", "🎬", "✂", "🔒", "🔓", "↥", "↧", "⚠", "▤", "✓"];
+  for (const file of files) {
+    const src = await read(file);
+    for (const glyph of banned) expect(src.includes(glyph), `${file} contém ${glyph}`).toBe(false);
+  }
+});

@@ -335,7 +335,7 @@ function applyTranscriptNotice(text) {
   if (notice) el.title = notice;
   else el.removeAttribute("title");
 }
-/** Pílula de etapas: ✓ nas feitas, cadeado na entrega travada (também na atual), ponto na atual (CSS). */
+/** Pílula de etapas: check nas feitas, cadeado na entrega travada (também na atual), ponto na atual (CSS). */
 function paintStages() {
   for (const item of stepperState(project(), state.get("stage"))) {
     const button = document.querySelector('#stages [data-stage="' + item.id + '"]');

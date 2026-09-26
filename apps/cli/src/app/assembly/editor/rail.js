@@ -153,7 +153,7 @@ export function exportView(ui, approved, formats = null) {
   } else if (ui.status === "done") {
     view = {
       disabled: !approved, loading: false, tone: "done",
-      buttonLabel: "Exportado ✓", statusText: "Exportado ✓ — links abaixo.",
+      buttonLabel: "Exportado", statusText: "Exportado. Os arquivos estão abaixo.",
     };
   } else {
     view = {
