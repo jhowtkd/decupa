@@ -23,6 +23,8 @@ export function sourceProgress(project, source) {
     if (stages.media === "ready" && stages.audio === "ready" && (!source.hasVideo || stages.visual === "ready")) {
       return { tone: "ready", label: "Análise concluída", detail: "" };
     }
+    // Cancelar é escolha do usuário, não falha: neutro, e retomar conclui o resto.
+    if (prep.status === "cancelled") return { tone: "cancelled", label: "Cancelada", detail: "Retome para concluir as etapas pendentes." };
     if (prep.status !== "running") return { tone: "error", label: "Preparação interrompida", detail: stages.error || "Retome para concluir as etapas pendentes." };
     // Áudio já salvo: o rótulo é visível, não só o tooltip. A etapa visual
     // pode continuar; a transcrição não espera por ela.
@@ -47,7 +49,8 @@ export function preparationView(project, operation) {
   const active = sources.find((source) => Object.values(prep?.sources[source.id] || {}).includes("running"));
   const failed = sources.find((source) => sourceProgress(project, source).tone === "error");
   const done = sources.filter((source) => sourceProgress(project, source).tone === "ready").length;
-  const tone = busy ? "running" : prep && ["interrupted", "attention"].includes(prep.status) ? "error" : "ready";
+  const tone = busy ? "running" : prep && ["interrupted", "attention"].includes(prep.status) ? "error"
+    : prep?.status === "cancelled" ? "cancelled" : "ready";
   const title = busy ? PREP_STAGES[prep.stage] + "…"
     : tone === "error" ? "A montagem precisa de atenção"
     : prep?.status === "cancelled" ? "Preparação cancelada"
@@ -55,6 +58,7 @@ export function preparationView(project, operation) {
   return { busy, tone, title, done, total: sources.length,
     detail: busy ? (active ? active.name + " · " : "") + (prep.note || `${done} de ${sources.length} mídias analisadas`)
       : failed ? failed.name + " · " + sourceProgress(project, failed).detail
+      : prep?.status === "cancelled" ? "As etapas concluídas ficam guardadas. Retome para concluir o que falta."
       : prep?.error || operation?.error || "Confira a prévia antes de aprovar a entrega." };
 }
 

@@ -113,7 +113,27 @@ it("falha visual prevalece sobre transcrição pronta e operação ready", () =>
   p.preparation.sources.a.visual = "running";
   expect(sourceProgress(p, source)).toMatchObject({ tone: "running", label: "Analisar imagens…" });
   p.preparation.status = "cancelled";
-  expect(sourceProgress(p, source).label).toBe("Preparação interrompida");
+  expect(sourceProgress(p, source)).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+});
+
+it("preparação cancelada: material e resumo neutros; interrompida e atenção continuam erro", () => {
+  const source = { id: "a", name: "fala.mp4", included: true, hasVideo: true };
+  const at = (status: string) => ({
+    assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "ready" }],
+    preparation: { status, stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "pending" } } },
+  });
+  const cancelled = sourceProgress(at("cancelled"), source);
+  expect(cancelled).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(sourceStatusText(cancelled)).toBe("Cancelada");
+  expect(preparationView(at("cancelled"), null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  expect(sourceProgress(at("interrupted"), source)).toMatchObject({ tone: "error", label: "Preparação interrompida" });
+  expect(preparationView(at("interrupted"), null)).toMatchObject({
+    tone: "error", title: "A montagem precisa de atenção", detail: "fala.mp4 · Retome para concluir as etapas pendentes.",
+  });
+  expect(preparationView(at("attention"), null)).toMatchObject({ tone: "error", title: "A montagem precisa de atenção" });
 });
 
 it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
