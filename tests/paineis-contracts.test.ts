@@ -152,6 +152,10 @@ it("limpar: casca de três cartões, maiúscula inicial e faixa da fonte pura", 
     expect(html).toContain(label);
   }
   for (const old of [">cancelar<", ">sugerir cortes<", ">aplicar<", ">descartar<", "⚠"]) expect(html).not.toContain(old);
+  // Tirar/restaurar por botão de verdade (teclado), e o item trazido de volta muda de estado.
+  expect(html).toContain('bar.className = "u-actions"');
+  expect(html).toContain('keptNow ? "Tirar" : "Restaurar"');
+  expect(html).toContain('"Trazido de volta"');
   const src = html.slice(html.indexOf("// <strip-model>"), html.indexOf("// </strip-model>"));
   const stripModel = runInNewContext(src + "; stripModel");
   const kept = new Map([["u1", true], ["u2", false], ["u3", true]]);

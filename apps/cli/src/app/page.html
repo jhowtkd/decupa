@@ -108,8 +108,16 @@
   #prosa { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 40px 64px; font: 20px/1.7 var(--serif); color: var(--prose-ink); }
   .u { position: relative; cursor: pointer; border-radius: 4px; transition: background 90ms; }
   .u:hover { background: rgb(255 255 255 / .07); }
-  .u .play, .gone .play { position: absolute; right: 100%; top: 0.2em; margin-right: 4px; opacity: 0; pointer-events: none; height: 26px; padding: 0 10px; font-size: 11px; background: #2A2C31; }
-  .u:hover .play, .gone:hover .play, .u .play:focus-visible, .gone .play:focus-visible { opacity: 1; pointer-events: auto; }
+  /* Balão de ações do trecho: botões de verdade, visíveis no hover e quando o foco entra. */
+  .u-actions { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; display: flex; gap: 2px; padding: 4px; border-radius: var(--radius-pill); background: #2A2C31; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08), 0 10px 28px rgb(0 0 0 / .5); white-space: nowrap; opacity: 0; pointer-events: none; }
+  .u-actions::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
+  .u:hover > .u-actions, .gone:hover > .u-actions, .u:focus-within > .u-actions, .gone:focus-within > .u-actions { opacity: 1; pointer-events: auto; }
+  .is-below > .u-actions { bottom: auto; top: calc(100% + 6px); }
+  .is-below > .u-actions::after { top: auto; bottom: 100%; }
+  .is-end > .u-actions { left: auto; right: 0; }
+  .u-actions button { height: 28px; padding: 0 12px; font-size: 12px; background: transparent; }
+  .u-actions button:hover:not(:disabled) { background: var(--tint); }
+  .u-actions .danger { background: var(--red-tint); color: var(--red); }
   .gone { position: relative; color: #7E838C; text-decoration: line-through; text-decoration-color: rgb(239 170 160 / .85); text-decoration-thickness: 1.5px; cursor: pointer; border-radius: 4px; }
   .gone:hover { color: var(--muted); background: rgb(255 255 255 / .05); }
   .flagged { background: rgb(239 170 160 / .12); box-shadow: inset 0 -2px 0 rgb(239 170 160 / .7); }
@@ -145,6 +153,7 @@
   .triage-list strong { font-size: 13px; }
   .triage-list .t span { font-size: 12px; color: var(--muted); }
   .triage-list .empty { font-size: 12px; color: var(--faint); }
+  .triage-list .is-restored strong, .triage-list .is-restored .t span { color: var(--faint); }
   #triage .actions { display: flex; gap: 8px; }
   .steps { list-style: none; margin: 0 auto; padding: 0; max-width: 34em; display: flex; flex-direction: column; gap: 2px; font: 13px var(--sans-ui); }
   .steps li { display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; color: var(--muted); }
@@ -319,6 +328,45 @@ function playBtn(label, onPlay) {
   return btn;
 }
 
+/** Trecho entra ou sai (o render guarda o foco no botão do mesmo trecho). */
+function setKept(id, value) {
+  kept.set(id, value);
+  render();
+  schedule();
+}
+
+/** Ações do trecho como botões (teclado e leitor de tela); o clique no texto segue como atalho. */
+function unitActions(u, keptNow) {
+  const bar = document.createElement("span");
+  bar.className = "u-actions";
+  const snippet = u.text.length > 48 ? u.text.slice(0, 47) + "…" : u.text;
+  if (canPlay(u.start, u.end)) {
+    const play = playBtn("Ouvir", () => playUnit(u));
+    play.setAttribute("aria-label", "Ouvir o trecho: " + snippet);
+    bar.append(play);
+  }
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = keptNow ? "act danger" : "act";
+  toggle.textContent = keptNow ? "Tirar" : "Restaurar";
+  toggle.setAttribute("aria-label", toggle.textContent + " o trecho: " + snippet);
+  toggle.onclick = (ev) => { ev.stopPropagation(); setKept(u.id, !keptNow); };
+  bar.append(toggle);
+  return bar;
+}
+
+// O balão abre acima do trecho; perto do topo abre embaixo e, perto da borda
+// direita, alinha pela direita, para não sair do cartão.
+function placeActions(ev) {
+  const unit = ev.target.closest?.(".u, .gone");
+  if (!unit) return;
+  const first = unit.getClientRects()[0];
+  if (!first) return;
+  const box = el("prosa").getBoundingClientRect();
+  unit.classList.toggle("is-below", first.top - box.top < 48);
+  unit.classList.toggle("is-end", first.left + 200 > box.right);
+}
+
 function playRanges(ranges) {
   const gen = ++playGen;
   const player = el("player");
@@ -417,24 +465,27 @@ function render() {
   setMode("review");
   const joinsBy = new Map(review.joins.map((j) => [j.afterUnitId, j]));
   const main = el("prosa");
+  // Foco num botão de trecho sobrevive ao redesenho (o do clique e o da resposta do servidor).
+  const active = document.activeElement;
+  const focusUnit = active?.closest?.("#prosa [data-unit]")?.dataset.unit;
+  const focusSel = active?.classList?.contains("act") ? ".act" : ".play";
   main.replaceChildren();
   let joinCount = 0;
   for (const u of review.units) {
     if (kept.get(u.id)) {
       const span = document.createElement("span");
       span.className = "u";
+      span.dataset.unit = u.id;
       span.append(u.text + " ");
       const reasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
       if (reasons.length) span.classList.add("flagged");
       span.title = reasons.length
         ? reasons.join(" · ")
         : "Clique para tirar este trecho";
-      if (canPlay(u.start, u.end)) span.append(playBtn("Ouvir", () => playUnit(u)));
+      span.append(unitActions(u, true));
       span.onclick = () => {
         if (String(document.getSelection() ?? "").length > 0) return;
-        kept.set(u.id, false);
-        render();
-        schedule();
+        setKept(u.id, false);
       };
       main.append(span);
       const join = joinsBy.get(u.id);
@@ -442,18 +493,20 @@ function render() {
     } else {
       const mark = document.createElement("span");
       mark.className = "gone";
+      mark.dataset.unit = u.id;
       mark.textContent = u.text;   // inteiro: o risco mostra tudo, sem elipse
       const goneReasons = (u.flags ?? []).map((f) => f.message).filter(Boolean);
       mark.title = goneReasons.length
         ? `Restaurar: ${u.text}\n${goneReasons.join(" · ")}`
         : `Restaurar: ${u.text}`;
-      if (canPlay(u.start, u.end)) mark.append(playBtn("Ouvir", () => playUnit(u)));
-      mark.onclick = () => { kept.set(u.id, true); render(); schedule(); };
+      mark.append(unitActions(u, false));
+      mark.onclick = () => setKept(u.id, true);
       // O espaço vive no fim do .u mantido; sem este, um corte colado no
       // texto seguinte lê "[bar]baz". .join é bloco (flex), não duplica.
       main.append(mark, " ");
     }
   }
+  if (focusUnit) main.querySelector('[data-unit="' + CSS.escape(focusUnit) + '"] ' + focusSel)?.focus();
   el("kept-count").textContent = review.units.filter((u) => kept.get(u.id)).length;
   el("total-count").textContent = review.units.length;
   el("out-sec").textContent = review.outputSeconds.toFixed(0);
@@ -584,6 +637,8 @@ el("monitor").addEventListener("timeupdate", () => {
   playheadEl.style.left = ((t / review.sourceSeconds) * 100).toFixed(3) + "%";
   el("strip").setAttribute("aria-valuenow", String(t));
 });
+el("prosa").addEventListener("mouseover", placeActions);
+el("prosa").addEventListener("focusin", placeActions);
 el("strip").addEventListener("click", (ev) => {
   if (!review) return;
   const rect = el("strip").getBoundingClientRect();
@@ -686,7 +741,20 @@ function fillTriage(node, items, applied) {
     t.append(b, s);
     li.append(t);
     if (applied && item.unitIds?.length) {
-      li.append(actionBtn("Trazer de volta", () => { for (const id of item.unitIds) kept.set(id, true); render(); schedule(); }));
+      if (item.restored) {
+        li.classList.add("is-restored");
+        const done = actionBtn("Trazido de volta", () => {});
+        done.disabled = true;
+        li.append(done);
+      } else {
+        li.append(actionBtn("Trazer de volta", () => {
+          for (const id of item.unitIds) kept.set(id, true);
+          item.restored = true;
+          render();
+          schedule();
+          renderTriage(true);
+        }));
+      }
     }
     if (item.unit) li.append(actionBtn("Ouvir", () => playUnit(item.unit)));
     node.append(li);
