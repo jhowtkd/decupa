@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { briefingSummary, countsFor, deliveryChecklist, deliveryFormats, exportView, formatLabel, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel, verifyView } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel, verifyView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -142,6 +142,16 @@ it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
  expect(resolveView({status:"ready",projectName:"P-r1"},true)).toMatchObject({disabled:false,statusText:"Projeto salvo: P-r1"});
  expect(resolveView({status:"error",error:"Resolve indisponível"},true)).toMatchObject({statusText:"Resolve indisponível",newCopy:true});
  expect(resolveView(null,false).disabled).toBe(true);
+  expect(resolveView(null, true).buttonLabel).toBe("Abrir no DaVinci");
+});
+
+it("formatOrigin diz de onde vem o formato, fora da linha técnica", () => {
+  const sources = [{ id: "a", name: "fala.mp4" }];
+  expect(formatOrigin({ sources, canvasSourceId: "a", canvasManual: false })).toBe("da fonte fala.mp4");
+  expect(formatOrigin({ sources, canvasSourceId: "a", canvasManual: true })).toBe("da fonte fala.mp4");
+  expect(formatOrigin({ sources, canvasManual: true })).toBe("personalizado");
+  expect(formatOrigin({ sources, canvasManual: false })).toBe("padrão do projeto");
+  expect(formatOrigin(null)).toBe("");
 });
 
 describe("primaryAction — montar/preparar/revisar/entregar", () => {

@@ -4,7 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, deliveryFormats, exportView, formatLabel, resolveView, verifyView } from "./rail.js";
+import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
 import { reviewView, watchProgress } from "./progress.js";
 
@@ -432,9 +432,9 @@ export function mountContexto({ state, api, player }) {
     + '<button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button>'
     + '<button type="button" class="primary" id="confirmImport" hidden>Confirmar conferência</button></div>'
     + '<section class="delivery-files" id="deliveryFiles" aria-labelledby="filesTitle"><div class="files-head">'
-    + '<h2 id="filesTitle" class="ttl">Arquivos da entrega</h2><span id="filesPath" class="mono"></span></div>'
+    + '<h2 id="filesTitle" class="ttl">Montagem preparada para o DaVinci</h2><span id="filesPath" class="mono"></span></div>'
     + '<ul id="downloads" class="plain"></ul></section>'
-    + '<div class="sub format-row"><span class="ttl">Formato</span><span id="formatLine" class="mono"></span>'
+    + '<div class="sub format-row"><span class="ttl">Formato</span><span id="formatLine" class="mono"></span><span id="formatOrigin"></span>'
     + '<button type="button" id="editFormat" class="small">Alterar formato</button></div>'
     + '<div class="resolve-paths"><section class="sub"><h2>Resolve gratuito</h2><ol class="plain resolve-steps">'
     + "<li>Baixe a timeline.otio.</li>"
@@ -659,14 +659,8 @@ export function mountContexto({ state, api, player }) {
     const badge = document.getElementById("deliveryBadge");
     badge.className = "pill" + (approved ? " pill-ok" : "");
     badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
-    const formatLine = document.getElementById("formatLine");
-    const canvasOwner = project.assembly.canvasSourceId
-      ? project.assembly.sources.find((item) => item.id === project.assembly.canvasSourceId)
-      : null;
-    formatLine.textContent = formatLabel(project.assembly)
-      + (project.assembly.canvasManual
-        ? canvasOwner ? ` · da fonte ${canvasOwner.name}` : " · personalizado"
-        : canvasOwner ? ` · da fonte ${canvasOwner.name}` : " · padrão do projeto");
+    document.getElementById("formatLine").textContent = formatLabel(project.assembly);
+    document.getElementById("formatOrigin").textContent = formatOrigin(project.assembly);
     // Estado da conferência: exportar nunca confirma; revisão nova
     // não herda a confirmação (verificacao.json é por revisão).
     const verificacao = state.get("verificacao");

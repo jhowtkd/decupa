@@ -106,6 +106,16 @@ export function formatLabel(assembly) {
   return `${assembly.width}×${assembly.height} ${orientation} @ ${fps} fps`;
 }
 
+/** De onde vem o formato (puro): a fonte que define o canvas ou a origem do ajuste. */
+export function formatOrigin(assembly) {
+  if (!assembly) return "";
+  const owner = assembly.canvasSourceId
+    ? (assembly.sources || []).find((item) => item.id === assembly.canvasSourceId)
+    : null;
+  if (owner) return "da fonte " + owner.name;
+  return assembly.canvasManual ? "personalizado" : "padrão do projeto";
+}
+
 /**
  * Checklist da entrega: derivado do estado real do projeto (mídia
  * presente, seleção feita, revisão pronta). Pura para teste sem DOM;
@@ -698,7 +708,7 @@ export function resolveView(delivery, approved) {
   const stages={connecting:"Conectando ao DaVinci…",created:"Importando montagem…",imported:"Verificando timeline importada…",verified:"Salvando projeto…",saved:"Projeto salvo",exported:"DRP exportado"};
   return {
     disabled:!approved||delivery?.status==="running",
-    buttonLabel:"Abrir montagem no DaVinci",
+    buttonLabel:"Abrir no DaVinci",
     statusText:delivery?.status==="error"?delivery.error:delivery?.status==="ready"?"Projeto salvo: "+delivery.projectName+(delivery.error?" — "+delivery.error:""):delivery?.status==="running"?(stages[delivery.stage]||"Entregando…"):"",
     newCopy:delivery?.status==="error"&&delivery.created!==false,
   };

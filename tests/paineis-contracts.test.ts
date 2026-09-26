@@ -136,4 +136,8 @@ it("entrega: sem emoji, arquivos por deliveryFormats, status sem ' · ' solto", 
   for (const glyph of ["🔒", "🔓", '"✓ "', '"○ "']) expect(contexto).not.toContain(glyph);
   // Confirmar a conferência não muda o projeto: o cartão redesenha pela verificação.
   expect(contexto).toContain('state.subscribe("verificacao"');
+  // Textos do artboard: seção de arquivos e origem do formato fora da linha mono.
+  expect(contexto).toContain(">Montagem preparada para o DaVinci</h2>");
+  expect(contexto).toContain('id="formatOrigin"');
+  expect(contexto).toContain("formatOrigin(project.assembly)");
 });
