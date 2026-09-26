@@ -93,3 +93,13 @@ it("prévia: cartão de revisão com anel de progresso e aprovar travado com cad
   expect(contexto).not.toContain("▰");
   expect(contexto).not.toContain('className = "stage-footer"');
 });
+
+it("contexto: pendências em lista, cena sem botões duplicados, pedido à IA com aviso de custo", async () => {
+  const contexto = await read(CONTEXTO);
+  expect(contexto).toContain("pendingItems(project)");
+  for (const gone of ['id="sceneBefore"', 'id="sceneAfter"', 'id="sceneDelete"', "B-roll", "aprovada ✓"]) {
+    expect(contexto).not.toContain(gone);
+  }
+  expect(contexto).toContain("Envia texto e quadros ao provedor configurado · pode haver cobrança");
+  expect(contexto).toContain('aria-label="Aplicar ajuste com IA"');
+});

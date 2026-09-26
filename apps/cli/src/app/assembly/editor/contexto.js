@@ -307,17 +307,35 @@ function backgroundBusy(project, operation, player) {
   return false;
 }
 
+/** Pendências do monitor (puro): correções não alinhadas, lacunas e animações a fazer. */
+export function pendingItems(project) {
+  if (!project) return [];
+  const span = (c) => c.sourceId + " " + c.start.toFixed(1).replace(".", ",") + "–" + c.end.toFixed(1).replace(".", ",") + " s";
+  const items = [];
+  for (const correction of project.corrections || []) {
+    if (correction.status === "aligned") continue;
+    items.push(correction.status === "error"
+      ? { tone: "error", title: "Correção com erro", detail: span(correction) + " · " + (correction.error || "falha no alinhamento") + ". O texto original segue valendo." }
+      : { tone: "running", title: "Alinhando correção", detail: span(correction) + " · o trecho original segue valendo até terminar." });
+  }
+  project.scenes.forEach((scene, index) => {
+    for (const gap of scene.gaps || []) items.push({ tone: "error", title: "Cena " + (index + 1), detail: "Lacuna: " + gap });
+    for (const note of scene.animationNotes || []) {
+      items.push({ tone: "info", title: "Animação no " + note.destination, detail: note.description });
+    }
+  });
+  return items;
+}
+
 export function mountContexto({ state, api, player }) {
   const root = document.getElementById("contexto");
   root.replaceChildren();
 
-  const scenePanel = document.createElement("section");
-  scenePanel.className = "scene-inspector";
-  scenePanel.innerHTML = '<h1>Clipe selecionado</h1><h2 id="sceneTitle">Nenhuma cena ainda</h2>'
-    + '<p id="sceneDetail" class="muted">A montagem aparecerá aqui depois da preparação.</p>'
-    + '<div class="row"><button type="button" id="sceneBefore">← Antes</button><button type="button" id="sceneAfter">Depois →</button>'
-    + '<button type="button" id="sceneDelete" class="danger">Remover cena</button></div>';
-  root.appendChild(scenePanel);
+  const scenePanel = document.createElement("details");
+  scenePanel.className = "sub scene-inspector";
+  scenePanel.open = true;
+  scenePanel.innerHTML = '<summary><span class="ttl">Cena selecionada</span><span id="sceneTitle" class="scene-card-title">Nenhuma cena ainda</span></summary>'
+    + '<p id="sceneDetail" class="muted">A montagem aparecerá aqui depois da preparação.</p>';
   const decisionNote = document.createElement("p");
   decisionNote.id = "decisionReport";
   decisionNote.className = "muted";
@@ -325,7 +343,7 @@ export function mountContexto({ state, api, player }) {
   scenePanel.appendChild(decisionNote);
   const supportForm=document.createElement("form");
   supportForm.className="support-editor";
-  supportForm.innerHTML='<h2>Imagem de apoio · B-roll</h2><p id="supportReason" class="muted"></p>'
+  supportForm.innerHTML='<h2>Imagem de apoio</h2><p id="supportReason" class="muted"></p>'
     +'<label>Apoio na cena<select id="supportGroup"></select></label>'
     +'<label>Imagem disponível<select id="supportCandidate"></select></label><p id="supportDetail" class="muted"></p>'
     +'<div class="support-times"><label>Início na cena (s)<input id="supportStart" type="number" min="0" step="any" required></label>'
@@ -385,46 +403,24 @@ export function mountContexto({ state, api, player }) {
       ? [...new Set(scene.takes.map((take) => project.assembly.sources.find((source) => source.id === take.sourceId)?.name || take.sourceId))].join(" · ")
       : "Prepare os materiais para criar a sequência.";
     renderSupport(project,scene);
-    const index = project.scenes.indexOf(scene);
-    document.getElementById("sceneBefore").disabled = index <= 0;
-    document.getElementById("sceneAfter").disabled = index < 0 || index === project.scenes.length - 1;
-    document.getElementById("sceneDelete").disabled = !scene;
-  }
-  for (const [id, direction] of [["sceneBefore", "up"], ["sceneAfter", "down"], ["sceneDelete", null]]) {
-    document.getElementById(id).onclick = () => {
-      const p = state.get("project");
-      const scene = selectedScene(p);
-      if (!scene) return;
-      return api.call("/project/edit", {
-        method: "POST", body: JSON.stringify({ baseRevision: p.revision, action: { type: direction ? "move-scene" : "delete-scene", sceneId: scene.id, direction } }),
-        label: direction ? "Movendo cena…" : "Removendo cena…",
-      });
-    };
   }
   state.subscribe("selectedScene", () => { if (state.get("project")) renderScene(state.get("project")); });
 
-  const inspectorState = document.createElement("p");
-  inspectorState.className = "muted";
-  inspectorState.id = "inspectorState";
-  inspectorState.setAttribute("aria-live", "polite");
-  root.appendChild(inspectorState);
-
-  // Só o estado das correções mora aqui; as ações por palavra (incluindo
-  // corrigir, com campo inline) moram no menu flutuante do texto.
-  const review = document.createElement("section");
-  review.setAttribute("aria-label", "Correções de texto");
-  review.innerHTML = "<h1>Correções de texto</h1>"
-    + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
-  root.appendChild(review);
+  const pending = document.createElement("section");
+  pending.className = "pending";
+  pending.setAttribute("aria-label", "Pendências");
+  pending.innerHTML = '<div class="pending-head"><h2>Pendências</h2><p id="inspectorState" aria-live="polite"></p></div>'
+    + '<ul id="corrections" class="plain pending-list"></ul>';
 
   // Pedido de ajuste usa o mesmo provedor configurado para Preparar montagem.
   const briefingActions = document.createElement("section");
-  briefingActions.setAttribute("aria-label", "Ajuste");
-  briefingActions.innerHTML = "<h1>Ajuste</h1>"
-    + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
-    + '<div class="row"><button type="button" class="primary" id="adjust">Aplicar ajuste com IA</button>'
-    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar preparação</button></div>';
-  root.appendChild(briefingActions);
+  briefingActions.className = "adjust";
+  briefingActions.setAttribute("aria-label", "Pedir ajuste à IA");
+  briefingActions.innerHTML = '<label for="request" class="ttl">Pedir ajuste à IA</label>'
+    + '<div class="composer"><textarea id="request" rows="1" placeholder="Ex.: encurtar a abertura"></textarea>'
+    + '<button type="button" class="icon send" id="adjust" aria-label="Aplicar ajuste com IA">' + ICON.send + "</button></div>"
+    + '<p class="consent">Envia texto e quadros ao provedor configurado · pode haver cobrança</p>'
+    + '<button type="button" class="danger small" id="cancelPrep" hidden>Cancelar preparação</button>';
 
   const delivery = document.createElement("section");
   delivery.id = "delivery";
@@ -444,12 +440,11 @@ export function mountContexto({ state, api, player }) {
   // Controle de ritmo (#66): escolha do perfil é etapa anterior à
   // prévia/aprovação — a proposta compara pausas e oferece amostra
   // auditável do mesmo trecho antes e depois, sem chamada paga.
-  const rhythm = document.createElement("section");
-  rhythm.setAttribute("aria-label", "Ritmo");
-  rhythm.innerHTML = "<h1>Ritmo</h1>"
-    + '<p class="muted" id="rhythmCurrent"></p>'
-    + '<div class="row" id="rhythmChoices"></div>';
-  root.appendChild(rhythm);
+  const rhythm = document.createElement("details");
+  rhythm.className = "sub rhythm";
+  rhythm.innerHTML = '<summary><span class="ttl">Ritmo</span></summary>'
+    + '<p class="muted" id="rhythmCurrent"></p><div class="row" id="rhythmChoices"></div>';
+  root.replaceChildren(pending, scenePanel, rhythm, briefingActions);
 
   const rhythmDialog = document.createElement("dialog");
   rhythmDialog.id = "rhythmDialog";
@@ -610,27 +605,19 @@ export function mountContexto({ state, api, player }) {
   let resolveDelivery=null;
   let resolveRevision=null;
 
-  /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
-  function renderCorrections(project) {
-    const box = document.getElementById("corrections");
-    if (!box) return;
-    box.replaceChildren();
-    for (const correction of project.corrections || []) {
-      if (correction.status === "aligned") continue;
-      const p = document.createElement("p");
-      if (correction.status === "error") {
-        p.className = "warn";
-        p.textContent = "Correção com erro (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s): "
-          + (correction.error || "falha no alinhamento") + ". O texto original segue valendo.";
-      } else {
-        p.className = "muted";
-        p.textContent = "Alinhando correção (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s)… "
-          + "o trecho original segue valendo e os cortes usam o catálogo atual.";
-      }
-      box.appendChild(p);
-    }
+  function renderPending(project) {
+    const items = pendingItems(project);
+    const shown = items.length ? items : [{ tone: "ok", title: "Sem pendências", detail: "" }];
+    document.getElementById("corrections").replaceChildren(...shown.map((item) => {
+      const li = document.createElement("li");
+      li.className = "pending-item";
+      li.dataset.tone = item.tone;
+      li.innerHTML = (item.tone === "ok" ? ICON.ok : item.tone === "running" ? ICON.spinner : ICON.alert)
+        + "<div><strong></strong> <span></span></div>";
+      li.querySelector("strong").textContent = item.title;
+      li.querySelector("span").textContent = item.detail;
+      return li;
+    }));
   }
 
   function renderDelivery(project) {
@@ -723,13 +710,12 @@ export function mountContexto({ state, api, player }) {
   function render(project) {
     if (!project) return;
     const operation = state.get("operation");
-    renderCorrections(project);
+    renderPending(project);
     const sections = inspectorSections(project);
     renderScene(project);
     document.getElementById("inspectorState").textContent =
-      (sections.hasPreview ? "prévia " + project.previewRevision : "sem prévia")
-      + " · " + sections.corrections + " correção(ões) pendente(s)"
-      + (sections.approved ? " · aprovada ✓" : "");
+      (sections.hasPreview ? "prévia v" + project.previewRevision : "sem prévia")
+      + (sections.approved ? " · aprovada" : "");
     const preparing = project.preparation
       && project.preparation.status === "running";
     document.getElementById("cancelPrep").hidden = !(
@@ -739,7 +725,6 @@ export function mountContexto({ state, api, player }) {
     // parecer travado (o servidor cancelaria o anterior).
     const bg = backgroundBusy(project, operation, player);
     setDisabled(document.getElementById("adjust"), bg || !project.scenes.length);
-    review.hidden = sections.corrections === 0;
     renderDelivery(project);
   }
 
