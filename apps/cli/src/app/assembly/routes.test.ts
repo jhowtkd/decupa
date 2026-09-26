@@ -108,6 +108,32 @@ it("recusa Origin de outra página", async () => {
   expect(res.status).toBe(403);
 });
 
+it("seleção preserva alterações feitas enquanto o seletor está aberto", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-select-"));
+  const app = await startApp({
+    projectDir: dir,
+    port: 0,
+    selectFn: async () => {
+      await saveProject(dir, 0, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        assembly: { ...current.assembly, revision: current.revision + 1 },
+        input: { ...current.input, text: "briefing atualizado" },
+      }));
+      return { paths: [join(FIXTURES, "clip.mp4")] };
+    },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+  await selectClip(base);
+  const project = await loadProject(dir);
+  expect(project.revision).toBe(2);
+  expect(project.input.text).toBe("briefing atualizado");
+  expect(project.assembly.sources.map((source) => source.id)).toEqual(["src-1"]);
+  await selectClip(base, 0);
+  expect((await loadProject(dir)).assembly.sources).toHaveLength(1);
+});
+
 it("recusa body inválido e maior que 1 MiB", async () => {
   const { base } = await boot();
   const bad = await fetch(`${base}/project/input`, {

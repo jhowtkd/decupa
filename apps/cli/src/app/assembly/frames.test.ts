@@ -41,6 +41,8 @@ it("extrai JPEGs a 1 FPS e etiqueta cada frame pelo segundo da fonte", async () 
     "data:image/jpeg;base64," + Buffer.from("jpeg-a").toString("base64"),
   );
   expect(seen[0]?.args).toEqual(expect.arrayContaining(["-ss", "19", "-t", "3"]));
+  expect(seen[0]!.args.indexOf("-ss")).toBeLessThan(seen[0]!.args.indexOf("-i"));
+  expect(seen[0]!.args).toContain("-accurate_seek");
   expect(seen[0]?.args.find((arg) => arg.includes("fps=1"))).toContain("fps=1");
   // Teto de threads de decodificação por janela, aplicado na entrada.
   const args = seen[0]!.args;

@@ -1,0 +1,5 @@
+# Patches do motor são aplicados com `git apply` e comparados byte a byte com
+# o diff do motor instalado: precisam de LF em qualquer sistema (no Windows o
+# checkout com autocrlf acrescentava \r em cada linha). O bundle é binário.
+scripts/engine/*.patch text eol=lf
+scripts/engine/*.bundle binary

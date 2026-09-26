@@ -66,7 +66,7 @@ function externalReference(source: Source, assembly: Assembly, fps: number) {
   const mediaStart = sourceMediaStart(source, fps);
   return {
     OTIO_SCHEMA: "ExternalReference.1",
-    name: source.id,
+    name: source.name,
     target_url: pathToFileURL(source.path).href,
     // Mesma rate do source_range do clipe: rates mistos no mesmo arquivo
     // (timeline vs fonte) deslocam in-point em importadores C++.

@@ -5,7 +5,8 @@ Copie o bloco abaixo para o agente que tem acesso ao terminal da máquina de des
 ```text
 Configure o Decupa neste computador e valide o que realmente funcionar. Execute a instalação; não entregue apenas um plano.
 
-Repositório: https://github.com/jhowtkd/decupa.git
+Origem preferida: ZIP completo fornecido, extraído em pasta dedicada. Alternativa: https://github.com/jhowtkd/decupa.git.
+O motor está incluído em scripts/engine/video-agent-kit.bundle e local-engine.patch; o setup o instala localmente. Não procure outro repositório, token ou mirror para o motor. Não copie venvs/node_modules do Mac.
 Guia: docs/setup/GUIA.md. Se ele ainda não estiver no clone, use a cópia anexada. Leia o código atual quando houver divergência.
 Pasta de instalação: descobrir ou propor uma pasta dedicada no perfil do usuário.
 Pasta dos projetos: separada do código, no perfil do usuário.
@@ -22,7 +23,7 @@ Não alterar código do produto, schemas ou transporte MCP; não adicionar depen
 
 Procedimento:
 
-1. Inspecione sistema, arquitetura, espaço, ferramentas e diretórios existentes. Se houver clone, confira remoto/branch/status e registre o commit instalado (git rev-parse HEAD). Preserve WIP. Clone somente se necessário, em pasta dedicada; caminhos com espaços devem funcionar.
+1. Inspecione sistema, arquitetura, espaço, ferramentas e diretórios existentes. Se houver clone, confira remoto/branch/status e registre o commit instalado (git rev-parse HEAD). Preserve WIP. Se recebeu o ZIP, use a pasta extraída e registre BUNDLE.txt (não exige .git do app). Clone somente se necessário, em pasta dedicada; caminhos com espaços devem funcionar.
 
 2. Confira os pré-requisitos (git --version, node --version >=22.6 com npm localizável, uv --version, ffmpeg/ffprobe com libx264 e aac em ffmpeg -encoders). Instale somente o que faltar, de fontes oficiais (nodejs.org, git-scm.com, docs.astral.sh/uv, ffmpeg.org), e garanta o PATH no processo real do agente. O setup não instala ferramentas globais nem exige administrador.
 
@@ -32,7 +33,7 @@ Procedimento:
 
 5. Valide fala local com o vídeo PT-BR autorizado, sem provedor remoto: transcrição não vazia, timestamps dentro da duração medida da mídia (ffprobe), prévia e exportação MP4 conferidas com ffprobe. Os modelos padrão já devem estar no cache deste usuário após o setup; registre o tempo do processamento separado da instalação dos modelos. Rode também node --experimental-strip-types scripts/assembly-proof.ts com DECUPA_ENGINE_PYTHON apontando para work/engine-venv (bin/python no macOS/Linux, Scripts\python.exe no Windows). Não execute davinci-proof.py automaticamente: ele pode carregar/excluir o projeto Decupa-QA-Proof preexistente.
 
-6. Diagnóstico: o setup executa doctor --local (imports de fala/visão e Python do motor, sem exigir chave de IA) e depois baixa e carrega os modelos reais. Para o relatório completo use pnpm decupa doctor. O doctor não comprova modelos baixados, render nem credencial salva em .decupa/credentials; não use chaves falsas para aprová-lo. Rode pnpm typecheck e pnpm test sem chaves reais no ambiente; a suíte básica é portátil (fixtures lavfi, sem say) e o gold do motor se pula sozinho sem o motor clonado.
+6. Diagnóstico: o setup executa doctor --local (imports de fala/visão e Python do motor, sem exigir chave de IA) e depois baixa e carrega os modelos reais. Para o relatório completo use node work/setup-tools/node_modules/pnpm/bin/pnpm.cjs decupa doctor. O doctor não comprova modelos baixados, render nem credencial salva em .decupa/credentials; não use chaves falsas para aprová-lo. Rode node work/setup-tools/node_modules/pnpm/bin/pnpm.cjs typecheck e node work/setup-tools/node_modules/pnpm/bin/pnpm.cjs test sem chaves reais no ambiente; a suíte básica é portátil (fixtures lavfi, sem say) e o gold do motor se pula sozinho sem o motor clonado.
 
 7. Provedor fica em ~/.decupa/credentials (0600 em POSIX; ACL restrita no Windows), gravado pelo setup quando há chave no ambiente, senão pelo formulário; reutilizado em novos projetos. Credenciais específicas do projeto continuam tendo precedência. MCP é separado e só é integrado quando solicitado. Nesta referência o transporte MCP usa Content-Length, incompatível com o stdio padrão delimitado por nova linha: só registre MCP operacional após handshake/listagem de ferramentas reais no host; senão, use o terminal do agente e registre MCP bloqueado. Não implemente adaptadores nem correções fora do escopo.
 
