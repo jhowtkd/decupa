@@ -315,12 +315,12 @@ mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
-const inspector = document.getElementById("contexto");
-const inspectTool = document.getElementById("inspectTool");
-function showInspector(show = true) {
-  inspector.hidden = !show;
-  inspectTool.setAttribute("aria-expanded", String(show));
-  document.body.classList.toggle("inspector-open", show);
+const monitorToggle = document.getElementById("monitorToggle");
+const narrowViewport = matchMedia("(max-width: 1100px)");
+/** Tela estreita: o monitor vira gaveta sobre a bancada. */
+function showMonitor(show = true) {
+  document.body.classList.toggle("monitor-open", show);
+  monitorToggle.setAttribute("aria-expanded", String(show));
 }
 function applyTranscriptNotice(text) {
   const el = document.getElementById("transcriptNotice");
@@ -333,24 +333,21 @@ function applyTranscriptNotice(text) {
 }
 function applyStageDom(stage) {
   if (!STAGE_TARGET[stage]) return;
-  // Trocar a etapa mostra a transcrição, mas não tira o foco de quem
-  // já estava num controle (papel, inclusão, outra etapa).
+  // A etapa não remonta a bancada: texto e monitor ficam onde estão; só a
+  // entrega troca de lugar com o texto no cartão central.
   const focus = document.activeElement;
   document.body.dataset.stage = stage;
   for (const el of document.querySelectorAll("#stages [data-stage]")) {
     if (el.dataset.stage === stage) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   }
-  document.getElementById("rail").hidden = !["materiais", "edicao"].includes(stage);
-  document.getElementById("faixa").hidden = stage !== "edicao";
-  const editing = stage === "edicao";
-  document.getElementById("texto").hidden = !editing;
-  document.getElementById("center").classList.toggle("with-text", editing);
-  document.querySelector('[data-tool="texto"]').setAttribute("aria-pressed", String(editing));
+  const entrega = stage === "entrega";
+  document.getElementById("texto").hidden = entrega;
+  document.getElementById("textoHead").hidden = entrega;
   const delivery = document.getElementById("delivery");
-  (stage === "entrega" ? document.getElementById("center") : inspector).appendChild(delivery);
-  delivery.hidden = stage !== "entrega";
-  showInspector(false);
+  if (delivery) delivery.hidden = !entrega;
+  if (stage === "revisao" && narrowViewport.matches) showMonitor(true);
+  document.getElementById(STAGE_TARGET[stage])?.scrollIntoView({ block: "nearest" });
   if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
     && document.activeElement !== focus) {
     focus.focus({ preventScroll: true });
@@ -369,28 +366,16 @@ document.getElementById("stages").addEventListener("click", (event) => {
 });
 // Ação principal do rail (revisar/entregar) navega sem chamada paga.
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
-const toolTexto = document.querySelector('[data-tool="texto"]');
-toolTexto.addEventListener("click", () => {
-  if (document.body.dataset.stage !== "edicao") { setStage("edicao"); return; }
-  const texto = document.getElementById("texto");
-  const show = texto.hidden;
-  texto.hidden = !show;
-  document.getElementById("center").classList.toggle("with-text", show);
-  toolTexto.setAttribute("aria-pressed", String(show));
-});
-inspectTool.setAttribute("aria-controls", "contexto");
-inspectTool.onclick = () => showInspector(inspector.hidden);
-document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
-const narrowViewport = matchMedia("(max-width: 1100px)");
-narrowViewport.addEventListener("change", () => { showInspector(false); });
-document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
-    showInspector(false); inspectTool.focus();
+monitorToggle.onclick = () => showMonitor(!document.body.classList.contains("monitor-open"));
+document.getElementById("closeMonitor").onclick = () => { showMonitor(false); monitorToggle.focus(); };
+narrowViewport.addEventListener("change", () => showMonitor(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.body.classList.contains("monitor-open")
+    && !document.querySelector("dialog[open]")) {
+    showMonitor(false);
+    monitorToggle.focus();
   }
 });
-document.getElementById("mediaTool").onclick = () => setStage("materiais");
-document.getElementById("reviewAction").onclick = () => setStage("revisao");
-document.getElementById("deliveryAction").onclick = () => setStage("entrega");
 setStage("materiais");
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).

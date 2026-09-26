@@ -200,6 +200,14 @@ export function mountRail({ state, api, player }) {
     + '<ul id="sources" class="plain"></ul>';
   root.appendChild(materials);
 
+  // Briefing mora no rail; a T4 completa o cartão (texto, duração x alvo).
+  const brief = document.createElement("section");
+  brief.className = "sub rail-brief";
+  brief.setAttribute("aria-label", "Briefing");
+  brief.innerHTML = '<div class="brief-head"><h2 class="ttl">Briefing</h2>'
+    + '<button type="button" id="openBriefing" class="quiet small">Editar</button></div>';
+  root.appendChild(brief);
+
   const briefingDialog = document.createElement("dialog");
   briefingDialog.id = "briefingDialog";
   briefingDialog.setAttribute("aria-labelledby", "briefingTitle");

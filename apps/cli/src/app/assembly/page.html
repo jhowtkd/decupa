@@ -7,41 +7,54 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/page.css">
 </head>
-<body>
+<body data-stage="materiais">
 <header id="topbar" aria-label="Projeto">
-  <strong class="brand"><span aria-hidden="true">▰</span> decupa</strong>
-  <span id="projectName" class="muted">montagem</span>
-  <span id="status" role="status" aria-live="polite">carregando…</span>
-  <span id="transcriptNotice" hidden></span>
-  <span class="spacer"></span>
-  <button type="button" id="newProject" class="quiet">Novo projeto</button>
-  <button type="button" id="openBriefing" class="quiet">Briefing</button>
-  <button type="button" id="reviewAction" class="quiet">Revisar</button>
-  <a href="/templates">Templates</a>
-  <button type="button" id="deliveryAction">Entrega</button>
-  <span id="primaryAction"></span>
+  <div class="topbar-project">
+    <strong class="brand"><svg class="brand-mark" width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="currentColor"/></svg>decupa</strong>
+    <span class="sep" aria-hidden="true"></span>
+    <span id="projectName">Montagem principal</span>
+    <span id="versionPill" class="pill mono" hidden></span>
+    <details class="project-menu">
+      <summary aria-label="Menu do projeto"><svg class="i" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg></summary>
+      <div class="menu-pop">
+        <button type="button" id="newProject">Novo projeto</button>
+        <a href="/templates">Templates editoriais</a>
+      </div>
+    </details>
+  </div>
+  <nav id="stages" aria-label="Etapas">
+    <button type="button" data-stage="materiais" aria-current="page"><span class="step-mark" aria-hidden="true"></span>Materiais</button>
+    <button type="button" data-stage="edicao"><span class="step-mark" aria-hidden="true"></span>Edição</button>
+    <button type="button" data-stage="revisao"><span class="step-mark" aria-hidden="true"></span>Revisão</button>
+    <button type="button" data-stage="entrega"><span class="step-mark" aria-hidden="true"></span>Entrega</button>
+  </nav>
+  <div class="topbar-actions">
+    <span id="transcriptNotice" class="pill pill-accent" hidden></span>
+    <span id="status" class="pill" role="status" aria-live="polite">carregando…</span>
+    <button type="button" id="monitorToggle" class="only-narrow" aria-controls="monitor" aria-expanded="false">Monitor</button>
+    <span id="primaryAction"></span>
+  </div>
 </header>
-<nav id="stages" aria-label="Etapas">
-  <button type="button" data-stage="materiais" aria-current="page"><small>01</small> Materiais</button>
-  <button type="button" data-stage="edicao"><small>02</small> Edição</button>
-  <button type="button" data-stage="revisao"><small>03</small> Revisão</button>
-  <button type="button" data-stage="entrega"><small>04</small> Entrega</button>
-</nav>
-<div id="tools" role="toolbar" aria-label="Ferramentas">
-  <button type="button" id="mediaTool" title="Materiais"><span aria-hidden="true">▱</span>Mídia</button>
-  <button type="button" data-tool="texto" aria-pressed="false" title="Mostrar/ocultar texto"><span aria-hidden="true">T</span>Texto</button>
-  <button type="button" id="inspectTool" title="Abrir inspetor"><span aria-hidden="true">☷</span>Inspetor</button>
-</div>
-<aside id="rail" aria-label="Materiais"></aside>
-<main id="center" aria-label="Bancada">
-  <section id="activity" aria-label="Andamento da montagem" hidden></section>
+<aside id="rail" class="card" aria-label="Projeto"></aside>
+<main id="center" class="card" aria-label="Texto">
+  <div id="textoHead" class="card-head">
+    <h1>Texto</h1>
+    <span id="textoMeta" class="pill mono" hidden></span>
+    <span class="spacer"></span>
+    <span id="undoSlot"></span>
+  </div>
+  <section id="texto" aria-label="Texto"></section>
+</main>
+<aside id="monitor" class="card" aria-label="Monitor">
+  <button type="button" id="closeMonitor" class="quiet only-narrow">Fechar monitor</button>
   <section id="stage" aria-label="Prévia">
     <video id="previewPlayer" controls preload="metadata"></video>
   </section>
-  <section id="texto" aria-label="Texto" hidden></section>
-</main>
-<aside id="contexto" aria-label="Inspetor"></aside>
-<footer id="faixa" aria-label="Sequência"></footer>
+  <section id="activity" aria-label="Andamento da montagem" hidden></section>
+  <section id="faixa" aria-label="Sequência"></section>
+  <section id="contexto" aria-label="Revisão e ajustes"></section>
+  <section id="monitorBriefing" aria-label="Briefing" hidden></section>
+</aside>
 <div id="dropzone" hidden tabindex="0" role="button" aria-label="Enviar arquivos de mídia">
   Arraste arquivos para cá ou clique para escolher
   <input type="file" id="filePicker" accept="video/*,audio/*" multiple hidden>

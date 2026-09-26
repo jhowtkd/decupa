@@ -449,7 +449,7 @@ function renderCenter(p, selection) {
     return;
   }
   dropzone.hidden = true;
-  const scroller = document.getElementById("center");
+  const scroller = texto;
   const top = scroller ? scroller.scrollTop : 0;
   // Coluna de leitura: o documento (transcrição ou prosa) inteiro dentro do
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos

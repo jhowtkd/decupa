@@ -16,11 +16,11 @@ async function read(p: string): Promise<string> {
 
 it("fiação shell↔módulos: regiões e ids dinâmicos existem", async () => {
   const html = await read(HTML);
-  for (const id of ["topbar", "stages", "tools", "rail", "center", "stage", "texto", "contexto", "faixa", "status", "previewPlayer", "openBriefing", "dropzone", "filePicker"]) {
+  for (const id of ["topbar", "stages", "monitor", "rail", "center", "stage", "texto", "contexto", "faixa", "status", "previewPlayer", "closeMonitor", "dropzone", "filePicker"]) {
     expect(html).toContain(`id="${id}"`);
   }
   const js = (await Promise.all([PAGEJS, RAIL, CONTEXTO, TEXTO, SEQ].map(read))).join("\n");
-  for (const id of ["briefingDialog", "delivery", "sourceCounts", "inspectorState", "deliveryChecklist", "versionHistory", "opLine", "closeInspector"]) {
+  for (const id of ["briefingDialog", "delivery", "sourceCounts", "inspectorState", "deliveryChecklist", "versionHistory", "opLine", "openBriefing"]) {
     expect(js).toContain(id);
   }
   expect(js).toContain('materiais: "rail"');
@@ -48,7 +48,7 @@ it("protótipo não vaza para produção", async () => {
   expect(all).not.toContain("decupa-redesign");
 });
 
-it("inspetor estreito tem abrir/fechar + reduced-motion", async () => {
+it("monitor estreito tem abrir/fechar + reduced-motion", async () => {
   const pagejs = await read(PAGEJS);
   const css = await read(CSS);
   expect(pagejs).toContain("matchMedia");

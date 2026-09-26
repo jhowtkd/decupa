@@ -388,14 +388,6 @@ export function mountContexto({ state, api, player }) {
   inspectorState.setAttribute("aria-live", "polite");
   root.appendChild(inspectorState);
 
-  const closeInspector = document.createElement("button");
-  closeInspector.type = "button";
-  closeInspector.id = "closeInspector";
-  closeInspector.className = "close-inspector";
-  closeInspector.textContent = "Fechar inspetor";
-  closeInspector.addEventListener("click", () => { root.hidden = true; });
-  root.prepend(closeInspector);
-
   // Só o estado das correções mora aqui; as ações por palavra (incluindo
   // corrigir, com campo inline) moram no menu flutuante do texto.
   const review = document.createElement("section");
@@ -425,7 +417,8 @@ export function mountContexto({ state, api, player }) {
     + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
     + '<p id="downloads"></p>'
     + '<ul id="versionHistory" class="plain"></ul>';
-  root.appendChild(delivery);
+  delivery.hidden = true;
+  document.getElementById("center").appendChild(delivery);
 
   // Controle de ritmo (#66): escolha do perfil é etapa anterior à
   // prévia/aprovação — a proposta compara pausas e oferece amostra
@@ -435,7 +428,7 @@ export function mountContexto({ state, api, player }) {
   rhythm.innerHTML = "<h1>Ritmo</h1>"
     + '<p class="muted" id="rhythmCurrent"></p>'
     + '<div class="row" id="rhythmChoices"></div>';
-  root.insertBefore(rhythm, delivery);
+  root.appendChild(rhythm);
 
   const rhythmDialog = document.createElement("dialog");
   rhythmDialog.id = "rhythmDialog";
