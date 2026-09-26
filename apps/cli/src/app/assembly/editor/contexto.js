@@ -4,7 +4,7 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, exportView, formatLabel, resolveView } from "./rail.js";
+import { deliveryChecklist, deliveryFormats, exportView, formatLabel, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
 import { reviewView, watchProgress } from "./progress.js";
 
@@ -425,15 +425,28 @@ export function mountContexto({ state, api, player }) {
   const delivery = document.createElement("section");
   delivery.id = "delivery";
   delivery.setAttribute("aria-label", "Entrega");
-  delivery.innerHTML = "<h1>Entrega</h1>"
-    + '<ul id="deliveryChecklist" class="plain"></ul>'
-    + '<p class="muted" id="formatLine"></p>'
-    + '<p class="muted" id="verifyLine"></p>'
-    + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button><button type="button" id="confirmImport" hidden>Confirmar conferência</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
-    + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
-    + '<p id="downloads"></p>'
-    + '<ul id="versionHistory" class="plain"></ul>';
+  delivery.innerHTML = '<header class="delivery-head"><div class="delivery-title"><h1>Entrega</h1><span id="deliveryBadge" class="pill"></span></div>'
+    + '<p id="deliveryLock" aria-live="polite"></p><ul id="deliveryChecklist" class="plain checklist"></ul></header>'
+    + '<div id="verifyCard" class="sub verify-card"><span class="verify-icon" id="verifyIcon"></span>'
+    + '<div class="verify-text"><strong id="verifyTitle"></strong><span id="verifyLine"></span></div>'
+    + '<button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button>'
+    + '<button type="button" class="primary" id="confirmImport" hidden>Confirmar conferência</button></div>'
+    + '<section class="delivery-files" id="deliveryFiles" aria-labelledby="filesTitle"><div class="files-head">'
+    + '<h2 id="filesTitle" class="ttl">Arquivos da entrega</h2><span id="filesPath" class="mono"></span></div>'
+    + '<ul id="downloads" class="plain"></ul></section>'
+    + '<div class="sub format-row"><span class="ttl">Formato</span><span id="formatLine" class="mono"></span>'
+    + '<button type="button" id="editFormat" class="small">Alterar formato</button></div>'
+    + '<div class="resolve-paths"><section class="sub"><h2>Resolve gratuito</h2><ol class="plain resolve-steps">'
+    + "<li>Baixe a timeline.otio.</li>"
+    + '<li>No Resolve: <span class="mono">File → Import → Timeline</span>.</li>'
+    + '<li><span class="mono">File → Export Project</span> salva o projeto nativo .drp.</li></ol></section>'
+    + '<section class="sub"><h2>Resolve Studio <span class="pill">automático</span></h2>'
+    + '<p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p>'
+    + '<div class="row"><button type="button" id="export" class="small">Abrir no DaVinci</button>'
+    + '<button type="button" id="exportDrp" class="small" hidden>Exportar .drp</button>'
+    + '<button type="button" id="resolveNewCopy" class="small" hidden>Criar outra cópia</button></div></section></div>'
+    + '<p id="exportStatus" role="status" aria-live="polite"></p>'
+    + '<ul id="versionHistory" class="plain history"></ul>';
   delivery.hidden = true;
   document.getElementById("center").appendChild(delivery);
 
@@ -623,59 +636,49 @@ export function mountContexto({ state, api, player }) {
   function renderDelivery(project) {
     // Checklist derivado do estado real: atualiza a cada render de projeto.
     const checklist = document.getElementById("deliveryChecklist");
-    checklist.replaceChildren();
-    for (const item of deliveryChecklist(project)) {
+    checklist.replaceChildren(...deliveryChecklist(project).map((item) => {
       const li = document.createElement("li");
-      li.append(chip((item.done ? "✓ " : "○ ") + item.label));
-      checklist.appendChild(li);
-    }
+      li.className = "pill" + (item.done ? " done" : "");
+      li.innerHTML = item.done ? ICON.check : ICON.circle;
+      li.append(item.label);
+      return li;
+    }));
     // Export de outra revisão não conta: edição nova volta ao ocioso.
     if (exportUi.status === "done" && exportUi.revision !== project.revision) {
       exportUi.status = "idle";
       exportUi.error = null;
       exportUi.revision = null;
     }
-    const downloads = document.getElementById("downloads");
-    downloads.replaceChildren();
     // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
     // o servidor também recusa export sem aprovação (exportApproved).
     const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
-    if (lock) {
-      lock.textContent = approved
-        ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
-        : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
-    }
+    lock.textContent = approved
+      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser assistida e aprovada."
+      : "Assista à prévia atual até o fim e aprove para liberar a entrega.";
+    const badge = document.getElementById("deliveryBadge");
+    badge.className = "pill" + (approved ? " pill-ok" : "");
+    badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
     const formatLine = document.getElementById("formatLine");
     const canvasOwner = project.assembly.canvasSourceId
       ? project.assembly.sources.find((item) => item.id === project.assembly.canvasSourceId)
       : null;
-    formatLine.textContent = "Formato: " + formatLabel(project.assembly)
+    formatLine.textContent = formatLabel(project.assembly)
       + (project.assembly.canvasManual
-        ? canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — personalizado"
-        : canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — padrão do projeto");
+        ? canvasOwner ? ` · da fonte ${canvasOwner.name}` : " · personalizado"
+        : canvasOwner ? ` · da fonte ${canvasOwner.name}` : " · padrão do projeto");
     // Estado da conferência: exportar nunca confirma; revisão nova
     // não herda a confirmação (verificacao.json é por revisão).
-    const verifyLine = document.getElementById("verifyLine");
-    const confirmImportButton = document.getElementById("confirmImport");
     const verificacao = state.get("verificacao");
-    if (!verificacao) {
-      verifyLine.textContent = "Conferência de importação: sem entrega da revisão atual.";
-      confirmImportButton.hidden = true;
-    } else if (verificacao.status === "confirmada") {
-      verifyLine.textContent = `Conferência de importação: confirmada (revisão ${verificacao.revision}, confirmação manual).`;
-      confirmImportButton.hidden = true;
-    } else {
-      verifyLine.textContent = `Conferência de importação: pendente — importe a revisão ${verificacao.revision} no Resolve e confira a timeline.`;
-      confirmImportButton.hidden = false;
-    }
-    const rev = project.finalApprovedRevision;
-    const formats = approved ? [
-      { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
-      { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
-      { id: "instrucoes", label: "Instruções de conferência (.txt)", href: "/project/output/" + rev + "/instrucoes", file: "importar-no-resolve.txt" },
-      { id: "verificacao", label: "verificacao.json", href: "/project/output/" + rev + "/verificacao", file: "verificacao.json" },
-    ] : null;
+    const verify = verifyView(project, verificacao);
+    const card = document.getElementById("verifyCard");
+    card.dataset.state = verify.state;
+    document.getElementById("verifyIcon").innerHTML = verify.state === "done" ? ICON.ok : verify.state === "locked" ? ICON.lock : ICON.alert;
+    document.getElementById("verifyTitle").textContent = verify.title;
+    document.getElementById("verifyLine").textContent = verify.detail;
+    document.getElementById("confirmImport").hidden = !verify.showConfirm;
+    document.getElementById("exportTimeline").hidden = !verify.showExport;
+    const formats = deliveryFormats(project, verificacao);
     if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
     const nativeView=resolveView(resolveDelivery,approved);
@@ -687,20 +690,34 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("resolveNewCopy").hidden=!nativeView.newCopy;
     setDisabled(document.getElementById("exportTimeline"),view.disabled);
     const exportStatus = document.getElementById("exportStatus");
-    exportStatus.textContent = (nativeView.statusText||view.statusText)+" · O .drp depende dos arquivos de mídia originais.";
-    exportStatus.className = "muted export-" + view.tone;
-    for (const format of view.formats || []) {
+    const parts = [nativeView.statusText || view.statusText];
+    if (resolveDelivery) parts.push("O .drp depende dos arquivos de mídia originais.");
+    exportStatus.textContent = parts.filter(Boolean).join(" · ");
+    exportStatus.className = "export-" + view.tone;
+    const downloads = document.getElementById("downloads");
+    const addFile = (file, label, href) => {
+      const li = document.createElement("li");
+      li.className = "file";
+      li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
+      li.querySelector(".file-name").textContent = file;
+      li.querySelector(".file-desc").textContent = label;
       const link = document.createElement("a");
-      link.className = "data";
-      link.href = format.href;
-      link.textContent = format.label;
-      link.setAttribute("download", format.file);
-      downloads.appendChild(link);
-    }
-    if(resolveDelivery?.drpPath){const link=document.createElement("a");link.href="/project/resolve-drp";link.textContent="Baixar projeto .drp";link.download="projeto.drp";downloads.appendChild(link);}
+      link.className = "button";
+      link.href = href;
+      link.download = file;
+      link.textContent = "Baixar";
+      link.setAttribute("aria-label", "Baixar " + file);
+      li.append(link);
+      downloads.append(li);
+    };
+    downloads.replaceChildren();
+    for (const f of formats) addFile(f.file, f.label, f.href);
+    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", "/project/resolve-drp");
+    document.getElementById("deliveryFiles").hidden = downloads.childElementCount === 0;
+    document.getElementById("filesPath").textContent = formats.length ? "exports/" + project.finalApprovedRevision + "/" : "";
     const history = document.getElementById("versionHistory");
     history.replaceChildren(
-      chip("revisão " + project.revision),
+      chip("versão " + project.revision),
       chip(project.previewRevision != null ? "prévia " + project.previewRevision : "sem prévia"),
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
       chip("formato " + formatLabel(project.assembly)),
@@ -792,6 +809,8 @@ export function mountContexto({ state, api, player }) {
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));
   state.subscribe("operation", () => render(state.get("project")));
+  // Confirmar a conferência devolve o mesmo projeto: só a verificação muda.
+  state.subscribe("verificacao", () => { if (state.get("project")) renderDelivery(state.get("project")); });
   render(state.get("project"));
 }
 

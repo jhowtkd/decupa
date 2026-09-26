@@ -151,6 +151,38 @@ export function exportView(ui, approved, formats = null) {
 }
 
 /**
+ * Arquivos da entrega (puro): só existem depois que a exportação da versão
+ * aprovada rodou (verificacao.json da mesma revisão). Antes disso a tela não
+ * oferece link que o servidor responderia com 404.
+ */
+export function deliveryFormats(project, verificacao) {
+  const rev = project?.finalApprovedRevision;
+  if (rev == null || rev !== project.revision || !verificacao || verificacao.revision !== rev) return [];
+  const href = (kind) => "/project/output/" + rev + "/" + kind;
+  return [
+    { id: "otio", file: "timeline.otio", label: "Timeline para importar no Resolve", href: href("otio") },
+    { id: "mp4", file: "reference.mp4", label: "Vídeo de referência da v" + rev, href: href("mp4") },
+    { id: "instrucoes", file: "importar-no-resolve.txt", label: "Instruções de conferência", href: href("instrucoes") },
+    { id: "verificacao", file: "verificacao.json", label: "Dados para conferir a importação", href: href("verificacao") },
+  ];
+}
+
+/** Cartão da conferência (puro): bloqueio → preparar → conferir → confirmada. */
+export function verifyView(project, verificacao) {
+  const approved = project?.finalApprovedRevision != null && project.finalApprovedRevision === project.revision;
+  if (!approved) {
+    return { state: "locked", title: "Entrega bloqueada", detail: "Assista à prévia atual até o fim e aprove para liberar.", showExport: true, showConfirm: false };
+  }
+  if (!verificacao || verificacao.revision !== project.revision) {
+    return { state: "ready", title: "Preparar a entrega da v" + project.revision, detail: "Gera a timeline e o vídeo de referência para o DaVinci.", showExport: true, showConfirm: false };
+  }
+  if (verificacao.status === "confirmada") {
+    return { state: "done", title: "Conferência confirmada", detail: "Versão " + verificacao.revision + " importada e conferida (confirmação manual).", showExport: false, showConfirm: false };
+  }
+  return { state: "pending", title: "Conferência pendente", detail: "Importe a versão " + verificacao.revision + " no Resolve e confira a timeline.", showExport: false, showConfirm: true };
+}
+
+/**
  * Resumo das fontes para o cabeçalho de materiais (puro): total,
  * incluídas e apoio (role support OU both). Testado sem DOM.
  */

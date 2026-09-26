@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, deliveryFormats, exportView, formatLabel, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel, verifyView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -289,4 +289,26 @@ it("preparationSteps: cancelada pelo usuário fica neutra; falha real continua F
   expect(preparationSteps(stopped("interrupted"), false)[2]).toMatchObject({ key: "visual", status: "error", state: "Falhou" });
   expect(preparationSteps(stopped("attention"), false)[2]).toMatchObject({ status: "error", state: "Falhou" });
   expect(preparationSteps(project(), false)).toEqual([]);
+});
+
+describe("entrega", () => {
+  const aprovado = { revision: 15, finalApprovedRevision: 15 };
+
+  it("arquivos só aparecem depois da exportação da versão aprovada", () => {
+    expect(deliveryFormats(aprovado, null)).toEqual([]);
+    expect(deliveryFormats({ revision: 16, finalApprovedRevision: 15 }, { revision: 15, status: "pendente" })).toEqual([]);
+    const files = deliveryFormats(aprovado, { revision: 15, status: "pendente" });
+    expect(files.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
+    expect(files[0].href).toBe("/project/output/15/otio");
+  });
+
+  it("verifyView guia do bloqueio à conferência", () => {
+    expect(verifyView({ revision: 15, finalApprovedRevision: null }, null)).toMatchObject({ state: "locked", showExport: true, showConfirm: false });
+    expect(verifyView(aprovado, null)).toMatchObject({ state: "ready", title: "Preparar a entrega da v15", showExport: true });
+    expect(verifyView(aprovado, { revision: 15, status: "pendente" })).toMatchObject({
+      state: "pending", title: "Conferência pendente", detail: "Importe a versão 15 no Resolve e confira a timeline.",
+      showExport: false, showConfirm: true,
+    });
+    expect(verifyView(aprovado, { revision: 15, status: "confirmada" })).toMatchObject({ state: "done", showConfirm: false });
+  });
 });

@@ -126,3 +126,14 @@ it("estados: vazio com briefing no monitor, preparação com etapas e custo vis�
   const css = await read(CSS);
   expect(css).toContain("body.is-empty");
 });
+
+it("entrega: sem emoji, arquivos por deliveryFormats, status sem ' · ' solto", async () => {
+  const contexto = await read(CONTEXTO);
+  expect(contexto).toContain("deliveryFormats(project, verificacao)");
+  expect(contexto).toContain("verifyView(project, verificacao)");
+  expect(contexto).toContain('id="verifyCard"');
+  expect(contexto).not.toContain('+" · O .drp depende');
+  for (const glyph of ["🔒", "🔓", '"✓ "', '"○ "']) expect(contexto).not.toContain(glyph);
+  // Confirmar a conferência não muda o projeto: o cartão redesenha pela verificação.
+  expect(contexto).toContain('state.subscribe("verificacao"');
+});
