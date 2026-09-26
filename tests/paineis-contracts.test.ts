@@ -8,8 +8,6 @@ const RAIL = "../apps/cli/src/app/assembly/editor/rail.js";
 const TEXTO = "../apps/cli/src/app/assembly/editor/texto.js";
 const CONTEXTO = "../apps/cli/src/app/assembly/editor/contexto.js";
 const SEQ = "../apps/cli/src/app/assembly/editor/sequencia.js";
-// A T8 passa a afirmar este arquivo; o binding fica desde a T2 e o lint não aceita constante solta.
-void SEQ;
 
 async function read(p: string): Promise<string> {
   return readFile(new URL(p, import.meta.url), "utf8");
@@ -102,4 +100,13 @@ it("contexto: pendências em lista, cena sem botões duplicados, pedido à IA co
   }
   expect(contexto).toContain("Envia texto e quadros ao provedor configurado · pode haver cobrança");
   expect(contexto).toContain('aria-label="Aplicar ajuste com IA"');
+});
+
+it("sequência: rótulo em português, desfazer no cabeçalho do texto, sem altura inline", async () => {
+  const seq = await read(SEQ);
+  expect(seq).toContain('label.textContent = "Sequência"');
+  expect(seq).toContain('getElementById("undoSlot")');
+  expect(seq).not.toContain("⎌");
+  expect(seq).not.toContain("min-height:154px");
+  expect(seq).toContain("clock(t)");
 });
