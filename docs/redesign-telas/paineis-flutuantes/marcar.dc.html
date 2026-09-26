@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Marcar fronteiras</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0B0C0E;color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#F0CA6E}a:hover{color:#F6DC9A}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+.card{box-sizing:border-box;border-radius:16px;background:#151619;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),0 1px 2px rgba(0,0,0,.4),0 18px 40px rgba(0,0,0,.28)}
+.sub{box-sizing:border-box;border-radius:12px;background:#1C1E22}
+.ttl{margin:0;font-size:12px;font-weight:600;color:#A3A7AF}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px;color:#A3A7AF;white-space:nowrap}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border:0;border-radius:999px;background:rgba(255,255,255,.07);color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.b-p{background:#F0CA6E;color:#1B1508;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 6px 16px rgba(240,202,110,.18)}
+.b-q{background:transparent;color:#A3A7AF;font-weight:500}
+.num{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:22px;height:22px;box-sizing:border-box;padding:0 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:11px;font-weight:700}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;box-sizing:border-box;padding:0 6px;border-radius:6px;background:#26282D;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),inset 0 -1px 0 rgba(0,0,0,.5);font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;color:#F2F1EE}
+.sc{display:flex;align-items:center;gap:6px;font-size:12px;color:#A3A7AF;white-space:nowrap}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 12px; display: flex; flex-direction: column; gap: 12px; background: #0B0C0E; overflow: hidden">
+
+<header style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 4px 0 10px">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="#F0CA6E"></path></svg>
+<span style="font-size: 16px; font-weight: 700; letter-spacing: -0.02em">decupa</span>
+<span style="width: 4px; height: 4px; margin: 0 4px; border-radius: 50%; background: #3A3D44"></span>
+<span style="font-size: 14px; font-weight: 500">Marcar fronteiras</span>
+<span class="pill mono" style="height: 22px">fala.mp4</span>
+<span class="pill mono" style="height: 22px"><span style="font-weight: 700; color: #F0CA6E">5</span>marcas</span>
+</div>
+<span style="flex-grow: 1"></span>
+<button class="b">Marcar aqui</button>
+<button class="b b-q">Apagar a mais próxima</button>
+<button class="b b-p">Salvar<span class="mono" style="font-size: 11px; font-weight: 600; opacity: .7">⌘S</span></button>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: flex; gap: 12px">
+
+<aside class="card" aria-label="Referência" style="width: 440px; flex-shrink: 0; padding: 16px; display: flex; flex-direction: column; gap: 20px">
+<div style="position: relative; width: 408px; height: 230px; flex-shrink: 0; border-radius: 12px; overflow: hidden; background: radial-gradient(120% 90% at 50% 28%, #2C2F35 0%, #17181B 55%, #0E0F11 100%)">
+<svg width="408" height="230" viewBox="0 0 512 288" aria-hidden="true" style="display: block"><circle cx="256" cy="116" r="40" fill="#33363D"></circle><path d="M160 288 C160 212 204 184 256 184 C308 184 352 212 352 288 Z" fill="#33363D"></path></svg>
+<span class="pill mono" style="position: absolute; left: 12px; top: 12px; background: rgba(11,12,14,.72); color: #F2F1EE">0:05,280</span>
+</div>
+
+<section aria-label="Marcas" style="display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; padding: 0 6px 8px"><h2 class="ttl">Marcas</h2><span class="mono" style="font-size: 11px; color: #A3A7AF">5</span></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; font-size: 13px"><span class="num mono">1</span><span class="mono" style="flex-grow: 1">0:00,420</span></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; font-size: 13px"><span class="num mono">2</span><span class="mono" style="flex-grow: 1">0:01,180</span></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; font-size: 13px"><span class="num mono">3</span><span class="mono" style="flex-grow: 1">0:02,040</span></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; font-size: 13px"><span class="num mono">4</span><span class="mono" style="flex-grow: 1">0:04,610</span></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-radius: 10px; background: rgba(240,202,110,.12); box-shadow: inset 0 0 0 1px rgba(240,202,110,.35); font-size: 13px"><span class="num mono" style="background: #F0CA6E; color: #1B1508">5</span><span class="mono" style="flex-grow: 1; color: #F0CA6E">0:05,020</span><span style="font-size: 11px; color: #D9C08A">mais próxima · −260 ms</span></div>
+</section>
+
+<div style="margin-top: auto; display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.03)">
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#A3A7AF" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 2px"><circle cx="8" cy="8" r="6.5"></circle><path d="M8 7.2v4M8 4.8v.1"></path></svg>
+<span style="font-size: 12px; line-height: 1.5; color: #A3A7AF">Medição às cegas: esta tela não mostra transcrição nem sugestão de posição.</span>
+</div>
+</aside>
+
+<main class="card" aria-label="Onda" style="flex-grow: 1; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: flex-end; gap: 32px">
+<div style="display: flex; flex-direction: column; gap: 4px"><span class="ttl">Cursor</span><span class="mono" style="font-size: 44px; font-weight: 600; line-height: 1; letter-spacing: -0.02em">5 280<span style="font-size: 18px; font-weight: 500; color: #A3A7AF"> ms</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 3px"><span class="ttl">De</span><span class="mono" style="font-size: 20px; color: #A3A7AF">96,0 s</span></div>
+<span style="flex-grow: 1"></span>
+<span class="pill" style="height: 30px; padding: 0 12px"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>Loop parado</span>
+<span class="pill mono" style="height: 30px; padding: 0 12px">janela ±1,5 s</span>
+</div>
+
+<div style="position: relative; width: 916px; height: 480px; flex-shrink: 0; border-radius: 12px; background: #1C1E22; overflow: hidden">
+<svg width="916" height="480" viewBox="0 0 916 480" aria-hidden="true" style="position: absolute; left: 0; top: 0"><path d="{{zoom}}" stroke="#8FB3A3" stroke-width="1.4" stroke-linecap="round" fill="none"></path><path d="{{ticks}}" stroke="#3A3D44" stroke-width="1"></path></svg>
+<div class="mono" style="position: absolute; left: 0; right: 0; bottom: 14px; height: 12px; font-size: 10px; color: #8A8F98"><span style="position: absolute; left: 60px">4,0 s</span><span style="position: absolute; left: 212px">4,5 s</span><span style="position: absolute; left: 365px">5,0 s</span><span style="position: absolute; left: 518px">5,5 s</span><span style="position: absolute; left: 670px">6,0 s</span><span style="position: absolute; left: 823px">6,5 s</span></div>
+<div aria-hidden="true" style="position: absolute; left: 253px; top: 36px; width: 1.5px; height: 404px; background: rgba(242,241,238,.4)"></div>
+<span class="pill mono" style="position: absolute; left: 222px; top: 10px; height: 22px; font-size: 11px; background: #2A2C31">0:04,610</span>
+<div aria-hidden="true" style="position: absolute; left: 378px; top: 36px; width: 2px; height: 404px; background: #F0CA6E"></div>
+<span class="pill mono" style="position: absolute; left: 347px; top: 10px; height: 22px; font-size: 11px; font-weight: 700; background: #F0CA6E; color: #1B1508">0:05,020</span>
+<div aria-hidden="true" style="position: absolute; left: 457px; top: 0; width: 2px; height: 440px; background: #F2F1EE"></div>
+<div aria-hidden="true" style="position: absolute; left: 452px; top: 434px; width: 12px; height: 12px; border-radius: 50%; background: #F2F1EE; box-shadow: 0 0 0 3px #1C1E22"></div>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #A3A7AF">Clique na onda para mover o cursor. A palavra começa onde a energia sobe; use o ouvido para confirmar.</p>
+
+<div style="position: relative; width: 916px; height: 56px; flex-shrink: 0; border-radius: 10px; background: #1C1E22; overflow: hidden">
+<svg width="916" height="56" viewBox="0 0 916 56" aria-hidden="true" style="position: absolute; left: 0; top: 0"><path d="{{overview}}" stroke="#4E6158" stroke-width="1.2" fill="none"></path></svg>
+<div aria-hidden="true" style="position: absolute; left: 36px; top: 0; width: 29px; height: 56px; box-sizing: border-box; border-radius: 4px; background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(240,202,110,.6)"></div>
+<div aria-hidden="true" style="position: absolute; left: 4px; top: 0; width: 1.5px; height: 10px; background: #F0CA6E"></div>
+<div aria-hidden="true" style="position: absolute; left: 11px; top: 0; width: 1.5px; height: 10px; background: #F0CA6E"></div>
+<div aria-hidden="true" style="position: absolute; left: 19px; top: 0; width: 1.5px; height: 10px; background: #F0CA6E"></div>
+<div aria-hidden="true" style="position: absolute; left: 44px; top: 0; width: 1.5px; height: 10px; background: #F0CA6E"></div>
+<div aria-hidden="true" style="position: absolute; left: 48px; top: 0; width: 1.5px; height: 10px; background: #F0CA6E"></div>
+<div aria-hidden="true" style="position: absolute; left: 50px; top: 0; width: 2px; height: 56px; background: #F2F1EE"></div>
+</div>
+</main>
+</div>
+
+<footer aria-label="Atalhos" style="height: 44px; flex-shrink: 0; display: flex; justify-content: center">
+<div style="display: flex; align-items: center; gap: 22px; padding: 0 20px; border-radius: 999px; background: #151619; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)">
+<span class="sc"><span class="kbd">espaço</span>tocar em loop a partir do cursor</span>
+<span class="sc"><span class="kbd">←</span><span class="kbd">→</span>±10 ms</span>
+<span class="sc"><span class="kbd">⇧←</span><span class="kbd">⇧→</span>±50 ms</span>
+<span class="sc"><span class="kbd">[</span><span class="kbd">]</span>±1 s</span>
+<span class="sc"><span class="kbd">enter</span>marcar</span>
+<span class="sc"><span class="kbd">⌫</span>apagar marca mais próxima</span>
+<span class="sc"><span class="kbd">⌘S</span>salvar</span>
+</div>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+rng(seed) {
+let s = seed;
+return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+}
+zoomWave(w, h) {
+const t0 = 3.78;
+const span = 3.0;
+const words = [[3.78, 4.52, 0.8], [4.61, 4.96, 0.95], [5.02, 5.62, 0.72], [5.7, 6.4, 0.9], [6.5, 6.78, 0.6]];
+const rnd = this.rng(17);
+const mid = (h - 40) / 2;
+let d = '';
+for (let x = 2; x < w - 1; x += 2) {
+const t = t0 + (x / w) * span;
+let env = 0.025;
+for (const [a, b, g] of words) {
+if (t >= a && t <= b) {
+const att = Math.min(1, (t - a) / 0.03);
+const dec = Math.min(1, (b - t) / 0.08);
+const body = 0.55 + 0.45 * Math.abs(Math.sin((t - a) * 22));
+env = Math.max(env, g * att * dec * body);
+}
+}
+const amp = Math.max(0.8, env * (0.45 + 0.55 * rnd()) * (mid - 30));
+d += 'M' + x + ' ' + (mid - amp).toFixed(1) + 'V' + (mid + amp).toFixed(1);
+}
+return d;
+}
+tickPath(w, h) {
+const t0 = 3.78;
+const pxs = w / 3.0;
+let d = '';
+for (let t = 3.8; t < 6.78; t += 0.1) {
+const x = ((t - t0) * pxs).toFixed(1);
+const tall = Math.abs((t * 2) - Math.round(t * 2)) < 0.01;
+d += 'M' + x + ' ' + (h - 40) + 'V' + (h - 40 + (tall ? 10 : 5));
+}
+return d;
+}
+wave(w, h, seed, step) {
+const rnd = this.rng(seed);
+const mid = h / 2;
+let d = '';
+for (let x = 2; x < w - 1; x += step) {
+const phrase = Math.abs(Math.sin(x / 11 + seed)) * Math.abs(Math.sin(x / 37 + seed * 2));
+const a = Math.max(0.6, (0.3 + 0.7 * rnd()) * (0.15 + 0.85 * phrase) * (mid - 8));
+d += 'M' + x + ' ' + (mid - a).toFixed(1) + 'V' + (mid + a).toFixed(1);
+}
+return d;
+}
+renderVals() {
+return { zoom: this.zoomWave(916, 480), ticks: this.tickPath(916, 480), overview: this.wave(916, 56, 5, 2) };
+}
+}
+</script>
+</body>
+</html>
