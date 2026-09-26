@@ -6,6 +6,7 @@ import {
   menuActionsFor,
   needsEmptyGuide,
   sceneHeaderActions,
+  floatMenuBox,
   sceneMenuItems,
   sceneRangeLabel,
   textoMetaView,
@@ -170,6 +171,38 @@ it("sceneMenuItems junta mover/ajustar/apoio/apagar num menu só", () => {
   const first = sceneMenuItems(0, 3, false);
   expect(first.map((i: { action: string }) => i.action)).toEqual(["up", "down", "ajustar", "delete"]);
   expect(first[0]).toMatchObject({ label: "Mover para cima", disabled: true });
+});
+
+it("floatMenuBox abre acima quando o menu não cabe embaixo e rola se nem assim couber", () => {
+  const viewport = { width: 1440, height: 900 };
+  const anchor = { top: 856, bottom: 888, left: 900, right: 932 };
+  const size = { width: 200, height: 148 };
+  const above = floatMenuBox(anchor, size, viewport, "end");
+  expect(above.placement).toBe("above");
+  expect(above.top).toBe(856 - 6 - 148);
+  expect(above.top).toBeGreaterThanOrEqual(8);
+  expect(above.top + size.height).toBeLessThanOrEqual(anchor.top - 6);
+  expect(above.maxHeight).toBeNull();
+  expect(above.left).toBe(932 - 200);
+
+  const tight = floatMenuBox(
+    { top: 80, bottom: 112, left: 10, right: 42 },
+    { width: 200, height: 300 },
+    { width: 390, height: 200 },
+    "end",
+  );
+  expect(tight.placement).toBe("below");
+  expect(tight.maxHeight).toBe(200 - 112 - 6 - 8);
+  expect(tight.top).toBe(118);
+  expect(tight.top + (tight.maxHeight ?? 0)).toBeLessThanOrEqual(200 - 8);
+
+  const open = floatMenuBox(
+    { top: 100, bottom: 132, left: 40, right: 72 },
+    { width: 200, height: 148 },
+    viewport,
+    "start",
+  );
+  expect(open).toMatchObject({ placement: "below", top: 138, left: 40, maxHeight: null });
 });
 
 it("textoMetaView resume cenas ou avisa a transcrição parcial", () => {

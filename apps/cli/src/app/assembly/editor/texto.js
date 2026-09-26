@@ -81,6 +81,28 @@ export function sceneMenuItems(index, total, hasSupport) {
   ];
 }
 
+const MENU_GAP = 6;
+const MENU_MARGIN = 8;
+
+/**
+ * Caixa do menu flutuante (pura). Abre abaixo do gatilho; se a altura não
+ * couber, abre acima. Se nenhum lado comporta o menu inteiro, limita
+ * maxHeight para o DOM rolar. align "end" encosta na direita do gatilho.
+ */
+export function floatMenuBox(anchor, size, viewport, align = "end") {
+  const spaceBelow = viewport.height - anchor.bottom - MENU_GAP - MENU_MARGIN;
+  const spaceAbove = anchor.top - MENU_GAP - MENU_MARGIN;
+  const below = size.height <= spaceBelow || spaceBelow >= spaceAbove;
+  const room = Math.max(0, below ? spaceBelow : spaceAbove);
+  const height = Math.min(size.height, room);
+  const top = below
+    ? anchor.bottom + MENU_GAP
+    : Math.max(MENU_MARGIN, anchor.top - MENU_GAP - height);
+  const prefer = align === "end" ? anchor.right - size.width : anchor.left;
+  const left = Math.max(MENU_MARGIN, Math.min(prefer, viewport.width - size.width - MENU_MARGIN));
+  return { top, left, maxHeight: size.height > room ? room : null, placement: below ? "below" : "above" };
+}
+
 /** Faixa da cena no tempo da montagem (puro): "0:00 – 0:21 · 21,3 s". */
 export function sceneRangeLabel(project, scene) {
   const start = sceneMontageStart(project, scene.id);
@@ -387,7 +409,7 @@ function renderProse(p, selection) {
       + '<span class="spacer"></span>'
       + '<span class="pill mono">' + esc(sceneRangeLabel(p, scene)) + "</span>"
       + '<button type="button" class="icon" data-scene-menu="' + esc(scene.id) + '" aria-haspopup="menu"'
-      + ' aria-label="Ações da cena ' + (index + 1) + '">' + ICON.more + "</button></header>";
+      + ' aria-expanded="false" aria-label="Ações da cena ' + (index + 1) + '">' + ICON.more + "</button></header>";
     html += '<div class="scene-body">';
     if (scene.rationale) html += '<p class="scene-note">' + esc(scene.rationale) + "</p>";
     for (const gap of scene.gaps) html += '<p class="scene-gap">Lacuna: ' + esc(gap) + "</p>";
@@ -941,9 +963,35 @@ export function mountTexto({ state, api, player }) {
     };
   }
 
+  /** Mede o menu já no documento e o coloca onde cabe. */
+  function placeFloatMenu(menu, anchor, align) {
+    menu.style.top = "0px";
+    menu.style.left = "0px";
+    menu.style.maxHeight = "";
+    menu.style.overflowY = "";
+    const rect = menu.getBoundingClientRect();
+    const box = floatMenuBox(
+      anchor,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+      align,
+    );
+    menu.style.top = box.top + "px";
+    menu.style.left = box.left + "px";
+    if (box.maxHeight != null) {
+      menu.style.maxHeight = box.maxHeight + "px";
+      menu.style.overflowY = "auto";
+    }
+  }
+
   /** Liga um menu flutuante ao documento: fora ou Escape fecham, foco no primeiro item. */
-  function attachMenu(menu) {
+  function attachMenu(menu, trigger, anchor, align) {
+    const returnTo = trigger || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    if (trigger) trigger.setAttribute("aria-expanded", "true");
+    menu.style.visibility = "hidden";
     document.body.appendChild(menu);
+    if (anchor) placeFloatMenu(menu, anchor, align);
+    menu.style.visibility = "";
     const onDoc = (ev) => {
       if (!menu.contains(ev.target) && closeMenu) closeMenu();
     };
@@ -957,6 +1005,8 @@ export function mountTexto({ state, api, player }) {
       document.removeEventListener("pointerdown", onDoc);
       document.removeEventListener("keydown", onKey);
       menu.remove();
+      if (trigger?.isConnected) trigger.setAttribute("aria-expanded", "false");
+      if (returnTo?.isConnected) returnTo.focus();
     };
     menu.querySelector("button:not(:disabled)")?.focus();
   }
@@ -973,8 +1023,6 @@ export function mountTexto({ state, api, player }) {
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", "Ações da cena " + (index + 1));
     const rect = btn.getBoundingClientRect();
-    menu.style.left = Math.max(8, Math.min(rect.right - 200, window.innerWidth - 216)) + "px";
-    menu.style.top = (rect.bottom + 6) + "px";
     for (const item of sceneMenuItems(index, p.scenes.length, scene.support.length > 0)) {
       const b = document.createElement("button");
       b.type = "button";
@@ -990,7 +1038,7 @@ export function mountTexto({ state, api, player }) {
       };
       menu.appendChild(b);
     }
-    attachMenu(menu);
+    attachMenu(menu, btn, rect, "end");
   }
 
   /** "Incluir trecho": seleciona a zona omitida inteira e inclui (mesmo POST do menu). */
@@ -1034,10 +1082,6 @@ export function mountTexto({ state, api, player }) {
     menu.className = "texto-menu float-menu";
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", "Ações do trecho");
-    menu.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - 260)) + "px";
-    const below = anchorRect.bottom + 6;
-    menu.style.top = (below + 60 > window.innerHeight
-      ? Math.max(8, anchorRect.top - 60) : below) + "px";
     for (const item of items) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1056,7 +1100,7 @@ export function mountTexto({ state, api, player }) {
       }
       menu.appendChild(btn);
     }
-    attachMenu(menu);
+    attachMenu(menu, null, anchorRect, "start");
   }
 
   async function sceneEdit(btn) {
