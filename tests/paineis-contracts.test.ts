@@ -59,3 +59,16 @@ it("topo: etapas pintadas pelo estado do projeto, versão em pílula", async () 
   expect(js).toContain('getElementById("versionPill")');
   expect(js).not.toContain('"revisão " + p.revision');
 });
+
+it("rail: lista compacta com menu por material, papel 'Fala + apoio' e sem jargão", async () => {
+  const rail = await read(RAIL);
+  expect(rail).toContain('["speech", "support", "both"]');
+  expect(rail).toContain('className = "source-menu"');
+  expect(rail).toContain('sceneNav.id = "sceneNav"');
+  expect(rail).toContain('templateSlot.id = "templateSlot"');
+  expect(rail).toContain('id="briefingForm"');
+  expect(rail).not.toContain('"Relink"');
+  expect(rail).not.toContain('chip("excluída")');
+  const templates = await read("../apps/cli/src/app/assembly/editor/templates.js");
+  expect(templates).toContain('getElementById("templateSlot")');
+});

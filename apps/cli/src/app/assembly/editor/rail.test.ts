@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countsFor, deliveryChecklist, exportView, formatLabel, primaryAction, stageLabel, sourceProgress, preparationView } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, primaryAction, sceneNavItems, stageLabel, sourceProgress, preparationView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -151,20 +151,20 @@ describe("primaryAction — montar/preparar/revisar/entregar", () => {
     }), null)).toMatchObject({ kind: "preparar", label: "Retomar preparação" });
   });
 
-  it("preparação pronta sem cortes → Revisar montagem (gratuito)", () => {
+  it("preparação pronta sem cortes → Revisar prévia (gratuito)", () => {
     expect(primaryAction(project({
       assembly: { sources: [{ id: "a", included: true }], tracks: [] },
       preparation: prep({ a: {} }),
-    }), null)).toMatchObject({ kind: "revisar", stage: "revisao" });
+    }), null)).toMatchObject({ kind: "revisar", label: "Revisar prévia", stage: "revisao" });
   });
 
-  it("montagem existente não aprovada → Revisar montagem, sem POST", () => {
+  it("montagem existente não aprovada → Revisar prévia, sem POST", () => {
     expect(primaryAction(project({
       revision: 5,
       assembly: { sources: [{ id: "a", included: true }], ...withClips },
       preparation: prep({ a: {} }),
       finalApprovedRevision: null,
-    }), null)).toMatchObject({ kind: "revisar", stage: "revisao" });
+    }), null)).toMatchObject({ kind: "revisar", label: "Revisar prévia", stage: "revisao" });
   });
 
   it("revisão aprovada → Abrir entrega navega para entrega", () => {
@@ -192,4 +192,27 @@ it("formatLabel resume dimensões, orientação e fps da entrega", () => {
   expect(formatLabel({ width: 720, height: 720, fps: { num: 25, den: 1 } }))
     .toBe("720×720 quadrado @ 25/1 fps");
   expect(formatLabel(null)).toBe("");
+});
+
+it("sceneNavItems numera as cenas e soma o início pela fala retida", () => {
+  const items = sceneNavItems({
+    scenes: [
+      { id: "s1", objective: "Gancho e promessa", gaps: [], takes: [{ start: 0.4, end: 25.2, removed: [{ start: 11, end: 14.5 }] }] },
+      { id: "s2", objective: "", gaps: ["sem imagem"], takes: [{ start: 32.1, end: 54.8, removed: [] }] },
+    ],
+  });
+  expect(items.map((i: { number: number }) => i.number)).toEqual([1, 2]);
+  expect(items[0]).toMatchObject({ id: "s1", title: "Gancho e promessa", start: 0, warn: false });
+  expect(items[1]).toMatchObject({ id: "s2", title: "s2", warn: true });
+  expect(items[1].start).toBeCloseTo(21.3, 5);
+  expect(sceneNavItems(null)).toEqual([]);
+});
+
+it("briefingSummary compara a duração com o alvo", () => {
+  const over = briefingSummary({ text: "aula", targetSeconds: 60 }, 73.12);
+  expect(over).toMatchObject({ text: "aula", target: 60, duration: 73.12, note: "13 s acima do alvo" });
+  expect(over.fill).toBeCloseTo(60 / 73.12, 5);
+  expect(briefingSummary({ text: "", targetSeconds: 60 }, 45).note).toBe("15 s abaixo do alvo");
+  expect(briefingSummary({ text: "", targetSeconds: 60 }, 60.2).note).toBe("No alvo");
+  expect(briefingSummary({ text: "x", targetSeconds: 60 }, null)).toMatchObject({ duration: null, note: "", fill: 0 });
 });

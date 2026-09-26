@@ -1,7 +1,12 @@
+import { clock } from "./format.js";
+import { ICON } from "./icons.js";
+import { montageDuration, retainedDuration } from "./montage.js";
+
 // Região do projeto (Task 5): materiais, briefing, preparação e entrega.
 // Cada render assina `state.subscribe("project", ...)` e porta o bloco
 // original do page.js monolítico, mantendo o comentário de comportamento.
-const ROLES = { speech: "Fala", support: "Apoio", both: "Fala+apoio" };
+const ROLES = { speech: "Fala", support: "Apoio", both: "Fala + apoio" };
+const ROLE_META = { speech: "fala", support: "apoio", both: "fala + apoio" };
 const STAGE_LABEL = { pending: "Na fila", running: "Em andamento", ready: "Concluída", error: "Falhou" };
 const PREP_STAGES = { media: "Verificar arquivos", audio: "Transcrever áudio", visual: "Analisar imagens", proposal: "Montar cenas", preview: "Renderizar prévia" };
 
@@ -46,9 +51,6 @@ export function preparationView(project, operation) {
       : failed ? failed.name + " · " + sourceProgress(project, failed).detail
       : prep?.error || operation?.error || "Confira a prévia antes de aprovar a entrega." };
 }
-
-/** Chip mono (.chip da Task 3): estado curto e legível ao lado do nome. */
-const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
 
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
 function setDisabled(el, value) {
@@ -176,7 +178,7 @@ export function primaryAction(project, operation) {
     return { kind: "preparar", label: "Preparar montagem", disabled: false, stage: null };
   }
   if (hasClips || prep?.status === "ready") {
-    return { kind: "revisar", label: "Revisar montagem", disabled: false, stage: "revisao" };
+    return { kind: "revisar", label: "Revisar prévia", disabled: false, stage: "revisao" };
   }
   if (prep && ["interrupted", "attention", "cancelled"].includes(prep.status)) {
     return { kind: "preparar", label: "Retomar preparação", disabled: false, stage: null };
@@ -184,39 +186,82 @@ export function primaryAction(project, operation) {
   return { kind: "montar", label: "Montar vídeo", disabled: false, stage: null };
 }
 
+/** Cenas do rail (puro): número, título e início na montagem pela fala retida. */
+export function sceneNavItems(project) {
+  let cursor = 0;
+  return (project?.scenes ?? []).map((scene, index) => {
+    const start = cursor;
+    for (const take of scene.takes) cursor += retainedDuration(take);
+    return { id: scene.id, number: index + 1, title: scene.objective || scene.id, start, warn: (scene.gaps ?? []).length > 0 };
+  });
+}
+
+/** Cartão do briefing (puro): texto, duração da montagem contra o alvo. */
+export function briefingSummary(input, durationSeconds) {
+  const target = Number.isFinite(input?.targetSeconds) && input.targetSeconds > 0 ? input.targetSeconds : null;
+  const duration = Number.isFinite(durationSeconds) ? durationSeconds : null;
+  const over = target != null && duration != null ? duration - target : null;
+  const fill = target != null && duration != null ? Math.min(target, duration) / Math.max(target, duration) : 0;
+  const note = over == null ? ""
+    : Math.abs(over) < 0.5 ? "No alvo"
+    : over > 0 ? Math.round(over) + " s acima do alvo"
+    : Math.round(-over) + " s abaixo do alvo";
+  return { text: input?.text ?? "", target, duration, over, fill, note };
+}
+
 export function mountRail({ state, api, player }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
   const materials = document.createElement("section");
+  materials.className = "rail-materials";
   materials.setAttribute("aria-label", "Materiais");
-  materials.innerHTML = '<h1>Materiais do projeto</h1><p class="muted" id="sourceCounts" aria-live="polite"></p>'
-    + '<p class="muted" id="invite" hidden>Solte mídias no centro ou escolha arquivos para começar.</p>'
-    + '<div class="row"><button type="button" id="select">+ Importar mídia</button></div>'
-    // Ações em lote só existem enquanto há seleção (Task 4: #rail.has-selection).
-    + '<div class="rail-actions"><button type="button" id="batchSupport" disabled>Categorizar seleção como apoio</button>'
-    + '<button type="button" id="batchInclude" disabled>Incluir seleção</button>'
-    + '<button type="button" id="batchExclude" disabled>Excluir seleção</button></div>'
+  materials.innerHTML = '<div class="rail-head"><h2 class="ttl">Materiais</h2>'
+    + '<button type="button" id="select" class="icon" aria-label="Importar mídia" title="Importar mídia">' + ICON.plus + "</button></div>"
+    + '<p id="sourceCounts" aria-live="polite"></p>'
+    + '<p class="muted" id="invite" hidden>Solte mídias no texto ou use + para escolher arquivos.</p>'
+    // Ações em lote só existem enquanto há seleção (#rail.has-selection).
+    + '<div class="rail-actions"><button type="button" id="batchSupport" class="quiet" disabled>Marcar seleção como apoio</button>'
+    + '<button type="button" id="batchInclude" class="quiet" disabled>Incluir seleção na montagem</button>'
+    + '<button type="button" id="batchExclude" class="quiet" disabled>Deixar seleção fora da montagem</button></div>'
     + '<ul id="sources" class="plain"></ul>';
   root.appendChild(materials);
 
-  // Briefing mora no rail; a T4 completa o cartão (texto, duração x alvo).
+  const sceneNav = document.createElement("nav");
+  sceneNav.id = "sceneNav";
+  sceneNav.setAttribute("aria-label", "Cenas");
+  sceneNav.innerHTML = '<h2 class="ttl">Cenas</h2><ol id="sceneList" class="plain"></ol>'
+    + '<p id="sceneEmpty">As cenas aparecem quando a etapa Montar cenas terminar.</p>';
+  root.appendChild(sceneNav);
+
+  const templateSlot = document.createElement("details");
+  templateSlot.id = "templateSlot";
+  templateSlot.innerHTML = "<summary>Template editorial</summary>";
+  root.appendChild(templateSlot);
+
   const brief = document.createElement("section");
   brief.className = "sub rail-brief";
   brief.setAttribute("aria-label", "Briefing");
   brief.innerHTML = '<div class="brief-head"><h2 class="ttl">Briefing</h2>'
-    + '<button type="button" id="openBriefing" class="quiet small">Editar</button></div>';
+    + '<button type="button" id="openBriefing" class="quiet small">Editar</button></div>'
+    + '<p id="briefText" class="brief-text"></p>'
+    + '<div class="brief-duration"><span id="briefDuration" class="mono big"></span><span id="briefTarget" class="mono"></span></div>'
+    + '<div class="brief-bar" aria-hidden="true"><span id="briefFill"></span><span id="briefOver"></span></div>'
+    + '<p id="briefNote" class="brief-note"></p>';
   root.appendChild(brief);
 
   const briefingDialog = document.createElement("dialog");
   briefingDialog.id = "briefingDialog";
   briefingDialog.setAttribute("aria-labelledby", "briefingTitle");
+  // O form é um bloco móvel: com o projeto vazio a T9 o leva para o monitor.
   briefingDialog.innerHTML = '<h1 id="briefingTitle">Briefing</h1>'
-    + '<label>Tipo <select id="kind"><option value="brief">briefing</option><option value="script">roteiro</option></select></label>'
-    + '<label>Texto <textarea id="inputText" rows="4"></textarea></label>'
+    + '<div id="briefingForm" class="briefing-form">'
+    + '<p class="muted briefing-intro">Diga o que o vídeo precisa ser. A montagem usa isto para escolher e ordenar as cenas.</p>'
+    + '<label>Tipo <select id="kind"><option value="brief">Briefing</option><option value="script">Roteiro</option></select></label>'
+    + '<label>Texto <textarea id="inputText" rows="6"></textarea></label>'
     + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60"></label>'
-    + '<div class="row"><button type="button" id="saveInput">Guardar briefing</button>'
-    + '<button type="button" id="closeBriefing">Fechar</button></div>';
+    + '<button type="button" id="saveInput">Guardar briefing</button></div>'
+    + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
   document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
@@ -282,7 +327,7 @@ export function mountRail({ state, api, player }) {
       box.type = "checkbox";
       box.value = source.id;
       box.checked = checked.has(source.id);
-      box.setAttribute("aria-label", "selecionar " + source.name);
+      box.setAttribute("aria-label", "Selecionar " + source.name);
       box.addEventListener("change", renderBatchButtons);
       const thumb = document.createElement("img");
       thumb.alt = "";
@@ -290,7 +335,7 @@ export function mountRail({ state, api, player }) {
       if (source.hasVideo) thumb.src = "/project/thumbnail/" + encodeURIComponent(source.id);
       const placeholder = document.createElement("span");
       placeholder.className = "thumbnail-placeholder";
-      placeholder.textContent = source.hasVideo ? "Carregando miniatura…" : "Áudio";
+      placeholder.textContent = source.hasVideo ? "" : "Áudio";
       thumb.addEventListener("load", () => { placeholder.hidden = true; });
       thumb.addEventListener("error", () => { thumb.hidden = true; placeholder.textContent = "Sem miniatura"; });
       const preview = document.createElement("button");
@@ -299,67 +344,72 @@ export function mountRail({ state, api, player }) {
       preview.setAttribute("aria-label", "Ver original de " + source.name);
       preview.append(placeholder, thumb);
       preview.onclick = () => player.playOriginal(source.id);
-      const meta = document.createElement("div");
-      meta.className = "m-body";
-      const name = document.createElement("div");
+      const body = document.createElement("div");
+      body.className = "m-body";
+      const name = document.createElement("span");
       name.className = "m-name";
       name.textContent = source.name;
-      const chips = document.createElement("div");
-      chips.className = "m-meta";
-      chips.append(chip(Math.round(source.durationSeconds) + "s"));
-      const category = chip({ speech: "Fala", support: "Imagem de apoio", both: "Fala + apoio" }[source.role] || "Não classificado");
-      category.classList.add("source-role");
-      chips.append(category);
-      if (!source.included) chips.append(chip("excluída"));
-      const status = document.createElement("p");
+      const meta = document.createElement("span");
+      meta.className = "m-meta mono";
+      meta.textContent = clock(source.durationSeconds) + " · " + (ROLE_META[source.role] || "sem papel");
+      const status = document.createElement("span");
       status.className = "source-status";
       status.setAttribute("role", "status");
-      const options = document.createElement("details");
+      body.append(name, meta, status);
+      const menu = document.createElement("details");
+      menu.className = "source-menu";
       const summary = document.createElement("summary");
-      summary.textContent = "Opções do material";
-      const controls = document.createElement("div");
-      controls.className = "controls";
-      options.append(summary, controls);
+      summary.setAttribute("aria-label", "Opções de " + source.name);
+      summary.innerHTML = ICON.more;
+      const pop = document.createElement("div");
+      pop.className = "menu-pop";
       const role = document.createElement("div");
-      role.className="role-switch";role.setAttribute("role","group");role.setAttribute("aria-label","Uso de "+source.name);
-      for(const value of ["speech","support"]){
-        const button=document.createElement("button");button.type="button";button.textContent=ROLES[value];
-        button.setAttribute("aria-pressed",String(source.role===value||source.role==="both"));
-        button.onclick=()=>api.call("/project/source-role",{method:"POST",body:JSON.stringify({baseRevision:state.get("project").revision,sourceIds:[source.id],role:value}),label:"Atualizando categoria…"});
+      role.className = "role-switch";
+      role.setAttribute("role", "group");
+      role.setAttribute("aria-label", "Uso de " + source.name);
+      for (const value of ["speech", "support", "both"]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = ROLES[value];
+        button.setAttribute("aria-pressed", String(source.role === value));
+        button.onclick = () => api.call("/project/source-role", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: value }),
+          label: "Atualizando categoria…",
+        });
         role.append(button);
       }
       const toggle = document.createElement("button");
       toggle.type = "button";
-      toggle.textContent = source.included ? "Excluir" : "Incluir";
+      toggle.textContent = source.included ? "Deixar fora da montagem" : "Incluir na montagem";
       toggle.addEventListener("click", () => api.call("/project/source-selection", {
         method: "POST",
         body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], included: !source.included }),
-        label: source.included ? "Excluindo material…" : "Incluindo material…",
+        label: source.included ? "Tirando da montagem…" : "Incluindo material…",
       }));
       const relink = document.createElement("button");
       relink.type = "button";
-      relink.className = "quiet";
-      relink.textContent = "Relink";
+      relink.textContent = "Religar arquivo";
       relink.addEventListener("click", () => api.call("/project/relink", {
         method: "POST",
         body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
-        label: "Relinkando material…",
+        label: "Religando arquivo…",
       }));
       const watch = document.createElement("button");
       watch.type = "button";
-      watch.className = "quiet";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
-      controls.append(toggle, relink, watch);
-      meta.append(name, chips, role, status);
-      li.append(box, preview, meta, options);
+      pop.append(role, toggle, relink, watch);
+      menu.append(summary, pop);
+      li.append(box, preview, body, menu);
       list.appendChild(li);
     }
     if (focusedId) list.querySelector(`[data-source-id="${focusedId}"]`)?.focus();
     const countsEl = document.getElementById("sourceCounts");
     if (countsEl) {
       const counts = countsFor(project.assembly.sources);
-      countsEl.textContent = counts.total + " fonte(s) · " + counts.included + " incluída(s) · " + counts.support + " apoio";
+      countsEl.textContent = counts.total + (counts.total === 1 ? " fonte" : " fontes")
+        + " · " + counts.included + " na montagem · " + counts.support + " apoio";
     }
     renderBatchButtons();
   }
@@ -404,6 +454,49 @@ export function mountRail({ state, api, player }) {
       : "";
   }
 
+  function renderScenes(project) {
+    if (!project) return;
+    const items = sceneNavItems(project);
+    const list = document.getElementById("sceneList");
+    document.getElementById("sceneEmpty").hidden = items.length > 0;
+    const current = state.get("selectedScene") ?? items[0]?.id;
+    list.replaceChildren(...items.map((item) => {
+      const li = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = "#cena-" + item.id;
+      link.className = "scene-link";
+      link.dataset.scene = item.id;
+      if (item.id === current) link.setAttribute("aria-current", "true");
+      link.innerHTML = '<span class="num"></span><span class="scene-title"></span>'
+        + (item.warn ? '<span class="dot warn-dot" aria-hidden="true"></span><span class="sr">com lacuna</span>' : "")
+        + '<span class="mono t"></span>';
+      link.querySelector(".num").textContent = String(item.number);
+      link.querySelector(".scene-title").textContent = item.title;
+      link.querySelector(".t").textContent = clock(item.start);
+      link.onclick = (event) => {
+        event.preventDefault();
+        state.set("selectedScene", item.id);
+        state.set("playhead", item.start);
+        player.seek(item.start);
+        document.querySelector('[data-scene-section="' + CSS.escape(item.id) + '"]')?.scrollIntoView({ block: "start" });
+      };
+      li.append(link);
+      return li;
+    }));
+  }
+
+  function renderBrief(project) {
+    const summary = briefingSummary(project.input, project.scenes.length ? montageDuration(project) : null);
+    document.getElementById("briefText").textContent = summary.text || "Sem briefing ainda.";
+    document.getElementById("briefDuration").textContent = summary.duration != null ? clock(summary.duration) : "–:––";
+    document.getElementById("briefTarget").textContent = summary.target != null ? "alvo " + clock(summary.target) : "";
+    document.getElementById("briefFill").style.width = (summary.fill * 100).toFixed(1) + "%";
+    document.getElementById("briefOver").style.width = summary.over > 0 ? ((1 - summary.fill) * 100).toFixed(1) + "%" : "0%";
+    const note = document.getElementById("briefNote");
+    note.textContent = summary.note;
+    note.classList.toggle("over", summary.over > 0.5);
+  }
+
   function render(project) {
     if (!project) return;
     if (!briefingDialog.open) {
@@ -413,6 +506,8 @@ export function mountRail({ state, api, player }) {
     }
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
     renderSources(project);
+    renderScenes(project);
+    renderBrief(project);
     document.getElementById("resume").hidden = !(
       project.preparation && project.preparation.status !== "running"
       && project.preparation.status !== "ready"
@@ -476,6 +571,7 @@ export function mountRail({ state, api, player }) {
   document.getElementById("resume").onclick = prepareMontage;
   state.subscribe("project", render);
   state.subscribe("operation", () => { if (state.get("project")) renderPreparation(state.get("project")); });
+  state.subscribe("selectedScene", () => renderScenes(state.get("project")));
   render(state.get("project"));
 
 }
