@@ -158,6 +158,21 @@ it("cancelada prevalece sobre falha anterior: sem vermelho, o erro fica só no d
   expect(sourceProgress(interrompida, falhou)).toMatchObject({ tone: "error", label: "Analisar imagens: falhou" });
 });
 
+it("cancelada prevalece também sem entrada em sources (prévia): erro antigo da análise vira diagnóstico", () => {
+  const source = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
+  const base = { assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "error", error: "ASR sem áudio" }] };
+  const cancelada = { ...base, preparation: { status: "cancelled", mode: "preview", stage: "preview", sources: {} } };
+  const progress = sourceProgress(cancelada, source);
+  expect(progress).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(progress.detail).toContain("ASR sem áudio");
+  expect(preparationView(cancelada, null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  // Sem preparação cancelada, o erro da análise continua sendo falha.
+  expect(sourceProgress({ ...base, preparation: null }, source)).toMatchObject({ tone: "error", label: "Falha na análise" });
+});
+
 it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
  const {resolveView}=await import("./rail.js");
  expect(resolveView({status:"running",stage:"imported"},true)).toMatchObject({disabled:true,statusText:"Verificando timeline importada…"});

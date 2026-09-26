@@ -35,6 +35,11 @@ export function sourceProgress(project, source) {
     if (stages.audio === "ready") return { tone: "pending", label: "Transcrição disponível", detail: "" };
     return { tone: "pending", label: "Na fila", detail: "" };
   }
+  // Sem entrada em sources (a prévia manda sources vazio), cancelar segue sendo
+  // o estado terminal: o erro antigo da análise fica só como diagnóstico.
+  if (prep?.status === "cancelled" && analysis?.status === "error") {
+    return { tone: "cancelled", label: "Cancelada", detail: "A análise falhou antes de cancelar: " + (analysis.error || "sem detalhe") + ". Retome para tentar de novo." };
+  }
   if (analysis?.status === "error") return { tone: "error", label: "Falha na análise", detail: analysis.error || "" };
   if (analysis) return { tone: "pending", label: "Transcrição disponível", detail: "" };
   return { tone: "pending", label: "Aguardando preparação", detail: "" };
