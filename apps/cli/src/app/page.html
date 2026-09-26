@@ -185,7 +185,8 @@
     .topbar-project, .topbar-actions { flex: 1 1 100%; }
     .topbar-actions { flex-wrap: wrap; justify-content: flex-start; }
     #steps { order: 3; width: 100%; overflow-x: auto; }
-    #center { order: 1; overflow: visible; }
+    /* A prosa cresce com a página; na horizontal o cartão recorta os balões de ação ainda ocultos. */
+    #center { order: 1; overflow: visible; overflow-x: clip; }
     #monitor-card { order: 2; }
     #side { order: 3; }
     .card-head { flex-wrap: wrap; height: auto; min-height: 56px; padding: 12px 16px; }
