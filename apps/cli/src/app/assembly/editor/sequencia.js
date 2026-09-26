@@ -163,6 +163,32 @@ export const SCRUB_THROTTLE_MS = 60;
 /** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
 let undoKeyBound = false;
 
+/**
+ * Um pedido por vez (pura): enquanto a promessa de `run` não assenta, novas
+ * chamadas são ignoradas. `onChange(busy)` avisa quem pinta o controle; a
+ * liberação vale para sucesso e erro. Sem promessa (nada a fazer), não trava.
+ * @param {(...args: any[]) => any} run
+ * @param {(busy: boolean) => void} [onChange]
+ */
+export function singleFlight(run, onChange = () => {}) {
+  let busy = false;
+  const call = (...args) => {
+    if (busy) return undefined;
+    const pending = run(...args);
+    if (!pending || typeof pending.then !== "function") return pending;
+    busy = true;
+    onChange(true);
+    const settle = () => {
+      busy = false;
+      onChange(false);
+    };
+    pending.then(settle, settle);
+    return pending;
+  };
+  call.busy = () => busy;
+  return call;
+}
+
 function esc(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -176,16 +202,19 @@ function esc(text) {
 export function mountSequencia({ state, api, player }) {
   const root = () => document.getElementById("faixa");
 
-  /** Desfaz a última edição (mesmo POST do antigo botão do contexto). */
-  function undoEdit() {
+  /**
+   * Desfaz a última edição (mesmo POST do antigo botão do contexto). Clique e
+   * Cmd+Z passam por aqui: com um pedido em voo, o segundo é ignorado.
+   */
+  const undoEdit = singleFlight(() => {
     const p = state.get("project");
-    if (!p || state.get("undoRevision") == null) return;
-    void api.call("/project/undo", {
+    if (!p || state.get("undoRevision") == null) return undefined;
+    return api.call("/project/undo", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
       label: "Desfazendo…",
     });
-  }
+  }, () => placeUndo(state.get("project")));
 
   /** Desfazer mora no cabeçalho do texto: é o gesto de quem edita pelo texto. */
   function placeUndo(p) {
@@ -197,11 +226,14 @@ export function mountSequencia({ state, api, player }) {
       undo.className = "icon";
       undo.innerHTML = ICON.undo;
       undo.setAttribute("aria-label", "Desfazer edição");
-      undo.onclick = undoEdit;
+      undo.onclick = () => void undoEdit();
       (document.getElementById("undoSlot") || root()).appendChild(undo);
     }
-    undo.disabled = !p || state.get("undoRevision") == null;
-    undo.title = undo.disabled ? "Nenhuma alteração com histórico para desfazer" : "Desfazer edição";
+    const busy = undoEdit.busy();
+    undo.disabled = !p || state.get("undoRevision") == null || busy;
+    undo.setAttribute("aria-busy", String(busy));
+    undo.title = busy ? "Desfazendo…"
+      : undo.disabled ? "Nenhuma alteração com histórico para desfazer" : "Desfazer edição";
   }
 
   let signature = "";
@@ -505,7 +537,7 @@ export function mountSequencia({ state, api, player }) {
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       }
       ev.preventDefault();
-      undoEdit();
+      void undoEdit();
     });
   }
 

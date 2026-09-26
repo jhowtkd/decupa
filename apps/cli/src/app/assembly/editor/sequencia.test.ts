@@ -10,6 +10,7 @@ import {
   planSceneWave,
   rulerTicks,
   seekFromRatio,
+  singleFlight,
 } from "./sequencia.js";
 
 function word(id: string, text: string, start: number, end: number): Word {
@@ -295,4 +296,36 @@ it("captionCues só com dado real, normalizado e ordenado", () => {
     { start: 0, end: 1, text: "a" },
     { start: 2, end: 3, text: "b" },
   ]);
+});
+
+it("singleFlight: um desfazer por vez, liberado no fim com sucesso ou erro", async () => {
+  let release!: (value: string) => void;
+  let fail!: (error: Error) => void;
+  const calls: number[] = [];
+  const seen: boolean[] = [];
+  const run = singleFlight(() => {
+    calls.push(calls.length + 1);
+    return new Promise<string>((resolve, reject) => { release = resolve; fail = reject; });
+  }, (busy: boolean) => seen.push(busy));
+
+  const first = run();
+  // Clique e Cmd+Z antes da resposta: sai um POST só.
+  expect(run()).toBeUndefined();
+  expect(calls).toEqual([1]);
+  expect(run.busy()).toBe(true);
+  release("ok");
+  await first;
+  expect(run.busy()).toBe(false);
+
+  const second = run();
+  expect(calls).toEqual([1, 2]);
+  fail(new Error("rede"));
+  await expect(second).rejects.toThrow("rede");
+  expect(run.busy()).toBe(false);
+  expect(seen).toEqual([true, false, true, false]);
+
+  // Nada a desfazer: a chamada não trava a próxima.
+  const idle = singleFlight(() => undefined);
+  idle();
+  expect(idle.busy()).toBe(false);
 });

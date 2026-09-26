@@ -109,6 +109,9 @@ it("sequência: rótulo em português, desfazer no cabeçalho do texto, sem altu
   expect(seq).not.toContain("⎌");
   expect(seq).not.toContain("min-height:154px");
   expect(seq).toContain("clock(t)");
+  // Desfazer em voo: clique e atalho passam pela mesma guarda.
+  expect(seq).toContain("const undoEdit = singleFlight(");
+  expect(seq).toContain('"aria-busy"');
 });
 
 it("estados: vazio com briefing no monitor, preparação com etapas e custo visível", async () => {
