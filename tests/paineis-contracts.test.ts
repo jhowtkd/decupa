@@ -181,6 +181,9 @@ it("marcar: cartões, rótulo honesto do apagar, cores do tema e marca mais pró
   // Cada marca da lista é um botão (foco e teclado), não um <li> clicável.
   expect(html).toContain('go.className = "mark-go"');
   expect(html).not.toContain('li.addEventListener("click"');
+  // Enter/espaço num controle ficam com a ativação nativa; atalhos só fora dos controles.
+  expect(html).toContain('const CONTROL = "button, a[href], input, textarea, select, [contenteditable]";');
+  expect(html).not.toContain('closest("#marks .mark-go")) return;');
   const src = html.slice(html.indexOf("// <nearest>"), html.indexOf("// </nearest>"));
   const nearestIndex = runInNewContext(src + "; nearestIndex");
   expect(nearestIndex([420, 1180, 5020], 5280)).toBe(2);

@@ -441,16 +441,27 @@ overview.addEventListener("pointerdown", (e) => {
   setCursor(canvasTime(overview, e, 0, durationMs));
 });
 el("save").addEventListener("click", save);
-el("undo").addEventListener("click", removeNearest);
+el("undo").addEventListener("click", (ev) => {
+  removeNearest();
+  // Clique de mouse não prende o foco: o Enter seguinte volta a marcar.
+  if (ev.detail > 0) el("undo").blur();
+});
 el("mark").addEventListener("click", () => { addMark(); el("mark").blur(); });
+
+// Enter e espaço num controle (botão, link, campo) ficam com a ativação nativa;
+// os atalhos de tecla valem quando o foco não está num controle. Num campo de
+// texto nenhum atalho age: setas e apagar são da edição.
+const CONTROL = "button, a[href], input, textarea, select, [contenteditable]";
+const FIELD = "input, textarea, select, [contenteditable]";
 
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault(); save(); return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  // Enter e espaço num botão da lista de marcas acionam o botão, não o atalho global.
-  if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element && e.target.closest("#marks .mark-go")) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if ((e.key === "Enter" || e.key === " ") && target?.closest(CONTROL)) return;
+  if (target?.closest(FIELD)) return;
 
   switch (e.key) {
     case " ": if (!el("mark").disabled) { e.preventDefault(); toggleLoop(); } break;
