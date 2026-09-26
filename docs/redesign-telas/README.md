@@ -67,7 +67,7 @@ node work/ui-screens/serve.ts   # limpar 7791 · montar 7792 · marcar 7793
 
 ## Painéis flutuantes (2026-09-26, direção A)
 
-Terceira passada, escolhida no canvas "Redesign da interface do editor" (https://claude.ai/artifact/9GJCiT7iy7JMVuvgJ6qhwV): texto e vídeo juntos, três cartões flutuantes, etapas numa pílula no topo, uma navegação só. Artboards de referência em [paineis-flutuantes/](paineis-flutuantes/); plano em `docs/superpowers/plans/2026-09-26-decupa-paineis-flutuantes.md`.
+Terceira passada, escolhida no canvas "Redesign da interface do editor" (https://claude.ai/artifact/9GJCiT7iy7JMVuvgJ6qhwV): texto e vídeo juntos, três cartões flutuantes, etapas numa pílula no topo, uma navegação só. Artboards de referência em [paineis-flutuantes/](paineis-flutuantes/); o plano de implementação é um documento local, não versionado (`docs/superpowers/plans/2026-09-26-decupa-paineis-flutuantes.md` na máquina de quem executou), como os prints abaixo.
 
 ### Prova visual (local, não versionada)
 
