@@ -35,4 +35,5 @@ it("mark-web usa os tokens e segue às cegas", async () => {
   for (const banned of ["transcript", "predi", "sugest", "melhor posição"]) {
     expect(html.toLowerCase()).not.toContain(banned);
   }
+  expect(html).toContain("Medição às cegas");
 });
