@@ -17,7 +17,8 @@ export function clockPrecise(seconds) {
   return Math.floor(whole / 60) + ":" + String(whole % 60).padStart(2, "0") + "," + (tenths % 10);
 }
 
-/** 21.32 → "21,3 s". */
+/** 21.32 → "21,3 s" (décimo arredondado, o mesmo critério de clockPrecise). */
 export function seconds1(seconds) {
-  return safe(seconds).toFixed(1).replace(".", ",") + " s";
+  const tenths = Math.round(safe(seconds) * 10);
+  return Math.floor(tenths / 10) + "," + (tenths % 10) + " s";
 }

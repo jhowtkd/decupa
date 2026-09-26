@@ -19,6 +19,11 @@ it("seconds1 usa vírgula decimal e unidade separada", () => {
   expect(seconds1(4)).toBe("4,0 s");
 });
 
+it("seconds1 arredonda empates decimais como clockPrecise", () => {
+  expect(seconds1(1.15)).toBe("1,2 s");
+  expect(seconds1(2.55)).toBe("2,6 s");
+});
+
 it("não-finito ou negativo vira zero", () => {
   expect(clock(Number.NaN)).toBe("0:00");
   expect(clockPrecise(-3)).toBe("0:00,0");
