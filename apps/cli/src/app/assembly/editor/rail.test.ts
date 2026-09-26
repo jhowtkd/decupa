@@ -1,5 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, primaryAction, sceneNavItems, stageLabel, sourceProgress, preparationView } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, exportView, formatLabel, paintSceneCurrent, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -192,6 +193,62 @@ it("formatLabel resume dimensões, orientação e fps da entrega", () => {
   expect(formatLabel({ width: 720, height: 720, fps: { num: 25, den: 1 } }))
     .toBe("720×720 quadrado @ 25/1 fps");
   expect(formatLabel(null)).toBe("");
+});
+
+it("material pronto some do rail; preparo e erro continuam visíveis", () => {
+  const source = { id: "a", name: "fala.mp4", included: true, hasVideo: true };
+  const base = { assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "ready" }] };
+  const ready = sourceProgress({ ...base, preparation: { status: "ready", sources: { a: { media: "ready", audio: "ready", visual: "ready" } } } }, source);
+  expect(ready).toMatchObject({ tone: "ready", label: "Análise concluída" });
+  expect(sourceStatusText(ready)).toBe("");
+  const transcript = sourceProgress({ ...base, preparation: { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "pending" } } } }, source);
+  expect(transcript.label).toBe("Transcrição disponível");
+  expect(sourceStatusText(transcript)).toBe("");
+  const running = sourceProgress({ ...base, preparation: { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "running" } } } }, source);
+  expect(sourceStatusText(running)).toBe("Analisar imagens…");
+  const failed = sourceProgress({ ...base, preparation: { status: "interrupted", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "error", error: "intervalo inválido" } } } }, source);
+  expect(sourceStatusText(failed)).toBe("Analisar imagens: falhou");
+});
+
+function sceneLink(id: string, current = false) {
+  const attrs = new Map<string, string>();
+  if (current) attrs.set("aria-current", "true");
+  return {
+    dataset: { scene: id },
+    setAttribute(name: string, value: string) { attrs.set(name, value); },
+    removeAttribute(name: string) { attrs.delete(name); },
+    getAttribute(name: string) { return attrs.get(name) ?? null; },
+    hasAttribute(name: string) { return attrs.has(name); },
+  };
+}
+
+it("troca de cena move o aria-current no link existente", () => {
+  const scenes = [
+    { id: "s1", objective: "Gancho", gaps: [], takes: [{ start: 0, end: 10, removed: [] }] },
+    { id: "s2", objective: "Corte", gaps: [], takes: [{ start: 10, end: 20, removed: [] }] },
+  ];
+  const items = sceneNavItems({ scenes });
+  expect(sameSceneNav(items, sceneNavItems({ scenes }))).toBe(true);
+  expect(sameSceneNav(items, sceneNavItems({ scenes: [{ ...scenes[0], objective: "Outro" }, scenes[1]] }))).toBe(false);
+  const first = sceneLink("s1", true);
+  const second = sceneLink("s2");
+  paintSceneCurrent([first, second], "s2");
+  expect(first.hasAttribute("aria-current")).toBe(false);
+  expect(second.getAttribute("aria-current")).toBe("true");
+  expect(first.dataset.scene).toBe("s1");
+  expect(second.dataset.scene).toBe("s2");
+});
+
+it("seleção de material tem nome e alvo de 24px visível sem hover", async () => {
+  const rail = await readFile(new URL("./rail.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../page.css", import.meta.url), "utf8");
+  expect(rail).toContain('check.className = "source-check"');
+  expect(rail).toContain('checkName.textContent = "Selecionar " + source.name');
+  expect(rail).toContain("paintSceneCurrent(links, current)");
+  expect(css).toContain(".source-check { position: absolute; left: 0; top: 0; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; margin: 0; }");
+  expect(css).toContain(".source-check input { width: 24px; height: 24px; margin: 0; padding: 0; accent-color: var(--accent); opacity: 0; }");
+  expect(css).toContain("@media (hover: none), (pointer: coarse), (max-width: 700px)");
+  expect(css).toContain(".source[data-status=\"ready\"] .source-status { display: none; }");
 });
 
 it("sceneNavItems numera as cenas e soma o início pela fala retida", () => {

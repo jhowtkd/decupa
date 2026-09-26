@@ -196,8 +196,12 @@ textarea, input[type="text"], input[type="number"] { width: 100%; }
 #sources { display: flex; flex-direction: column; gap: 2px; }
 .source { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px; border-radius: 10px; }
 .source:hover, .source:focus-within { background: var(--tint); }
-.source > input[type="checkbox"] { position: absolute; left: 2px; top: 2px; z-index: 1; width: auto; margin: 0; padding: 0; accent-color: var(--accent); opacity: 0; }
-.source:hover > input, .source > input:checked, .source > input:focus-visible { opacity: 1; }
+.source-check { position: absolute; left: 0; top: 0; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; margin: 0; }
+.source-check input { width: 24px; height: 24px; margin: 0; padding: 0; accent-color: var(--accent); opacity: 0; }
+.source:hover .source-check input, .source-check input:checked, .source-check input:focus-visible { opacity: 1; }
+@media (hover: none), (pointer: coarse), (max-width: 700px) {
+  .source-check input { opacity: 1; }
+}
 .source-preview { position: relative; width: 44px; height: 28px; padding: 0; border-radius: 6px; overflow: hidden; background: var(--panel2); }
 .source-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumbnail-placeholder { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8px; font-weight: 400; color: var(--faint); }
@@ -205,7 +209,7 @@ textarea, input[type="text"], input[type="number"] { width: 100%; }
 .m-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-meta, .source-status { font-size: 11px; color: var(--muted); }
 .source-status:empty { display: none; }
-.source[data-status="ready"] .source-status { color: var(--green); }
+.source[data-status="ready"] .source-status { display: none; }
 .source[data-status="running"] .source-status { color: var(--accent); }
 .source[data-status="error"] .source-status { color: var(--red); }
 .source[data-status="muted"] { opacity: .6; }

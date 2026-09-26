@@ -34,6 +34,12 @@ export function sourceProgress(project, source) {
   return { tone: "pending", label: "Aguardando preparação", detail: "" };
 }
 
+/** Linha de status no rail: pronto não ocupa a segunda linha; preparo e erro ficam. */
+export function sourceStatusText(progress) {
+  if (!progress || progress.tone === "ready" || progress.label === "Transcrição disponível") return "";
+  return progress.label;
+}
+
 export function preparationView(project, operation) {
   const prep = project.preparation;
   const sources = project.assembly.sources.filter((source) => source.included);
@@ -186,6 +192,19 @@ export function primaryAction(project, operation) {
   return { kind: "montar", label: "Montar vídeo", disabled: false, stage: null };
 }
 
+/** A lista de cenas só é a mesma quando número, título, início e lacuna não mudam. */
+export function sameSceneNav(prev, next) {
+  return JSON.stringify(prev) === JSON.stringify(next);
+}
+
+/** Move o aria-current entre os links que já estão no DOM, sem recriá-los. */
+export function paintSceneCurrent(links, current) {
+  for (const link of links) {
+    if (link.dataset.scene === current) link.setAttribute("aria-current", "true");
+    else link.removeAttribute("aria-current");
+  }
+}
+
 /** Cenas do rail (puro): número, título e início na montagem pela fala retida. */
 export function sceneNavItems(project) {
   let cursor = 0;
@@ -327,8 +346,13 @@ export function mountRail({ state, api, player }) {
       box.type = "checkbox";
       box.value = source.id;
       box.checked = checked.has(source.id);
-      box.setAttribute("aria-label", "Selecionar " + source.name);
       box.addEventListener("change", renderBatchButtons);
+      const check = document.createElement("label");
+      check.className = "source-check";
+      const checkName = document.createElement("span");
+      checkName.className = "sr";
+      checkName.textContent = "Selecionar " + source.name;
+      check.append(box, checkName);
       const thumb = document.createElement("img");
       thumb.alt = "";
       thumb.loading = "lazy";
@@ -401,7 +425,7 @@ export function mountRail({ state, api, player }) {
       watch.addEventListener("click", () => player.playOriginal(source.id));
       pop.append(role, toggle, relink, watch);
       menu.append(summary, pop);
-      li.append(box, preview, body, menu);
+      li.append(check, preview, body, menu);
       list.appendChild(li);
     }
     if (focusedId) list.querySelector(`[data-source-id="${focusedId}"]`)?.focus();
@@ -421,7 +445,7 @@ export function mountRail({ state, api, player }) {
       const status = sourceProgress(project, source);
       node.dataset.status = status.tone;
       const label = node.querySelector(".source-status");
-      label.textContent = status.label;
+      label.textContent = sourceStatusText(status);
       label.title = status.detail;
     }
     preparation.hidden = !prep;
@@ -454,12 +478,22 @@ export function mountRail({ state, api, player }) {
       : "";
   }
 
+  let sceneItems = null;
   function renderScenes(project) {
     if (!project) return;
     const items = sceneNavItems(project);
     const list = document.getElementById("sceneList");
     document.getElementById("sceneEmpty").hidden = items.length > 0;
     const current = state.get("selectedScene") ?? items[0]?.id;
+    const links = [...list.querySelectorAll("a.scene-link")];
+    // Seleção nova não recria a lista: o link focado pelo teclado continua no DOM.
+    if (sceneItems && sameSceneNav(sceneItems, items) && links.length === items.length) {
+      paintSceneCurrent(links, current);
+      return;
+    }
+    sceneItems = items;
+    const focusedScene = document.activeElement?.closest?.("#sceneList")
+      ? document.activeElement.dataset.scene : null;
     list.replaceChildren(...items.map((item) => {
       const li = document.createElement("li");
       const link = document.createElement("a");
@@ -483,6 +517,7 @@ export function mountRail({ state, api, player }) {
       li.append(link);
       return li;
     }));
+    if (focusedScene) list.querySelector('[data-scene="' + CSS.escape(focusedScene) + '"]')?.focus();
   }
 
   function renderBrief(project) {
