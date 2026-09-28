@@ -8,6 +8,8 @@ import { mountRail, preparationView } from "/editor/rail.js";
 import { mountContexto, mountStage } from "/editor/contexto.js";
 import { mountTexto } from "/editor/texto.js";
 import { mountSequencia } from "/editor/sequencia.js";
+import { idleStatus, stepperState, versionPill } from "/editor/topbar.js";
+import { ICON } from "/editor/icons.js";
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
@@ -30,10 +32,11 @@ function project() {
   return state.get("project");
 }
 
-function setStatus(text, busy) {
+function setStatus(text, busy, tone = "") {
   const statusEl = document.getElementById("status");
   if (!statusEl) return;
   statusEl.textContent = text;
+  statusEl.dataset.tone = tone;
   statusEl.classList.toggle("busy", !!busy);
   if (busy) statusEl.setAttribute("aria-busy", "true");
   else statusEl.removeAttribute("aria-busy");
@@ -44,7 +47,7 @@ function renderStatus() {
   const previewBusy = previewInflight || previewPending;
   if (state.get("previewBusy") !== previewBusy) state.set("previewBusy", previewBusy);
   if (ui.error) {
-    setStatus(ui.error, false);
+    setStatus(ui.error, false, "error");
     return;
   }
   if (ui.label) {
@@ -56,7 +59,7 @@ function renderStatus() {
   if (p?.preparation) {
     const view = preparationView(p, operation);
     if (view.busy || view.tone === "error" || p.preparation.status === "cancelled") {
-      setStatus(view.title, view.busy);
+      setStatus(view.title, view.busy, view.tone === "error" ? "error" : "");
       return;
     }
   }
@@ -65,7 +68,7 @@ function renderStatus() {
     return;
   }
   if (operation?.stage === "error") {
-    setStatus("Erro: " + (operation.error || "falha no processamento"), false);
+    setStatus("Erro: " + (operation.error || "falha no processamento"), false, "error");
     return;
   }
   if (previewInflight || previewPending) {
@@ -77,7 +80,8 @@ function renderStatus() {
     return;
   }
   if (p) {
-    setStatus("revisão " + p.revision, false);
+    const idle = idleStatus(p);
+    setStatus(idle.text, false, idle.tone);
     return;
   }
   setStatus("carregando…", true);
@@ -315,12 +319,12 @@ mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
-const inspector = document.getElementById("contexto");
-const inspectTool = document.getElementById("inspectTool");
-function showInspector(show = true) {
-  inspector.hidden = !show;
-  inspectTool.setAttribute("aria-expanded", String(show));
-  document.body.classList.toggle("inspector-open", show);
+const monitorToggle = document.getElementById("monitorToggle");
+const narrowViewport = matchMedia("(max-width: 1100px)");
+/** Tela estreita: o monitor vira gaveta sobre a bancada. */
+function showMonitor(show = true) {
+  document.body.classList.toggle("monitor-open", show);
+  monitorToggle.setAttribute("aria-expanded", String(show));
 }
 function applyTranscriptNotice(text) {
   const el = document.getElementById("transcriptNotice");
@@ -331,26 +335,46 @@ function applyTranscriptNotice(text) {
   if (notice) el.title = notice;
   else el.removeAttribute("title");
 }
+/** Pílula de etapas: check nas feitas, cadeado na entrega travada (também na atual), ponto na atual (CSS). */
+function paintStages() {
+  for (const item of stepperState(project(), state.get("stage"))) {
+    const button = document.querySelector('#stages [data-stage="' + item.id + '"]');
+    if (!button) continue;
+    button.classList.toggle("is-done", item.done);
+    button.classList.toggle("is-locked", item.locked);
+    button.querySelector(".step-mark").innerHTML = item.done ? ICON.check : item.locked ? ICON.lock : "";
+    // O cadeado é decorativo. O nome acessível é que diz que a etapa está travada.
+    let lockedName = button.querySelector(":scope > .sr");
+    if (item.locked) {
+      if (!lockedName) {
+        lockedName = document.createElement("span");
+        lockedName.className = "sr";
+        lockedName.textContent = " travada";
+        button.append(lockedName);
+      }
+    } else if (lockedName) {
+      lockedName.remove();
+    }
+  }
+}
 function applyStageDom(stage) {
   if (!STAGE_TARGET[stage]) return;
-  // Trocar a etapa mostra a transcrição, mas não tira o foco de quem
-  // já estava num controle (papel, inclusão, outra etapa).
+  // A etapa não remonta a bancada: texto e monitor ficam onde estão; só a
+  // entrega troca de lugar com o texto no cartão central.
   const focus = document.activeElement;
   document.body.dataset.stage = stage;
   for (const el of document.querySelectorAll("#stages [data-stage]")) {
     if (el.dataset.stage === stage) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   }
-  document.getElementById("rail").hidden = !["materiais", "edicao"].includes(stage);
-  document.getElementById("faixa").hidden = stage !== "edicao";
-  const editing = stage === "edicao";
-  document.getElementById("texto").hidden = !editing;
-  document.getElementById("center").classList.toggle("with-text", editing);
-  document.querySelector('[data-tool="texto"]').setAttribute("aria-pressed", String(editing));
+  const entrega = stage === "entrega";
+  document.getElementById("texto").hidden = entrega;
+  document.getElementById("textoHead").hidden = entrega;
   const delivery = document.getElementById("delivery");
-  (stage === "entrega" ? document.getElementById("center") : inspector).appendChild(delivery);
-  delivery.hidden = stage !== "entrega";
-  showInspector(false);
+  if (delivery) delivery.hidden = !entrega;
+  if (stage === "revisao" && narrowViewport.matches) showMonitor(true);
+  document.getElementById(STAGE_TARGET[stage])?.scrollIntoView({ block: "nearest" });
+  paintStages();
   if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
     && document.activeElement !== focus) {
     focus.focus({ preventScroll: true });
@@ -369,28 +393,16 @@ document.getElementById("stages").addEventListener("click", (event) => {
 });
 // Ação principal do rail (revisar/entregar) navega sem chamada paga.
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
-const toolTexto = document.querySelector('[data-tool="texto"]');
-toolTexto.addEventListener("click", () => {
-  if (document.body.dataset.stage !== "edicao") { setStage("edicao"); return; }
-  const texto = document.getElementById("texto");
-  const show = texto.hidden;
-  texto.hidden = !show;
-  document.getElementById("center").classList.toggle("with-text", show);
-  toolTexto.setAttribute("aria-pressed", String(show));
-});
-inspectTool.setAttribute("aria-controls", "contexto");
-inspectTool.onclick = () => showInspector(inspector.hidden);
-document.getElementById("closeInspector").onclick = () => { showInspector(false); inspectTool.focus(); };
-const narrowViewport = matchMedia("(max-width: 1100px)");
-narrowViewport.addEventListener("change", () => { showInspector(false); });
-document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && !inspector.hidden && !document.querySelector("dialog[open]")) {
-    showInspector(false); inspectTool.focus();
+monitorToggle.onclick = () => showMonitor(!document.body.classList.contains("monitor-open"));
+document.getElementById("closeMonitor").onclick = () => { showMonitor(false); monitorToggle.focus(); };
+narrowViewport.addEventListener("change", () => showMonitor(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.body.classList.contains("monitor-open")
+    && !document.querySelector("dialog[open]")) {
+    showMonitor(false);
+    monitorToggle.focus();
   }
 });
-document.getElementById("mediaTool").onclick = () => setStage("materiais");
-document.getElementById("reviewAction").onclick = () => setStage("revisao");
-document.getElementById("deliveryAction").onclick = () => setStage("entrega");
 setStage("materiais");
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
@@ -406,11 +418,17 @@ setStage("materiais");
 
 state.subscribe("project", (p) => {
   if (!p) return;
+  document.body.classList.toggle("is-empty", p.assembly.sources.length === 0);
   renderStatus();
+  paintStages();
   // 202 de prepare/adjust/prepare-resume trazem preparation running e caem
   // aqui: o polling retoma sem fiação extra nos módulos.
   poller.schedule();
   document.getElementById("projectName").textContent = p.assembly.name && p.assembly.name !== p.id ? p.assembly.name : "Montagem principal";
+  const pill = document.getElementById("versionPill");
+  const version = versionPill(p);
+  pill.textContent = version.text;
+  pill.hidden = version.hidden;
 });
 
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });

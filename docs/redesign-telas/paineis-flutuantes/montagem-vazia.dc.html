@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Montagem vazia</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0B0C0E;color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#F0CA6E}a:hover{color:#F6DC9A}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+.card{box-sizing:border-box;border-radius:16px;background:#151619;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),0 1px 2px rgba(0,0,0,.4),0 18px 40px rgba(0,0,0,.28)}
+.sub{box-sizing:border-box;border-radius:12px;background:#1C1E22}
+.ttl{margin:0;font-size:12px;font-weight:600;color:#A3A7AF}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px;color:#A3A7AF;white-space:nowrap}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border:0;border-radius:999px;background:rgba(255,255,255,.07);color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.b-p{background:#F0CA6E;color:#1B1508;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 6px 16px rgba(240,202,110,.18)}
+.b-off{background:rgba(255,255,255,.05);color:#8A8F98;box-shadow:none;cursor:not-allowed}
+.nav{display:flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:999px;color:#A3A7AF;text-decoration:none;font-size:13px}
+.num{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:22px;height:22px;box-sizing:border-box;padding:0 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:11px;font-weight:700}
+.field{box-sizing:border-box;width:100%;border:0;border-radius:12px;background:#1C1E22;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);color:#F2F1EE;font-family:inherit;font-size:14px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 12px; display: flex; flex-direction: column; gap: 12px; background: #0B0C0E; overflow: hidden">
+
+<header style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 4px 0 10px">
+<div style="width: 380px; display: flex; align-items: center; gap: 10px">
+<svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="#F0CA6E"></path></svg>
+<span style="font-size: 16px; font-weight: 700; letter-spacing: -0.02em">decupa</span>
+<span style="width: 4px; height: 4px; margin: 0 4px; border-radius: 50%; background: #3A3D44"></span>
+<span style="font-size: 14px; font-weight: 500">Montagem principal</span>
+</div>
+<nav aria-label="Etapas" style="flex-grow: 1; display: flex; justify-content: center">
+<ol style="display: flex; align-items: center; gap: 2px; margin: 0; padding: 4px; list-style: none; border-radius: 999px; background: #151619; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)">
+<li><a href="#materiais" class="nav" aria-current="step" style="background: #26282D; color: #F2F1EE; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)"><span style="width: 6px; height: 6px; border-radius: 50%; background: #F0CA6E"></span>Materiais</a></li>
+<li><a href="#edicao" class="nav">Edição</a></li>
+<li><a href="#revisao" class="nav">Revisão</a></li>
+<li><a href="#entrega" class="nav">Entrega<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg></a></li>
+</ol>
+</nav>
+<div style="width: 380px; display: flex; align-items: center; justify-content: flex-end; gap: 12px">
+<span style="font-size: 12px; color: #A3A7AF">Importe um material para montar</span>
+<button class="b b-off" disabled>Montar vídeo</button>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: flex; gap: 12px">
+
+<main class="card" style="flex-grow: 1; min-width: 0; padding: 16px; display: flex">
+<section aria-label="Importar mídia" style="flex-grow: 1; box-sizing: border-box; border: 1.5px dashed rgba(255,255,255,.14); border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 56px; padding: 40px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center">
+<div style="width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; border-radius: 22px; background: rgba(240,202,110,.12); color: #F0CA6E; box-shadow: inset 0 0 0 1px rgba(240,202,110,.25)">
+<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M3 9h18M8 5v4M16 5v4M12 12v5M9.5 14.5L12 12l2.5 2.5"></path></svg>
+</div>
+<h1 style="margin: 6px 0 0; font-size: 28px; font-weight: 650; letter-spacing: -0.02em">Seu próximo vídeo começa aqui</h1>
+<p style="margin: 0; max-width: 440px; font-size: 15px; line-height: 1.55; color: #A3A7AF">Solte vídeos e áudios nesta área ou escolha os arquivos no computador.</p>
+<div style="display: flex; align-items: center; gap: 10px; margin-top: 6px">
+<button class="b b-p" style="height: 44px; padding: 0 22px; font-size: 14px"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg>Importar mídia</button>
+</div>
+<span style="font-size: 12px; color: #8A8F98">Formatos aceitos: vídeo e áudio · arquivos locais, o original não é enviado a terceiros</span>
+</div>
+
+<ol aria-label="Como funciona" style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; max-width: 760px">
+<li class="sub" style="padding: 16px; display: flex; flex-direction: column; gap: 8px; box-shadow: inset 0 0 0 1px rgba(240,202,110,.3)">
+<span class="num mono" style="background: #F0CA6E; color: #1B1508">1</span>
+<span style="font-size: 14px; font-weight: 600">Importe</span>
+<span style="font-size: 12px; line-height: 1.5; color: #A3A7AF">Importe seus vídeos e áudios.</span>
+</li>
+<li class="sub" style="padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<span class="num mono">2</span>
+<span style="font-size: 14px; font-weight: 600">Arrume pelo texto</span>
+<span style="font-size: 12px; line-height: 1.5; color: #A3A7AF">Selecione e arrume o texto para montar as cenas.</span>
+</li>
+<li class="sub" style="padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<span class="num mono">3</span>
+<span style="font-size: 14px; font-weight: 600">Revise e entregue</span>
+<span style="font-size: 12px; line-height: 1.5; color: #A3A7AF">Confira a prévia e exporte o resultado.</span>
+</li>
+</ol>
+</section>
+</main>
+
+<aside class="card" aria-label="Briefing" style="width: 420px; flex-shrink: 0; padding: 24px; display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 600">Briefing</h2>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #A3A7AF">Diga o que o vídeo precisa ser. A montagem usa isto para escolher e ordenar as cenas.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span class="ttl" id="tipo-label">Tipo</span>
+<div role="radiogroup" aria-labelledby="tipo-label" style="display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: #1C1E22; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)">
+<button role="radio" aria-checked="true" style="flex-grow: 1; height: 32px; border: 0; border-radius: 999px; background: #2A2D33; color: #F2F1EE; font-family: inherit; font-size: 13px; font-weight: 600">Briefing</button>
+<button role="radio" aria-checked="false" style="flex-grow: 1; height: 32px; border: 0; border-radius: 999px; background: transparent; color: #A3A7AF; font-family: inherit; font-size: 13px">Roteiro</button>
+</div>
+</div>
+
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0">
+<label for="briefing-texto" class="ttl">Texto</label>
+<textarea id="briefing-texto" class="field" placeholder="Ex.: vídeo-aula sobre edição textual, com gancho, método em três partes e fechamento com gancho pro próximo vídeo." style="flex-grow: 1; min-height: 0; padding: 14px; line-height: 1.55; resize: none"></textarea>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label for="briefing-alvo" class="ttl">Duração alvo</label>
+<div style="display: flex; align-items: center; gap: 10px">
+<div style="position: relative; width: 140px">
+<input id="briefing-alvo" class="field mono" value="60" style="height: 44px; padding: 0 36px 0 14px; font-size: 15px">
+<span class="mono" style="position: absolute; right: 14px; top: 13px; font-size: 13px; color: #A3A7AF">s</span>
+</div>
+<span style="font-size: 12px; color: #A3A7AF">1:00 de vídeo final</span>
+</div>
+</div>
+
+<button class="b" style="height: 44px; width: 100%">Guardar briefing</button>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

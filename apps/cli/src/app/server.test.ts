@@ -64,7 +64,16 @@ describe("startApp", () => {
     // O botão de legendas precisa existir na página: o server aceita
     // kind:"srt" no export, mas sem markup a rota é inalcançável pela UI.
     expect(html).toContain('data-export="srt"');
-    expect(html).toContain("legendas");
+    expect(html).toContain("Legendas");
+  });
+
+  it("o poll diz o nome da fonte para o cartão lateral", async () => {
+    const { base } = await boot();
+    const html = await (await fetch(`${base}/`)).text();
+    const jobId = /"([0-9a-f-]{36})"/.exec(html)![1];
+    const job = (await (await fetch(`${base}/jobs/${jobId}`)).json()) as { source?: string };
+    expect(typeof job.source).toBe("string");
+    expect(job.source).not.toContain("/");
   });
 
   it("serve o keeplist.js testado, não uma cópia", async () => {
@@ -331,10 +340,10 @@ describe("startApp", () => {
     expect(html).toContain('id="aviso"');
     expect(html).toContain("j.warning");
     expect(html).toContain("j.progress");
-    expect(html).toContain("vai cair (retake limpo)");
-    expect(html).toContain("olhe isto (sem substituto)");
-    expect(html).toContain("a transcrição leva alguns minutos");
-    expect(html).toContain("ouvir junção");
+    expect(html).toContain(">Vai cair</h3>");
+    expect(html).toContain(">Olhe isto</h3>");
+    expect(html).toContain("A transcrição leva alguns minutos.");
+    expect(html).toContain("Ouvir junção");
     expect(html).not.toContain("confirm(");
     expect(html).not.toContain("alert(");
   });

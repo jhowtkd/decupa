@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Entrega liberada</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0B0C0E;color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#F0CA6E}a:hover{color:#F6DC9A}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+.card{box-sizing:border-box;border-radius:16px;background:#151619;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),0 1px 2px rgba(0,0,0,.4),0 18px 40px rgba(0,0,0,.28)}
+.sub{box-sizing:border-box;border-radius:12px;background:#1C1E22}
+.ttl{margin:0;font-size:12px;font-weight:600;color:#A3A7AF}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px;color:#A3A7AF;white-space:nowrap}
+.pill-ok{background:rgba(159,201,178,.12);color:#9FC9B2}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border:0;border-radius:999px;background:rgba(255,255,255,.07);color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.b-p{background:#F0CA6E;color:#1B1508;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 6px 16px rgba(240,202,110,.18)}
+.ib{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:999px;background:transparent;color:#A3A7AF;cursor:pointer}
+.nav{display:flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:999px;color:#A3A7AF;text-decoration:none;font-size:13px}
+.num{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:22px;height:22px;box-sizing:border-box;padding:0 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:11px;font-weight:700}
+.file{display:flex;align-items:center;gap:12px;height:48px;padding:0 8px 0 12px;border-radius:10px;background:rgba(255,255,255,.03)}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 12px; display: flex; flex-direction: column; gap: 12px; background: #0B0C0E; overflow: hidden">
+
+<header style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 4px 0 10px">
+<div style="width: 380px; display: flex; align-items: center; gap: 10px">
+<svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="#F0CA6E"></path></svg>
+<span style="font-size: 16px; font-weight: 700; letter-spacing: -0.02em">decupa</span>
+<span style="width: 4px; height: 4px; margin: 0 4px; border-radius: 50%; background: #3A3D44"></span>
+<span style="font-size: 14px; font-weight: 500">Montagem principal</span>
+<span class="pill mono" style="height: 22px">v15</span>
+</div>
+<nav aria-label="Etapas" style="flex-grow: 1; display: flex; justify-content: center">
+<ol style="display: flex; align-items: center; gap: 2px; margin: 0; padding: 4px; list-style: none; border-radius: 999px; background: #151619; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)">
+<li><a href="#materiais" class="nav"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Materiais</a></li>
+<li><a href="#edicao" class="nav"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Edição</a></li>
+<li><a href="#revisao" class="nav"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Revisão</a></li>
+<li><a href="#entrega" class="nav" aria-current="step" style="background: #26282D; color: #F2F1EE; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)"><span style="width: 6px; height: 6px; border-radius: 50%; background: #F0CA6E"></span>Entrega</a></li>
+</ol>
+</nav>
+<div style="width: 380px; display: flex; align-items: center; justify-content: flex-end; gap: 10px">
+<span class="pill pill-ok" style="height: 32px; padding: 0 14px"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0"></path></svg>Entrega liberada</span>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: flex; gap: 12px">
+
+<aside class="card" aria-label="Projeto" style="width: 224px; flex-shrink: 0; padding: 16px 10px 10px; display: flex; flex-direction: column; gap: 22px">
+<section style="display: flex; flex-direction: column; gap: 4px">
+<h2 class="ttl" style="padding: 0 6px 4px">Materiais</h2>
+<div style="display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 10px">
+<svg width="44" height="28" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 6px"><rect width="160" height="90" fill="#202226"></rect><circle cx="80" cy="36" r="13" fill="#3A3D44"></circle><path d="M50 90 C50 65 64 56 80 56 C96 56 110 65 110 90 Z" fill="#3A3D44"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13px; font-weight: 500">fala.mp4</span><span class="mono" style="font-size: 11px; color: #A3A7AF">1:36 · fala</span></div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 10px">
+<svg width="44" height="28" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 6px"><rect width="160" height="90" fill="#1F262D"></rect><rect x="22" y="18" width="116" height="54" rx="4" fill="#33404D"></rect><rect x="30" y="26" width="36" height="38" rx="2" fill="#44546A"></rect><rect x="74" y="26" width="56" height="7" rx="2" fill="#4A5B70"></rect><rect x="74" y="39" width="42" height="7" rx="2" fill="#4A5B70"></rect></svg>
+<div style="display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13px; font-weight: 500">apoio.mp4</span><span class="mono" style="font-size: 11px; color: #A3A7AF">0:40 · apoio</span></div>
+</div>
+</section>
+
+<nav aria-label="Cenas" style="display: flex; flex-direction: column; gap: 2px">
+<h2 class="ttl" style="padding: 0 6px 6px">Cenas</h2>
+<a href="#cena-1" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px; border-radius: 10px; color: #F2F1EE; text-decoration: none; font-size: 13px"><span class="num mono">1</span><span style="flex-grow: 1">Gancho e promessa</span><span class="mono" style="font-size: 11px; color: #A3A7AF">0:00</span></a>
+<a href="#cena-2" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px; border-radius: 10px; color: #F2F1EE; text-decoration: none; font-size: 13px"><span class="num mono">2</span><span style="flex-grow: 1">Cortar × aparar</span><span class="mono" style="font-size: 11px; color: #A3A7AF">0:21</span></a>
+<a href="#cena-3" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px; border-radius: 10px; color: #F2F1EE; text-decoration: none; font-size: 13px"><span class="num mono">3</span><span style="flex-grow: 1">Fechamento</span><span class="mono" style="font-size: 11px; color: #A3A7AF">0:54</span></a>
+</nav>
+
+<div class="sub" style="margin-top: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: baseline; justify-content: space-between"><h2 class="ttl">Briefing</h2><a href="#briefing" style="font-size: 12px; font-weight: 600; text-decoration: none">Editar</a></div>
+<div style="display: flex; align-items: baseline; justify-content: space-between"><span class="mono" style="font-size: 20px; font-weight: 600; letter-spacing: -0.02em">1:13</span><span class="mono" style="font-size: 11px; color: #A3A7AF">alvo 1:00</span></div>
+<div style="display: flex; gap: 2px; height: 6px"><div style="width: 82%; border-radius: 999px 0 0 999px; background: #F2F1EE"></div><div style="flex-grow: 1; border-radius: 0 999px 999px 0; background: #EFAAA0"></div></div>
+<span style="font-size: 11px; color: #EFAAA0">13 s acima do alvo</span>
+</div>
+</aside>
+
+<main class="card" aria-labelledby="entrega-titulo" style="flex-grow: 1; min-width: 0; padding: 28px 36px; display: flex; flex-direction: column; gap: 20px; overflow: hidden">
+<header style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 12px">
+<h1 id="entrega-titulo" style="margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.02em">Entrega</h1>
+<span class="pill pill-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>v15 aprovada</span>
+</div>
+<p style="margin: 0; max-width: 560px; font-size: 13px; line-height: 1.55; color: #A3A7AF">A entrega vale para a v15. Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser assistida e aprovada.</p>
+<div style="display: flex; gap: 6px">
+<span class="pill"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Mídia presente</span>
+<span class="pill"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Seleção feita</span>
+<span class="pill"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Revisão pronta</span>
+</div>
+</header>
+
+<div class="sub" style="padding: 14px 14px 14px 16px; display: flex; align-items: center; gap: 14px; box-shadow: inset 0 0 0 1px rgba(240,202,110,.3)">
+<div style="width: 38px; height: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: rgba(240,202,110,.14); color: #F0CA6E"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="10" height="11.5" rx="2"></rect><path d="M6 2.5h4v2H6zM5.8 9l1.5 1.5 3-3"></path></svg></div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px"><span style="font-size: 14px; font-weight: 600">Conferência pendente</span><span style="font-size: 12px; line-height: 1.45; color: #A3A7AF">Importe a revisão 15 no Resolve e confira a timeline.</span></div>
+<button class="b b-p">Confirmar conferência</button>
+</div>
+
+<section aria-label="Arquivos da entrega" style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; padding: 0 2px 4px"><h2 class="ttl">Montagem preparada para o DaVinci</h2><span class="mono" style="font-size: 11px; color: #8A8F98">exports/15/</span></div>
+<div class="file"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#A3A7AF" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5v10h-8.5z"></path><path d="M9.5 1.5v3h3"></path></svg><span class="mono" style="width: 190px; font-size: 13px">timeline.otio</span><span style="flex-grow: 1; font-size: 12px; color: #A3A7AF">Timeline para importar no Resolve</span><button class="b" style="height: 30px; padding: 0 12px; font-size: 12px">Baixar</button></div>
+<div class="file"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#A3A7AF" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10" rx="2"></rect><path d="M6.5 6v4l3.5-2z"></path></svg><span class="mono" style="width: 190px; font-size: 13px">reference.mp4</span><span style="flex-grow: 1; font-size: 12px; color: #A3A7AF">Vídeo de referência da v15</span><button class="b" style="height: 30px; padding: 0 12px; font-size: 12px">Baixar</button></div>
+<div class="file"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#A3A7AF" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5v10h-8.5z"></path><path d="M6 8h4.5M6 10.5h4.5"></path></svg><span class="mono" style="width: 190px; font-size: 13px">importar-no-resolve.txt</span><span style="flex-grow: 1; font-size: 12px; color: #A3A7AF">Instruções de conferência</span><button class="b" style="height: 30px; padding: 0 12px; font-size: 12px">Baixar</button></div>
+<div class="file"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#A3A7AF" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5v10h-8.5z"></path><path d="M6.5 7.5L5.5 9l1 1.5M9.5 7.5l1 1.5-1 1.5"></path></svg><span class="mono" style="width: 190px; font-size: 13px">verificacao.json</span><span style="flex-grow: 1; font-size: 12px; color: #A3A7AF">Dados para conferir a importação</span><button class="b" style="height: 30px; padding: 0 12px; font-size: 12px">Baixar</button></div>
+</section>
+
+<div class="sub" style="padding: 10px 10px 10px 16px; display: flex; align-items: center; gap: 12px">
+<span class="ttl">Formato</span>
+<span class="mono" style="font-size: 13px">1280×720 horizontal · 25 fps</span>
+<span style="flex-grow: 1; font-size: 12px; color: #A3A7AF">da fonte fala.mp4</span>
+<button class="b" style="height: 30px; padding: 0 12px; font-size: 12px">Alterar formato</button>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<section class="sub" aria-label="Resolve gratuito" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 600">Resolve gratuito</h2>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.45; color: #A3A7AF">
+<li style="display: flex; gap: 8px"><span class="mono" style="color: #F2F1EE">1</span>Baixe a timeline.otio.</li>
+<li style="display: flex; gap: 8px"><span class="mono" style="color: #F2F1EE">2</span><span>No Resolve: <span class="mono" style="color: #F2F1EE">File → Import → Timeline</span>.</span></li>
+<li style="display: flex; gap: 8px"><span class="mono" style="color: #F2F1EE">3</span><span><span class="mono" style="color: #F2F1EE">File → Export Project</span> salva o .drp nativo.</span></li>
+</ol>
+</section>
+<section class="sub" aria-label="Resolve Studio" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 8px"><h2 style="margin: 0; font-size: 13px; font-weight: 600">Resolve Studio</h2><span class="pill" style="height: 20px; font-size: 11px">automático</span></div>
+<p style="margin: 0; font-size: 12px; line-height: 1.45; color: #A3A7AF">Requer o Resolve Studio aberto, com scripting local habilitado.</p>
+<div style="display: flex; gap: 8px; margin-top: auto"><button class="b" style="height: 32px; padding: 0 14px; font-size: 12px">Abrir no DaVinci</button><button class="b" style="height: 32px; padding: 0 14px; font-size: 12px">Exportar .drp</button></div>
+</section>
+</div>
+<p style="margin: -6px 2px 0; font-size: 11px; color: #8A8F98">O .drp depende dos arquivos de mídia originais.</p>
+</main>
+
+<aside class="card" aria-label="Monitor" style="width: 520px; flex-shrink: 0; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<div style="position: relative; width: 488px; height: 274px; flex-shrink: 0; border-radius: 12px; overflow: hidden; background: radial-gradient(120% 90% at 50% 28%, #2C2F35 0%, #17181B 55%, #0E0F11 100%)">
+<svg width="488" height="274" viewBox="0 0 512 288" aria-hidden="true" style="display: block"><circle cx="256" cy="116" r="40" fill="#33363D"></circle><path d="M160 288 C160 212 204 184 256 184 C308 184 352 212 352 288 Z" fill="#33363D"></path></svg>
+<span class="pill mono" style="position: absolute; left: 12px; top: 12px; background: rgba(11,12,14,.72); color: #F2F1EE">Prévia v15</span>
+<div style="position: absolute; left: 14px; right: 14px; bottom: 14px; height: 4px; border-radius: 999px; background: #9FC9B2"></div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 12px">
+<button aria-label="Tocar" style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: #F2F1EE; color: #0B0C0E"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"></path></svg></button>
+<span class="mono" style="font-size: 15px">1:13,1 <span style="color: #A3A7AF">/ 1:13,1</span></span>
+<span style="flex-grow: 1"></span>
+<span class="pill mono" style="font-size: 11px">1280×720 · 25 fps</span>
+</div>
+
+<div class="sub" style="padding: 14px; display: flex; align-items: center; gap: 12px">
+<svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true" style="flex-shrink: 0"><circle cx="22" cy="22" r="19" fill="none" stroke="#9FC9B2" stroke-width="4"></circle><path d="M15 22.5l4.5 4.3 9.5-9.6" fill="none" stroke="#9FC9B2" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 14px; font-weight: 600">Prévia aprovada</span><span style="font-size: 12px; color: #A3A7AF">v15 · assistida até o fim</span></div>
+</div>
+
+<section aria-label="Sequência" style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: baseline; justify-content: space-between"><h2 class="ttl">Sequência</h2><span class="mono" style="font-size: 11px; color: #A3A7AF">3 cenas · 1 apoio · 1:13,1</span></div>
+<div style="position: relative; width: 488px; height: 56px">
+<div title="apoio.mp4 · 4,0 s" style="position: absolute; left: 294px; top: 0; width: 27px; height: 8px; border-radius: 999px; background: #7F93A8"></div>
+<div style="position: absolute; left: 0; top: 14px; width: 141px; height: 42px; box-sizing: border-box; padding: 7px 9px; border-radius: 8px; background: #22252A; display: flex; flex-direction: column; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden">Gancho e promessa</span><span class="mono" style="font-size: 10px; color: #A3A7AF">21,3 s</span></div>
+<div style="position: absolute; left: 144px; top: 14px; width: 217px; height: 42px; box-sizing: border-box; padding: 7px 9px; border-radius: 8px; background: #22252A; display: flex; flex-direction: column; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden">Cortar × aparar</span><span class="mono" style="font-size: 10px; color: #A3A7AF">32,9 s</span></div>
+<div style="position: absolute; left: 364px; top: 14px; width: 124px; height: 42px; box-sizing: border-box; padding: 7px 9px; border-radius: 8px; background: #22252A; display: flex; flex-direction: column; justify-content: space-between"><span style="font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden">Fechamento</span><span class="mono" style="font-size: 10px; color: #A3A7AF">18,9 s</span></div>
+</div>
+</section>
+
+<section aria-label="Histórico" style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+<h2 class="ttl">Histórico desta entrega</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 6px"><span class="pill mono" style="font-size: 11px">versão 15</span><span class="pill mono" style="font-size: 11px">prévia 15</span><span class="pill mono pill-ok" style="font-size: 11px">aprovada 15</span><span class="pill mono" style="font-size: 11px">formato 1280×720</span></div>
+</section>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

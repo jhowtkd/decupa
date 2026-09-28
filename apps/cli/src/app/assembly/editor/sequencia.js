@@ -4,8 +4,10 @@
 // ratio, arraste faz scrub com throttle e o playhead acende bloco + linha.
 // O waveform (Task 8) compõe os trechos retidos sobre cada bloco de cena
 // num <canvas>; apoio não entra (não tem áudio próprio) e sem peaks a
-// faixa segue só com os blocos. O desfazer mora na faixa de transporte
-// (botão ⎌ discreto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
+// faixa segue só com os blocos. O desfazer mora no cabeçalho do texto
+// (botão de desfazer no cabeçalho do texto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
+import { clock, clockPrecise } from "./format.js";
+import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
 
 /**
@@ -161,6 +163,32 @@ export const SCRUB_THROTTLE_MS = 60;
 /** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
 let undoKeyBound = false;
 
+/**
+ * Um pedido por vez (pura): enquanto a promessa de `run` não assenta, novas
+ * chamadas são ignoradas. `onChange(busy)` avisa quem pinta o controle; a
+ * liberação vale para sucesso e erro. Sem promessa (nada a fazer), não trava.
+ * @param {(...args: any[]) => any} run
+ * @param {(busy: boolean) => void} [onChange]
+ */
+export function singleFlight(run, onChange = () => {}) {
+  let busy = false;
+  const call = (...args) => {
+    if (busy) return undefined;
+    const pending = run(...args);
+    if (!pending || typeof pending.then !== "function") return pending;
+    busy = true;
+    onChange(true);
+    const settle = () => {
+      busy = false;
+      onChange(false);
+    };
+    pending.then(settle, settle);
+    return pending;
+  };
+  call.busy = () => busy;
+  return call;
+}
+
 function esc(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -174,44 +202,51 @@ function esc(text) {
 export function mountSequencia({ state, api, player }) {
   const root = () => document.getElementById("faixa");
 
-  /** Desfaz a última edição (mesmo POST do antigo botão do contexto). */
-  function undoEdit() {
+  /**
+   * Desfaz a última edição (mesmo POST do antigo botão do contexto). Clique e
+   * Cmd+Z passam por aqui: com um pedido em voo, o segundo é ignorado.
+   */
+  const undoEdit = singleFlight(() => {
     const p = state.get("project");
-    if (!p || state.get("undoRevision") == null) return;
-    void api.call("/project/undo", {
+    if (!p || state.get("undoRevision") == null) return undefined;
+    return api.call("/project/undo", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
       label: "Desfazendo…",
     });
-  }
+  }, () => placeUndo(state.get("project")));
 
-  /** Faixa de transporte: botão ⎌ discreto ao lado da faixa, sem revisão 0. */
-  function transportRow(p) {
-    const bar = document.createElement("div");
-    bar.className = "seq-transport";
-    bar.style.cssText = "display:flex;gap:8px;align-items:center;";
-    const undo = document.createElement("button");
-    undo.type = "button";
-    undo.id = "undo";
-    undo.textContent = "⎌ Desfazer";
-    undo.setAttribute("aria-label", "Desfazer edição");
-    undo.title = "Desfazer edição";
-    undo.disabled = !p || state.get("undoRevision") == null;
-    if (undo.disabled) undo.title = "Nenhuma alteração com histórico para desfazer";
-    undo.onclick = undoEdit;
-    bar.appendChild(undo);
-    return bar;
+  /** Desfazer mora no cabeçalho do texto: é o gesto de quem edita pelo texto. */
+  function placeUndo(p) {
+    let undo = document.getElementById("undo");
+    if (!undo) {
+      undo = document.createElement("button");
+      undo.type = "button";
+      undo.id = "undo";
+      undo.className = "icon";
+      undo.innerHTML = ICON.undo;
+      undo.setAttribute("aria-label", "Desfazer edição");
+      undo.onclick = () => void undoEdit();
+      (document.getElementById("undoSlot") || root()).appendChild(undo);
+    }
+    const busy = undoEdit.busy();
+    undo.disabled = !p || state.get("undoRevision") == null || busy;
+    undo.setAttribute("aria-busy", String(busy));
+    undo.title = busy ? "Desfazendo…"
+      : undo.disabled ? "Nenhuma alteração com histórico para desfazer" : "Desfazer edição";
   }
 
   let signature = "";
   function render(p) {
+    // O botão vive fora da faixa: atualiza mesmo quando o desenho não muda.
+    placeUndo(p);
     const next = JSON.stringify(p && [p.revision, p.scenes, p.assembly.sources, p.captions]);
     if (next === signature) return;
     signature = next;
     const el = root();
     if (!el) return;
     if (!p) {
-      el.replaceChildren(transportRow(null));
+      el.replaceChildren();
       return;
     }
     const blocks = timelineBlocks(p);
@@ -220,20 +255,21 @@ export function mountSequencia({ state, api, player }) {
     const head = document.createElement("div");
     head.className = "faixa-head";
     const label = document.createElement("span");
-    label.className = "panel-label";
-    label.textContent = "Timeline";
-    const total = document.createElement("span");
-    total.className = "data total";
-    total.textContent = formatTimecode(duration);
-    head.append(label, total);
+    label.className = "ttl";
+    label.textContent = "Sequência";
     const count = document.createElement("span");
-    count.className = "muted";
-    count.textContent = p.scenes.length + " cenas · " + p.assembly.sources.filter((source) => source.included).length + " materiais";
-    head.append(count, transportRow(p));
+    count.className = "count";
+    const supports = blocks.filter((block) => block.kind === "support").length;
+    count.textContent = p.scenes.length + (p.scenes.length === 1 ? " cena" : " cenas")
+      + (supports ? " · " + supports + (supports === 1 ? " apoio" : " apoios") : "");
+    const total = document.createElement("span");
+    total.className = "mono total";
+    total.textContent = clockPrecise(duration);
+    head.append(label, count, total);
     if (!blocks.length) {
       const empty = document.createElement("div");
       empty.className = "timeline-empty";
-      empty.innerHTML = '<span aria-hidden="true">▤</span><div><strong>Sua sequência aparece aqui</strong><p>Prepare os materiais para criar o primeiro corte.</p></div>';
+      empty.innerHTML = '<div><strong>Sua sequência aparece aqui</strong><p>Prepare os materiais para criar o primeiro corte.</p></div>';
       el.replaceChildren(head, empty);
       return;
     }
@@ -245,7 +281,7 @@ export function mountSequencia({ state, api, player }) {
     const ticks = rulerTicks(duration);
     ticks.forEach((t, i) => {
       const s = document.createElement("span");
-      s.textContent = formatTimecode(t);
+      s.textContent = clock(t);
       s.style.left = duration > 0 ? ((t / duration) * 100).toFixed(3) + "%" : "0%";
       if (i === 0 || i === ticks.length - 1) s.style.transform = "none";
       ruler.append(s);
@@ -253,7 +289,7 @@ export function mountSequencia({ state, api, player }) {
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     // Layout crítico inline (o tema segue em page.css, fora desta tarefa).
-    strip.style.cssText = "position:relative;width:100%;min-height:154px;cursor:pointer;";
+    strip.style.cssText = "position:relative;width:100%;cursor:pointer;";
     strip.setAttribute("role", "slider");
     strip.setAttribute("aria-label", "Sequência da montagem");
     strip.setAttribute("aria-valuemin", "0");
@@ -278,7 +314,7 @@ export function mountSequencia({ state, api, player }) {
         + ' title="' + esc(title) + '"'
         + ' style="width:' + width.toFixed(3) + '%;' + pos + '">'
         + thumb + '<span class="clip-label">' + esc(block.label) + "</span>" + wave
-        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + "s</span>"
+        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + " s</span>"
         + "</div>";
     }).join("")
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
@@ -402,7 +438,7 @@ export function mountSequencia({ state, api, player }) {
     // Chip de timecode acima da linha (recriado a cada render da faixa).
     let chip = line.querySelector(".t");
     if (!chip) { chip = document.createElement("span"); chip.className = "t"; line.append(chip); }
-    if (valid) chip.textContent = formatTimecode(playhead);
+    if (valid) chip.textContent = clockPrecise(playhead);
     const hit = valid ? blocksAt(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-bloco")) {
       const on = !!hit && node.dataset.scene === hit.sceneId && node.dataset.kind === hit.kind;
@@ -501,7 +537,7 @@ export function mountSequencia({ state, api, player }) {
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       }
       ev.preventDefault();
-      undoEdit();
+      void undoEdit();
     });
   }
 

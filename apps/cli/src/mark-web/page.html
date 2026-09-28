@@ -14,147 +14,121 @@
     --warn: var(--red); --ok: var(--green);
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
     --sans-ui: system-ui, -apple-system, sans-serif;
+    /* Painéis flutuantes (2026-09-26). */
+    --ground: #0B0C0E; --card: #151619; --card-2: #1C1E22;
+    --hairline: rgb(255 255 255 / .06); --tint: rgb(255 255 255 / .06); --tint-strong: rgb(255 255 255 / .1);
+    --prose-ink: #ECEAE5; --slate: #7F93A8;
+    --accent-tint: rgb(240 202 110 / .14); --red-tint: rgb(239 170 160 / .12); --green-tint: rgb(159 201 178 / .12);
+    --radius-card: 16px; --radius-sub: 12px; --radius-pill: 999px;
+    --shadow-card: inset 0 0 0 1px var(--hairline), 0 1px 2px rgb(0 0 0 / .4), 0 18px 40px rgb(0 0 0 / .28);
+    --gap: 12px;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg-0); color: var(--ink);
-    font: 14px/1.5 var(--sans-ui);
-    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
-  }
-  header {
-    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
-    border-bottom: 1px solid var(--line); background: var(--bg-1); flex: none;
-  }
-  header .name { font-weight: 600; font-size: 13px; }
-  header .count {
-    color: var(--muted); font-family: var(--mono); font-size: 13px;
-    font-variant-numeric: tabular-nums;
-  }
-  header .count b { color: var(--accent); font-size: 15px; font-weight: 600; }
-  header .spacer { flex: 1; }
-  button {
-    display: inline-flex; align-items: center; gap: 6px;
-    height: 32px; padding: 0 12px; border-radius: 6px;
-    font: 600 13px/1 var(--sans-ui, system-ui); color: var(--ink);
-    background: var(--bg-2); border: 1px solid var(--line-strong); cursor: pointer;
-  }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  body { margin: 0; height: 100vh; overflow: hidden; padding: var(--gap); display: flex; flex-direction: column; gap: var(--gap); background: var(--ground); color: var(--ink); font: 14px/1.5 var(--sans-ui); -webkit-font-smoothing: antialiased; }
+  .card { border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow-card); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: var(--radius-pill); background: var(--tint); font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .spacer { flex: 1; }
+  header { height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 4px 0 10px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; letter-spacing: -.02em; }
+  .brand-mark { color: var(--accent); }
+  header .sep { width: 4px; height: 4px; margin: 0 4px; border-radius: 50%; background: #3A3D44; }
+  .crumb { font-size: 14px; font-weight: 500; }
+  header .count b { color: var(--accent); font-weight: 700; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: var(--radius-pill); background: rgb(255 255 255 / .07); color: var(--ink); font: 600 13px/1 var(--sans-ui); cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--tint-strong); }
+  button.primary { background: var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / .35), 0 6px 16px rgb(240 202 110 / .18); }
+  button.quiet { background: transparent; color: var(--muted); font-weight: 500; }
   button:disabled { opacity: .45; cursor: default; }
   button:active:not(:disabled) { transform: translateY(1px); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  /* O vídeo é referência (40% à esquerda, com as marcas); a onda com zoom é o hero (60%). */
-  main {
-    flex: 1; display: grid; min-height: 0;
-    grid-template-columns: 2fr 3fr;
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas: "video stage" "marks stage";
-    gap: 20px; padding: 18px 20px;
-  }
-  main > video {
-    grid-area: video; width: 100%; height: auto; max-height: 44vh;
-    border-radius: 8px; background: #000; display: block; align-self: start;
-  }
-  .right {
-    grid-area: stage; display: flex; flex-direction: column; gap: 12px;
-    min-width: 0; min-height: 0;
-  }
+  .kbd-hint { font: 600 11px var(--mono); opacity: .7; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 440px minmax(0, 1fr); gap: var(--gap); }
+  .left { padding: 16px; display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+  .left video { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-sub); background: #0E0F11; display: block; }
+  .right { padding: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
   body.is-loading canvas { opacity: .35; pointer-events: none; }
   #loading { color: var(--muted); font-size: 12.5px; }
   body:not(.is-loading) #loading { display: none; }
-  #marks-wrap { grid-area: marks; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-  #marks-wrap .lbl {
-    font: 600 10.5px var(--sans-ui); letter-spacing: .08em; text-transform: uppercase;
-    color: var(--muted);
-  }
-  #marks {
-    list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0;
-    font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums;
-  }
-  #marks li { padding: 5px 8px; border-radius: 4px; cursor: pointer; }
-  #marks li:hover { background: #ffffff0d; }
-  #marks li.current { color: var(--accent); background: #f2c23014; }
-  #marks .empty { color: var(--muted); cursor: default; }
-  .readout {
-    display: flex; align-items: baseline; gap: 24px;
-    font-family: var(--mono); font-variant-numeric: tabular-nums;
-  }
-  .readout .big { font-size: 30px; font-weight: 600; letter-spacing: -.02em; }
-  .readout .lbl {
-    font: 600 10.5px var(--sans-ui); letter-spacing: .08em; text-transform: uppercase;
-    color: var(--muted);
-  }
-  .readout .loop { color: var(--ok); font-family: var(--sans-ui); font-size: 12.5px; }
-  .readout .loop.off { color: var(--muted); }
-  canvas {
-    display: block; width: 100%; border-radius: 8px;
-    background: var(--bg-1); border: 1px solid var(--line); cursor: crosshair;
-  }
+  .lbl { font: 600 12px var(--sans-ui); color: var(--muted); }
+  #marks-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  .marks-head { padding: 0 6px; }
+  #marks { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; font: 13px var(--mono); }
+  #marks .mark-go, #marks .empty { display: flex; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 10px; border-radius: 10px; }
+  #marks .mark-go { justify-content: flex-start; background: transparent; color: inherit; font: 13px var(--mono); font-variant-numeric: tabular-nums; }
+  #marks .mark-go:hover:not(:disabled) { background: var(--tint); }
+  #marks .n { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: var(--radius-pill); background: rgb(255 255 255 / .08); font-size: 11px; font-weight: 700; }
+  #marks li.current .mark-go { background: var(--accent-tint); box-shadow: inset 0 0 0 1px rgb(240 202 110 / .35); color: var(--accent); }
+  #marks li.current .n { background: var(--accent); color: var(--on-accent); }
+  #marks .delta { margin-left: auto; font: 11px var(--sans-ui); color: #D9C08A; }
+  #marks .empty { color: var(--muted); }
+  .blind { margin: 0; padding: 12px 14px; border-radius: var(--radius-sub); background: rgb(255 255 255 / .03); font-size: 12px; line-height: 1.5; color: var(--muted); }
+  .readout { display: flex; align-items: flex-end; gap: 32px; }
+  .readout .big { font: 600 44px/1 var(--mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .readout .total { font: 20px var(--mono); color: var(--muted); }
+  .readout .loop { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: var(--radius-pill); background: var(--green-tint); color: var(--green); font-size: 12px; }
+  .readout .loop.off { background: var(--tint); color: var(--muted); }
+  canvas { display: block; width: 100%; border-radius: var(--radius-sub); background: var(--card-2); cursor: crosshair; }
   #zoom { flex: 1; min-height: 180px; }
-  #overview { flex: none; height: 62px; }
-  .hint { color: var(--muted); font-size: 12.5px; max-width: 46ch; }
-
-  footer {
-    flex: none; background: var(--bg-1); border-top: 1px solid var(--line);
-    padding: 9px 18px; display: flex; flex-wrap: wrap; gap: 6px 22px;
-    font-size: 12.5px; color: var(--muted);
-  }
-  kbd {
-    font-family: var(--mono); font-size: 11px; color: var(--ink);
-    background: var(--bg-2); border: 1px solid var(--line-strong); border-bottom-width: 2px;
-    border-radius: 4px; padding: 1px 6px;
-  }
-  #toast {
-    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
-    background: var(--ok); color: #10201a; font-weight: 600; font-size: 13px;
-    padding: 10px 20px; border-radius: 6px; opacity: 0; transition: opacity .2s;
-    pointer-events: none;
-  }
+  #overview { flex: none; height: 56px; border-radius: 10px; }
+  .hint { color: var(--muted); font-size: 13px; max-width: 60ch; }
+  footer { flex: none; align-self: center; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; padding: 10px 20px; border-radius: var(--radius-pill); background: var(--card); box-shadow: inset 0 0 0 1px var(--hairline); font-size: 12px; color: var(--muted); }
+  kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 6px; background: #26282D; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08), inset 0 -1px 0 rgb(0 0 0 / .5); font: 11px var(--mono); color: var(--ink); }
+  #toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); padding: 10px 20px; border-radius: var(--radius-pill); background: var(--ok); color: #10201a; font-weight: 600; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   #toast.show { opacity: 1; }
   #toast.err { background: var(--warn); color: #2a1410; }
+  /* Tela estreita: cabeçalho em linhas, onda em cima da referência, e a página rola. */
+  @media (max-width: 700px) {
+    body { height: auto; min-height: 100vh; overflow: auto; }
+    header { height: auto; flex-wrap: wrap; padding: 0; }
+    header .spacer { flex-basis: 100%; }
+    main { grid-template-columns: minmax(0, 1fr); }
+    .right { order: -1; padding: 16px; }
+    .readout { flex-wrap: wrap; gap: 12px 24px; }
+    .readout .big { font-size: 32px; }
+    #zoom { flex: none; height: 220px; }
+    #marks-wrap { flex: none; }
+    footer { align-self: stretch; border-radius: var(--radius-sub); }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
 </style>
 </head>
 <body class="is-loading">
 
 <header>
-  <span class="name" id="name">…</span>
-  <span class="count"><b id="count">0</b> marcas</span>
+  <strong class="brand"><svg class="brand-mark" width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="currentColor"/></svg>decupa</strong>
+  <span class="sep" aria-hidden="true"></span>
+  <span class="crumb">Marcar fronteiras</span>
+  <span class="pill mono name" id="name">…</span>
+  <span class="pill mono count"><b id="count">0</b> marcas</span>
   <span class="spacer"></span>
   <button id="mark" disabled>Marcar aqui</button>
-  <button id="undo" disabled>Desfazer</button>
-  <button id="save" class="primary" disabled>Salvar</button>
+  <button id="undo" class="quiet" disabled>Apagar a mais próxima</button>
+  <button id="save" class="primary" disabled>Salvar<span class="kbd-hint">⌘S</span></button>
 </header>
-
 <main>
-  <video id="video" preload="auto" playsinline></video>
-  <div class="right">
-    <div id="loading">carregando vídeo e forma de onda…</div>
+  <aside class="card left" aria-label="Referência">
+    <video id="video" preload="auto" playsinline></video>
+    <div id="marks-wrap">
+      <div class="marks-head"><span class="lbl">Marcas</span></div>
+      <ul id="marks"></ul>
+    </div>
+    <p class="blind">Medição às cegas: a tela não mostra transcrição nem palpite de posição.</p>
+  </aside>
+  <section class="card right" aria-label="Onda">
+    <div id="loading">Carregando vídeo e forma de onda…</div>
     <div class="readout">
-      <div>
-        <div class="lbl">cursor</div>
-        <div class="big" id="cursor">0 ms</div>
-      </div>
-      <div>
-        <div class="lbl">de</div>
-        <div class="big" id="total">—</div>
-      </div>
-      <div class="loop off" id="loopState">loop parado</div>
+      <div><div class="lbl">Cursor</div><div class="big" id="cursor">0 ms</div></div>
+      <div><div class="lbl">De</div><div class="total" id="total">—</div></div>
+      <span class="spacer"></span>
+      <div class="loop off" id="loopState">Loop parado</div>
     </div>
     <canvas id="zoom"></canvas>
-    <div class="hint">
-      Clique na onda para mover o cursor. A palavra começa onde a energia sobe;
-      use o ouvido para confirmar.
-    </div>
+    <div class="hint">Clique na onda para mover o cursor. A palavra começa onde a energia sobe; use o ouvido para confirmar.</div>
     <canvas id="overview"></canvas>
-  </div>
-  <div id="marks-wrap">
-    <div class="lbl">marcas</div>
-    <ul id="marks"></ul>
-  </div>
+  </section>
 </main>
-
-<footer>
+<footer aria-label="Atalhos">
   <span><kbd>espaço</kbd> tocar em loop a partir do cursor</span>
   <span><kbd>←</kbd><kbd>→</kbd> ±10 ms</span>
   <span><kbd>⇧←</kbd><kbd>⇧→</kbd> ±50 ms</span>
@@ -187,6 +161,17 @@ let looping = false;
 let saved = false;
 
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+// <nearest>
+function nearestIndex(marks, cursorMs) {
+  if (marks.length === 0) return -1;
+  let best = 0;
+  for (let i = 1; i < marks.length; i++) {
+    if (Math.abs(marks[i] - cursorMs) < Math.abs(marks[best] - cursorMs)) best = i;
+  }
+  return best;
+}
+// </nearest>
+const fmtDelta = (ms) => (ms >= 0 ? "+" : "−") + Math.abs(Math.round(ms)) + " ms";
 
 function toast(message, isError) {
   const node = el("toast");
@@ -235,7 +220,7 @@ function drawZoom() {
   const xOf = (ms) => ((ms - fromMs) / (toMs - fromMs)) * width;
 
   // régua a cada 100 ms, com marca forte no segundo cheio
-  ctx.strokeStyle = "#232c31";
+  ctx.strokeStyle = "#2C2F35";
   ctx.beginPath();
   for (let ms = Math.ceil(fromMs / 100) * 100; ms < toMs; ms += 100) {
     const x = Math.round(xOf(ms)) + 0.5;
@@ -244,25 +229,26 @@ function drawZoom() {
   }
   ctx.stroke();
 
-  drawWave(ctx, width, height, fromMs, toMs, "#5d7480");
+  drawWave(ctx, width, height, fromMs, toMs, "#8FB3A3");
 
-  // marcas já feitas
-  ctx.strokeStyle = "#f2c230";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (const m of marks) {
-    if (m < fromMs || m > toMs) continue;
+  // marcas já feitas: a mais próxima do cursor em dourado, as outras claras
+  const near = nearestIndex(marks, cursorMs);
+  marks.forEach((m, i) => {
+    if (m < fromMs || m > toMs) return;
+    ctx.strokeStyle = i === near ? "#F0CA6E" : "rgba(242,241,238,.45)";
+    ctx.lineWidth = i === near ? 2 : 1.5;
+    ctx.beginPath();
     const x = Math.round(xOf(m)) + 0.5;
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
-  }
-  ctx.stroke();
+    ctx.stroke();
+  });
 
   // cabeça de reprodução
   if (looping) {
     const playMs = video.currentTime * 1000;
     if (playMs >= fromMs && playMs <= toMs) {
-      ctx.strokeStyle = "#63be97";
+      ctx.strokeStyle = "#9FC9B2";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(Math.round(xOf(playMs)) + 0.5, 0);
@@ -272,7 +258,7 @@ function drawZoom() {
   }
 
   // cursor, sempre no centro
-  ctx.strokeStyle = "#e4e9e5";
+  ctx.strokeStyle = "#F0F0ED";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(Math.round(width / 2) + 0.5, 0);
@@ -283,14 +269,14 @@ function drawZoom() {
 function drawOverview() {
   const { ctx, width, height } = fitCanvas(overview);
   ctx.clearRect(0, 0, width, height);
-  drawWave(ctx, width, height, 0, durationMs, "#3c484e");
+  drawWave(ctx, width, height, 0, durationMs, "#4E6158");
 
   const xOf = (ms) => (ms / durationMs) * width;
 
-  ctx.fillStyle = "rgba(242,194,48,.16)";
+  ctx.fillStyle = "rgba(240,202,110,.16)";
   ctx.fillRect(xOf(cursorMs - ZOOM_HALF_MS), 0, (ZOOM_HALF_MS * 2 / durationMs) * width, height);
 
-  ctx.strokeStyle = "#f2c230";
+  ctx.strokeStyle = "#F0CA6E";
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (const m of marks) {
@@ -299,7 +285,7 @@ function drawOverview() {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = "#e4e9e5";
+  ctx.strokeStyle = "#F0F0ED";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(Math.round(xOf(cursorMs)) + 0.5, 0);
@@ -313,36 +299,60 @@ function fmtMark(ms) {
   const m = Math.floor(s / 60);
   const rem = s % 60;
   const frac = total % 1000;
-  return `${m}:${String(rem).padStart(2, "0")}.${String(frac).padStart(3, "0")}`;
+  return `${m}:${String(rem).padStart(2, "0")},${String(frac).padStart(3, "0")}`;
 }
 
 function renderMarks() {
   const list = el("marks");
+  // O foco numa marca sobrevive ao redesenho da lista (cursor mudou, lista refeita).
+  const focused = document.activeElement?.closest?.("#marks .mark-go")?.dataset.index;
   list.replaceChildren();
   if (marks.length === 0) {
     const empty = document.createElement("li");
     empty.className = "empty";
-    empty.textContent = "nenhuma ainda";
+    empty.textContent = "Nenhuma ainda";
     list.append(empty);
     return;
   }
-  let nearest = 0;
-  for (let i = 1; i < marks.length; i++) {
-    if (Math.abs(marks[i] - cursorMs) < Math.abs(marks[nearest] - cursorMs)) nearest = i;
-  }
+  const nearest = nearestIndex(marks, cursorMs);
   marks.forEach((ms, i) => {
     const li = document.createElement("li");
-    li.textContent = fmtMark(ms);
-    if (i === nearest) li.className = "current";
-    li.addEventListener("click", () => setCursor(ms));
+    // Cada marca é um botão: leva o cursor até ela, com foco e teclado.
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "mark-go";
+    go.dataset.index = String(i);
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = String(i + 1);
+    const t = document.createElement("span");
+    t.textContent = fmtMark(ms);
+    go.append(n, t);
+    let label = "Ir para a marca " + (i + 1) + ", " + fmtMark(ms);
+    if (i === nearest) {
+      li.className = "current";
+      const d = document.createElement("span");
+      d.className = "delta";
+      d.textContent = "mais próxima · " + fmtDelta(ms - cursorMs);
+      go.append(d);
+      label += ", mais próxima do cursor";
+    }
+    go.setAttribute("aria-label", label);
+    go.addEventListener("click", (ev) => {
+      setCursor(ms);
+      // Clique de mouse não prende o foco: o Enter seguinte volta a marcar.
+      if (ev.detail > 0) document.activeElement?.blur?.();
+    });
+    li.append(go);
     list.append(li);
   });
+  if (focused != null) list.querySelector('[data-index="' + focused + '"]')?.focus();
 }
 
 function render() {
   el("cursor").textContent = `${Math.round(cursorMs)} ms`;
   el("count").textContent = String(marks.length);
-  el("loopState").textContent = looping ? "tocando em loop" : "loop parado";
+  el("loopState").textContent = looping ? "Tocando em loop" : "Loop parado";
   el("loopState").className = looping ? "loop" : "loop off";
   el("undo").disabled = marks.length === 0;
   renderMarks();
@@ -377,17 +387,14 @@ function addMark() {
 
 function removeNearest() {
   if (marks.length === 0) return;
-  let best = 0;
-  for (let i = 1; i < marks.length; i++) {
-    if (Math.abs(marks[i] - cursorMs) < Math.abs(marks[best] - cursorMs)) best = i;
-  }
+  const best = nearestIndex(marks, cursorMs);
   marks = marks.filter((_, i) => i !== best);
   render();
 }
 
 async function save() {
   if (marks.length === 0) {
-    toast("marque pelo menos uma fronteira antes de salvar", true);
+    toast("Marque pelo menos uma fronteira antes de salvar", true);
     return;
   }
   el("save").disabled = true;
@@ -398,9 +405,9 @@ async function save() {
       body: JSON.stringify({ boundariesMs: marks }),
     });
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || "falhou ao salvar");
+    if (!res.ok) throw new Error(body.error || "Falhou ao salvar");
     saved = true;
-    toast(`${body.count} marcas salvas — pode fechar a aba`);
+    toast(`${body.count} marcas salvas. Pode fechar a aba.`);
   } catch (error) {
     el("save").disabled = false;
     toast(String(error.message || error), true);
@@ -434,14 +441,27 @@ overview.addEventListener("pointerdown", (e) => {
   setCursor(canvasTime(overview, e, 0, durationMs));
 });
 el("save").addEventListener("click", save);
-el("undo").addEventListener("click", removeNearest);
+el("undo").addEventListener("click", (ev) => {
+  removeNearest();
+  // Clique de mouse não prende o foco: o Enter seguinte volta a marcar.
+  if (ev.detail > 0) el("undo").blur();
+});
 el("mark").addEventListener("click", () => { addMark(); el("mark").blur(); });
+
+// Enter e espaço num controle (botão, link, campo) ficam com a ativação nativa;
+// os atalhos de tecla valem quando o foco não está num controle. Num campo de
+// texto nenhum atalho age: setas e apagar são da edição.
+const CONTROL = "button, a[href], input, textarea, select, [contenteditable]";
+const FIELD = "input, textarea, select, [contenteditable]";
 
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault(); save(); return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if ((e.key === "Enter" || e.key === " ") && target?.closest(CONTROL)) return;
+  if (target?.closest(FIELD)) return;
 
   switch (e.key) {
     case " ": if (!el("mark").disabled) { e.preventDefault(); toggleLoop(); } break;
@@ -472,7 +492,7 @@ window.addEventListener("beforeunload", (e) => {
   displayGain = loudest > 0 ? clamp(0.92 / loudest, 1, 24) : 1;
   durationMs = meta.durationMs;
   el("name").textContent = meta.name;
-  el("total").textContent = `${(durationMs / 1000).toFixed(1)} s`;
+  el("total").textContent = (durationMs / 1000).toFixed(1).replace(".", ",") + " s";
   video.src = "/media";
   await new Promise((resolve) => {
     video.addEventListener("loadeddata", resolve, { once: true });

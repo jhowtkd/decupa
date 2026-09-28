@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Montagem preparando</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0B0C0E;color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#F0CA6E}a:hover{color:#F6DC9A}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+.card{box-sizing:border-box;border-radius:16px;background:#151619;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),0 1px 2px rgba(0,0,0,.4),0 18px 40px rgba(0,0,0,.28)}
+.sub{box-sizing:border-box;border-radius:12px;background:#1C1E22}
+.ttl{margin:0;font-size:12px;font-weight:600;color:#A3A7AF}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px;color:#A3A7AF;white-space:nowrap}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border:0;border-radius:999px;background:rgba(255,255,255,.07);color:#F2F1EE;font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.b-off{background:rgba(255,255,255,.05);color:#8A8F98;cursor:not-allowed}
+.b-danger{background:rgba(239,170,160,.10);color:#EFAAA0}
+.nav{display:flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:999px;color:#A3A7AF;text-decoration:none;font-size:13px}
+.prosa{margin:0;font-family:Charter,"Iowan Old Style",Georgia,serif;font-size:20px;line-height:1.7;color:#C9C7C2;text-wrap:pretty}
+.sk{border-radius:6px;background:linear-gradient(90deg,rgba(255,255,255,.05) 0%,rgba(255,255,255,.10) 50%,rgba(255,255,255,.05) 100%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite}
+.spin{animation:spin 1s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
+@media (prefers-reduced-motion: reduce){.spin,.sk{animation:none}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 12px; display: flex; flex-direction: column; gap: 12px; background: #0B0C0E; overflow: hidden">
+
+<header style="height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 4px 0 10px">
+<div style="width: 380px; display: flex; align-items: center; gap: 10px">
+<svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><path d="M6.2 1h12.3a1 1 0 0 1 .95 1.3l-3.1 9.4a1.5 1.5 0 0 1-1.4 1H2.6a1 1 0 0 1-.95-1.3l3.1-9.4A1.5 1.5 0 0 1 6.2 1z" fill="#F0CA6E"></path></svg>
+<span style="font-size: 16px; font-weight: 700; letter-spacing: -0.02em">decupa</span>
+<span style="width: 4px; height: 4px; margin: 0 4px; border-radius: 50%; background: #3A3D44"></span>
+<span style="font-size: 14px; font-weight: 500">Montagem principal</span>
+</div>
+<nav aria-label="Etapas" style="flex-grow: 1; display: flex; justify-content: center">
+<ol style="display: flex; align-items: center; gap: 2px; margin: 0; padding: 4px; list-style: none; border-radius: 999px; background: #151619; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)">
+<li><a href="#materiais" class="nav"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>Materiais</a></li>
+<li><a href="#edicao" class="nav" aria-current="step" style="background: #26282D; color: #F2F1EE; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06)"><span style="width: 6px; height: 6px; border-radius: 50%; background: #F0CA6E"></span>Edição</a></li>
+<li><a href="#revisao" class="nav">Revisão</a></li>
+<li><a href="#entrega" class="nav">Entrega<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg></a></li>
+</ol>
+</nav>
+<div style="width: 380px; display: flex; align-items: center; justify-content: flex-end; gap: 10px">
+<span class="pill" role="status" style="height: 32px; padding: 0 14px; color: #F2F1EE"><svg class="spin" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke-width="2" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="#3A3D44"></circle><path d="M8 2a6 6 0 0 1 6 6" stroke="#F0CA6E" stroke-linecap="round"></path></svg>Analisando imagens…</span>
+<button class="b b-off" disabled>Analisando mídia…</button>
+</div>
+</header>
+
+<div style="flex-grow: 1; min-height: 0; display: flex; gap: 12px">
+
+<aside class="card" aria-label="Projeto" style="width: 224px; flex-shrink: 0; padding: 16px 10px 10px; display: flex; flex-direction: column; gap: 22px">
+<section style="display: flex; flex-direction: column; gap: 4px">
+<h2 class="ttl" style="padding: 0 6px 4px">Materiais</h2>
+<div style="display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 10px">
+<svg width="44" height="28" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 6px"><rect width="160" height="90" fill="#202226"></rect><circle cx="80" cy="36" r="13" fill="#3A3D44"></circle><path d="M50 90 C50 65 64 56 80 56 C96 56 110 65 110 90 Z" fill="#3A3D44"></path></svg>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500">fala.mp4</span><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: #9FC9B2"><span style="width: 5px; height: 5px; border-radius: 50%; background: #9FC9B2"></span>Transcrição disponível</span></div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 10px; background: rgba(255,255,255,.04)">
+<svg width="44" height="28" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 6px"><rect width="160" height="90" fill="#1F262D"></rect><rect x="22" y="18" width="116" height="54" rx="4" fill="#33404D"></rect><rect x="30" y="26" width="36" height="38" rx="2" fill="#44546A"></rect><rect x="74" y="26" width="56" height="7" rx="2" fill="#4A5B70"></rect><rect x="74" y="39" width="42" height="7" rx="2" fill="#4A5B70"></rect></svg>
+<div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500">apoio.mp4</span><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: #F0CA6E"><svg class="spin" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke-width="2.4" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="#3A3D44"></circle><path d="M8 2a6 6 0 0 1 6 6" stroke="#F0CA6E" stroke-linecap="round"></path></svg>Analisando imagens…</span></div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 8px">
+<h2 class="ttl" style="padding: 0 6px 2px">Cenas</h2>
+<div style="display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 8px"><span class="sk" style="width: 22px; height: 22px; border-radius: 999px"></span><span class="sk" style="width: 120px; height: 10px"></span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 8px"><span class="sk" style="width: 22px; height: 22px; border-radius: 999px"></span><span class="sk" style="width: 96px; height: 10px"></span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 8px"><span class="sk" style="width: 22px; height: 22px; border-radius: 999px"></span><span class="sk" style="width: 108px; height: 10px"></span></div>
+<span style="padding: 2px 8px 0; font-size: 12px; line-height: 1.45; color: #8A8F98">As cenas aparecem quando a etapa Montar cenas terminar.</span>
+</section>
+
+<div class="sub" style="margin-top: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: baseline; justify-content: space-between"><h2 class="ttl">Briefing</h2><a href="#briefing" style="font-size: 12px; font-weight: 600; text-decoration: none">Editar</a></div>
+<p style="margin: 0; font-size: 12px; line-height: 1.5; color: #A3A7AF">Vídeo-aula sobre edição textual: gancho com promessa, método em três partes…</p>
+<div style="display: flex; align-items: baseline; justify-content: space-between"><span class="mono" style="font-size: 20px; font-weight: 600; color: #5A5E66">–:––</span><span class="mono" style="font-size: 11px; color: #A3A7AF">alvo 1:00</span></div>
+</div>
+</aside>
+
+<main class="card" style="position: relative; flex-grow: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden">
+<div style="height: 56px; flex-shrink: 0; box-sizing: border-box; padding: 0 16px 0 40px; display: flex; align-items: center; gap: 10px">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Texto</h1>
+<span class="pill" style="background: rgba(240,202,110,.12); color: #F0CA6E">Transcrição parcial</span>
+<span style="flex-grow: 1"></span>
+<span style="font-size: 12px; color: #A3A7AF">Já dá para ler; editar libera com as cenas</span>
+</div>
+<div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 8px 40px 0; display: flex; flex-direction: column; gap: 28px; overflow: hidden">
+<article style="display: flex; flex-direction: column; gap: 14px">
+<header style="display: flex; align-items: center; gap: 10px">
+<svg width="36" height="22" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 5px"><rect width="160" height="90" fill="#202226"></rect><circle cx="80" cy="36" r="13" fill="#3A3D44"></circle><path d="M50 90 C50 65 64 56 80 56 C96 56 110 65 110 90 Z" fill="#3A3D44"></path></svg>
+<h2 style="margin: 0; font-size: 15px; font-weight: 600">fala.mp4</h2>
+<span class="pill mono" style="font-size: 11px">1:36</span>
+</header>
+<p class="prosa">E aí pessoal, bem-vindos de volta pro canal. Hoje eu vou te mostrar o método que eu uso pra cortar meus vídeos em metade do tempo. Antes de começar: deixo o like que ajuda demais o canal a crescer.</p>
+<p class="prosa">A primeira coisa que você precisa entender é a diferença entre cortar e aparar. Aparar é tirar o silêncio das pontas. Cortar é tirar o que não serve do meio. Quem edita na mão perde tempo nas duas, porque faz tudo frame a frame.</p>
+<p class="prosa">O truque é deixar a transcrição guiar o corte, e não o contrário. Você lê o texto, marca o que fica, e a ferramenta resolve o resto.</p>
+</article>
+<article style="display: flex; flex-direction: column; gap: 14px">
+<header style="display: flex; align-items: center; gap: 10px">
+<svg width="36" height="22" viewBox="0 0 160 90" aria-hidden="true" style="display: block; flex-shrink: 0; border-radius: 5px"><rect width="160" height="90" fill="#1F262D"></rect><rect x="22" y="18" width="116" height="54" rx="4" fill="#33404D"></rect></svg>
+<h2 style="margin: 0; font-size: 15px; font-weight: 600">apoio.mp4</h2>
+<span class="pill" style="font-size: 11px">imagem de apoio · sem fala</span>
+</header>
+<div style="display: flex; gap: 8px">
+<span class="sk" style="width: 112px; height: 63px; border-radius: 8px"></span>
+<span class="sk" style="width: 112px; height: 63px; border-radius: 8px"></span>
+<span class="sk" style="width: 112px; height: 63px; border-radius: 8px"></span>
+<span class="sk" style="width: 112px; height: 63px; border-radius: 8px"></span>
+</div>
+</article>
+</div>
+<div aria-hidden="true" style="position: absolute; left: 0; right: 0; bottom: 0; height: 64px; border-radius: 0 0 16px 16px; background: linear-gradient(rgba(21,22,25,0), #151619)"></div>
+</main>
+
+<aside class="card" aria-label="Monitor" style="width: 520px; flex-shrink: 0; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<div style="width: 488px; height: 274px; flex-shrink: 0; box-sizing: border-box; border-radius: 12px; background: #111214; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center">
+<svg class="spin" width="28" height="28" viewBox="0 0 16 16" fill="none" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="#2C2F35"></circle><path d="M8 2a6 6 0 0 1 6 6" stroke="#F0CA6E" stroke-linecap="round"></path></svg>
+<span style="font-size: 15px; font-weight: 600">Sua montagem está sendo preparada</span>
+<span style="max-width: 320px; font-size: 12px; line-height: 1.5; color: #A3A7AF">A prévia aparece aqui quando as cenas estiverem montadas.</span>
+</div>
+
+<div class="sub" style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<span style="font-size: 14px; font-weight: 600">Preparando montagem</span>
+<span class="mono" style="font-size: 12px; color: #A3A7AF">1 de 2 mídias analisadas</span>
+</div>
+<div aria-hidden="true" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px">
+<span style="height: 4px; border-radius: 999px; background: #9FC9B2"></span>
+<span style="height: 4px; border-radius: 999px; background: #9FC9B2"></span>
+<span style="height: 4px; border-radius: 999px; background: linear-gradient(90deg, #F0CA6E 55%, #2C2F35 55%)"></span>
+<span style="height: 4px; border-radius: 999px; background: #2C2F35"></span>
+<span style="height: 4px; border-radius: 999px; background: #2C2F35"></span>
+</div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px">
+<li style="display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: #A3A7AF"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle><path d="M5.2 8.3l1.9 1.8 3.7-3.8"></path></svg><span style="flex-grow: 1">Verificar arquivos</span><span style="font-size: 12px">Concluída</span></li>
+<li style="display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: #A3A7AF"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#9FC9B2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle><path d="M5.2 8.3l1.9 1.8 3.7-3.8"></path></svg><span style="flex-grow: 1">Transcrever áudio</span><span style="font-size: 12px">Concluída</span></li>
+<li style="display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; background: rgba(240,202,110,.08); font-size: 13px; font-weight: 600; color: #F2F1EE"><svg class="spin" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="#3A3D44"></circle><path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke="#F0CA6E" stroke-linecap="round"></path></svg><span style="flex-grow: 1">Analisar imagens</span><span style="font-size: 12px; font-weight: 500; color: #F0CA6E">Em andamento · apoio.mp4</span></li>
+<li style="display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: #A3A7AF"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#3A3D44" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle></svg><span style="flex-grow: 1">Montar cenas</span><span style="font-size: 12px">Na fila</span></li>
+<li style="display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: #A3A7AF"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#3A3D44" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle></svg><span style="flex-grow: 1">Renderizar prévia</span><span style="font-size: 12px">Na fila</span></li>
+</ol>
+</div>
+
+<div style="margin-top: auto; display: flex; align-items: center; gap: 12px">
+<p style="flex-grow: 1; margin: 0; font-size: 12px; line-height: 1.5; color: #A3A7AF">Se cancelar, as etapas concluídas ficam guardadas e dá para retomar depois.</p>
+<button class="b b-danger">Cancelar preparação</button>
+</div>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

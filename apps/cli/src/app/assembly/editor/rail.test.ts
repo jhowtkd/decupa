@@ -1,5 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { countsFor, deliveryChecklist, exportView, formatLabel, primaryAction, stageLabel, sourceProgress, preparationView } from "./rail.js";
+import { briefingSummary, countsFor, deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, paintSceneCurrent, preparationSteps, preparationView, primaryAction, sameSceneNav, sceneNavItems, sourceProgress, sourceStatusText, stageLabel, verifyView } from "./rail.js";
 
 function project(over: Record<string, unknown> = {}) {
   return {
@@ -65,7 +66,7 @@ it("em progresso: desabilitado com spinner e rótulo próprios", () => {
 it("concluído: rótulo e mensagem de conclusão distinguíveis", () => {
   expect(exportView({ status: "done", error: null }, true)).toEqual({
     disabled: false, loading: false, tone: "done",
-    buttonLabel: "Exportado ✓", statusText: "Exportado ✓ — links abaixo.",
+    buttonLabel: "Exportado", statusText: "Exportado. Os arquivos estão abaixo.",
   });
 });
 
@@ -112,7 +113,64 @@ it("falha visual prevalece sobre transcrição pronta e operação ready", () =>
   p.preparation.sources.a.visual = "running";
   expect(sourceProgress(p, source)).toMatchObject({ tone: "running", label: "Analisar imagens…" });
   p.preparation.status = "cancelled";
-  expect(sourceProgress(p, source).label).toBe("Preparação interrompida");
+  expect(sourceProgress(p, source)).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+});
+
+it("preparação cancelada: material e resumo neutros; interrompida e atenção continuam erro", () => {
+  const source = { id: "a", name: "fala.mp4", included: true, hasVideo: true };
+  const at = (status: string) => ({
+    assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "ready" }],
+    preparation: { status, stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "pending" } } },
+  });
+  const cancelled = sourceProgress(at("cancelled"), source);
+  expect(cancelled).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(sourceStatusText(cancelled)).toBe("Cancelada");
+  expect(preparationView(at("cancelled"), null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  expect(sourceProgress(at("interrupted"), source)).toMatchObject({ tone: "error", label: "Preparação interrompida" });
+  expect(preparationView(at("interrupted"), null)).toMatchObject({
+    tone: "error", title: "A montagem precisa de atenção", detail: "fala.mp4 · Retome para concluir as etapas pendentes.",
+  });
+  expect(preparationView(at("attention"), null)).toMatchObject({ tone: "error", title: "A montagem precisa de atenção" });
+});
+
+it("cancelada prevalece sobre falha anterior: sem vermelho, o erro fica só no detalhe", () => {
+  const falhou = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
+  const pronta = { id: "b", name: "fala.mp4", included: true, hasVideo: true };
+  const p = {
+    assembly: { sources: [falhou, pronta] }, analyses: [],
+    preparation: { status: "cancelled", stage: "visual", sources: {
+      a: { media: "ready", audio: "ready", visual: "error", error: "intervalo inválido" },
+      b: { media: "ready", audio: "ready", visual: "ready" },
+    } },
+  };
+  expect(sourceProgress(p, falhou)).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(sourceProgress(p, falhou).detail).toContain("intervalo inválido");
+  expect(sourceProgress(p, pronta)).toMatchObject({ tone: "ready" });
+  expect(preparationView(p, null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  // Sem cancelar, a mesma falha continua sendo falha.
+  const interrompida = { ...p, preparation: { ...p.preparation, status: "interrupted" } };
+  expect(sourceProgress(interrompida, falhou)).toMatchObject({ tone: "error", label: "Analisar imagens: falhou" });
+});
+
+it("cancelada prevalece também sem entrada em sources (prévia): erro antigo da análise vira diagnóstico", () => {
+  const source = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
+  const base = { assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "error", error: "ASR sem áudio" }] };
+  const cancelada = { ...base, preparation: { status: "cancelled", mode: "preview", stage: "preview", sources: {} } };
+  const progress = sourceProgress(cancelada, source);
+  expect(progress).toMatchObject({ tone: "cancelled", label: "Cancelada" });
+  expect(progress.detail).toContain("ASR sem áudio");
+  expect(preparationView(cancelada, null)).toMatchObject({
+    tone: "cancelled", title: "Preparação cancelada",
+    detail: "As etapas concluídas ficam guardadas. Retome para concluir o que falta.",
+  });
+  // Sem preparação cancelada, o erro da análise continua sendo falha.
+  expect(sourceProgress({ ...base, preparation: null }, source)).toMatchObject({ tone: "error", label: "Falha na análise" });
 });
 
 it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
@@ -121,6 +179,16 @@ it("Resolve apresenta etapa e bloqueia revisão não aprovada", async()=>{
  expect(resolveView({status:"ready",projectName:"P-r1"},true)).toMatchObject({disabled:false,statusText:"Projeto salvo: P-r1"});
  expect(resolveView({status:"error",error:"Resolve indisponível"},true)).toMatchObject({statusText:"Resolve indisponível",newCopy:true});
  expect(resolveView(null,false).disabled).toBe(true);
+  expect(resolveView(null, true).buttonLabel).toBe("Abrir no DaVinci");
+});
+
+it("formatOrigin diz de onde vem o formato, fora da linha técnica", () => {
+  const sources = [{ id: "a", name: "fala.mp4" }];
+  expect(formatOrigin({ sources, canvasSourceId: "a", canvasManual: false })).toBe("da fonte fala.mp4");
+  expect(formatOrigin({ sources, canvasSourceId: "a", canvasManual: true })).toBe("da fonte fala.mp4");
+  expect(formatOrigin({ sources, canvasManual: true })).toBe("personalizado");
+  expect(formatOrigin({ sources, canvasManual: false })).toBe("padrão do projeto");
+  expect(formatOrigin(null)).toBe("");
 });
 
 describe("primaryAction — montar/preparar/revisar/entregar", () => {
@@ -151,20 +219,20 @@ describe("primaryAction — montar/preparar/revisar/entregar", () => {
     }), null)).toMatchObject({ kind: "preparar", label: "Retomar preparação" });
   });
 
-  it("preparação pronta sem cortes → Revisar montagem (gratuito)", () => {
+  it("preparação pronta sem cortes → Revisar prévia (gratuito)", () => {
     expect(primaryAction(project({
       assembly: { sources: [{ id: "a", included: true }], tracks: [] },
       preparation: prep({ a: {} }),
-    }), null)).toMatchObject({ kind: "revisar", stage: "revisao" });
+    }), null)).toMatchObject({ kind: "revisar", label: "Revisar prévia", stage: "revisao" });
   });
 
-  it("montagem existente não aprovada → Revisar montagem, sem POST", () => {
+  it("montagem existente não aprovada → Revisar prévia, sem POST", () => {
     expect(primaryAction(project({
       revision: 5,
       assembly: { sources: [{ id: "a", included: true }], ...withClips },
       preparation: prep({ a: {} }),
       finalApprovedRevision: null,
-    }), null)).toMatchObject({ kind: "revisar", stage: "revisao" });
+    }), null)).toMatchObject({ kind: "revisar", label: "Revisar prévia", stage: "revisao" });
   });
 
   it("revisão aprovada → Abrir entrega navega para entrega", () => {
@@ -192,4 +260,122 @@ it("formatLabel resume dimensões, orientação e fps da entrega", () => {
   expect(formatLabel({ width: 720, height: 720, fps: { num: 25, den: 1 } }))
     .toBe("720×720 quadrado @ 25/1 fps");
   expect(formatLabel(null)).toBe("");
+});
+
+it("material pronto some do rail; preparo e erro continuam visíveis", () => {
+  const source = { id: "a", name: "fala.mp4", included: true, hasVideo: true };
+  const base = { assembly: { sources: [source] }, analyses: [{ sourceId: "a", status: "ready" }] };
+  const ready = sourceProgress({ ...base, preparation: { status: "ready", sources: { a: { media: "ready", audio: "ready", visual: "ready" } } } }, source);
+  expect(ready).toMatchObject({ tone: "ready", label: "Análise concluída" });
+  expect(sourceStatusText(ready)).toBe("");
+  const transcript = sourceProgress({ ...base, preparation: { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "pending" } } } }, source);
+  expect(transcript.label).toBe("Transcrição disponível");
+  expect(sourceStatusText(transcript)).toBe("");
+  const running = sourceProgress({ ...base, preparation: { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "running" } } } }, source);
+  expect(sourceStatusText(running)).toBe("Analisar imagens…");
+  const failed = sourceProgress({ ...base, preparation: { status: "interrupted", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "error", error: "intervalo inválido" } } } }, source);
+  expect(sourceStatusText(failed)).toBe("Analisar imagens: falhou");
+});
+
+function sceneLink(id: string, current = false) {
+  const attrs = new Map<string, string>();
+  if (current) attrs.set("aria-current", "true");
+  return {
+    dataset: { scene: id },
+    setAttribute(name: string, value: string) { attrs.set(name, value); },
+    removeAttribute(name: string) { attrs.delete(name); },
+    getAttribute(name: string) { return attrs.get(name) ?? null; },
+    hasAttribute(name: string) { return attrs.has(name); },
+  };
+}
+
+it("troca de cena move o aria-current no link existente", () => {
+  const scenes = [
+    { id: "s1", objective: "Gancho", gaps: [], takes: [{ start: 0, end: 10, removed: [] }] },
+    { id: "s2", objective: "Corte", gaps: [], takes: [{ start: 10, end: 20, removed: [] }] },
+  ];
+  const items = sceneNavItems({ scenes });
+  expect(sameSceneNav(items, sceneNavItems({ scenes }))).toBe(true);
+  expect(sameSceneNav(items, sceneNavItems({ scenes: [{ ...scenes[0], objective: "Outro" }, scenes[1]] }))).toBe(false);
+  const first = sceneLink("s1", true);
+  const second = sceneLink("s2");
+  paintSceneCurrent([first, second], "s2");
+  expect(first.hasAttribute("aria-current")).toBe(false);
+  expect(second.getAttribute("aria-current")).toBe("true");
+  expect(first.dataset.scene).toBe("s1");
+  expect(second.dataset.scene).toBe("s2");
+});
+
+it("seleção de material tem nome e alvo de 24px visível sem hover", async () => {
+  const rail = await readFile(new URL("./rail.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../page.css", import.meta.url), "utf8");
+  expect(rail).toContain('check.className = "source-check"');
+  expect(rail).toContain('checkName.textContent = "Selecionar " + source.name');
+  expect(rail).toContain("paintSceneCurrent(links, current)");
+  expect(css).toContain(".source-check { position: absolute; left: 0; top: 0; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; margin: 0; }");
+  expect(css).toContain(".source-check input { width: 24px; height: 24px; margin: 0; padding: 0; accent-color: var(--accent); opacity: 0; }");
+  expect(css).toContain("@media (hover: none), (pointer: coarse), (max-width: 700px)");
+  expect(css).toContain(".source[data-status=\"ready\"] .source-status { display: none; }");
+});
+
+it("sceneNavItems numera as cenas e soma o início pela fala retida", () => {
+  const items = sceneNavItems({
+    scenes: [
+      { id: "s1", objective: "Gancho e promessa", gaps: [], takes: [{ start: 0.4, end: 25.2, removed: [{ start: 11, end: 14.5 }] }] },
+      { id: "s2", objective: "", gaps: ["sem imagem"], takes: [{ start: 32.1, end: 54.8, removed: [] }] },
+    ],
+  });
+  expect(items.map((i: { number: number }) => i.number)).toEqual([1, 2]);
+  expect(items[0]).toMatchObject({ id: "s1", title: "Gancho e promessa", start: 0, warn: false });
+  expect(items[1]).toMatchObject({ id: "s2", title: "s2", warn: true });
+  expect(items[1].start).toBeCloseTo(21.3, 5);
+  expect(sceneNavItems(null)).toEqual([]);
+});
+
+it("briefingSummary compara a duração com o alvo", () => {
+  const over = briefingSummary({ text: "aula", targetSeconds: 60 }, 73.12);
+  expect(over).toMatchObject({ text: "aula", target: 60, duration: 73.12, note: "13 s acima do alvo" });
+  expect(over.fill).toBeCloseTo(60 / 73.12, 5);
+  expect(briefingSummary({ text: "", targetSeconds: 60 }, 45).note).toBe("15 s abaixo do alvo");
+  expect(briefingSummary({ text: "", targetSeconds: 60 }, 60.2).note).toBe("No alvo");
+  expect(briefingSummary({ text: "x", targetSeconds: 60 }, null)).toMatchObject({ duration: null, note: "", fill: 0 });
+});
+
+it("preparationSteps: cancelada pelo usuário fica neutra; falha real continua Falhou", () => {
+  const preparation = { status: "running", stage: "visual", sources: { a: { media: "ready", audio: "ready", visual: "running" } } };
+  const running = project({
+    assembly: { sources: [{ id: "a", name: "fala.mp4", included: true }] },
+    previewRevision: null,
+    preparation,
+  });
+  expect(preparationSteps(running, true).map((step: { status: string; state: string }) => [step.status, step.state])).toEqual([
+    ["ready", "Concluída"], ["ready", "Concluída"], ["running", "Em andamento · fala.mp4"], ["pending", "Na fila"], ["pending", "Na fila"],
+  ]);
+  const stopped = (status: string) => ({ ...running, preparation: { ...preparation, status } });
+  expect(preparationSteps(stopped("cancelled"), false)[2]).toMatchObject({ key: "visual", status: "cancelled", state: "Cancelada" });
+  expect(preparationSteps(stopped("interrupted"), false)[2]).toMatchObject({ key: "visual", status: "error", state: "Falhou" });
+  expect(preparationSteps(stopped("attention"), false)[2]).toMatchObject({ status: "error", state: "Falhou" });
+  expect(preparationSteps(project(), false)).toEqual([]);
+});
+
+describe("entrega", () => {
+  const aprovado = { revision: 15, finalApprovedRevision: 15 };
+
+  it("arquivos só aparecem depois da exportação da versão aprovada", () => {
+    expect(deliveryFormats(aprovado, null)).toEqual([]);
+    expect(deliveryFormats({ revision: 16, finalApprovedRevision: 15 }, { revision: 15, status: "pendente" })).toEqual([]);
+    const files = deliveryFormats(aprovado, { revision: 15, status: "pendente" });
+    expect(files.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
+    expect(files[0].href).toBe("/project/output/15/otio");
+  });
+
+  it("verifyView guia do bloqueio à conferência", () => {
+    expect(verifyView({ revision: 15, finalApprovedRevision: null }, null)).toMatchObject({ state: "locked", showExport: true, showConfirm: false });
+    expect(verifyView(aprovado, null)).toMatchObject({ state: "ready", title: "Preparar a entrega da v15", showExport: true });
+    expect(verifyView(aprovado, { revision: 15, status: "pendente" })).toMatchObject({
+      state: "pending", title: "Conferência pendente", detail: "Importe a versão 15 no Resolve e confira a timeline.",
+      showExport: false, showConfirm: true,
+    });
+    expect(verifyView(aprovado, { revision: 15, status: "confirmada" })).toMatchObject({ state: "done", showConfirm: false });
+  });
 });
