@@ -7,6 +7,7 @@ import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries }
 import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
+import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -70,22 +71,16 @@ export function mountStage({ state, api, player }) {
     if (source) player.playOriginal(source.id);
   };
 
-  // Rastreio "assistido de verdade" (Task 9): só a prévia atual conta, e só
-  // quando vista até o fim (perto do fim ou evento ended). Troca de src,
-  // seek para trás ou revisão nova resetam.
-  let lastTime = 0;
-  // Até onde a prévia atual foi vista (só exibição): volta junto com o
-  // assistido num seek para trás ou troca de src.
-  let furthest = 0;
+  // Rastreio "assistido de verdade" (#103): só conta a reprodução real da
+  // prévia atual, provada pelo played do player. A cobertura (playback.js)
+  // junta os trechos tocados; seek para a frente não entra, voltar zera, e
+  // trocar de src (Original ou revisão nova) recomeça do zero. Aqui só se
+  // leem os eventos do player.
+  let coverage = newCoverage();
   const RING = 2 * Math.PI * 19;
   function isPreviewSrc(project) {
     return !!project && project.previewRevision != null
       && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
-  }
-  function nearEnd() {
-    const duration = previewPlayer.duration;
-    return Number.isFinite(previewPlayer.currentTime) && Number.isFinite(duration)
-      && duration > 0 && previewPlayer.currentTime >= duration - 0.05;
   }
   function markWatched() {
     const project = state.get("project");
@@ -94,28 +89,52 @@ export function mountStage({ state, api, player }) {
   }
   function resetWatched() {
     state.set("watched", { revision: null, ended: false });
-    lastTime = previewPlayer.currentTime || 0;
-    furthest = previewPlayer.currentTime || 0;
   }
-  previewPlayer.addEventListener("timeupdate", () => {
-    if (!Number.isFinite(previewPlayer.currentTime)) return;
-    // O timeupdate chega antes do seeked. Sem esta comparação o salto para
-    // trás já teria sobrescrito lastTime e o assistido não reiniciaria.
-    if (previewPlayer.currentTime < lastTime - 0.25) resetWatched();
-    else lastTime = previewPlayer.currentTime;
-    if (isPreviewSrc(state.get("project"))) furthest = Math.max(furthest, previewPlayer.currentTime);
-    paintReview(state.get("project"));
-    if (nearEnd()) markWatched();
-  });
-  previewPlayer.addEventListener("ended", markWatched);
-  previewPlayer.addEventListener("seeked", () => {
-    if (!Number.isFinite(previewPlayer.currentTime)) return;
-    if (previewPlayer.currentTime < lastTime - 0.25) resetWatched();
-    else lastTime = previewPlayer.currentTime;
-  });
+  function playedRanges() {
+    const ranges = [];
+    for (let i = 0; i < previewPlayer.played.length; i++) {
+      ranges.push([previewPlayer.played.start(i), previewPlayer.played.end(i)]);
+    }
+    return ranges;
+  }
+  /**
+   * O assistido acompanha a cobertura contra a duração de agora: marca quando
+   * cobre e revoga quando deixa de cobrir (metadados que mudam a duração).
+   */
+  function settleWatched(project) {
+    const watched = state.get("watched");
+    const marked = watched?.ended === true && watched.revision === project.previewRevision;
+    const complete = coverageComplete(coverage, previewPlayer.duration);
+    if (complete && !marked) markWatched();
+    else if (!complete && watched?.ended) resetWatched();
+    paintReview(project);
+  }
+  /** Uma leitura do player; `seek` marca posição vinda de salto (seeking/seeked). */
+  function readPlayback(seek) {
+    const project = state.get("project");
+    if (!Number.isFinite(previewPlayer.currentTime) || !isPreviewSrc(project)) return;
+    const reading = playbackReading(coverage, previewPlayer.currentTime, {
+      played: playedRanges(), rate: previewPlayer.playbackRate, seek,
+      source: previewPlayer.getAttribute("data-rev"),
+    });
+    coverage = reading.coverage;
+    if (reading.reset) resetWatched();
+    settleWatched(project);
+  }
+  previewPlayer.addEventListener("timeupdate", () => readPlayback(previewPlayer.seeking));
+  previewPlayer.addEventListener("seeking", () => readPlayback(true));
+  previewPlayer.addEventListener("seeked", () => readPlayback(true));
+  previewPlayer.addEventListener("ended", () => readPlayback(false));
+  // Fecha o trecho na velocidade antiga antes de a nova valer (sem retroagir).
+  previewPlayer.addEventListener("ratechange", () => readPlayback(false));
+  const onDuration = () => {
+    const project = state.get("project");
+    if (isPreviewSrc(project)) settleWatched(project);
+  };
+  previewPlayer.addEventListener("durationchange", onDuration);
+  previewPlayer.addEventListener("loadedmetadata", onDuration);
   previewPlayer.addEventListener("loadstart", () => {
-    lastTime = 0;
-    furthest = 0;
+    coverage = newCoverage(0, { source: previewPlayer.getAttribute("data-rev") });
     state.set("watched", { revision: null, ended: false });
   });
 
@@ -123,7 +142,8 @@ export function mountStage({ state, api, player }) {
   function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const view = reviewView(project, status, watchProgress(furthest, previewPlayer.duration, status.watched));
+    const view = reviewView(project, status,
+      watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched));
     document.getElementById("reviewTitle").textContent = view.title;
     document.getElementById("freshChip").textContent = project.previewRevision == null
       ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada")
@@ -195,8 +215,8 @@ export function mountStage({ state, api, player }) {
         previewPlayer.currentTime = time;
         // Troca de src invalida o "assistido" (o loadstart cobre o resto).
         state.set("watched", { revision: null, ended: false });
-        furthest = 0;
-        lastTime = Number.isFinite(time) ? time : 0;
+        // A posição mantida na troca não foi tocada nesta prévia: a contagem recomeça.
+        coverage = newCoverage(Number.isFinite(time) ? time : 0, { source: String(project.previewRevision) });
       }
       lastPreviewRev = project.previewRevision;
       if (!current) {

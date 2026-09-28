@@ -5,9 +5,9 @@ const p = (over: Record<string, unknown> = {}) => ({
   revision: 15, previewRevision: 15, finalApprovedRevision: null, scenes: [{ id: "s1" }], ...over,
 });
 
-it("watchProgress mede até onde a prévia foi vista", () => {
-  expect(watchProgress(14.6, 73.12, false)).toEqual({ ratio: 14.6 / 73.12, label: "vista até 0:14 de 1:13" });
-  expect(watchProgress(99, 73.12, false)).toEqual({ ratio: 0.99, label: "falta assistir ao final" });
+it("watchProgress mede quanto da prévia foi tocado de fato (#103)", () => {
+  expect(watchProgress(14.6, 73.12, false)).toEqual({ ratio: 14.6 / 73.12, label: "0:14 de 1:13 vistos" });
+  expect(watchProgress(99, 73.12, false)).toEqual({ ratio: 0.99, label: "falta assistir um trecho" });
   expect(watchProgress(10, Number.NaN, false)).toEqual({ ratio: 0, label: "" });
   expect(watchProgress(0, 73.12, true)).toEqual({ ratio: 1, label: "vista até o fim" });
 });
@@ -29,17 +29,19 @@ it("reviewView explica o gate: assistir até o fim, desatualizada, pronta, aprov
 });
 
 it("sem o gate liberado, o anel não chega a 100% nem diz que viu tudo", () => {
-  // Seek de 0 para 73,00 s numa prévia de 73,12 s: canApprove continua falso.
+  // 73,00 s cobertos de 73,12 s, com um buraco em algum ponto: canApprove continua falso.
   const near = watchProgress(73, 73.12, false);
-  expect(near).toEqual({ ratio: 0.99, label: "falta assistir ao final" });
+  expect(near).toEqual({ ratio: 0.99, label: "falta assistir um trecho" });
   expect(Math.round(near.ratio * 100)).toBe(99);
   expect(reviewView(p(), { fresh: true, watched: false }, near)).toEqual({
     visible: true, title: "Assista até o fim para aprovar",
-    detail: "Prévia v15 · falta assistir ao final · voltar reinicia a contagem", ratio: 0.99,
+    detail: "Prévia v15 · falta assistir um trecho · voltar reinicia a contagem", ratio: 0.99,
   });
   // O 100% e o "vista até o fim" ficam para quando status.watched é verdadeiro.
   expect(watchProgress(73, 73.12, true)).toEqual({ ratio: 1, label: "vista até o fim" });
-  expect(watchProgress(72.4, 73.12, false)).toEqual({ ratio: 0.99, label: "vista até 1:12 de 1:13" });
+  expect(watchProgress(72.4, 73.12, false)).toEqual({ ratio: 0.99, label: "1:12 de 1:13 vistos" });
+  // Seek direto para o fim sem tocar nada: a cobertura é zero, e o anel também.
+  expect(watchProgress(0, 73.12, false)).toEqual({ ratio: 0, label: "0:00 de 1:13 vistos" });
 });
 
 it("approveButtonView: versão atual já aprovada mostra Aprovada, sem cadeado", () => {
