@@ -3,8 +3,11 @@
 // (menuActionsFor/sceneHeaderActions); o DOM só ancora gestos e dispara
 // POST /project/edit (a sincronização do projeto volta pelo api.call do
 // bootstrap, como nos outros módulos).
+import { clock, clockPrecise, seconds1 } from "./format.js";
+import { ICON } from "./icons.js";
 import {
   effectiveWords,
+  montageDuration,
   montageTimeOfWord,
   omittedWords,
   retainedDuration,
@@ -54,8 +57,8 @@ export function menuActionsFor(selection) {
 }
 
 /**
- * Controles do cabeçalho de cena (puro): mover ↥↧ desabilita nos extremos,
- * excluir ✕ segue sempre disponível (rota direta move-scene/delete-scene).
+ * Ordem e exclusão da cena (puro): mover desabilita nos extremos,
+ * excluir segue sempre disponível (rota direta move-scene/delete-scene).
  * @returns {HeaderAction[]}
  */
 export function sceneHeaderActions(index, total) {
@@ -64,6 +67,55 @@ export function sceneHeaderActions(index, total) {
     { kind: "move", direction: "down", disabled: index >= total - 1 },
     { kind: "delete", disabled: false, danger: true },
   ];
+}
+
+/** Menu "Ações da cena" (puro): mover, ajustar fala, trocar apoio e apagar num lugar só. */
+export function sceneMenuItems(index, total, hasSupport) {
+  const [up, down, del] = sceneHeaderActions(index, total);
+  return [
+    { action: "up", label: "Mover para cima", disabled: up.disabled },
+    { action: "down", label: "Mover para baixo", disabled: down.disabled },
+    { action: "ajustar", label: "Ajustar fala…", disabled: false },
+    ...(hasSupport ? [{ action: "apoio", label: "Trocar apoio…", disabled: false }] : []),
+    { action: "delete", label: "Apagar cena", disabled: del.disabled, danger: true },
+  ];
+}
+
+const MENU_GAP = 6;
+const MENU_MARGIN = 8;
+
+/**
+ * Caixa do menu flutuante (pura). Abre abaixo do gatilho; se a altura não
+ * couber, abre acima. Se nenhum lado comporta o menu inteiro, limita
+ * maxHeight para o DOM rolar. align "end" encosta na direita do gatilho.
+ */
+export function floatMenuBox(anchor, size, viewport, align = "end") {
+  const spaceBelow = viewport.height - anchor.bottom - MENU_GAP - MENU_MARGIN;
+  const spaceAbove = anchor.top - MENU_GAP - MENU_MARGIN;
+  const below = size.height <= spaceBelow || spaceBelow >= spaceAbove;
+  const room = Math.max(0, below ? spaceBelow : spaceAbove);
+  const height = Math.min(size.height, room);
+  const top = below
+    ? anchor.bottom + MENU_GAP
+    : Math.max(MENU_MARGIN, anchor.top - MENU_GAP - height);
+  const prefer = align === "end" ? anchor.right - size.width : anchor.left;
+  const left = Math.max(MENU_MARGIN, Math.min(prefer, viewport.width - size.width - MENU_MARGIN));
+  return { top, left, maxHeight: size.height > room ? room : null, placement: below ? "below" : "above" };
+}
+
+/** Faixa da cena no tempo da montagem (puro): "0:00 – 0:21 · 21,3 s". */
+export function sceneRangeLabel(project, scene) {
+  const start = sceneMontageStart(project, scene.id);
+  const duration = scene.takes.reduce((sum, take) => sum + retainedDuration(take), 0);
+  return clock(start) + " – " + clock(start + duration) + " · " + seconds1(duration);
+}
+
+/** Pílula do cabeçalho do texto (puro). */
+export function textoMetaView(sceneCount, running, durationSeconds) {
+  if (sceneCount > 0) {
+    return { hidden: false, accent: false, text: sceneCount + (sceneCount === 1 ? " cena · " : " cenas · ") + clockPrecise(durationSeconds) };
+  }
+  return { hidden: !running, accent: true, text: "Transcrição parcial" };
 }
 
 /**
@@ -217,17 +269,18 @@ export function acceptedFormatsLabel(accept) {
  * @param {string} accept
  */
 export function emptyGuideHtml(accept) {
-  return '<section data-empty-guide aria-label="Como começar">'
-    + "<h1>Monte seu vídeo em 3 passos</h1>"
-    + "<ol>"
-    + "<li><strong>Importe</strong> seus vídeos e áudios.</li>"
-    + "<li><strong>Selecione e arrume o texto</strong> para montar as cenas.</li>"
-    + "<li><strong>Revise e entregue</strong>: confira a prévia e exporte o resultado.</li>"
-    + "</ol>"
-    + '<p class="muted">Formatos aceitos: ' + esc(acceptedFormatsLabel(accept)) + ".</p>"
-    + '<p><button type="button" class="primary" data-empty-import>Importar mídia</button></p>'
-    + '<p class="muted">Ou arraste os arquivos para esta área.</p>'
-    + "</section>";
+  return '<section class="empty-guide" data-empty-guide aria-label="Como começar">'
+    + '<div class="empty-hero"><span class="empty-icon">' + ICON.importMedia + "</span>"
+    + "<h1>Seu próximo vídeo começa aqui</h1>"
+    + "<p>Solte vídeos e áudios nesta área ou escolha os arquivos no computador.</p>"
+    + '<button type="button" class="primary big" data-empty-import>' + ICON.plus + "Importar mídia</button>"
+    + '<p class="empty-foot">Formatos aceitos: ' + esc(acceptedFormatsLabel(accept))
+    + " · os originais ficam neste computador</p></div>"
+    + '<ol class="empty-steps" aria-label="Como funciona">'
+    + '<li><span class="num is-current">1</span><strong>Importe</strong><span>Importe seus vídeos e áudios.</span></li>'
+    + '<li><span class="num">2</span><strong>Arrume pelo texto</strong><span>Selecione e arrume o texto para montar as cenas.</span></li>'
+    + '<li><span class="num">3</span><strong>Revise e entregue</strong><span>Confira a prévia e exporte o resultado.</span></li>'
+    + "</ol></section>";
 }
 
 /* ---- Render (os dois documentos do spec, portados do bootstrap) ---- */
@@ -272,26 +325,27 @@ function sourcesWithTranscript(project) {
   });
 }
 
+/** Status da análise por fonte, em português (o enum do servidor não vai para a tela). */
+export function analysisStatusLabel(status) {
+  return { ready: "transcrita", partial: "parcial", error: "com erro" }[status] || "na fila";
+}
+
 /**
- * Documento da transcrição (antes da proposta de cenas). O marcador
- * "· parcial" permanece enquanto a preparação está em andamento.
+ * Documento da transcrição (antes da proposta de cenas). Enquanto a
+ * preparação roda, a pílula "Transcrição parcial" do cabeçalho avisa.
  * Cada fonte entra com as palavras dela assim que essa fonte é salva.
  */
 export function transcriptHtml(project) {
-  const running = project.preparation && project.preparation.status === "running";
   let html = "";
   for (const source of project.assembly.sources) {
     const analysis = project.analyses.find((item) => item.sourceId === source.id);
-    const statusText = analysis ? analysis.status : "na fila";
-    html += '<section class="doc-source" data-source="' + esc(source.id) + '"><h2>'
-      + esc(source.name) + " · " + esc(statusText)
-      + (running ? ' <span class="parcial">· parcial</span>' : "") + "</h2>";
+    html += '<section class="doc-source" data-source="' + esc(source.id) + '">'
+      + '<header class="doc-head"><h2>' + esc(source.name) + '</h2><span class="pill">'
+      + esc(analysisStatusLabel(analysis?.status)) + "</span></header>";
     const words = effectiveWords(project, source.id);
-    if (!words.length) {
-      html += '<p class="muted">transcrição ainda não disponível.</p>';
-    } else {
-      html += '<p class="prose">' + words.map((w) => esc(w.text)).join(" ") + "</p>";
-    }
+    html += words.length
+      ? '<p class="prose is-draft">' + words.map((w) => esc(w.text)).join(" ") + "</p>"
+      : '<p class="muted">Transcrição ainda não disponível.</p>';
     html += "</section>";
   }
   return html;
@@ -339,48 +393,28 @@ function chipHtml(p, scene, support, index) {
   const fps = p.assembly.fps.num / p.assembly.fps.den;
   const at = sceneMontageStart(p, scene.id) + support.offsetFrames / fps;
   const dur = support.durationFrames / fps;
+  const name = visualSourceName(p, support.visualId);
   return '<button type="button" class="chip-apoio"'
     + ' data-scene="' + esc(scene.id) + '" data-support="' + index + '"'
-    + ' title="apoio em ' + at.toFixed(1) + "s da montagem · " + dur.toFixed(1) + 's"'
-    + ' aria-label="Apoio ' + esc(visualSourceName(p, support.visualId)) + ", seleciona a cena" + '"'
-    + ">🎬 " + esc(visualSourceName(p, support.visualId)) + " · " + dur.toFixed(1) + "s</button>";
+    + ' title="Apoio em ' + esc(clockPrecise(at)) + " da montagem · " + esc(seconds1(dur)) + '"'
+    + ' aria-label="Apoio ' + esc(name) + ', seleciona a cena">'
+    + ICON.image + esc(name) + " · " + esc(seconds1(dur)) + "</button>";
 }
 
 function renderProse(p, selection) {
   let html = "";
-  let cursor = 0;
   p.scenes.forEach((scene, index) => {
-    for (const take of scene.takes) cursor += retainedDuration(take);
-    const [up, down] = sceneHeaderActions(index, p.scenes.length);
-    // Tempos do cabeçalho: primeiro start e último end dos takes da cena
-    // (os mesmos segundos que hoje aparecem nos rótulos de fonte).
-    const range = scene.takes.length
-      ? '<span class="chip">' + Math.min(...scene.takes.map((take) => take.start)).toFixed(1)
-        + "-" + Math.max(...scene.takes.map((take) => take.end)).toFixed(1) + "s</span>"
-      : "";
-    html += '<section class="scene" data-scene-section="' + esc(scene.id) + '">';
-    html += '<p class="scene-head" data-scene="' + esc(scene.id) + '">'
-      + '<span class="num">cena ' + (index + 1) + "</span>"
-      + '<span class="title">' + esc(scene.objective || "") + "</span>"
-      + '<span class="spacer"></span>' + range
-      + '<button type="button" class="quiet" data-scene-action="up" data-scene="' + esc(scene.id) + '"'
-      + (up.disabled ? " disabled" : "")
-      + ' aria-label="Mover cena ' + (index + 1) + ' para cima">↥</button>'
-      + '<button type="button" class="quiet" data-scene-action="down" data-scene="' + esc(scene.id) + '"'
-      + (down.disabled ? " disabled" : "")
-      + ' aria-label="Mover cena ' + (index + 1) + ' para baixo">↧</button>'
-      + '<button type="button" class="quiet" data-scene-action="delete" data-scene="' + esc(scene.id) + '"'
-      + ' aria-label="Excluir cena ' + (index + 1) + '">✕</button>'
-      + '<button type="button" class="quiet" data-scene-action="ajustar" data-scene="' + esc(scene.id) + '"'
-      + ' aria-label="Ajustar fala da cena ' + (index + 1) + '"'
-      + ' title="Pedir ajuste localizado a uma fala desta cena">✂</button>'
-      + (scene.support.length ? '<button type="button" class="quiet" data-scene-action="apoio"'
-        + ' data-scene="' + esc(scene.id) + '" aria-label="Trocar apoio da cena ' + (index + 1) + '"'
-        + ' title="Trocar um apoio desta cena por outro candidato">🎬</button>' : "") + "</p>";
-    if (scene.rationale) html += '<p class="muted">' + esc(scene.rationale) + "</p>";
-    if (scene.gaps.length) {
-      html += '<p class="warn">lacunas: ' + esc(scene.gaps.join("; ")) + "</p>";
-    }
+    html += '<section class="scene" id="cena-' + esc(scene.id) + '" data-scene-section="' + esc(scene.id) + '">';
+    html += '<header class="scene-head" data-scene="' + esc(scene.id) + '">'
+      + '<span class="num">' + (index + 1) + "</span>"
+      + '<h2 class="title">' + esc(scene.objective || "Cena " + (index + 1)) + "</h2>"
+      + '<span class="spacer"></span>'
+      + '<span class="pill mono">' + esc(sceneRangeLabel(p, scene)) + "</span>"
+      + '<button type="button" class="icon" data-scene-menu="' + esc(scene.id) + '" aria-haspopup="menu"'
+      + ' aria-expanded="false" aria-label="Ações da cena ' + (index + 1) + '">' + ICON.more + "</button></header>";
+    html += '<div class="scene-body">';
+    if (scene.rationale) html += '<p class="scene-note">' + esc(scene.rationale) + "</p>";
+    for (const gap of scene.gaps) html += '<p class="scene-gap">Lacuna: ' + esc(gap) + "</p>";
     // Âncoras de apoio: índice plano da primeira palavra com tempo de
     // montagem >= início do apoio; sem palavra depois, cai no fim da cena.
     const flat = [];
@@ -409,23 +443,24 @@ function renderProse(p, selection) {
         html += chipAt(pos) + wordButton(scene, take.id, word, selection) + " ";
         pos += 1;
       }
-      // Chip de fonte no fim do bloco (os tempos subiram para o cabeçalho).
-      html += '</p><span class="src-chip">'
-        + esc(source ? source.name : take.sourceId) + "</span></div>";
+      html += '</p><span class="src-chip">' + esc(source ? source.name : take.sourceId) + " · "
+        + esc(take.start.toFixed(1).replace(".", ",")) + "–" + esc(take.end.toFixed(1).replace(".", ",")) + " s</span></div>";
     }
-    html += chipAt(pos);
-    // Zonas omitidas (fora da montagem): takeId "" → menu ouvir/incluir,
-    // como inset apagado com contador de palavras e atalho "incluir trecho".
+    html += chipAt(pos) + "</div>";
+    // Zonas omitidas: resumo com "Incluir trecho" (inclui tudo de uma vez) e
+    // o texto recolhido; palavra a palavra continua no menu ouvir/incluir.
     for (const source of p.assembly.sources) {
       const missing = omittedWords(p, scene, source.id);
       if (!missing.length) continue;
-      html += '<div class="unused"><span>não usado (' + missing.length + ' palavras)</span> '
-        + '<span class="chip">incluir trecho</span><p class="prose">';
+      html += '<div class="unused"><div class="unused-head"><span>Trecho não usado</span>'
+        + '<span class="mono">' + esc(source.name) + " · " + missing.length + (missing.length === 1 ? " palavra" : " palavras") + "</span>"
+        + '<span class="spacer"></span>'
+        + '<button type="button" class="small" data-include-zone data-scene="' + esc(scene.id) + '" data-source="' + esc(source.id) + '">Incluir trecho</button></div>'
+        + '<details><summary>Ver o texto</summary><p class="prose">';
       for (const word of missing) {
-        html += wordButton(scene, "", word, selection, " omit",
-          ' data-source="' + esc(source.id) + '"') + " ";
+        html += wordButton(scene, "", word, selection, " omit", ' data-source="' + esc(source.id) + '"') + " ";
       }
-      html += '</p><span class="src-chip">' + esc(source.name) + "</span></div>";
+      html += "</p></details></div>";
     }
     html += "</section>";
   });
@@ -449,7 +484,7 @@ function renderCenter(p, selection) {
     return;
   }
   dropzone.hidden = true;
-  const scroller = document.getElementById("center");
+  const scroller = texto;
   const top = scroller ? scroller.scrollTop : 0;
   // Coluna de leitura: o documento (transcrição ou prosa) inteiro dentro do
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
@@ -551,6 +586,7 @@ export function mountTexto({ state, api, player }) {
   let lastSig = null;
   function render(p) {
     if (!p) return;
+    paintMeta(p);
     const sig = docSignature(p);
     if (sig === lastSig) {
       const el = root();
@@ -559,6 +595,7 @@ export function mountTexto({ state, api, player }) {
     }
     lastSig = sig;
     renderCenter(p, selection());
+    paintCurrentScene();
     paintProposalBanner(p, state.get("speechProposal"));
     paintSupportSwap(state.get("supportSwap"));
   }
@@ -687,7 +724,7 @@ export function mountTexto({ state, api, player }) {
     const summary = speechSummary(proposal);
     box.innerHTML = '<p class="muted">' + esc(summary.scope) + " · " + esc(summary.duration) + "</p>"
       + '<p>' + esc(proposal.before.text) + "</p>"
-      + '<p class="muted">cortes: " + (summary.cuts.length ? "" : "nenhum") + "</p>'
+      + '<p class="muted">cortes: ' + (summary.cuts.length ? "" : "nenhum") + "</p>"
       + "<ul class=\"plain\">" + summary.cuts.map((cut) => "<li>" + esc(cut) + "</li>").join("") + "</ul>"
       + (summary.protected ? '<p class="muted">' + esc(summary.protected) + "</p>" : "");
     applyRow.hidden = false;
@@ -912,7 +949,6 @@ export function mountTexto({ state, api, player }) {
     btn.disabled = true;
     const form = document.createElement("form");
     form.className = "texto-correct";
-    form.style.cssText = "display:flex;gap:4px;";
     const input = document.createElement("input");
     input.type = "text";
     input.setAttribute("aria-label", "Correção do trecho");
@@ -929,41 +965,35 @@ export function mountTexto({ state, api, player }) {
     };
   }
 
-  function openSelectionMenu(anchorRect) {
-    if (closeMenu) closeMenu();
-    const p = state.get("project");
-    if (!p) return;
-    const items = menuActionsFor(selectedFlags(p, selection()));
-    if (!items.length) return;
-    const menu = document.createElement("div");
-    menu.className = "texto-menu";
-    menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", "Ações do trecho");
-    menu.style.cssText = "position:fixed;z-index:30;display:flex;gap:4px;padding:6px;"
-      + "border-radius:8px;background:var(--panel,#1d2429);border:1px solid var(--line,#333);"
-      + "box-shadow:0 4px 16px rgba(0,0,0,.4);";
-    menu.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - 260)) + "px";
-    const below = anchorRect.bottom + 6;
-    menu.style.top = (below + 60 > window.innerHeight
-      ? Math.max(8, anchorRect.top - 60) : below) + "px";
-    for (const item of items) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = item.label;
-      btn.setAttribute("role", "menuitem");
-      if (item.action === "corrigir") {
-        // Corrigir expande o campo inline no próprio menu (sem fechar).
-        btn.setAttribute("aria-haspopup", "dialog");
-        btn.onclick = () => openCorrectForm(menu, btn);
-      } else {
-        btn.onclick = () => {
-          if (closeMenu) closeMenu();
-          void runMenuAction(item.action);
-        };
-      }
-      menu.appendChild(btn);
+  /** Mede o menu já no documento e o coloca onde cabe. */
+  function placeFloatMenu(menu, anchor, align) {
+    menu.style.top = "0px";
+    menu.style.left = "0px";
+    menu.style.maxHeight = "";
+    menu.style.overflowY = "";
+    const rect = menu.getBoundingClientRect();
+    const box = floatMenuBox(
+      anchor,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+      align,
+    );
+    menu.style.top = box.top + "px";
+    menu.style.left = box.left + "px";
+    if (box.maxHeight != null) {
+      menu.style.maxHeight = box.maxHeight + "px";
+      menu.style.overflowY = "auto";
     }
+  }
+
+  /** Liga um menu flutuante ao documento: fora ou Escape fecham, foco no primeiro item. */
+  function attachMenu(menu, trigger, anchor, align) {
+    const returnTo = trigger || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    if (trigger) trigger.setAttribute("aria-expanded", "true");
+    menu.style.visibility = "hidden";
     document.body.appendChild(menu);
+    if (anchor) placeFloatMenu(menu, anchor, align);
+    menu.style.visibility = "";
     const onDoc = (ev) => {
       if (!menu.contains(ev.target) && closeMenu) closeMenu();
     };
@@ -977,8 +1007,102 @@ export function mountTexto({ state, api, player }) {
       document.removeEventListener("pointerdown", onDoc);
       document.removeEventListener("keydown", onKey);
       menu.remove();
+      if (trigger?.isConnected) trigger.setAttribute("aria-expanded", "false");
+      if (returnTo?.isConnected) returnTo.focus();
     };
-    menu.querySelector("button")?.focus();
+    menu.querySelector("button:not(:disabled)")?.focus();
+  }
+
+  function openSceneMenu(btn) {
+    if (closeMenu) closeMenu();
+    const p = state.get("project");
+    if (!p) return;
+    const index = p.scenes.findIndex((scene) => scene.id === btn.dataset.sceneMenu);
+    if (index < 0) return;
+    const scene = p.scenes[index];
+    const menu = document.createElement("div");
+    menu.className = "float-menu is-list";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Ações da cena " + (index + 1));
+    const rect = btn.getBoundingClientRect();
+    for (const item of sceneMenuItems(index, p.scenes.length, scene.support.length > 0)) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.textContent = item.label;
+      b.dataset.sceneAction = item.action;
+      b.dataset.scene = scene.id;
+      b.disabled = item.disabled;
+      if (item.danger) b.className = "danger";
+      b.onclick = () => {
+        if (closeMenu) closeMenu();
+        void sceneEdit(b);
+      };
+      menu.appendChild(b);
+    }
+    attachMenu(menu, btn, rect, "end");
+  }
+
+  /** "Incluir trecho": seleciona a zona omitida inteira e inclui (mesmo POST do menu). */
+  function includeZone(sceneId, sourceId) {
+    const p = state.get("project");
+    const scene = p?.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    state.set("selection", new Set(omittedWords(p, scene, sourceId).map((word) => selectionKey(sceneId, "", word.id))));
+    void runMenuAction("incluir");
+  }
+
+  function paintCurrentScene() {
+    const el = root();
+    const p = state.get("project");
+    if (!el || !p) return;
+    const current = state.get("selectedScene") ?? p.scenes[0]?.id;
+    for (const head of el.querySelectorAll(".scene-head")) {
+      const on = head.dataset.scene === current;
+      head.classList.toggle("is-current", on);
+      head.querySelector(".num")?.classList.toggle("is-current", on);
+    }
+  }
+
+  function paintMeta(p) {
+    const meta = document.getElementById("textoMeta");
+    if (!meta) return;
+    const view = textoMetaView(p.scenes.length, p.preparation?.status === "running",
+      p.scenes.length ? montageDuration(p) : 0);
+    meta.hidden = view.hidden;
+    meta.textContent = view.text;
+    meta.classList.toggle("pill-accent", view.accent);
+  }
+
+  function openSelectionMenu(anchorRect) {
+    if (closeMenu) closeMenu();
+    const p = state.get("project");
+    if (!p) return;
+    const items = menuActionsFor(selectedFlags(p, selection()));
+    if (!items.length) return;
+    const menu = document.createElement("div");
+    menu.className = "texto-menu float-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Ações do trecho");
+    for (const item of items) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = item.label;
+      if (item.danger) btn.className = "danger";
+      btn.setAttribute("role", "menuitem");
+      if (item.action === "corrigir") {
+        // Corrigir expande o campo inline no próprio menu (sem fechar).
+        btn.setAttribute("aria-haspopup", "dialog");
+        btn.onclick = () => openCorrectForm(menu, btn);
+      } else {
+        btn.onclick = () => {
+          if (closeMenu) closeMenu();
+          void runMenuAction(item.action);
+        };
+      }
+      menu.appendChild(btn);
+    }
+    attachMenu(menu, null, anchorRect, "start");
   }
 
   async function sceneEdit(btn) {
@@ -1023,6 +1147,16 @@ export function mountTexto({ state, api, player }) {
       document.getElementById("filePicker")?.click();
       return;
     }
+    const sceneMenuBtn = ev.target.closest("[data-scene-menu]");
+    if (sceneMenuBtn && el.contains(sceneMenuBtn)) {
+      openSceneMenu(sceneMenuBtn);
+      return;
+    }
+    const zone = ev.target.closest("[data-include-zone]");
+    if (zone && el.contains(zone)) {
+      includeZone(zone.dataset.scene, zone.dataset.source);
+      return;
+    }
     const speechAction = ev.target.closest("[data-speech-apply],[data-speech-reject]");
     if (speechAction && el.contains(speechAction)) {
       const proposal = state.get("speechProposal");
@@ -1035,11 +1169,6 @@ export function mountTexto({ state, api, player }) {
           label: speechAction.hasAttribute("data-speech-apply") ? "Aplicando ajuste…" : "Recusando proposta…",
         });
       }
-      return;
-    }
-    const sceneBtn = ev.target.closest("[data-scene-action]");
-    if (sceneBtn && el.contains(sceneBtn)) {
-      void sceneEdit(sceneBtn);
       return;
     }
     const chip = ev.target.closest(".chip-apoio");
@@ -1085,6 +1214,7 @@ export function mountTexto({ state, api, player }) {
     if (t != null) {
       state.set("playhead", t);
       player.seek(t);
+      state.set("selectedScene", found.scene.id);
     }
   }
 
@@ -1156,6 +1286,7 @@ export function mountTexto({ state, api, player }) {
     }
   }
   state.subscribe("playhead", (t) => paintPlayhead(t));
+  state.subscribe("selectedScene", paintCurrentScene);
 
   const el = root();
   if (el) {

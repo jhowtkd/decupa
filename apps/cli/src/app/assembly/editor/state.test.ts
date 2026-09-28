@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createState } from "./state.js";
-import { transcriptHtml } from "./texto.js";
+import { textoMetaView, transcriptHtml } from "./texto.js";
 
 type Word = { id: string; text: string; start: number; end: number };
 type Analysis = { sourceId: string; status?: string; words: Word[] };
@@ -65,8 +65,10 @@ it("primeira transcrição parcial durante a preparação abre a etapa de texto 
   expect(s.get("stage")).toBe("edicao");
   expect(seenStage).toEqual(["edicao"]);
   const html = transcriptHtml(s.get("project") as never);
-  expect(html).toContain("ola");
-  expect(html).toContain('<span class="parcial">· parcial</span>');
+  expect(html).toContain('<p class="prose is-draft">ola</p>');
+  // O "parcial" mora na pílula do cabeçalho do texto enquanto a preparação roda.
+  const running = (s.get("project") as { preparation: { status: string } }).preparation.status === "running";
+  expect(textoMetaView(0, running, 0).text).toBe("Transcrição parcial");
 });
 
 it("fora da preparação, o mesmo ganho de palavras não troca a etapa", () => {
@@ -125,7 +127,7 @@ it("com duas fontes, a transcrição de cada uma aparece quando aquela fonte é 
 
   let html = transcriptHtml(s.get("project") as never);
   expect(html).toMatch(/data-source="a"[\s\S]*ola/);
-  expect(html).toMatch(/data-source="b"[\s\S]*transcrição ainda não disponível/);
+  expect(html).toMatch(/data-source="b"[\s\S]*Transcrição ainda não disponível/);
   let notice = s.get("transcriptNotice") as string;
   expect(notice).toContain("A.mp4");
   expect(notice).not.toContain("B.mp4");
@@ -138,7 +140,7 @@ it("com duas fontes, a transcrição de cada uma aparece quando aquela fonte é 
 
   html = transcriptHtml(s.get("project") as never);
   expect(html).toContain("mundo");
-  expect(html).toContain('<span class="parcial">· parcial</span>');
+  expect(html).not.toContain("Transcrição ainda não disponível");
   notice = s.get("transcriptNotice") as string;
   expect(notice).toContain("A.mp4");
   expect(notice).toContain("B.mp4");

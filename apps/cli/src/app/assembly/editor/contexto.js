@@ -4,7 +4,10 @@
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, exportView, formatLabel, resolveView } from "./rail.js";
+import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
+import { ICON } from "./icons.js";
+import { approveButtonView, reviewView, watchProgress } from "./progress.js";
+import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -29,33 +32,33 @@ export function mountStage({ state, api, player }) {
   const meta = document.createElement("div");
   meta.className = "preview-meta";
   meta.id = "deliveryMeta";
-  const fresh = document.createElement("p");
-  fresh.className = "muted";
-  fresh.id = "freshChip";
-  fresh.setAttribute("aria-live", "polite");
-  const hint = document.createElement("p");
-  hint.className = "muted";
-  hint.textContent = "Assista à prévia atual antes de aprovar.";
-  const row = document.createElement("div");
-  row.className = "row";
-  row.innerHTML = '<button type="button" id="refreshPreview">Atualizar prévia</button>'
-    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button>';
-  const header = document.createElement("div");
-  header.className = "stage-header";
-  header.innerHTML = '<div class="view-tabs"><button type="button" id="montageView" aria-pressed="true">Montagem</button>'
-    + '<button type="button" id="originalView" aria-pressed="false">Original</button></div><span id="viewLabel" class="muted">Prévia da montagem</span>';
-  const screen = document.createElement("div");
-  screen.className = "preview-screen";
   const empty = document.createElement("div");
   empty.className = "preview-empty";
-  empty.innerHTML = '<span class="empty-mark" aria-hidden="true">▰</span><h1 id="emptyTitle">Seu próximo vídeo começa aqui</h1>'
+  empty.innerHTML = '<span class="empty-mark">' + ICON.importMedia + '</span><h1 id="emptyTitle">Seu próximo vídeo começa aqui</h1>'
     + '<p id="emptyMessage">Importe os materiais, conte o que você quer no briefing e monte seu primeiro corte.</p>'
     + '<button type="button" id="importFromStage" class="primary">Importar mídia</button>';
-  screen.append(previewPlayer, empty);
-  const footer = document.createElement("div");
-  footer.className = "stage-footer";
-  footer.append(note, meta, fresh, hint, row);
-  stage.append(header, screen, footer);
+  const overlay = document.createElement("div");
+  overlay.className = "preview-overlay";
+  overlay.innerHTML = '<span id="viewLabel" class="pill mono preview-label">Prévia da montagem</span>'
+    + '<div class="view-tabs" role="group" aria-label="Fonte do monitor">'
+    + '<button type="button" id="montageView" aria-pressed="true">Montagem</button>'
+    + '<button type="button" id="originalView" aria-pressed="false">Original</button></div>';
+  const screen = document.createElement("div");
+  screen.className = "preview-screen";
+  screen.append(previewPlayer, empty, overlay);
+  const review = document.createElement("div");
+  review.className = "sub review-card";
+  review.id = "reviewCard";
+  review.innerHTML = '<div class="review-head">'
+    + '<svg class="ring" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">'
+    + '<circle class="ring-track" cx="22" cy="22" r="19"></circle>'
+    + '<circle id="watchRing" class="ring-fill" cx="22" cy="22" r="19" transform="rotate(-90 22 22)"></circle>'
+    + '<text id="watchPct" class="ring-pct" x="22" y="26" text-anchor="middle"></text></svg>'
+    + '<div class="review-text"><span id="reviewTitle" class="review-title"></span>'
+    + '<span id="freshChip" aria-live="polite"></span></div></div>'
+    + '<div class="review-actions"><button type="button" id="refreshPreview" class="quiet small">Atualizar prévia</button>'
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
+  stage.append(screen, note, meta, review);
   document.getElementById("importFromStage").onclick = () => document.getElementById("filePicker").click();
   document.getElementById("montageView").onclick = () => {
     previewPlayer.removeAttribute("data-source");
@@ -68,18 +71,16 @@ export function mountStage({ state, api, player }) {
     if (source) player.playOriginal(source.id);
   };
 
-  // Rastreio "assistido de verdade" (Task 9): só a prévia atual conta, e só
-  // quando vista até o fim (perto do fim ou evento ended). Troca de src,
-  // seek para trás ou revisão nova resetam.
-  let lastTime = 0;
+  // Rastreio "assistido de verdade" (#103): só conta a reprodução real da
+  // prévia atual, provada pelo played do player. A cobertura (playback.js)
+  // junta os trechos tocados; seek para a frente não entra, voltar zera, e
+  // trocar de src (Original ou revisão nova) recomeça do zero. Aqui só se
+  // leem os eventos do player.
+  let coverage = newCoverage();
+  const RING = 2 * Math.PI * 19;
   function isPreviewSrc(project) {
     return !!project && project.previewRevision != null
       && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
-  }
-  function nearEnd() {
-    const duration = previewPlayer.duration;
-    return Number.isFinite(previewPlayer.currentTime) && Number.isFinite(duration)
-      && duration > 0 && previewPlayer.currentTime >= duration - 0.05;
   }
   function markWatched() {
     const project = state.get("project");
@@ -88,36 +89,76 @@ export function mountStage({ state, api, player }) {
   }
   function resetWatched() {
     state.set("watched", { revision: null, ended: false });
-    lastTime = previewPlayer.currentTime || 0;
   }
-  previewPlayer.addEventListener("timeupdate", () => {
-    if (!Number.isFinite(previewPlayer.currentTime)) return;
-    lastTime = previewPlayer.currentTime;
-    if (nearEnd()) markWatched();
-  });
-  previewPlayer.addEventListener("ended", markWatched);
-  previewPlayer.addEventListener("seeked", () => {
-    if (!Number.isFinite(previewPlayer.currentTime)) return;
-    if (previewPlayer.currentTime < lastTime - 0.25) resetWatched();
-    else lastTime = previewPlayer.currentTime;
-  });
+  function playedRanges() {
+    const ranges = [];
+    for (let i = 0; i < previewPlayer.played.length; i++) {
+      ranges.push([previewPlayer.played.start(i), previewPlayer.played.end(i)]);
+    }
+    return ranges;
+  }
+  /**
+   * O assistido acompanha a cobertura contra a duração de agora: marca quando
+   * cobre e revoga quando deixa de cobrir (metadados que mudam a duração).
+   */
+  function settleWatched(project) {
+    const watched = state.get("watched");
+    const marked = watched?.ended === true && watched.revision === project.previewRevision;
+    const complete = coverageComplete(coverage, previewPlayer.duration);
+    if (complete && !marked) markWatched();
+    else if (!complete && watched?.ended) resetWatched();
+    paintReview(project);
+  }
+  /** Uma leitura do player; `seek` marca posição vinda de salto (seeking/seeked). */
+  function readPlayback(seek) {
+    const project = state.get("project");
+    if (!Number.isFinite(previewPlayer.currentTime) || !isPreviewSrc(project)) return;
+    const reading = playbackReading(coverage, previewPlayer.currentTime, {
+      played: playedRanges(), rate: previewPlayer.playbackRate, seek,
+      source: previewPlayer.getAttribute("data-rev"),
+    });
+    coverage = reading.coverage;
+    if (reading.reset) resetWatched();
+    settleWatched(project);
+  }
+  previewPlayer.addEventListener("timeupdate", () => readPlayback(previewPlayer.seeking));
+  previewPlayer.addEventListener("seeking", () => readPlayback(true));
+  previewPlayer.addEventListener("seeked", () => readPlayback(true));
+  previewPlayer.addEventListener("ended", () => readPlayback(false));
+  // Fecha o trecho na velocidade antiga antes de a nova valer (sem retroagir).
+  previewPlayer.addEventListener("ratechange", () => readPlayback(false));
+  const onDuration = () => {
+    const project = state.get("project");
+    if (isPreviewSrc(project)) settleWatched(project);
+  };
+  previewPlayer.addEventListener("durationchange", onDuration);
+  previewPlayer.addEventListener("loadedmetadata", onDuration);
   previewPlayer.addEventListener("loadstart", () => {
-    lastTime = 0;
+    coverage = newCoverage(0, { source: previewPlayer.getAttribute("data-rev") });
     state.set("watched", { revision: null, ended: false });
   });
 
-  /** Chip de frescor + gate do botão aprovar (Task 9). */
-  function renderFreshness(project) {
+  /** Cartão de revisão: anel do visto, texto do gate e aprovar travado (Task 9). */
+  function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const chip = document.getElementById("freshChip");
-    if (chip) chip.textContent = !project.scenes.length ? "" : project.previewRevision == null
-      ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada") : status.label;
-    setDisabled(document.getElementById("approveFinal"), !status.canApprove || state.get("view") === "original");
+    const view = reviewView(project, status,
+      watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched));
+    document.getElementById("reviewTitle").textContent = view.title;
+    document.getElementById("freshChip").textContent = project.previewRevision == null
+      ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada")
+      : view.detail;
+    document.getElementById("watchRing").style.strokeDasharray = (view.ratio * RING).toFixed(1) + " " + RING.toFixed(1);
+    document.getElementById("watchPct").textContent = Math.round(view.ratio * 100) + "%";
+    const approve = document.getElementById("approveFinal");
+    const button = approveButtonView(project, status, state.get("view") === "original");
+    setDisabled(approve, button.disabled);
+    approve.classList.toggle("is-locked", button.locked);
+    approve.classList.toggle("is-approved", button.approved);
+    approve.innerHTML = (button.icon === "lock" ? ICON.lock : ICON.check) + button.label;
   }
 
   function renderPreview(project) {
-    hint.textContent = "Assista à prévia atual antes de aprovar. " + (project?.scenes||[]).flatMap(s=>(s.animationNotes||[]).map(n=>"Pendente no handoff: "+n.description+" ("+n.destination+")")).join(" · ");
     if (!project) return;
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
@@ -128,7 +169,7 @@ export function mountStage({ state, api, player }) {
     const hasPreview = project.previewRevision != null || previewPlayer.hasAttribute("data-rev");
     previewPlayer.hidden = !original && !hasPreview;
     empty.hidden = !previewPlayer.hidden;
-    footer.hidden = !project.scenes.length || original;
+    review.hidden = !project.scenes.length || original;
     document.getElementById("montageView").setAttribute("aria-pressed", String(!original));
     document.getElementById("originalView").setAttribute("aria-pressed", String(original));
     document.getElementById("originalView").disabled = project.assembly.sources.length === 0;
@@ -142,12 +183,12 @@ export function mountStage({ state, api, player }) {
       : project.scenes.length ? "A prévia ainda não está pronta" : "Materiais prontos para começar";
     document.getElementById("emptyMessage").textContent = !hasMedia
       ? "Importe os materiais, conte o que você quer no briefing e monte seu primeiro corte."
-      : prep?.status === "running" ? "Acompanhe as etapas acima. Você pode consultar os materiais e a transcrição enquanto isso."
-      : prep && ["interrupted", "attention"].includes(prep.status) ? "Veja o material com falha acima e retome a preparação. A transcrição concluída continua disponível em Texto."
+      : prep?.status === "running" ? "Acompanhe as etapas abaixo. A transcrição já aparece no texto enquanto isso."
+      : prep && ["interrupted", "attention"].includes(prep.status) ? "Veja o material com falha no rail e retome a preparação. A transcrição concluída continua no texto."
       : "Confira o briefing e clique em Montar vídeo. Para assistir a uma fonte, escolha Original ou sua miniatura.";
     document.getElementById("importFromStage").hidden = hasMedia;
     setDisabled(document.getElementById("refreshPreview"), !project.scenes.length);
-    renderFreshness(project);
+    paintReview(project);
     if (original) return;
     if (!project.scenes.length) { previewPlayer.hidden = true; empty.hidden = false; return; }
     // Metadados da prévia em linha de chips mono (Task 4).
@@ -174,7 +215,8 @@ export function mountStage({ state, api, player }) {
         previewPlayer.currentTime = time;
         // Troca de src invalida o "assistido" (o loadstart cobre o resto).
         state.set("watched", { revision: null, ended: false });
-        lastTime = Number.isFinite(time) ? time : 0;
+        // A posição mantida na troca não foi tocada nesta prévia: a contagem recomeça.
+        coverage = newCoverage(Number.isFinite(time) ? time : 0, { source: String(project.previewRevision) });
       }
       lastPreviewRev = project.previewRevision;
       if (!current) {
@@ -194,7 +236,7 @@ export function mountStage({ state, api, player }) {
       previewPlayer.removeAttribute("data-rev");
       note(true, chip("sem prévia"));
     }
-    renderFreshness(project);
+    paintReview(project);
     // Atualizar prévia renderiza no servidor: bloqueia o segundo clique.
     setDisabled(
       document.getElementById("refreshPreview"),
@@ -239,7 +281,7 @@ export function mountStage({ state, api, player }) {
   state.subscribe("previewBusy", () => renderPreview(state.get("project")));
   state.subscribe("operation", () => renderPreview(state.get("project")));
   state.subscribe("view", () => renderPreview(state.get("project")));
-  state.subscribe("watched", () => renderFreshness(state.get("project")));
+  state.subscribe("watched", () => paintReview(state.get("project")));
   renderPreview(state.get("project"));
 }
 
@@ -286,17 +328,35 @@ function backgroundBusy(project, operation, player) {
   return false;
 }
 
+/** Pendências do monitor (puro): correções não alinhadas, lacunas e animações a fazer. */
+export function pendingItems(project) {
+  if (!project) return [];
+  const span = (c) => c.sourceId + " " + c.start.toFixed(1).replace(".", ",") + "–" + c.end.toFixed(1).replace(".", ",") + " s";
+  const items = [];
+  for (const correction of project.corrections || []) {
+    if (correction.status === "aligned") continue;
+    items.push(correction.status === "error"
+      ? { tone: "error", title: "Correção com erro", detail: span(correction) + " · " + (correction.error || "falha no alinhamento") + ". O texto original segue valendo." }
+      : { tone: "running", title: "Alinhando correção", detail: span(correction) + " · o trecho original segue valendo até terminar." });
+  }
+  project.scenes.forEach((scene, index) => {
+    for (const gap of scene.gaps || []) items.push({ tone: "error", title: "Cena " + (index + 1), detail: "Lacuna: " + gap });
+    for (const note of scene.animationNotes || []) {
+      items.push({ tone: "info", title: "Animação no " + note.destination, detail: note.description });
+    }
+  });
+  return items;
+}
+
 export function mountContexto({ state, api, player }) {
   const root = document.getElementById("contexto");
   root.replaceChildren();
 
-  const scenePanel = document.createElement("section");
-  scenePanel.className = "scene-inspector";
-  scenePanel.innerHTML = '<h1>Clipe selecionado</h1><h2 id="sceneTitle">Nenhuma cena ainda</h2>'
-    + '<p id="sceneDetail" class="muted">A montagem aparecerá aqui depois da preparação.</p>'
-    + '<div class="row"><button type="button" id="sceneBefore">← Antes</button><button type="button" id="sceneAfter">Depois →</button>'
-    + '<button type="button" id="sceneDelete" class="danger">Remover cena</button></div>';
-  root.appendChild(scenePanel);
+  const scenePanel = document.createElement("details");
+  scenePanel.className = "sub scene-inspector";
+  scenePanel.open = true;
+  scenePanel.innerHTML = '<summary><span class="ttl">Cena selecionada</span><span id="sceneTitle" class="scene-card-title">Nenhuma cena ainda</span></summary>'
+    + '<p id="sceneDetail" class="muted">A montagem aparecerá aqui depois da preparação.</p>';
   const decisionNote = document.createElement("p");
   decisionNote.id = "decisionReport";
   decisionNote.className = "muted";
@@ -304,7 +364,7 @@ export function mountContexto({ state, api, player }) {
   scenePanel.appendChild(decisionNote);
   const supportForm=document.createElement("form");
   supportForm.className="support-editor";
-  supportForm.innerHTML='<h2>Imagem de apoio · B-roll</h2><p id="supportReason" class="muted"></p>'
+  supportForm.innerHTML='<h2>Imagem de apoio</h2><p id="supportReason" class="muted"></p>'
     +'<label>Apoio na cena<select id="supportGroup"></select></label>'
     +'<label>Imagem disponível<select id="supportCandidate"></select></label><p id="supportDetail" class="muted"></p>'
     +'<div class="support-times"><label>Início na cena (s)<input id="supportStart" type="number" min="0" step="any" required></label>'
@@ -364,78 +424,61 @@ export function mountContexto({ state, api, player }) {
       ? [...new Set(scene.takes.map((take) => project.assembly.sources.find((source) => source.id === take.sourceId)?.name || take.sourceId))].join(" · ")
       : "Prepare os materiais para criar a sequência.";
     renderSupport(project,scene);
-    const index = project.scenes.indexOf(scene);
-    document.getElementById("sceneBefore").disabled = index <= 0;
-    document.getElementById("sceneAfter").disabled = index < 0 || index === project.scenes.length - 1;
-    document.getElementById("sceneDelete").disabled = !scene;
-  }
-  for (const [id, direction] of [["sceneBefore", "up"], ["sceneAfter", "down"], ["sceneDelete", null]]) {
-    document.getElementById(id).onclick = () => {
-      const p = state.get("project");
-      const scene = selectedScene(p);
-      if (!scene) return;
-      return api.call("/project/edit", {
-        method: "POST", body: JSON.stringify({ baseRevision: p.revision, action: { type: direction ? "move-scene" : "delete-scene", sceneId: scene.id, direction } }),
-        label: direction ? "Movendo cena…" : "Removendo cena…",
-      });
-    };
   }
   state.subscribe("selectedScene", () => { if (state.get("project")) renderScene(state.get("project")); });
 
-  const inspectorState = document.createElement("p");
-  inspectorState.className = "muted";
-  inspectorState.id = "inspectorState";
-  inspectorState.setAttribute("aria-live", "polite");
-  root.appendChild(inspectorState);
-
-  const closeInspector = document.createElement("button");
-  closeInspector.type = "button";
-  closeInspector.id = "closeInspector";
-  closeInspector.className = "close-inspector";
-  closeInspector.textContent = "Fechar inspetor";
-  closeInspector.addEventListener("click", () => { root.hidden = true; });
-  root.prepend(closeInspector);
-
-  // Só o estado das correções mora aqui; as ações por palavra (incluindo
-  // corrigir, com campo inline) moram no menu flutuante do texto.
-  const review = document.createElement("section");
-  review.setAttribute("aria-label", "Correções de texto");
-  review.innerHTML = "<h1>Correções de texto</h1>"
-    + '<div id="corrections" aria-label="Estado das correções de texto"></div>';
-  root.appendChild(review);
+  const pending = document.createElement("section");
+  pending.className = "pending";
+  pending.setAttribute("aria-label", "Pendências");
+  pending.innerHTML = '<div class="pending-head"><h2>Pendências</h2><p id="inspectorState" aria-live="polite"></p></div>'
+    + '<ul id="corrections" class="plain pending-list"></ul>';
 
   // Pedido de ajuste usa o mesmo provedor configurado para Preparar montagem.
   const briefingActions = document.createElement("section");
-  briefingActions.setAttribute("aria-label", "Ajuste");
-  briefingActions.innerHTML = "<h1>Ajuste</h1>"
-    + '<label>Pedido <textarea id="request" rows="2" placeholder="Ex.: encurtar a abertura"></textarea></label>'
-    + '<div class="row"><button type="button" class="primary" id="adjust">Aplicar ajuste com IA</button>'
-    + '<button type="button" class="danger" id="cancelPrep" hidden>Cancelar preparação</button></div>';
-  root.appendChild(briefingActions);
+  briefingActions.className = "adjust";
+  briefingActions.setAttribute("aria-label", "Pedir ajuste à IA");
+  briefingActions.innerHTML = '<label for="request" class="ttl">Pedir ajuste à IA</label>'
+    + '<div class="composer"><textarea id="request" rows="1" placeholder="Ex.: encurtar a abertura"></textarea>'
+    + '<button type="button" class="icon send" id="adjust" aria-label="Aplicar ajuste com IA">' + ICON.send + "</button></div>"
+    + '<p class="consent">Envia texto e quadros ao provedor configurado · pode haver cobrança</p>'
+    + '<button type="button" class="danger small" id="cancelPrep" hidden>Cancelar preparação</button>';
 
   const delivery = document.createElement("section");
   delivery.id = "delivery";
   delivery.setAttribute("aria-label", "Entrega");
-  delivery.innerHTML = "<h1>Entrega</h1>"
-    + '<ul id="deliveryChecklist" class="plain"></ul>'
-    + '<p class="muted" id="formatLine"></p>'
-    + '<p class="muted" id="verifyLine"></p>'
-    + '<p class="muted" id="deliveryLock" aria-live="polite"></p>'
-    + '<div class="row"><button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button><button type="button" id="editFormat">Alterar formato…</button><button type="button" id="confirmImport" hidden>Confirmar conferência</button></div><p class="muted">Resolve gratuito: baixe a timeline abaixo, abra um projeto no Resolve e use File → Import → Timeline. Depois, File → Export Project salva o projeto nativo .drp.</p><details><summary>Integração automática — Resolve Studio</summary><p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p><div class="row"><button type="button" id="export">Abrir montagem no DaVinci</button><button type="button" id="exportDrp" hidden>Exportar .drp</button><button type="button" id="resolveNewCopy" hidden>Criar outra cópia</button></div></details>'
-    + '<p class="muted" id="exportStatus" role="status" aria-live="polite"></p>'
-    + '<p id="downloads"></p>'
-    + '<ul id="versionHistory" class="plain"></ul>';
-  root.appendChild(delivery);
+  delivery.innerHTML = '<header class="delivery-head"><div class="delivery-title"><h1>Entrega</h1><span id="deliveryBadge" class="pill"></span></div>'
+    + '<p id="deliveryLock" aria-live="polite"></p><ul id="deliveryChecklist" class="plain checklist"></ul></header>'
+    + '<div id="verifyCard" class="sub verify-card"><span class="verify-icon" id="verifyIcon"></span>'
+    + '<div class="verify-text"><strong id="verifyTitle"></strong><span id="verifyLine"></span></div>'
+    + '<button type="button" class="primary" id="exportTimeline">Preparar montagem para DaVinci</button>'
+    + '<button type="button" class="primary" id="confirmImport" hidden>Confirmar conferência</button></div>'
+    + '<section class="delivery-files" id="deliveryFiles" aria-labelledby="filesTitle"><div class="files-head">'
+    + '<h2 id="filesTitle" class="ttl">Montagem preparada para o DaVinci</h2><span id="filesPath" class="mono"></span></div>'
+    + '<ul id="downloads" class="plain"></ul></section>'
+    + '<div class="sub format-row"><span class="ttl">Formato</span><span id="formatLine" class="mono"></span><span id="formatOrigin"></span>'
+    + '<button type="button" id="editFormat" class="small">Alterar formato</button></div>'
+    + '<div class="resolve-paths"><section class="sub"><h2>Resolve gratuito</h2><ol class="plain resolve-steps">'
+    + "<li>Baixe a timeline.otio.</li>"
+    + '<li>No Resolve: <span class="mono">File → Import → Timeline</span>.</li>'
+    + '<li><span class="mono">File → Export Project</span> salva o projeto nativo .drp.</li></ol></section>'
+    + '<section class="sub"><h2>Resolve Studio <span class="pill">automático</span></h2>'
+    + '<p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p>'
+    + '<div class="row"><button type="button" id="export" class="small">Abrir no DaVinci</button>'
+    + '<button type="button" id="exportDrp" class="small" hidden>Exportar .drp</button>'
+    + '<button type="button" id="resolveNewCopy" class="small" hidden>Criar outra cópia</button></div></section></div>'
+    + '<p id="exportStatus" role="status" aria-live="polite"></p>'
+    + '<ul id="versionHistory" class="plain history"></ul>';
+  delivery.hidden = true;
+  document.getElementById("center").appendChild(delivery);
 
   // Controle de ritmo (#66): escolha do perfil é etapa anterior à
   // prévia/aprovação — a proposta compara pausas e oferece amostra
   // auditável do mesmo trecho antes e depois, sem chamada paga.
-  const rhythm = document.createElement("section");
-  rhythm.setAttribute("aria-label", "Ritmo");
-  rhythm.innerHTML = "<h1>Ritmo</h1>"
-    + '<p class="muted" id="rhythmCurrent"></p>'
-    + '<div class="row" id="rhythmChoices"></div>';
-  root.insertBefore(rhythm, delivery);
+  const rhythm = document.createElement("details");
+  rhythm.className = "sub rhythm";
+  rhythm.innerHTML = '<summary><span class="ttl">Ritmo</span></summary>'
+    + '<p class="muted" id="rhythmCurrent"></p><div class="row" id="rhythmChoices"></div>';
+  root.replaceChildren(pending, scenePanel, rhythm, briefingActions);
 
   const rhythmDialog = document.createElement("dialog");
   rhythmDialog.id = "rhythmDialog";
@@ -596,85 +639,61 @@ export function mountContexto({ state, api, player }) {
   let resolveDelivery=null;
   let resolveRevision=null;
 
-  /** Estado pending/error das correções; alinhadas já estão no catálogo (V3). */
-  function renderCorrections(project) {
-    const box = document.getElementById("corrections");
-    if (!box) return;
-    box.replaceChildren();
-    for (const correction of project.corrections || []) {
-      if (correction.status === "aligned") continue;
-      const p = document.createElement("p");
-      if (correction.status === "error") {
-        p.className = "warn";
-        p.textContent = "Correção com erro (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s): "
-          + (correction.error || "falha no alinhamento") + ". O texto original segue valendo.";
-      } else {
-        p.className = "muted";
-        p.textContent = "Alinhando correção (" + correction.sourceId + " "
-          + correction.start.toFixed(1) + "s–" + correction.end.toFixed(1) + "s)… "
-          + "o trecho original segue valendo e os cortes usam o catálogo atual.";
-      }
-      box.appendChild(p);
-    }
+  function renderPending(project) {
+    const items = pendingItems(project);
+    const shown = items.length ? items : [{ tone: "ok", title: "Sem pendências", detail: "" }];
+    document.getElementById("corrections").replaceChildren(...shown.map((item) => {
+      const li = document.createElement("li");
+      li.className = "pending-item";
+      li.dataset.tone = item.tone;
+      li.innerHTML = (item.tone === "ok" ? ICON.ok : item.tone === "running" ? ICON.spinner : ICON.alert)
+        + "<div><strong></strong> <span></span></div>";
+      li.querySelector("strong").textContent = item.title;
+      li.querySelector("span").textContent = item.detail;
+      return li;
+    }));
   }
 
   function renderDelivery(project) {
     // Checklist derivado do estado real: atualiza a cada render de projeto.
     const checklist = document.getElementById("deliveryChecklist");
-    checklist.replaceChildren();
-    for (const item of deliveryChecklist(project)) {
+    checklist.replaceChildren(...deliveryChecklist(project).map((item) => {
       const li = document.createElement("li");
-      li.append(chip((item.done ? "✓ " : "○ ") + item.label));
-      checklist.appendChild(li);
-    }
+      li.className = "pill" + (item.done ? " done" : "");
+      li.innerHTML = item.done ? ICON.check : ICON.circle;
+      li.append(item.label);
+      return li;
+    }));
     // Export de outra revisão não conta: edição nova volta ao ocioso.
     if (exportUi.status === "done" && exportUi.revision !== project.revision) {
       exportUi.status = "idle";
       exportUi.error = null;
       exportUi.revision = null;
     }
-    const downloads = document.getElementById("downloads");
-    downloads.replaceChildren();
     // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
     // o servidor também recusa export sem aprovação (exportApproved).
     const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
-    if (lock) {
-      lock.textContent = approved
-        ? "🔓 Revisão " + project.finalApprovedRevision + " aprovada — entrega liberada."
-        : "🔒 Entrega bloqueada — assista à prévia atual até o fim e aprove para liberar.";
-    }
-    const formatLine = document.getElementById("formatLine");
-    const canvasOwner = project.assembly.canvasSourceId
-      ? project.assembly.sources.find((item) => item.id === project.assembly.canvasSourceId)
-      : null;
-    formatLine.textContent = "Formato: " + formatLabel(project.assembly)
-      + (project.assembly.canvasManual
-        ? canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — personalizado"
-        : canvasOwner ? ` — da fonte "${canvasOwner.name}"` : " — padrão do projeto");
+    lock.textContent = approved
+      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser assistida e aprovada."
+      : "Assista à prévia atual até o fim e aprove para liberar a entrega.";
+    const badge = document.getElementById("deliveryBadge");
+    badge.className = "pill" + (approved ? " pill-ok" : "");
+    badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
+    document.getElementById("formatLine").textContent = formatLabel(project.assembly);
+    document.getElementById("formatOrigin").textContent = formatOrigin(project.assembly);
     // Estado da conferência: exportar nunca confirma; revisão nova
     // não herda a confirmação (verificacao.json é por revisão).
-    const verifyLine = document.getElementById("verifyLine");
-    const confirmImportButton = document.getElementById("confirmImport");
     const verificacao = state.get("verificacao");
-    if (!verificacao) {
-      verifyLine.textContent = "Conferência de importação: sem entrega da revisão atual.";
-      confirmImportButton.hidden = true;
-    } else if (verificacao.status === "confirmada") {
-      verifyLine.textContent = `Conferência de importação: confirmada (revisão ${verificacao.revision}, confirmação manual).`;
-      confirmImportButton.hidden = true;
-    } else {
-      verifyLine.textContent = `Conferência de importação: pendente — importe a revisão ${verificacao.revision} no Resolve e confira a timeline.`;
-      confirmImportButton.hidden = false;
-    }
-    const rev = project.finalApprovedRevision;
-    const formats = approved ? [
-      { id: "otio", label: "Baixar timeline.otio", href: "/project/output/" + rev + "/otio", file: "timeline.otio" },
-      { id: "mp4", label: "Baixar reference.mp4", href: "/project/output/" + rev + "/mp4", file: "reference.mp4" },
-      { id: "instrucoes", label: "Instruções de conferência (.txt)", href: "/project/output/" + rev + "/instrucoes", file: "importar-no-resolve.txt" },
-      { id: "verificacao", label: "verificacao.json", href: "/project/output/" + rev + "/verificacao", file: "verificacao.json" },
-    ] : null;
+    const verify = verifyView(project, verificacao);
+    const card = document.getElementById("verifyCard");
+    card.dataset.state = verify.state;
+    document.getElementById("verifyIcon").innerHTML = verify.state === "done" ? ICON.ok : verify.state === "locked" ? ICON.lock : ICON.alert;
+    document.getElementById("verifyTitle").textContent = verify.title;
+    document.getElementById("verifyLine").textContent = verify.detail;
+    document.getElementById("confirmImport").hidden = !verify.showConfirm;
+    document.getElementById("exportTimeline").hidden = !verify.showExport;
+    const formats = deliveryFormats(project, verificacao);
     if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
     const nativeView=resolveView(resolveDelivery,approved);
@@ -686,20 +705,34 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("resolveNewCopy").hidden=!nativeView.newCopy;
     setDisabled(document.getElementById("exportTimeline"),view.disabled);
     const exportStatus = document.getElementById("exportStatus");
-    exportStatus.textContent = (nativeView.statusText||view.statusText)+" · O .drp depende dos arquivos de mídia originais.";
-    exportStatus.className = "muted export-" + view.tone;
-    for (const format of view.formats || []) {
+    const parts = [nativeView.statusText || view.statusText];
+    if (resolveDelivery) parts.push("O .drp depende dos arquivos de mídia originais.");
+    exportStatus.textContent = parts.filter(Boolean).join(" · ");
+    exportStatus.className = "export-" + view.tone;
+    const downloads = document.getElementById("downloads");
+    const addFile = (file, label, href) => {
+      const li = document.createElement("li");
+      li.className = "file";
+      li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
+      li.querySelector(".file-name").textContent = file;
+      li.querySelector(".file-desc").textContent = label;
       const link = document.createElement("a");
-      link.className = "data";
-      link.href = format.href;
-      link.textContent = format.label;
-      link.setAttribute("download", format.file);
-      downloads.appendChild(link);
-    }
-    if(resolveDelivery?.drpPath){const link=document.createElement("a");link.href="/project/resolve-drp";link.textContent="Baixar projeto .drp";link.download="projeto.drp";downloads.appendChild(link);}
+      link.className = "button";
+      link.href = href;
+      link.download = file;
+      link.textContent = "Baixar";
+      link.setAttribute("aria-label", "Baixar " + file);
+      li.append(link);
+      downloads.append(li);
+    };
+    downloads.replaceChildren();
+    for (const f of formats) addFile(f.file, f.label, f.href);
+    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", "/project/resolve-drp");
+    document.getElementById("deliveryFiles").hidden = downloads.childElementCount === 0;
+    document.getElementById("filesPath").textContent = formats.length ? "exports/" + project.finalApprovedRevision + "/" : "";
     const history = document.getElementById("versionHistory");
     history.replaceChildren(
-      chip("revisão " + project.revision),
+      chip("versão " + project.revision),
       chip(project.previewRevision != null ? "prévia " + project.previewRevision : "sem prévia"),
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
       chip("formato " + formatLabel(project.assembly)),
@@ -709,13 +742,12 @@ export function mountContexto({ state, api, player }) {
   function render(project) {
     if (!project) return;
     const operation = state.get("operation");
-    renderCorrections(project);
+    renderPending(project);
     const sections = inspectorSections(project);
     renderScene(project);
     document.getElementById("inspectorState").textContent =
-      (sections.hasPreview ? "prévia " + project.previewRevision : "sem prévia")
-      + " · " + sections.corrections + " correção(ões) pendente(s)"
-      + (sections.approved ? " · aprovada ✓" : "");
+      (sections.hasPreview ? "prévia v" + project.previewRevision : "sem prévia")
+      + (sections.approved ? " · aprovada" : "");
     const preparing = project.preparation
       && project.preparation.status === "running";
     document.getElementById("cancelPrep").hidden = !(
@@ -725,7 +757,6 @@ export function mountContexto({ state, api, player }) {
     // parecer travado (o servidor cancelaria o anterior).
     const bg = backgroundBusy(project, operation, player);
     setDisabled(document.getElementById("adjust"), bg || !project.scenes.length);
-    review.hidden = sections.corrections === 0;
     renderDelivery(project);
   }
 
@@ -793,6 +824,8 @@ export function mountContexto({ state, api, player }) {
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));
   state.subscribe("operation", () => render(state.get("project")));
+  // Confirmar a conferência devolve o mesmo projeto: só a verificação muda.
+  state.subscribe("verificacao", () => { if (state.get("project")) renderDelivery(state.get("project")); });
   render(state.get("project"));
 }
 

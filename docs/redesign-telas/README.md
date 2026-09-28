@@ -64,3 +64,28 @@ node work/ui-screens/serve.ts   # limpar 7791 · montar 7792 · marcar 7793
 - A faixa de sequência do editor virou timeline com régua e playhead (task 7 do redesign; ver print [03-montar-editor.png](depois/03-montar-editor.png)).
 - Na primeira carga da montagem o thumbnail devolve 409 transitório (proxy sendo gerado); recarregar resolve.
 - O app de montagem auto-renderiza a prévia e faz bump de revisão sozinho ao abrir.
+
+## Painéis flutuantes (2026-09-26, direção A)
+
+Terceira passada, escolhida no canvas "Redesign da interface do editor" (https://claude.ai/artifact/9GJCiT7iy7JMVuvgJ6qhwV): texto e vídeo juntos, três cartões flutuantes, etapas numa pílula no topo, uma navegação só. Artboards de referência em [paineis-flutuantes/](paineis-flutuantes/); o plano de implementação é um documento local, não versionado (`docs/superpowers/plans/2026-09-26-decupa-paineis-flutuantes.md` na máquina de quem executou), como os prints abaixo.
+
+### Prova visual (local, não versionada)
+
+Os prints de conferência desta passada são artefatos locais: não entram no git e não há arquivo de imagem para abrir a partir deste README. Para gerá-los:
+
+1. Suba o harness de mock (a pasta `work/` também é local): `node work/ui-screens/serve.ts`. O Limpar fica na porta 7791, a Montagem na 7792 e o Marcar na 7793.
+2. Capture cada tela com o `playwright-cli`, como no plano, a 1440×900 e a 390 px de largura:
+
+   ```bash
+   playwright-cli open http://127.0.0.1:7792/
+   playwright-cli resize 1440 900
+   playwright-cli screenshot --filename=paineis-montar.png
+   playwright-cli resize 390 844
+   playwright-cli screenshot --filename=paineis-montar-390.png
+   ```
+
+   Repita com a 7791 (Limpar) e a 7793 (Marcar). Na Montagem estreita, o botão "Monitor" abre a gaveta do monitor.
+3. Montagem vazia, preparando e entrega não têm mock no harness: rode `pnpm decupa montar --project <pasta nova> --port <porta livre>` para o vazio; num projeto com mídia, "Montar vídeo" mostra a preparação (a etapa passa sozinha para Edição quando a transcrição chega); aprovar a prévia e abrir Entrega mostra a entrega.
+4. Compare cada print com o artboard correspondente em [paineis-flutuantes/](paineis-flutuantes/): `montagem.dc.html`, `montagem-vazia.dc.html`, `montagem-preparando.dc.html`, `montagem-entrega.dc.html`, `limpar.dc.html` e `marcar.dc.html`.
+
+Desvios conhecidos do canvas: a faixa da fonte no Limpar mostra trechos, não onda (não há endpoint de picos no Limpar); o aviso às cegas do Marcar diz "palpite de posição", porque a tela não pode citar sugestão; preparação e entrega não têm mock no harness e foram conferidas em servidores de prova (preparação com fala e análise visual falsas; entrega numa cópia aprovada do fixture).

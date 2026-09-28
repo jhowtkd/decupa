@@ -388,6 +388,7 @@ async function startCleanupApp(opts: {
             stage: current.stage, error: current.error, warning: current.warning,
             progress: current.progress,
             keepList: current.keepList, review: current.review,
+            source: basename(input),
             audio: audioReady,
           });
           return;
