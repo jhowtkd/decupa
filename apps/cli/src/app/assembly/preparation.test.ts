@@ -463,6 +463,60 @@ describe("runPreparation", () => {
     expect(done.corrections).toHaveLength(0);
   });
 
+  it("prepare registra o passo Preparar montagem e a revisão preparada", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps } = makeFakes();
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    expect({
+      label: done.undo?.steps.at(-1)?.label ?? null,
+      prepared: done.preparedRevision ?? null,
+      head: done.undo?.head ?? null,
+    }).toEqual({ label: "Preparar montagem", prepared: done.revision, head: done.revision });
+  });
+
+  it("adjust registra o passo Ajuste com IA mas não move a revisão preparada", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps } = makeFakes();
+    const prepared = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    const takeId = prepared.scenes[0]?.takes[0]?.id;
+    const ajuste = makeFakes({
+      proposalJson: JSON.stringify({
+        scenes: [{ id: "sc-1", objective: "Abertura ajustada", selections: [{ takeId }] }],
+        changedSceneIds: ["sc-1"],
+        gaps: [],
+      }),
+    });
+    const adjusted = await runPreparation(
+      dir,
+      prepared.revision,
+      { mode: "adjust", request: "ajustar", modelOptIn: true, visualOptIn: true },
+      ajuste.deps,
+      ctrl(),
+    );
+    expect(adjusted.preparation?.error ?? null).toBeNull();
+    expect({
+      label: adjusted.undo?.steps.at(-1)?.label ?? null,
+      avancou: adjusted.revision > prepared.revision,
+      preparedRevision: adjusted.preparedRevision ?? null,
+    }).toEqual({
+      label: "Ajuste com IA",
+      avancou: true,
+      preparedRevision: prepared.preparedRevision ?? null,
+    });
+  });
+
   it("falha do áudio da segunda fonte preserva a primeira e para antes da proposta (V5)", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
     const { deps, calls } = makeFakes({ failAudioFor: "b" });

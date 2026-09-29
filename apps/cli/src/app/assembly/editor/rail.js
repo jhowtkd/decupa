@@ -273,7 +273,9 @@ export function primaryAction(project, operation) {
   if (needsPrep) {
     return { kind: "preparar", label: "Preparar montagem", disabled: false, stage: null };
   }
-  if (hasClips || prep?.status === "ready") {
+  // Preparação "ready" sem cenas é a que sobra depois de desfazer "Preparar":
+  // não há o que revisar, e a saída é montar de novo.
+  if (hasClips || (prep?.status === "ready" && project.scenes.length > 0)) {
     return { kind: "revisar", label: "Revisar prévia", disabled: false, stage: "revisao" };
   }
   if (prep && ["interrupted", "attention", "cancelled"].includes(prep.status)) {
@@ -375,6 +377,19 @@ export async function prepareAfterBriefing(draft, prepare) {
   return true;
 }
 
+/** Pergunta feita antes de preparar por cima de cenas que mudaram. */
+export const PREPARE_CONFIRM = "Preparar de novo substitui as cenas atuais, inclusive o que você editou à mão. "
+  + "Dá para voltar com Desfazer. Continuar?";
+
+/**
+ * Montar/Preparar/Retomar trocam as cenas (puro): pede confirmação quando já
+ * há cenas e o projeto mudou desde a última preparação que as aplicou
+ * (`preparedRevision`). Projeto antigo, sem o registro, também pergunta.
+ */
+export function prepareNeedsConfirm(project) {
+  return !!project && project.scenes.length > 0 && project.revision !== project.preparedRevision;
+}
+
 /** A lista de cenas só é a mesma quando número, título, início e lacuna não mudam. */
 export function sameSceneNav(prev, next) {
   return JSON.stringify(prev) === JSON.stringify(next);
@@ -411,7 +426,7 @@ export function briefingSummary(input, durationSeconds) {
   return { text: input?.text ?? "", target, duration, over, fill, note };
 }
 
-export function mountRail({ state, api, player }) {
+export function mountRail({ state, api, player, confirm: confirmAction = (message) => window.confirm(message) }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
@@ -522,7 +537,8 @@ export function mountRail({ state, api, player }) {
       const { res, body } = await api.call("/project/new", {
         method: "POST", body: "{}", label: "Criando projeto…",
       });
-      if (res.ok) window.location.assign(body.url);
+      // #novo: a página nova anuncia a pasta criada no status.
+      if (res.ok) window.location.assign(body.url + "#novo");
     } finally {
       newProject.disabled = false;
     }
@@ -846,10 +862,14 @@ export function mountRail({ state, api, player }) {
   // e nenhum enquanto o servidor segue preparando depois do 202 (os botões
   // já ficam travados; a guarda cobre o clique que chegar antes da pintura).
   // O erro já aparece no status pelo api.call; aqui só destrava o botão.
+  // Cenas mudadas desde a última preparação só são trocadas com confirmação.
   const prepareMontage = singleFlight(
-    () => (preparationBusy(state.get("project"), state.get("operation"))
-      ? undefined
-      : prepareAfterBriefing(briefing, callPrepare).catch(() => false)),
+    () => {
+      const project = state.get("project");
+      if (preparationBusy(project, state.get("operation"))) return undefined;
+      if (prepareNeedsConfirm(project) && !confirmAction(PREPARE_CONFIRM)) return undefined;
+      return prepareAfterBriefing(briefing, callPrepare).catch(() => false);
+    },
     () => { if (state.get("project")) paintPrepare(state.get("project")); },
   );
   document.getElementById("prepare").onclick = prepareClick;

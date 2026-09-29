@@ -1,7 +1,7 @@
 import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
 import { validateAnimationNotes } from "./handoff.ts";
 import { validateDecisionReport } from "./assembly-decisions.ts";
-import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
+import { open, readFile, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { access } from "node:fs/promises";
 import { publishAtomic } from "@decupa/cache";
@@ -19,6 +19,7 @@ import type {
   Word,
 } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
+import { readUndoStack } from "./undo.ts";
 
 const writers = new Map<string, LimitedQueue>();
 
@@ -444,6 +445,11 @@ function validateV2(value: Record<string, unknown>): Project {
     value.proposal.template=approvedSnapshot(value.proposal.template);
     value.proposal.templateReport=validateTemplateReport(value.proposal.templateReport??[],value.proposal.template as Project["template"]??null);
   }
+  // Pilha do desfazer e revisão preparada são opcionais: inválidas somem,
+  // e o projeto abre sem desfazer em vez de ficar ilegível.
+  const undo = readUndoStack(value.undo);
+  const preparedRevision = Number.isSafeInteger(value.preparedRevision) && (value.preparedRevision as number) >= 0
+    ? value.preparedRevision as number : undefined;
   return {
     ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
     ...(value.templateReport!==undefined?{templateReport:validateTemplateReport(value.templateReport,approvedSnapshot(value.template))}:{}),
@@ -467,6 +473,8 @@ function validateV2(value: Record<string, unknown>): Project {
     // para não deixar snapshot antigo reverter consentimentos atuais.
     permissions: value.permissions as Project["permissions"],
     previewArtifact: previewArtifact as Project["previewArtifact"],
+    ...(undo !== undefined ? { undo } : {}),
+    ...(preparedRevision !== undefined ? { preparedRevision } : {}),
   };
 }
 
@@ -765,7 +773,10 @@ function historyPath(dir: string, revision: number): string {
   return join(dir, "history", `rev-${revision}.json`);
 }
 
-/** Guarda o estado editorial antes da mutação; sobrescreve o mesmo rev. */
+/**
+ * Guarda o estado editorial antes da mutação; sobrescreve o mesmo rev.
+ * Publicação atômica: uma queda no meio nunca deixa foto pela metade.
+ */
 export async function writeHistorySnapshot(dir: string, project: Project): Promise<void> {
   const snapshot: EditorialSnapshot = {
     revision: project.revision,
@@ -778,8 +789,8 @@ export async function writeHistorySnapshot(dir: string, project: Project): Promi
     ...(project.assembly.rhythmProfile!==undefined
       ?{rhythmProfile:project.assembly.rhythmProfile}:{}),
   };
-  await mkdir(join(dir, "history"), { recursive: true });
-  await writeFile(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  // A foto é o que o desfazer restaura: durável como o project.json.
+  await publishAtomic(historyPath(dir, project.revision), `${JSON.stringify(snapshot, null, 2)}\n`, { durable: true });
 }
 
 export async function readHistorySnapshot(dir: string, revision: number): Promise<EditorialSnapshot> {

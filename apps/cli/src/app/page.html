@@ -652,6 +652,7 @@ el("strip").addEventListener("keydown", (ev) => {
 });
 
 // Clique não re-planeja: 250ms depois, o servidor recalcula as junções.
+// Falha de rede, ou erro sem corpo JSON (ex.: 502), vira aviso, nunca exceção muda.
 function schedule() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
@@ -660,16 +661,20 @@ function schedule() {
       toast("Pelo menos um trecho precisa permanecer", true);
       return;
     }
-    const res = await fetch(`/jobs/${jobId}/keep`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ keepList: list }),
-    });
-    const r = await res.json();
-    if (!res.ok || r.error) {
-      toast(r.error ?? `Erro ${res.status}`, true);
-      return;
+    try {
+      const res = await fetch(`/jobs/${jobId}/keep`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ keepList: list }),
+      });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok || r.error) {
+        toast(r.error ?? `Erro ${res.status}`, true);
+        return;
+      }
+      if (r.review) { review = r.review; render(); }
+    } catch (err) {
+      toast("Não deu para salvar a seleção: " + ((err && err.message) || err) + ". Confira o terminal do decupa.", true);
     }
-    if (r.review) { review = r.review; render(); }
   }, 250);
 }
 
@@ -682,8 +687,22 @@ function readyFrom(j) {
   render();
 }
 
+// Poll que falha (servidor fora, resposta que não é JSON) avisa e tenta de novo;
+// job que o servidor não conhece encerra com a mensagem, sem ficar em "Transcrevendo".
 async function poll() {
-  const j = await api("");
+  let j;
+  try {
+    j = await api("");
+  } catch (err) {
+    el("aviso").textContent = "Sem resposta do decupa (" + ((err && err.message) || err) + "). Tentando de novo…";
+    setTimeout(poll, 3000);
+    return;
+  }
+  if (j.error && !j.stage) {
+    renderMessage("Não deu para acompanhar o processamento", j.error);
+    el("cancelar").disabled = true;
+    return;
+  }
   if (j.audio) audioSrc = "/media/audio";
   if (j.source) {
     el("sourceName").textContent = j.source;

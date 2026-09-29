@@ -655,6 +655,17 @@ function lazyPaidSend(projectDir: string, configDir?: string): (content: unknown
   };
 }
 
+/**
+ * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
+ * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
+ */
+export function withProjectDir(page: string, dir: string): string {
+  const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+  // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
+  return page.replace('<meta name="decupa-project-dir" content="">',
+    () => `<meta name="decupa-project-dir" content="${escaped}">`);
+}
+
 async function startAssemblyApp(opts: {
   projectDir: string;
   inputs?: string[];
@@ -741,14 +752,17 @@ async function startAssemblyApp(opts: {
           ...opts, projectDir: nextDir, inputs: undefined, port: 0,
         });
         newProjects.push(next);
-        sendJson(res, { url: `http://127.0.0.1:${next.port}/` }, 201);
+        const nextUrl = `http://127.0.0.1:${next.port}/`;
+        // A pasta nova precisa ser achável depois: vai no log e na resposta.
+        console.log(`novo projeto em ${nextDir}: ${nextUrl}`);
+        sendJson(res, { url: nextUrl, dir: nextDir }, 201);
         return;
       }
 
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(page);
+        res.end(withProjectDir(page, dir));
         return;
       }
       if (url.pathname === "/page.css") {

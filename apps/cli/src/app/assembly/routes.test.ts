@@ -1128,7 +1128,7 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   const source = js.slice(js.indexOf("async function call("), js.indexOf("const api ="));
   const ui = { importing: true, error: null };
   const client = { call: vi.fn() };
-  const state = { set: vi.fn() };
+  const state = { set: vi.fn(), get: vi.fn() };
   const call = runInNewContext(source + "; call", { ui, client, state, renderStatus: vi.fn(), maybeScheduleAutoPreview: vi.fn() });
   const opts = { method: "POST", body: JSON.stringify({ baseRevision: 1 }) };
   expect((await call("/project/source-role", opts)).res.ok).toBe(false);
@@ -1143,20 +1143,24 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   expect(state.set).toHaveBeenCalledWith("project", { revision: 3 });
 });
 
-it("GET deriva Desfazer de histórico persistido e diagnostica corrupção", async()=>{
+it("GET deriva Desfazer da pilha persistida e trata histórico corrompido como sem desfazer", async()=>{
   const {dir,base,app}=await boot();
   expect((await (await fetch(`${base}/project`)).json() as {undoRevision:number|null}).undoRevision).toBeNull();
   const p=await loadProject(dir);
   const {writeHistorySnapshot}=await import("./store.ts");
+  const {recordUndo}=await import("./undo.ts");
   await writeHistorySnapshot(dir,p);
-  await saveProject(dir,p.revision,{...p,revision:1,assembly:{...p.assembly,revision:1}});
+  await saveProject(dir,p.revision,recordUndo(p,{...p,revision:1,assembly:{...p.assembly,revision:1}},"Tirar trecho"));
   await app.close();
   const reopened=await startApp({projectDir:dir,port:0});stop=reopened.close;
   const url=`http://127.0.0.1:${reopened.port}/project`;
-  expect((await (await fetch(url)).json() as {undoRevision:number|null}).undoRevision).toBe(0);
+  const ok=await (await fetch(url)).json() as {undoRevision:number|null;project:Project};
+  expect(ok.undoRevision).toBe(0);
+  expect(ok.project.undo).toEqual({head:1,steps:[{revision:0,label:"Tirar trecho"}]});
   await writeFile(join(dir,"history","rev-0.json"),"{quebrado");
   const corrupt=await fetch(url);
-  expect(corrupt.ok).toBe(false);
+  expect(corrupt.status).toBe(200);
+  expect((await corrupt.json() as {undoRevision:number|null}).undoRevision).toBeNull();
 });
 
 it("edita apoio por HTTP, protege revisão e restaura por undo",async()=>{

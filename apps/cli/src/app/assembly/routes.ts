@@ -40,6 +40,7 @@ import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
 import type { Assembly, Project, Source } from "./types.ts";
+import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
@@ -608,14 +609,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             void alignCorrectionJob(dir, correction.id, project.revision);
           }
         }
+        // Desfazer só aparece com a foto do topo da pilha legível; histórico
+        // ausente ou corrompido vira "sem desfazer", nunca 500.
         let undoRevision: number | null = null;
-        if (project.revision > 0) {
-          const revision = project.revision - 1;
-          const exists = await stat(join(dir, "history", `rev-${revision}.json`)).then(() => true, error => {
-            if (error.code === "ENOENT") return false;
-            throw error;
-          });
-          if (exists) undoRevision = (await readHistorySnapshot(dir, revision)).revision;
+        const undoStep = undoTop(project);
+        if (undoStep) {
+          undoRevision = await readHistorySnapshot(dir, undoStep.revision).then(() => undoStep.revision, () => null);
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const listed=brollCandidates(project),index=brollIndex(project,listed);
@@ -1122,7 +1121,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const expected=requireRevision(body);const proposal=await readTemplateProposal();
         if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
         let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
-        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return applyProposal(p,proposal);});
+        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return recordUndo(p,applyProposal(p,proposal),"Aplicar template");});
         // Preserve a newer candidate if another generation finished concurrently.
         if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
         sendJson(res,{project,templateProposal:null,...snapshot()});return true;
@@ -1220,7 +1219,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const project = await mutate(baseRevision, async (loaded) => {
           await writeHistorySnapshot(dir, loaded);
-          return applySpeechProposal(loaded, proposal);
+          return recordUndo(loaded, applySpeechProposal(loaded, proposal), "Ajuste de fala");
         });
         await unlink(speechProposalPath).catch(() => {});
         sendJson(res, { project, speechProposal: null, ...snapshot() });
@@ -1276,7 +1275,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             await writeHistorySnapshot(dir, loaded);
-            return applySupportSwap(loaded, proposal, candidateId);
+            return recordUndo(loaded, applySupportSwap(loaded, proposal, candidateId), "Troca de apoio");
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -1348,7 +1347,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const project = await mutate(baseRevision, async (loaded) => {
           await writeHistorySnapshot(dir, loaded);
-          return applyRhythmProposal(loaded, proposal);
+          return recordUndo(loaded, applyRhythmProposal(loaded, proposal), "Ritmo do corte");
         });
         await unlink(rhythmProposalPath).catch(() => {});
         sendJson(res, { project, rhythmProposal: null, ...snapshot() });
@@ -1376,7 +1375,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(409, "proposta ausente ou desatualizada");
           }
           await writeHistorySnapshot(dir, project);
-          return applyProposal(project, project.proposal);
+          return recordUndo(project, applyProposal(project, project.proposal), "Aplicar proposta");
         });
         sendJson(res, { project, ...snapshot() });
         return true;
@@ -1412,7 +1411,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             await writeHistorySnapshot(dir, loaded);
-            return applyEdit(loaded, action);
+            return recordUndo(loaded, applyEdit(loaded, action), editLabel(action));
           });
         } catch (err) {
           if (err instanceof HttpError) throw err;
@@ -1438,7 +1437,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
-        if (target >= loaded.revision) {
+        // Só o topo da pilha se desfaz: pedir outro passo (ou um alvo já
+        // desfeito) é conflito, não um salto no histórico.
+        if (undoTop(loaded)?.revision !== target) {
           throw new HttpError(409, "nada a desfazer nessa revisão");
         }
         let snap;
@@ -1447,11 +1448,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           throw new HttpError(404, err instanceof Error ? err.message : String(err));
         }
-        await writeHistorySnapshot(dir, loaded);
         try {
           // Forma funcional: substitui o conteúdo editorial (sem unir correções
-          // antigas de volta) e valida antes de gravar.
-          await saveProject(dir, baseRevision, (current) => applyHistorySnapshot(current, snap));
+          // antigas de volta) e valida antes de gravar. O estado desfeito não
+          // vira foto nem passo: o próximo desfazer volta mais um, nunca refaz.
+          await saveProject(dir, baseRevision, (current) => {
+            if (current.revision !== baseRevision || undoTop(current)?.revision !== target) {
+              throw new Error(`revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
+            }
+            return popUndo(current, applyHistorySnapshot(current, snap));
+          });
         } catch (err) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));
         }

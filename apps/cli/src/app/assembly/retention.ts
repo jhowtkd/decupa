@@ -40,6 +40,15 @@ function inteiro(valor: unknown): number | null {
   return typeof valor === "number" && Number.isInteger(valor) && valor >= 0 ? valor : null;
 }
 
+/** Revisões das fotos na pilha do desfazer (`project.undo.steps`). */
+function passosDaPilha(undo: unknown): Set<number> {
+  const passos = typeof undo === "object" && undo !== null ? (undo as Record<string, unknown>)["steps"] : null;
+  if (!Array.isArray(passos)) return new Set();
+  return new Set(passos.map((passo: unknown) =>
+    typeof passo === "object" && passo !== null ? inteiro((passo as Record<string, unknown>)["revision"]) : null,
+  ).filter((n): n is number => n !== null));
+}
+
 async function ehDiretorioReal(path: string): Promise<boolean> {
   // lstat nunca segue symlink: link simbólico não é diretório real.
   const st = await lstat(path).catch(() => null);
@@ -57,7 +66,8 @@ async function ehArquivoReal(path: string): Promise<boolean> {
  *
  * Mantém sempre: a revisão atual (`project.json`), revisões com diretório
  * em `exports/`, e as referenciadas por `previewArtifact`/`previewRevision`/
- * `finalApprovedRevision`. Das demais, mantém as `K` mais recentes. Uma
+ * `finalApprovedRevision`. Das demais, mantém as `K` mais recentes. A foto
+ * `history/rev-N.json` de cada passo da pilha do desfazer também fica. Uma
  * entrada do `preview-cache/` fica enquanto alguma `rev-N/` mantida a
  * registra em `preview-cache.json`; sem registro, sai.
  *
@@ -159,8 +169,11 @@ export async function pruneProject(
   for (const [n, nome] of [...dirsRev.entries()].sort((a, b) => a[0] - b[0])) {
     if (!manter.has(n)) alvos.push(nome);
   }
+  // Fotos da pilha do desfazer ficam, mas só o JSON: o rev-N/ do mesmo passo
+  // segue a regra geral.
+  const pilha = passosDaPilha(projeto["undo"]);
   for (const [n, nome] of [...arquivosHistory.entries()].sort((a, b) => a[0] - b[0])) {
-    if (!manter.has(n)) alvos.push(`history/${nome}`);
+    if (!manter.has(n) && !pilha.has(n)) alvos.push(`history/${nome}`);
   }
   // Prévias em cache seguem as revisões mantidas (atual, aprovada, exportadas
   // e as K recentes); as marcas são lidas antes de listar o cache.
