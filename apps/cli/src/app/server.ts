@@ -8,19 +8,20 @@ import { analysisClientOptions, envWithStoredTypeSafe, installCompanyCredentials
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
-import { originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  audioProxyPath, ensureAudioProxy, indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
-  SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
+  assertSidecarSynced, audioProxyPath, ensureAudioProxy, indexPath, planPath, preflight, probeFps, runIngest, runPlan,
+  runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech,
+  type PipelineJob,
 } from "./pipeline.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
@@ -79,9 +80,27 @@ function parseRequestUrl(raw: string | undefined): URL | null {
   }
 }
 
-async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
+/** Os corpos da limpeza são um keep-list e um `kind`: 1 MiB sobra. Sem teto,
+ *  um POST gigante enche a memória do processo que segura os jobs. */
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("corpo do pedido excede 1 MiB");
+  }
+}
+
+async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw new BodyTooLargeError();
+  // Sem content-length, drena até o fim antes de recusar: largar o stream no
+  // meio derruba o socket e o 413 nunca chega.
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size <= MAX_BODY_BYTES) chunks.push(chunk as Buffer);
+  }
+  if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
@@ -118,9 +137,12 @@ export interface AppHandle {
   address: string;
   jobId: string;
   close(): Promise<void>;
+  /** SIGKILL síncrono no que restar de filho: o handler de `exit` do CLI só
+   *  roda código síncrono e não tem como esperar a escalada do `close()`. */
+  killChildren(): void;
 }
 
-function attachResidentSpeech(opts: {
+export function attachResidentSpeech(opts: {
   dir: string;
   speech?: IngestSpeech;
   executorInjected: boolean;
@@ -129,8 +151,18 @@ function attachResidentSpeech(opts: {
   if (opts.executorInjected) return { closeSpeech: async () => undefined };
   const client = createResidentSpeechClient();
   const coordinator = createFileCoordinator(join(opts.dir, ".decupa", "coordinator"), { limit: 1 });
+  // O worker sobe com `uv run --no-sync`: sem o venv da fala sincronizado a
+  // montagem (que não passa pelo preflight da limpeza) quebraria só na
+  // primeira transcrição, com um ModuleNotFoundError cru. Confere uma vez;
+  // falha não fica em cache, para o setup poder ser feito com o app aberto.
+  let synced: Promise<void> | undefined;
+  const ensureSynced = (): Promise<void> => {
+    synced ??= assertSidecarSynced(new SpawnExecutor(), dirname(SPEECH_SCRIPT), "fala")
+      .catch((error: unknown) => { synced = undefined; throw error; });
+    return synced;
+  };
   return {
-    speech: { worker: (req) => client.transcribe(req), coordinator },
+    speech: { worker: async (req) => { await ensureSynced(); return client.transcribe(req); }, coordinator },
     closeSpeech: () => client.close(),
   };
 }
@@ -339,6 +371,7 @@ async function startCleanupApp(opts: {
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      if (!guardLocalRequest(req, res, boundPort)) return;
       // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
       // isso derrubava o processo inteiro.
       const url = parseRequestUrl(req.url);
@@ -614,7 +647,7 @@ async function startCleanupApp(opts: {
 
     handle().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!res.headersSent) sendJson(res, { error: message }, 500);
+      if (!res.headersSent) sendJson(res, { error: message }, error instanceof BodyTooLargeError ? 413 : 500);
       else res.end();
     });
   });
@@ -635,10 +668,14 @@ async function startCleanupApp(opts: {
   return {
     port, address: "127.0.0.1", jobId: job.id,
     close: async () => {
-      if (exec instanceof SpawnExecutor) exec.killAll();
-      await closeSpeech();
-      await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
+      // síncrono roda, e é nele que os filhos recebem o sinal.
+      const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const speechClosed = closeSpeech();
+      const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      await Promise.all([killed, speechClosed, closed]);
     },
+    killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };
 }
 
@@ -740,6 +777,7 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      if (!guardLocalRequest(req, res, boundPort)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
         sendJson(res, { error: "origem não permitida" }, 403);
@@ -799,10 +837,17 @@ async function startAssemblyApp(opts: {
   return {
     port, address: "127.0.0.1", jobId: project.id,
     close: async () => {
-      if (exec instanceof SpawnExecutor) exec.killAll();
-      await Promise.all(newProjects.map(app => app.close()));
-      await closeSpeech();
-      await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
+      // síncrono roda, e é nele que os filhos e o worker de fala morrem.
+      const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const speechClosed = closeSpeech();
+      const nested = Promise.all(newProjects.map(app => app.close()));
+      const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      await Promise.all([killed, speechClosed, nested, closed]);
+    },
+    killChildren: () => {
+      if (exec instanceof SpawnExecutor) exec.killNow();
+      for (const app of newProjects) app.killChildren();
     },
   };
 }

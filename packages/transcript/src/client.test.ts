@@ -57,7 +57,7 @@ describe("createResidentSpeechClient", () => {
       ]);
       expect(spawned).toHaveLength(1);
       expect(spawned[0]!.command).toBe("uv");
-      expect(spawned[0]!.args).toEqual(["run", "python", "worker.py", "--serve"]);
+      expect(spawned[0]!.args).toEqual(["run", "--no-sync", "python", "worker.py", "--serve"]);
       expect(spawned.some((call) => call.args.includes("transcribe.py"))).toBe(false);
       expect(new Set([a.words[0]?.text, b.words[0]?.text])).toEqual(new Set(["cam-a.mp4", "cam-b.mp4"]));
     } finally {

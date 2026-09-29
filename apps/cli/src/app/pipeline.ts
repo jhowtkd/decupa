@@ -11,7 +11,7 @@ import { DEFAULT_LANGUAGE, DEFAULT_MODEL, transcribe, type TranscribeDeps } from
 // contrato é a assinatura TypeScript, não uma regex sobre stdout.
 import { runTriage as runTriageLibrary } from "../triage.ts";
 import { runCondensePrep } from "../condense/run.ts";
-import { enginePython, terminateTree } from "../runtime.ts";
+import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
 
 export interface ExecResult {
   code: number;
@@ -104,6 +104,9 @@ export class SpawnExecutor implements Executor {
   /** Processos vivos, para que `cancel` cumpra o que promete. Sem isto o
    *  cancelamento só trocaria um enum e o WhisperX seguiria até o fim. */
   private readonly running = new Set<ReturnType<typeof spawn>>();
+  /** Grupos já sinalizados por `terminateAll` e ainda não confirmados como
+   *  mortos: o `killNow` do `exit` também precisa deles. */
+  private readonly terminating = new Set<number>();
 
   run(call: ExecCall): Promise<ExecResult> {
     return new Promise((resolvePromise) => {
@@ -165,12 +168,35 @@ export class SpawnExecutor implements Executor {
   }
 
   killAll(): void {
-    for (const child of this.running) {
-      // terminateTree conhece a plataforma: grupo POSIX ou taskkill /PID /T
-      // no Windows — sem shell e sem /IM (que mataria homônimos inocentes).
-      if (child.pid) terminateTree(child.pid);
-    }
-    this.running.clear();
+    // Mesma contabilidade do shutdown: um /cancel seguido de saída em menos
+    // de 2 s deixava vivo o filho que ignora SIGTERM, porque o SIGKILL do
+    // terminateTree era um timer solto que o process.exit matava, e o
+    // `running` já estava vazio para o terminateAll/killNow do shutdown.
+    // Em terminateAll o SIGTERM sai sincronamente, como antes.
+    void this.terminateAll();
+  }
+
+  /**
+   * SIGTERM em todos os filhos vivos (sincronamente, antes do primeiro
+   * `await`) e espera os grupos saírem, com SIGKILL depois de `graceMs`. É o
+   * que o shutdown usa: `killAll` sozinho deixava o SIGKILL num timer que o
+   * `process.exit` seguinte matava, e o filho que ignora SIGTERM ficava vivo.
+   */
+  async terminateAll(graceMs = 2000): Promise<void> {
+    // Inclui os grupos que um terminateAll/killAll anterior ainda espera:
+    // o líder pode ter saído com um neto que ignora SIGTERM.
+    const pids = new Set<number>(this.terminating);
+    for (const child of this.running) if (child.pid) pids.add(child.pid);
+    for (const pid of pids) this.terminating.add(pid);
+    await Promise.all([...pids].map((pid) =>
+      terminateTreeAndWait(pid, graceMs).finally(() => this.terminating.delete(pid))));
+  }
+
+  /** SIGKILL síncrono no que restar: o handler de `exit` não espera timer. */
+  killNow(): void {
+    const pids = new Set<number>(this.terminating);
+    for (const child of this.running) if (child.pid) pids.add(child.pid);
+    for (const pid of pids) killTreeNow(pid);
   }
 }
 
@@ -298,6 +324,27 @@ const VISION_SCRIPT = join(VISION_CWD, "visual_index.py");
 // Exportada para o `decupa doctor` conferir o sidecar sem duplicar o caminho.
 export const SPEECH_SCRIPT = join(REPO_ROOT, "services", "speech", "transcribe.py");
 const VISUAL_SKIP = "sidecar de visão não instalado, segue sem visual";
+const SPEECH_DIR = dirname(SPEECH_SCRIPT);
+
+/**
+ * O venv do sidecar bate com o uv.lock? Os sidecars rodam com
+ * `uv run --no-sync`, que não instala nada: com o venv ausente ele cria um
+ * vazio em silêncio e a etapa só cai depois, num ModuleNotFoundError que
+ * ninguém liga ao setup. `sync --check` compara sem criar nem alterar nada.
+ */
+export async function assertSidecarSynced(exec: Executor, dir: string, name: string): Promise<void> {
+  const { code } = await exec.run({
+    command: "uv",
+    args: ["sync", "--locked", "--check", "--offline"],
+    cwd: dir,
+  });
+  if (code !== 0) {
+    throw new Error(
+      `o ambiente Python de ${name} está ausente ou incompleto em ${join(dir, ".venv")}. ` +
+      "Execute primeiro: node scripts/setup.mjs",
+    );
+  }
+}
 
 export async function runIngest(
   job: PipelineJob,
@@ -351,6 +398,7 @@ export async function runIngest(
         env: envFor(job),
         cwd: REPO_ROOT,
         onLine,
+        ...(signal ? { signal } : {}),
       }, "a transcrição");
     });
   }
@@ -368,6 +416,9 @@ export async function runIngest(
       args: [CONDENSE, "index", job.videoPath, transcriptPath(job), "--no-visual-survey"],
       env: envFor(job),
       onLine,
+      // Sem o sinal, o filho sobrevive quando outra operação toma o lugar
+      // desta: o begin() da montagem só aborta, não mata mais tudo.
+      ...(signal ? { signal } : {}),
     }, "a medição do índice");
     return false;
   });
@@ -396,6 +447,13 @@ async function runVisualIndex(
 ): Promise<string | undefined> {
   const hasScript = await access(VISION_SCRIPT).then(() => true, () => false);
   if (!hasScript) return VISUAL_SKIP;
+  // Visual é opcional: venv da visão sem sincronizar vira aviso, e nenhum
+  // proxy é gerado nem `.venv` vazio criado pelo uv.
+  try {
+    await assertSidecarSynced(exec, VISION_CWD, "visão");
+  } catch (error) {
+    return `${error instanceof Error ? error.message : String(error)} — segue sem visual`;
+  }
 
   const proxy = visualProxyPath(job);
   const hasProxy = await access(proxy).then(() => true, () => false);
@@ -414,7 +472,7 @@ async function runVisualIndex(
   const result = await exec.run({
     command: "uv",
     args: [
-      "run", "python", "visual_index.py",
+      "run", "--no-sync", "python", "visual_index.py",
       "--video", proxy,
       "--index", indexPath(job),
       "--fps", "4",
@@ -582,6 +640,7 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
       "`services/speech/transcribe.py`. Veja `services/speech/README.md`.",
     );
   }
+  await assertSidecarSynced(exec, SPEECH_DIR, "fala");
 
   const engine = process.env.VE_PLUGIN_ROOT ?? DEFAULT_ENGINE;
   const hasEngine = await access(join(engine, "mcp", "ve_tools", "condense.py"))

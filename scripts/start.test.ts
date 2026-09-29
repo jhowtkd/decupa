@@ -1,16 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { main, startArgs } from "./start.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PYTHON_REL = process.platform === "win32" ? "Scripts/python.exe" : "bin/python";
-
-const exists = (path: string) => access(path).then(() => true, () => false);
+const START_URL = pathToFileURL(join(ROOT, "scripts/start.mjs")).href;
 
 /** Porta livre de verdade: o SO escolhe, o teste libera antes do CLI ocupar. */
 async function ephemeralPort(): Promise<number> {
@@ -19,6 +18,80 @@ async function ephemeralPort(): Promise<number> {
   const port = (server.address() as AddressInfo).port;
   await new Promise<void>((r) => server.close(() => r()));
   return port;
+}
+
+/**
+ * Root só de teste: o Python do motor é um arquivo vazio (o launcher só faz
+ * access) e apps/node_modules são symlinks do repositório. Nada é escrito em
+ * `<repo>/work` — um placeholder lá seria executado por enginePython().
+ */
+async function launcherRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "decupa launcher "));
+  const python = join(root, "work/engine-venv", PYTHON_REL);
+  await mkdir(dirname(python), { recursive: true });
+  await writeFile(python, "");
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  await symlink(join(ROOT, "apps"), join(root, "apps"), kind);
+  await symlink(join(ROOT, "node_modules"), join(root, "node_modules"), kind);
+  return root;
+}
+
+/** PATH vazio e sem chaves: o `open` não existe e nenhuma credencial é gravada. */
+async function ambienteIsolado(): Promise<{ env: NodeJS.ProcessEnv; dir: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "decupa path-"));
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === "path" || /key|token|secret|password|credential/i.test(key)) delete env[key];
+  }
+  env.PATH = dir;
+  env.HOME = dir;
+  env.USERPROFILE = dir;
+  return { env, dir };
+}
+
+/**
+ * Launcher em processo próprio e grupo próprio (`detached`). O CLI nasce no
+ * mesmo grupo, então `kill(-pid)` imita o terminal sem atingir o vitest.
+ */
+function spawnLauncher(root: string, argv: string[], env: NodeJS.ProcessEnv, sidecarReady: string): ChildProcess {
+  const script = `
+    const m = await import(${JSON.stringify(START_URL)});
+    await m.main(${JSON.stringify(root)}, ${JSON.stringify(argv)}, { sidecarReady: ${sidecarReady} });
+  `;
+  return spawn(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function matarGrupo(child: ChildProcess | null): void {
+  if (!child?.pid || child.exitCode !== null) return;
+  try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* já saiu */ } }
+}
+
+async function esperar428(port: number, child: ChildProcess, saida: string[]): Promise<void> {
+  const limite = Date.now() + 12_000;
+  while (Date.now() < limite) {
+    if (child.exitCode !== null) break;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/project`, { signal: AbortSignal.timeout(1_000) });
+      if (res.status === 428) return;
+    } catch { /* ainda subindo */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`o servidor não subiu; saída:\n${saida.join("")}`);
+}
+
+async function portaFechada(port: number): Promise<boolean> {
+  const limite = Date.now() + 2_000;
+  while (Date.now() < limite) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/project`, { signal: AbortSignal.timeout(500) });
+    } catch {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
 }
 
 it("preserva argumento com espaços sem shell", () => {
@@ -45,6 +118,8 @@ it("recusa duas fontes, flags pagas e porta fora de 1–65535", () => {
 it("sem runtime local, falha orientando executar o setup", async () => {
   // Root temporário com caminho com espaços: prova a mensagem sem tocar no
   // work/ do repositório (main aceita root opcional justamente para isso).
+  // O Python falta antes de node_modules, e node_modules falta antes dos
+  // sidecars — a checagem do uv não chega a rodar.
   const root = await mkdtemp(join(tmpdir(), "decupa sem runtime "));
   try {
     await expect(main(root, ["--project", join(root, "projeto")]))
@@ -61,80 +136,70 @@ it("sem runtime local, falha orientando executar o setup", async () => {
   }
 });
 
-it("abre o Decupa com um comando, exige provedor antes de GET /project e encerra no sinal", async () => {
+it("recusa o sidecar de fala incompleto antes de subir o CLI", async () => {
+  const root = await launcherRoot();
+  const projectDir = await mkdtemp(join(tmpdir(), "decupa start "));
+  const { env, dir: pathVazio } = await ambienteIsolado();
   const port = await ephemeralPort();
-  const projectDir = await mkdtemp(join(tmpdir(), "decupa start ")); // caminho com espaços
-  // PATH vazio: o CLI tenta openBrowser e o `open`/`xdg-open` não é
-  // encontrado — nenhum navegador real abre durante o teste.
-  const pathVazio = await mkdtemp(join(tmpdir(), "decupa path-"));
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
-  for (const key of ["DECUPA_COMPANY_API_KEY", "ZAI_API_KEY", "GEMINI_API_KEY", "MINIMAX_API_KEY", "DECUPA_API_KEY"]) delete env[key];
-  env.PATH = pathVazio;
-  env.HOME = pathVazio;
-  env.USERPROFILE = pathVazio;
-
-  // O launcher só confere access() no Python do venv; o CLI não o executa no
-  // boot do montar. Se não houver venv real, cria um placeholder e remove no
-  // finally exatamente o que criou — nunca apaga um venv de verdade.
-  const venvPython = join(ROOT, "work/engine-venv", PYTHON_REL);
-  const placeholderCriado = !(await exists(venvPython));
-  if (placeholderCriado) {
-    await mkdir(dirname(venvPython), { recursive: true });
-    await writeFile(venvPython, "placeholder de teste\n", "utf8");
-  }
-
-  let child: ChildProcess | null = null;
+  // Terceiro argumento injetável: false reprova sem chamar `uv sync`.
+  const child = spawnLauncher(root, ["--project", projectDir, "--port", String(port)], env, "async () => false");
+  const saida: string[] = [];
+  child.stderr!.on("data", (d) => saida.push(String(d)));
+  child.stdout!.on("data", (d) => saida.push(String(d)));
   try {
-    child = spawn(process.execPath, [
-      join(ROOT, "scripts", "start.mjs"), "--project", projectDir, "--port", String(port),
-    ], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env });
-    const saida: string[] = [];
-    child.stdout!.on("data", (d) => saida.push(String(d)));
-    child.stderr!.on("data", (d) => saida.push(String(d)));
-
-    const base = `http://127.0.0.1:${port}`;
-    // Prazo total do teste: 10 s; o boot fica em 8 s para o término e a
-    // checagem de porta fechada caberem no orçamento.
-    const limite = Date.now() + 8_000;
-    let corpo: { error?: string } | null = null;
-    while (Date.now() < limite) {
-      if (child.exitCode !== null) break; // morreu no caminho; falha com a saída abaixo
-      try {
-        const res = await fetch(`${base}/project`, { signal: AbortSignal.timeout(1_000) });
-        if (res.status === 428) { corpo = (await res.json()) as typeof corpo; break; }
-      } catch { /* ainda subindo */ }
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    expect(corpo, `o servidor não subiu; saída:\n${saida.join("")}`).not.toBeNull();
-    expect(corpo!.error).toContain("Configure o provedor");
-    expect(await (await fetch(base)).text()).toContain("Configure a IA do Decupa");
-
-    const saiu = new Promise<number | null>((r) => child!.once("exit", (code) => r(code)));
-    child.kill("SIGTERM");
-    const code = await saiu;
-    // No POSIX o CLI faz shutdown gracioso e sai 0; no Windows o SIGTERM
-    // emulado encerra sem código gracioso — a Task 6 valida o console real.
-    if (process.platform !== "win32") expect(code).toBe(0);
-
-    let portaFechada = false;
-    try {
-      await fetch(`${base}/project`, { signal: AbortSignal.timeout(1_000) });
-    } catch {
-      portaFechada = true;
-    }
-    expect(portaFechada, "a porta continuou aberta após o término").toBe(true);
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => resolve(child.exitCode), 4_000);
+      child.once("exit", (c) => { clearTimeout(timer); resolve(c); });
+    });
+    const texto = saida.join("");
+    expect(texto, texto).toMatch(/Ambiente Python de fala/);
+    expect(texto).toMatch(/node scripts\/setup\.mjs/);
+    expect(code).toBe(1);
   } finally {
-    if (child && child.exitCode === null) child.kill("SIGKILL");
-    if (placeholderCriado) {
-      await rm(venvPython, { force: true });
-      // Remove só os diretórios que o teste criou e só se vazios; um venv
-      // real (Task 6 roda o setup de verdade depois) nunca é tocado.
-      for (const dir of [dirname(venvPython), join(ROOT, "work/engine-venv"), join(ROOT, "work")]) {
-        await rmdir(dir).catch(() => {});
-      }
-    }
+    matarGrupo(child);
+    await rm(root, { recursive: true, force: true });
     await rm(projectDir, { recursive: true, force: true });
     await rm(pathVazio, { recursive: true, force: true });
   }
-}, 10_000);
+});
+
+// O launcher ignora SIGINT (o CLI já recebeu o do terminal) e repassa
+// SIGTERM/SIGHUP. No prefix o SIGINT era repassado e o CLI saía com 1.
+async function encerraNoSinal(sinal: "SIGINT" | "SIGHUP" | "SIGTERM"): Promise<void> {
+  const port = await ephemeralPort();
+  const projectDir = await mkdtemp(join(tmpdir(), "decupa start "));
+  const root = await launcherRoot();
+  const { env, dir: pathVazio } = await ambienteIsolado();
+  const child = spawnLauncher(root, ["--project", projectDir, "--port", String(port)], env, "async () => true");
+  const saida: string[] = [];
+  child.stdout!.on("data", (d) => saida.push(String(d)));
+  child.stderr!.on("data", (d) => saida.push(String(d)));
+  try {
+    await esperar428(port, child, saida);
+    const saiu = new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`não encerrou; saída:\n${saida.join("")}`)), 8_000);
+      child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
+    });
+    if (sinal === "SIGTERM") child.kill("SIGTERM");
+    else process.kill(-child.pid!, sinal);
+    expect(await saiu).toBe(0);
+    expect(await portaFechada(port), "a porta continuou aberta após o término").toBe(true);
+  } finally {
+    matarGrupo(child);
+    await rm(root, { recursive: true, force: true });
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(pathVazio, { recursive: true, force: true });
+  }
+}
+
+it.skipIf(process.platform === "win32")("SIGINT no grupo encerra o CLI uma vez só e fecha a porta", async () => {
+  await encerraNoSinal("SIGINT");
+}, 20_000);
+
+it.skipIf(process.platform === "win32")("SIGHUP no grupo encerra o CLI e fecha a porta", async () => {
+  await encerraNoSinal("SIGHUP");
+}, 20_000);
+
+it.skipIf(process.platform === "win32")("SIGTERM só no launcher é repassado e fecha a porta", async () => {
+  await encerraNoSinal("SIGTERM");
+}, 20_000);

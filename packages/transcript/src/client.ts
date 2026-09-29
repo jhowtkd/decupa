@@ -74,7 +74,7 @@ export function createResidentSpeechClient(opts: {
 
   const ensure = (): ChildProcess => {
     if (child) return child;
-    const proc = spawnFn("uv", ["run", "python", "worker.py", "--serve"], { cwd: speechDir });
+    const proc = spawnFn("uv", ["run", "--no-sync", "python", "worker.py", "--serve"], { cwd: speechDir });
     child = proc;
     proc.stderr?.on("data", (chunk: Buffer | string) => {
       if (child !== proc) return;

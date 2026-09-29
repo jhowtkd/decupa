@@ -2,7 +2,7 @@
 // para os comandos montar/limpar do CLI, confere o runtime local preparado pelo
 // setup e lança o servidor com o Python do motor injetado no ambiente.
 // Este módulo não executa nada ao ser importado.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { access, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exists = path => access(path).then(() => true, () => false);
+const venvPython = venv => join(venv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
 
 /**
  * Traduz os argumentos do launcher para o CLI: exatamente uma fonte
@@ -33,21 +34,39 @@ export function startArgs(argv) {
 }
 
 /**
- * Verifica o runtime local e lança o CLI pelo próprio Node. `root` e `argv`
- * são parâmetros para os testes provarem a ausência de runtime num diretório
- * temporário; a entrada protegida usa os padrões do repositório.
+ * O venv do sidecar bate com o uv.lock? O CLI roda os sidecars com
+ * `uv run --no-sync`, que não instala nada — e, sem venv, cria um vazio em
+ * silêncio. Por isso não basta o venv existir: `--check` compara com o lock
+ * sem criar nem alterar nada, e um .venv vazio também reprova.
  */
-export async function main(root = ROOT, argv = process.argv.slice(2)) {
-  const python = join(root, 'work/engine-venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+export function sidecarSynced(dir) {
+  return new Promise(resolvePromise => {
+    execFile('uv', ['sync', '--locked', '--check', '--offline'], { cwd: dir }, error => resolvePromise(!error));
+  });
+}
+
+/**
+ * Verifica o runtime local e lança o CLI pelo próprio Node. `root`, `argv` e
+ * `sidecarReady` são parâmetros para os testes provarem a ausência de runtime
+ * num diretório temporário; a entrada protegida usa os padrões do repositório.
+ */
+export async function main(root = ROOT, argv = process.argv.slice(2), { sidecarReady = sidecarSynced } = {}) {
+  const python = venvPython(join(root, 'work/engine-venv'));
   if (!(await exists(python))) {
     throw new Error(`Python do motor não encontrado em ${python}\nExecute primeiro: node scripts/setup.mjs`);
   }
   if (!(await exists(join(root, 'node_modules')))) {
     throw new Error(`Dependências do pacote JS não encontradas em ${join(root, 'node_modules')}\nExecute primeiro: node scripts/setup.mjs`);
   }
-  // Não detached: o Ctrl+C do console chega ao CLI no grupo foreground, e o
-  // forwarding abaixo cobre quem sinaliza só o launcher; o executor do CLI é
-  // o responsável pelos subprocessos dele.
+  // Sem isto, venv ausente ou vazio só quebrava a transcrição no primeiro vídeo.
+  for (const [sidecar, name] of [['speech', 'fala'], ['vision', 'visão']]) {
+    const dir = join(root, 'services', sidecar);
+    if (!(await sidecarReady(dir))) {
+      throw new Error(`Ambiente Python de ${name} ausente ou incompleto em ${join(dir, '.venv')}\nExecute primeiro: node scripts/setup.mjs`);
+    }
+  }
+  // Não detached: o Ctrl+C do console chega ao CLI no grupo foreground; o
+  // executor do CLI é o responsável pelos subprocessos dele.
   const child = spawn(process.execPath, [
     '--experimental-strip-types', join(root, 'apps/cli/src/index.ts'), ...startArgs(argv),
   ], {
@@ -55,7 +74,17 @@ export async function main(root = ROOT, argv = process.argv.slice(2)) {
   });
   child.once('error', error => { console.error(`falha ao iniciar o Decupa: ${error.message}`); process.exitCode = 1; });
   child.once('exit', code => { process.exitCode = code ?? 1; });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => child.kill(signal));
+  const alive = () => child.exitCode === null && child.signalCode === null;
+  // O Ctrl+C do terminal vai para o grupo inteiro e o CLI já recebe o dele:
+  // repassar entregava dois (saída 1 com o close() interrompido) e, no
+  // Windows, child.kill('SIGINT') encerra à força. O launcher só não morre.
+  process.on('SIGINT', () => {});
+  // SIGTERM e SIGHUP podem chegar só ao launcher (kill, janela fechada). No
+  // Windows o libuv não implementa SIGHUP e child.kill('SIGHUP') lança ENOSYS.
+  const forwarded = process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGHUP'];
+  for (const signal of forwarded) process.on(signal, () => { if (alive()) child.kill(signal); });
+  // Saída do launcher por qualquer outro motivo não deixa o servidor órfão.
+  process.on('exit', () => { if (alive()) child.kill('SIGTERM'); });
   return child;
 }
 

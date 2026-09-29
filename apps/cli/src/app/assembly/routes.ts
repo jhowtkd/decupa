@@ -422,6 +422,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let controller: AbortController | null = null;
   // Ajuste de fala aguardando o modelo: um segundo pedido recebe 409.
   let speechProposalInFlight = false;
+  // Sinal da preparação em curso: Retomar sem pedido novo recebe 409 em vez
+  // de abortar e recomeçar (duas abas cobravam duas vezes). Abortada por
+  // /cancel ou por outra operação, deixa de valer.
+  let preparationSignal: AbortSignal | null = null;
   const livePreviews = new Set<AbortController>();
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
@@ -441,11 +445,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     for (const preview of livePreviews) preview.abort();
   }
 
+  // Aborta só a operação corrente: os filhos dela recebem o sinal. O
+  // executor é compartilhado com a entrega ao DaVinci, a análise de template
+  // e o proxy de playback, e killAll aqui matava esses também.
   function begin(stage: string, sourceId?: string): { gen: number; signal: AbortSignal } {
     cancelled = false;
     abortOperations();
     livePreviews.clear();
-    if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
     controller = new AbortController();
     const gen = ++opGen;
     operation = { stage, sourceId };
@@ -1061,17 +1067,24 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           { modelOptIn, visualOptIn, needsModel: true },
         );
         if (blocked) throw new HttpError(402, blocked);
-        // Um novo início cancela o anterior (mesma semântica de analyze e
+        if (mode === "prepare" && request.trim() === "" && preparationSignal && !preparationSignal.aborted) {
+          throw new HttpError(409, "Já há uma preparação em andamento. Aguarde ela terminar ou cancele antes de retomar.");
+        }
+        // Um pedido novo cancela o anterior (mesma semântica de analyze e
         // propose): o percurso abortado registra cancelled sem escrever mais.
         const { gen, signal } = begin("preparing");
         const releaseHold = holdPreparation(dir);
+        preparationSignal = signal;
         void runPreparation(
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
           { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
           { signal, isCurrent: () => stillCurrent(gen) },
-        ).finally(releaseHold).then(
+        ).finally(() => {
+          releaseHold();
+          if (preparationSignal === signal) preparationSignal = null;
+        }).then(
           (result) => {
             if (!stillCurrent(gen)) return;
             const prep = result.preparation;

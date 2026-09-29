@@ -6,11 +6,16 @@ import { renderDoctor, runDoctor } from "./doctor.ts";
 
 /**
  * Executor falso: binário conhecido existe (código 0), o resto não.
- * python/python3 entram na lista porque o doctor agora prova o Python do
- * motor via enginePython() — em teste real quem responde é o fakeRun.
+ * Qualquer python responde: o doctor prova o Python do motor via
+ * enginePython() e os sidecars pelo Python do venv de cada um, em caminho
+ * absoluto — em teste real quem responde é o fakeRun.
  */
 const fakeRun = async (command: string, _args: string[]): Promise<{ code: number }> =>
-  ({ code: ["ffmpeg", "ffprobe", "uv", "python", "python3"].includes(command) ? 0 : 1 });
+  ({ code: ["ffmpeg", "ffprobe", "uv"].includes(command) || /python(3)?(\.exe)?$/.test(command) ? 0 : 1 });
+
+/** HOME sem credencial: o doctor lê ~/.decupa/credentials, e o da máquina
+ *  de quem roda a suíte não pode decidir o resultado. */
+const emptyHome = () => mkdtemp(join(tmpdir(), "doctor-home-"));
 
 /**
  * Motor mínimo num tmpdir: só o que o doctor abre — `condense.py` para a
@@ -39,6 +44,7 @@ describe("runDoctor", () => {
     const lines = await runDoctor({
       run: fakeRun,
       env: { ZAI_API_KEY: "k" },
+      home: await emptyHome(),
       // engine injetado: o motor real fica em work/, fora do git — nem todo
       // checkout o tem, e o teste verde não pode depender disso
       engine,
@@ -62,7 +68,7 @@ describe("runDoctor", () => {
   });
 
   it("sem nenhuma chave, lista as 4 variáveis", async () => {
-    const lines = await runDoctor({ run: fakeRun, env: {} });
+    const lines = await runDoctor({ run: fakeRun, env: {}, home: await emptyHome() });
     const chave = lines.find((l) => l.name === "chave de análise")!;
     expect(chave.ok).toBe(false);
     expect(chave.fix).toMatch(/ZAI_API_KEY/);
@@ -73,7 +79,7 @@ describe("runDoctor", () => {
   });
 
   it("com GEMINI_API_KEY, chave de análise passa", async () => {
-    const lines = await runDoctor({ run: fakeRun, env: { GEMINI_API_KEY: "k" } });
+    const lines = await runDoctor({ run: fakeRun, env: { GEMINI_API_KEY: "k" }, home: await emptyHome() });
     const chave = lines.find((l) => l.name === "chave de análise")!;
     expect(chave.ok).toBe(true);
     expect(chave.detail).toMatch(/gemini/);
@@ -83,6 +89,7 @@ describe("runDoctor", () => {
     const lines = await runDoctor({
       run: fakeRun,
       env: { ZAI_API_KEY: "k", GEMINI_API_KEY: "k2" },
+      home: await emptyHome(),
     });
     const chave = lines.find((l) => l.name === "chave de análise")!;
     expect(chave.ok).toBe(true);
@@ -90,7 +97,7 @@ describe("runDoctor", () => {
   });
 
   it("endpoint default vira nota sobre a armadilha 1113", async () => {
-    const lines = await runDoctor({ run: fakeRun, env: { ZAI_API_KEY: "k" } });
+    const lines = await runDoctor({ run: fakeRun, env: { ZAI_API_KEY: "k" }, home: await emptyHome() });
     const endpoint = lines.find((l) => l.name === "ZAI_BASE_URL")!;
     expect(endpoint.ok).toBe(true);
     expect(endpoint.detail).toMatch(/coding/);
@@ -121,12 +128,15 @@ describe("runDoctor", () => {
     expect(lines.some((line) => line.name === "ZAI_BASE_URL")).toBe(false);
     expect(calls.some((args) => args.includes("import whisperx"))).toBe(true);
     expect(calls.some((args) => args.includes("import mediapipe"))).toBe(true);
-    // O doctor não vira instalador: --no-sync --offline, projeto em caminho
-    // absoluto (sem depender do cwd) e o Python do motor também é provado.
+    // O doctor não vira instalador: nenhum `uv run`, que criava .venv vazio;
+    // o import roda no Python do venv, em caminho absoluto (sem depender do
+    // cwd), e o Python do motor também é provado.
+    expect(calls.some(([command, ...args]) => command === "uv" && args[0] === "run")).toBe(false);
     const whisperx = calls.find((args) => args.includes("import whisperx"))!;
-    expect(whisperx.slice(0, 5)).toEqual(["uv", "run", "--no-sync", "--offline", "--project"]);
-    expect(isAbsolute(whisperx[5]!)).toBe(true);
+    expect(isAbsolute(whisperx[0]!)).toBe(true);
+    expect(whisperx[0]).toMatch(/[\\/]services[\\/]speech[\\/]\.venv[\\/]/);
     expect(calls.some((args) => args.includes("import sys; assert sys.version_info >= (3, 11)"))).toBe(true);
+    expect(calls.some((args) => args.includes("import cv2, numpy, scenedetect"))).toBe(true);
   });
 
   it("import que retorna code 1 vira linha vermelha apontando o setup", async () => {
@@ -145,6 +155,61 @@ describe("runDoctor", () => {
     }
     const python = lines.find((l) => l.name === "Python do motor")!;
     expect(python.ok).toBe(false);
+  });
+
+  it("Python do motor com versão ok e imports falhando vira ERR", async () => {
+    const lines = await runDoctor({
+      home: await emptyHome(),
+      env: {},
+      run: async (_command, args) => ({ code: args.some((arg) => arg.includes("import cv2")) ? 1 : 0 }),
+    });
+    const python = lines.find((l) => l.name === "Python do motor")!;
+    expect(python.ok, python.detail).toBe(false);
+    expect(python.detail).toMatch(/cv2, numpy ou scenedetect/);
+    expect(python.fix).toMatch(/setup\.mjs/);
+  });
+
+  it("credencial gemini no home conta sem chave no ambiente", async () => {
+    const home = await emptyHome();
+    await mkdir(join(home, ".decupa"), { recursive: true });
+    await writeFile(join(home, ".decupa", "credentials"), JSON.stringify({ preset: "gemini", apiKey: "k" }));
+    const lines = await runDoctor({ run: fakeRun, env: {}, home });
+    const chave = lines.find((l) => l.name === "chave de análise")!;
+    expect(chave.ok, chave.detail).toBe(true);
+    expect(chave.detail).toBe("setada (provedor gemini, ~/.decupa/credentials)");
+  });
+
+  it("credencial com baseUrl e sem apiKey vira ERR", async () => {
+    // A chave do ambiente não pode autenticar o host que o arquivo escolheu.
+    const home = await emptyHome();
+    await mkdir(join(home, ".decupa"), { recursive: true });
+    await writeFile(
+      join(home, ".decupa", "credentials"),
+      JSON.stringify({ preset: "zai", baseUrl: "https://evil.example/v1" }),
+    );
+    const lines = await runDoctor({ run: fakeRun, env: { ZAI_API_KEY: "k" }, home });
+    const chave = lines.find((l) => l.name === "chave de análise")!;
+    expect(chave.ok, chave.detail).toBe(false);
+    expect(chave.detail).toMatch(/apiKey/);
+  });
+
+  it("Node 22.11 reprova e 22.12 passa", async () => {
+    const previous = Object.getOwnPropertyDescriptor(process.versions, "node");
+    const setNode = (value: string) => {
+      Object.defineProperty(process.versions, "node", { value, configurable: true, enumerable: true });
+    };
+    try {
+      setNode("22.11.0");
+      const old = await runDoctor({ run: fakeRun, env: { ZAI_API_KEY: "k" }, home: await emptyHome() });
+      const bad = old.find((l) => l.name === "node")!;
+      expect(bad.ok, bad.detail).toBe(false);
+      expect(bad.fix).toMatch(/22\.12/);
+      setNode("22.12.0");
+      const next = await runDoctor({ run: fakeRun, env: { ZAI_API_KEY: "k" }, home: await emptyHome() });
+      expect(next.find((l) => l.name === "node")!.ok).toBe(true);
+    } finally {
+      if (previous) Object.defineProperty(process.versions, "node", previous);
+    }
   });
 });
 

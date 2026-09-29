@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
-import { originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, originAllowed } from "../http/origin.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -12,6 +12,8 @@ export { parseRange } from "../http/media.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUCKETS_PER_SECOND = 200;
+/** Uma marcação de horas tem dezenas de milhares de números: 1 MiB sobra. */
+const MAX_TRUTH_BYTES = 1024 * 1024;
 
 function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   const payload = JSON.stringify(body);
@@ -69,6 +71,7 @@ export async function runMarkWeb(opts: {
     let boundPort = opts.port ?? 7777;
     const server = createServer((req, res) => {
       const handle = async (): Promise<void> => {
+        if (!guardLocalRequest(req, res, boundPort)) return;
         // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
         // isso derrubava o marcador no meio da medição.
         let url: URL;
@@ -106,8 +109,21 @@ export async function runMarkWeb(opts: {
           return;
         }
         if (url.pathname === "/truth" && req.method === "POST") {
+          // Passou do teto: para de guardar, mas drena até o fim — largar o
+          // stream no meio derruba o socket antes de o 413 sair.
+          const declared = Number(req.headers["content-length"]);
           const chunks: Buffer[] = [];
-          for await (const chunk of req) chunks.push(chunk as Buffer);
+          let size = 0;
+          if (!(declared > MAX_TRUTH_BYTES)) {
+            for await (const chunk of req) {
+              size += (chunk as Buffer).length;
+              if (size <= MAX_TRUTH_BYTES) chunks.push(chunk as Buffer);
+            }
+          }
+          if (declared > MAX_TRUTH_BYTES || size > MAX_TRUTH_BYTES) {
+            sendJson(res, { error: "marcação excede 1 MiB" }, 413);
+            return;
+          }
           const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
             boundariesMs?: unknown;
           };

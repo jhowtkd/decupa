@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { startApp } from "../apps/cli/src/app/server.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
@@ -199,7 +199,9 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
           for (let i = 0; i < seconds; i += 1) {
             await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
           }
-        } else {
+        } else if (isAbsolute(dest)) {
+          // `ffmpeg -hide_banner -encoders` (detecção de hardware) não grava
+          // arquivo: sem o filtro, "-encoders" virava arquivo no cwd do teste.
           await writeFile(dest, "clip");
         }
       }
@@ -413,7 +415,9 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
           for (let i = 0; i < seconds; i += 1) {
             await writeFile(dest.replace("%03d", String(i).padStart(3, "0")), `frame-${i}`);
           }
-        } else {
+        } else if (isAbsolute(dest)) {
+          // `ffmpeg -hide_banner -encoders` (detecção de hardware) não grava
+          // arquivo: sem o filtro, "-encoders" virava arquivo no cwd do teste.
           await writeFile(dest, "clip");
         }
       }

@@ -138,9 +138,16 @@ describe("runIngest", () => {
     // Sem diretório por job, dois vídeos no mesmo cwd se sobrescrevem.
     const exec = new FakeExecutor();
     await runIngest(job, exec, () => {});
-    for (const call of exec.calls) {
+    // `uv sync --check` confere o venv do sidecar: não é chamada ao motor e
+    // não tem diretório de job.
+    for (const call of exec.calls.filter((c) => !c.args.includes("sync"))) {
       expect(call.env?.CLAUDE_PROJECT_DIR).toBe("/work/j1");
     }
+    // Sem isso o filtro acima esconderia um sync que sumiu ou que apontou
+    // para o venv errado: o da visão é o único que o ingest confere.
+    const syncs = exec.calls.filter((c) => c.args.includes("sync"));
+    expect(syncs.length).toBeGreaterThan(0);
+    for (const call of syncs) expect(call.cwd).toMatch(/services[\\/]vision$/);
   });
 
   it("estoura com a saída do motor quando uma etapa falha", async () => {
@@ -181,6 +188,14 @@ describe("runIngest", () => {
     expect(vis!.args).toContain("4");
     const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease"));
     expect(proxy).toBeDefined();
+  });
+
+  it("chama visual_index.py com uv run --no-sync", async () => {
+    // Sem --no-sync, uv cria um .venv vazio quando o sidecar não está sincronizado.
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const vis = exec.calls.find((call) => call.args.includes("visual_index.py"));
+    expect(vis?.args.slice(0, 4)).toEqual(["run", "--no-sync", "python", "visual_index.py"]);
   });
 
   it("invoca o condense-prep com o Node do processo na raiz do repo, não no cwd de quem chamou", async () => {
