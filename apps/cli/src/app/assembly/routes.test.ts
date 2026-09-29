@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
 import { mediaWork } from "./media-work.ts";
@@ -43,7 +44,9 @@ function indexingExec(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call)) && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -507,7 +510,9 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         workDirs.push(work);
         // Mídia válida: o probe recusa bytes arbitrários com 500.
-        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        if (!(await writeTimelineReference(call)) && work) {
+          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        }
         await new Promise((r) => setTimeout(r, 40));
         return { code: 0, stdout: "ok", stderr: "" };
       },
@@ -515,13 +520,28 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
   });
   stop = app.close;
   const opened = await loadProject(dir);
-  await saveProject(dir, opened.revision, (current) => ({
-    ...current,
-    scenes: [{
-      id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
-      visualEvidenceIds: [], support: [], gaps: [],
-    }],
-  }));
+  await saveProject(dir, opened.revision, (current) => {
+    const source = current.assembly.sources[0];
+    const fps = current.assembly.fps.num / current.assembly.fps.den;
+    const frames = source ? Math.round(source.durationSeconds * fps) : 0;
+    const placed = (id: string) => ({
+      id, sceneId: "s1", sourceId: source?.id ?? "a",
+      sourceStartSeconds: 0, startFrame: 0, durationFrames: frames,
+    });
+    return {
+      ...current,
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
+        visualEvidenceIds: [], support: [], gaps: [],
+      }],
+      assembly: source ? {
+        ...current.assembly,
+        tracks: current.assembly.tracks.map((track) => (
+          track.name === "V2" ? track : { ...track, clips: [placed(track.kind === "Audio" ? "a1-fala" : "v1-fala")] }
+        )),
+      } : current.assembly,
+    };
+  });
   const loaded = await loadProject(dir);
   const url = `http://127.0.0.1:${app.port}`;
   const [a, b] = await Promise.all([
@@ -555,7 +575,7 @@ it("prévia cancelada na fila não lança render pela rota", async () => {
         calls.push({ command: call.command, args: call.args });
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         if (work && call.command === "python3") {
-          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+          await writeTimelineReference(call);
         }
         return { code: 0, stdout: "", stderr: "" };
       },

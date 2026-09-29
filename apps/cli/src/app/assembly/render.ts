@@ -1,13 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, copyFile, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { access, copyFile, link, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectArtifact, publishAtomic } from "@decupa/cache";
-import { hashFile, probe } from "@decupa/media";
+import { hashFile, probe, type MediaInfo } from "@decupa/media";
 import type { Executor } from "../pipeline.ts";
 import { verifySourceIdentity } from "./media.ts";
 import { mediaWork } from "./media-work.ts";
-import { pruneProject } from "./retention.ts";
+import { timelineDurationFrames } from "./otio.ts";
+import { PREVIEW_CACHE_MARKER, pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 import { encoderFor, detectHardwareProfile, type HardwareProfile } from "./hardware.ts";
@@ -151,6 +152,47 @@ export function motorFellBack(stdout: string): boolean {
 
 type PreviewRecord = { sha256: string; profile: HardwareProfile };
 
+/**
+ * O MP4 tem a duração da timeline, com folga de um quadro para cima ou para
+ * baixo (mais o arredondamento em ms do probe). Um render truncado pelo motor
+ * nunca vira prévia pronta nem entrega.
+ */
+export function timelineDurationMismatch(info: MediaInfo, assembly: Assembly): string | null {
+  const frame = assembly.fps.den / assembly.fps.num;
+  const expected = timelineDurationFrames(assembly) * frame;
+  const actual = info.durationMs / 1000;
+  if (Math.abs(actual - expected) <= frame + 0.0005) return null;
+  return `duração ${actual.toFixed(3)} s, a timeline tem ${expected.toFixed(3)} s (tolerância de um quadro)`;
+}
+
+// Hardlink sem suporte: outro volume, FAT/exFAT, permissão ou limite de links.
+const LINK_UNSUPPORTED = new Set(["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"]);
+
+/**
+ * Publica `from` em `to` sem duplicar os bytes: hardlink num temporário ao
+ * lado do destino e rename por cima. Sem suporte a hardlink, copia.
+ */
+async function linkOrCopy(from: string, to: string): Promise<void> {
+  const tmp = `${to}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await link(from, tmp);
+  } catch (err) {
+    if (!LINK_UNSUPPORTED.has((err as NodeJS.ErrnoException).code ?? "")) throw err;
+    await copyFile(from, tmp);
+  }
+  try {
+    await rename(tmp, to);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
+/** Registra em rev-N qual entrada do preview-cache ela usa (retention.ts). */
+async function markPreviewCache(revisionDir: string, key: string): Promise<void> {
+  await publishAtomic(join(revisionDir, PREVIEW_CACHE_MARKER), `${JSON.stringify({ key })}\n`);
+}
+
 // Renders concorrentes rodam cada um na própria pasta de trabalho, mas a
 // publicação se serializa por projeto: os arquivos do preview-cache e do
 // rev-<n> são compartilhados e rename/copyFile concorrentes sobre o mesmo
@@ -197,10 +239,13 @@ export async function renderAssembly(
   const cached = await inspectArtifact(requestSidecar);
   if (cached.status === "ready") {
     const info = await probe(requestCachedMp4).catch(() => null);
-    if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0) {
+    // Cache de antes da conferência de duração pode estar truncado: renderiza de novo.
+    if (info && (info.hasVideo || info.hasAudio) && info.durationMs > 0
+      && timelineDurationMismatch(info, valid) === null) {
       return await publishTurn(outDir, async () => {
         await mkdir(dirname(dest), { recursive: true });
-        await copyFile(requestCachedMp4, dest);
+        await markPreviewCache(dirname(dest), requestKey);
+        await linkOrCopy(requestCachedMp4, dest);
         return dest;
       });
     }
@@ -262,6 +307,8 @@ export async function renderAssembly(
       if (info.durationMs <= 0) {
         throw new Error("prévia com duração zerada");
       }
+      const mismatch = timelineDurationMismatch(info, valid);
+      if (mismatch) throw new Error(`prévia com duração errada: ${mismatch}`);
     } catch (err) {
       await unlink(tmp).catch(() => {});
       throw err;
@@ -269,21 +316,25 @@ export async function renderAssembly(
     // Fallback explícito do motor: o cache é identificado como software,
     // nunca como o perfil de hardware pedido.
     const effectiveProfile = motorFellBack(result.stdout) ? "software" : profile;
-    const cacheDir = join(outDir, "preview-cache", previewIdentity(valid, effectiveProfile));
+    const cacheKey = previewIdentity(valid, effectiveProfile);
+    const cacheDir = join(outDir, "preview-cache", cacheKey);
     const cachedMp4 = join(cacheDir, "reference.mp4");
     const sidecar = join(cacheDir, "preview.json");
     await publishTurn(outDir, async () => {
       await rename(tmp, dest);
+      // Marca antes de criar a entrada: a poda nunca vê entrada sem dono.
+      await markPreviewCache(published, cacheKey);
       await mkdir(cacheDir, { recursive: true });
-      await copyFile(dest, cachedMp4);
+      await linkOrCopy(dest, cachedMp4);
       await publishAtomic(sidecar, `${JSON.stringify({
         sha256: await hashFile(dest),
         profile: effectiveProfile,
       } satisfies PreviewRecord)}\n`);
     });
     // Poda best-effort de derivados antigos (retention.ts): nunca falha o
-    // render — erro é silenciosamente ignorado (retorno descartado).
-    await pruneProject(outDir).catch(() => {});
+    // render — erro é silenciosamente ignorado (retorno descartado). Na
+    // mesma fila da publicação: não poda entrada que outro render publica.
+    await publishTurn(outDir, () => pruneProject(outDir)).catch(() => {});
     return dest;
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});

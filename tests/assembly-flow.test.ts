@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { startApp } from "../apps/cli/src/app/server.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
 import { FIXTURES } from "./fixtures/global-setup.ts";
+import { writeTimelineReference } from "./fixtures/timeline-reference.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -26,7 +27,9 @@ function indexingAndRender(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call)) && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -201,7 +204,7 @@ it("preparar monta sozinho: prepare 202 até cenas e prévia atuais", async () =
         }
       }
       if (call.command === "python3" && call.args.includes("--out")) {
-        await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
+        await writeTimelineReference(call);
       }
       return { code: 0, stdout: "", stderr: "" };
     },
@@ -415,7 +418,7 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
         }
       }
       if (call.command === "python3" && call.args.includes("--out")) {
-        await copyFile(join(FIXTURES, "clip.mp4"), call.args[call.args.indexOf("--out") + 1]);
+        await writeTimelineReference(call);
       }
       return { code: 0, stdout: "", stderr: "" };
     },

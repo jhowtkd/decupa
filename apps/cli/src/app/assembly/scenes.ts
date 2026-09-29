@@ -17,10 +17,11 @@ import type {
   Span,
   SpeechTake,
   VisualSpan,
+  Word,
 } from "./types.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import { validateAssembly } from "./validate.ts";
-import { effectiveWords, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
+import { effectiveWords, overlaps, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
 - Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
@@ -387,7 +388,18 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
     for (const take of takes) {
       const source = bySource.get(take.sourceId);
       if (!source) throw new Error(`take ${take.id} referencia fonte ausente ${take.sourceId}`);
+      let words: Word[] | undefined;
       retainedRanges(take).forEach((fragment, i) => {
+        // Sobra de menos de um quadro entre dois cortes (ou entre um corte e
+        // a ponta do take) viraria piscada de imagem e estalo: os cortes se
+        // fundem. Um take inteiro curto continua com o seu quadro, e a sobra
+        // com palavra mantida ou trecho protegido também: descartá-la tiraria
+        // da timeline o que a pessoa manteve ou protegeu.
+        const partial = fragment.start > take.start || fragment.end < take.end;
+        if (partial && ((fragment.end - fragment.start) * fpsNum) / fpsDen < 1) {
+          words ??= effectiveWords(project, take.sourceId);
+          if (!overlaps(fragment, words) && !overlaps(fragment, take.protected)) return;
+        }
         const first = Math.floor((fragment.start * fpsNum) / fpsDen);
         const lastRounded = Math.round((fragment.end * fpsNum) / fpsDen);
         const last = Math.min(Math.max(first + 1, lastRounded), sourceFrames(source));

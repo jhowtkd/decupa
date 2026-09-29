@@ -564,12 +564,54 @@ export function validateProject(value: unknown): Project {
 }
 
 async function writeAtomic(dir: string, project: Project): Promise<void> {
-  await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`);
+  await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`, { durable: true });
+}
+
+/** Versão anterior do project.json, regravada a cada saveProject. */
+export function previousProjectPath(dir: string): string {
+  return join(dir, "project.prev.json");
+}
+
+// Um aviso por queda: o GET da tela lê o projeto a cada poucos segundos.
+const fallbackWarned = new Set<string>();
+
+type ProjectBytes = { text: string; raw: unknown; fromPrevious: boolean };
+
+/**
+ * Lê o project.json. Só bytes que não são JSON (arquivo zerado ou truncado
+ * por queda: SyntaxError do parse) usam a cópia anterior, com aviso no log.
+ * Erro de leitura (permissão, disco, ausência) e JSON que não passa na
+ * validação seguem como erro: a cópia é mais velha e substituí-la em silêncio
+ * perderia a revisão atual.
+ */
+async function readProjectBytes(dir: string): Promise<ProjectBytes> {
+  const text = await readFile(projectPath(dir), "utf8");
+  let failure: SyntaxError;
+  try {
+    const raw: unknown = JSON.parse(text);
+    fallbackWarned.delete(dir);
+    return { text, raw, fromPrevious: false };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    failure = error;
+  }
+  let previousText: string;
+  let raw: unknown;
+  try {
+    previousText = await readFile(previousProjectPath(dir), "utf8");
+    raw = JSON.parse(previousText);
+  } catch {
+    throw failure;
+  }
+  if (!fallbackWarned.has(dir)) {
+    fallbackWarned.add(dir);
+    console.warn(`project.json ilegível em ${dir} (${failure.message}); usando a cópia anterior, project.prev.json`);
+  }
+  return { text: previousText, raw, fromPrevious: true };
 }
 
 export async function loadProject(dir: string): Promise<Project> {
-  const raw = await readFile(projectPath(dir), "utf8");
-  return validateProject(JSON.parse(raw));
+  return validateProject((await readProjectBytes(dir)).raw);
 }
 
 export async function missingMedia(project: Project): Promise<Source[]> {
@@ -589,8 +631,12 @@ export async function createProject(dir: string, initial: unknown): Promise<void
     try {
       try {
         const handle = await open(projectPath(dir), "wx");
-        await handle.writeFile(`${JSON.stringify(project, null, 2)}\n`);
-        await handle.close();
+        try {
+          await handle.writeFile(`${JSON.stringify(project, null, 2)}\n`);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (code === "EEXIST") throw new Error("projeto já existe");
@@ -626,10 +672,24 @@ function relinkedSources(current: Assembly, base: Assembly, next: Assembly): Sou
 export function mergeCorrections(
   base: TextCorrection[],
   overlay: TextCorrection[],
+  dropped: ReadonlySet<string> = new Set(),
 ): TextCorrection[] {
-  const map = new Map(base.map((item) => [item.id, item]));
+  const map = new Map(base.filter((item) => !dropped.has(item.id)).map((item) => [item.id, item]));
   for (const item of overlay) map.set(item.id, item);
   return [...map.values()];
+}
+
+/**
+ * Correções que `next` retirou: uma correção sobreposta substitui as
+ * anteriores, e elas não podem voltar pelo merge. Com `base`, é o que ela tinha
+ * e `next` não tem. Sem `base`, numa revisão nova, é o que falta em `next`
+ * frente ao atual: correção só nasce com revisão nova, então o atual não tem
+ * correção que `next` não tenha visto.
+ */
+function droppedCorrections(current: Project, next: Project, base?: Project): Set<string> {
+  const kept = new Set(next.corrections.map((item) => item.id));
+  const reference = base ?? (next.revision > current.revision ? current : null);
+  return new Set((reference?.corrections ?? []).map((item) => item.id).filter((id) => !kept.has(id)));
 }
 
 /** Mesma revisão: não deixa snapshot antigo apagar aprovação/análise/relink. */
@@ -640,7 +700,9 @@ export function mergeProjectCommit(current: Project, next: Project, base?: Proje
     );
   }
   const analyses = mergeAnalyses(current.analyses, next.analyses);
-  const corrections = mergeCorrections(current.corrections, next.corrections);
+  const corrections = mergeCorrections(
+    current.corrections, next.corrections, droppedCorrections(current, next, base),
+  );
   if (next.revision > current.revision) {
     return { ...next, analyses, corrections };
   }
@@ -752,8 +814,9 @@ export async function saveProject(
     await acquireLock(dir);
     try {
       // Lê os bytes crus para detectar v1 sem modificar nada na leitura.
-      const rawText = await readFile(projectPath(dir), "utf8");
-      const raw = JSON.parse(rawText) as { version?: unknown };
+      const bytes = await readProjectBytes(dir);
+      const rawText = bytes.text;
+      const raw = bytes.raw as { version?: unknown };
       const current = validateProject(raw);
       let next: Project;
       if (typeof nextOrFn === "function") {
@@ -777,6 +840,11 @@ export async function saveProject(
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
         }
+      }
+      // A versão atual vira a anterior antes de publicar a nova. Lida da
+      // própria cópia (principal ilegível), a cópia boa fica como está.
+      if (!bytes.fromPrevious) {
+        await publishAtomic(previousProjectPath(dir), rawText, { durable: true });
       }
       await writeAtomic(dir, next);
     } finally {

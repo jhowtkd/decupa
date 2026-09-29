@@ -8,6 +8,7 @@ import { createProject, loadProject, readHistorySnapshot, saveProject } from "./
 import { blankProject } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
 import { holdPreparation, isPreparationActive, runPreparation, type PreparationDeps } from "./preparation.ts";
 import { mediaWork } from "./media-work.ts";
 import { applyTextEdit } from "./words.ts";
@@ -265,7 +266,7 @@ function makeFakes(opts: FakeOpts = {}): {
       if (opts.failRender) return { code: 1, stdout: "", stderr: "no render" };
       const out = call.args[call.args.indexOf("--out") + 1];
       await mkdir(join(out, ".."), { recursive: true }).catch(() => undefined);
-      await cp(CLIP, out);
+      await writeTimelineReference(call);
       return { code: 0, stdout: "", stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };

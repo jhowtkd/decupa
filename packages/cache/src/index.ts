@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CancelledError, createLimitedQueue, isCancelledError, type LimitedQueue } from "@decupa/queue";
 
@@ -34,15 +34,49 @@ function replaceBusy(error: unknown): boolean {
   return code === "EPERM" || code === "EEXIST" || code === "EACCES" || code === "EBUSY";
 }
 
-export async function publishAtomic(path: string, payload: string): Promise<void> {
+export type PublishOptions = {
+  /**
+   * fsync do temporário antes do rename, e da pasta depois: uma queda de
+   * energia logo após publicar não deixa o arquivo vazio ou truncado.
+   */
+  durable?: boolean;
+};
+
+async function writeSynced(path: string, payload: string): Promise<void> {
+  const handle = await open(path, "w");
+  try {
+    await handle.writeFile(payload, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDir(path: string): Promise<void> {
+  // Windows não abre pasta para fsync: best-effort.
+  try {
+    const handle = await open(path, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Sem fsync de pasta, o rename já está no journal do sistema de arquivos.
+  }
+}
+
+export async function publishAtomic(path: string, payload: string, opts: PublishOptions = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  const write = opts.durable ? writeSynced : (target: string, text: string) => writeFile(target, text, "utf8");
   try {
-    await writeFile(tmp, payload, "utf8");
+    await write(tmp, payload);
     let last: unknown;
     for (let attempt = 0; attempt < 25; attempt += 1) {
       try {
         await rename(tmp, path);
+        if (opts.durable) await syncDir(dirname(path));
         return;
       } catch (error) {
         last = error;
@@ -50,7 +84,7 @@ export async function publishAtomic(path: string, payload: string): Promise<void
         // Windows cannot rename-over a destination that is open (antivirus
         // or a concurrent reader). Overwrite in place, then retry rename.
         try {
-          await writeFile(path, payload, "utf8");
+          await write(path, payload);
           await unlink(tmp).catch(() => undefined);
           return;
         } catch (writeError) {

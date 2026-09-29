@@ -6,6 +6,7 @@ import { startApp } from "../apps/cli/src/app/server.ts";
 import { saveProject } from "../apps/cli/src/app/assembly/store.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
 import { FIXTURES } from "./fixtures/global-setup.ts";
+import { writeTimelineReference } from "./fixtures/timeline-reference.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -42,7 +43,9 @@ function executor(): Executor {
         await writeFile(join(work, "transcript.json"), `${JSON.stringify(TRANSCRIPT)}\n`);
       }
       // Render da amostra/prévia: materializa o mp4 no diretório de trabalho.
-      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call)) && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };

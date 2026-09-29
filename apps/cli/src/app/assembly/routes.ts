@@ -1,7 +1,7 @@
 import { publishAtomic } from "@decupa/cache";
 import { loadRecipe } from "../templates/store.ts";
 import { deliverApproved, readDelivery } from "./delivery.ts";
-import { brollCandidates, candidateSupport } from "./broll.ts";
+import { brollCandidates, brollIndex, candidateSupport } from "./broll.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
@@ -618,7 +618,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           if (exists) undoRevision = (await readHistorySnapshot(dir, revision)).revision;
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
-        const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
+        const listed=brollCandidates(project),index=brollIndex(project,listed);
+        const candidates=listed.map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps),index)}));
         sendJson(res, {
           project, undoRevision,
           templateProposal:await readTemplateProposal(),
