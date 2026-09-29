@@ -19,14 +19,16 @@ import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  assertSidecarSynced, audioProxyPath, ensureAudioProxy, indexPath, planPath, preflight, probeFps, runIngest, runPlan,
-  runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech,
-  type PipelineJob,
+  assertSidecarSynced, audioProxyPath, ensureAudioProxy, indexPath, keepListError, planPath, preflight, probeFps,
+  probeSourceStartSeconds, runIngest, runPlan, runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath,
+  visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
+import { triageIdentity } from "../triage.ts";
+import { parseSourceTimecode } from "./assembly/timecode.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
-import { claimWorkDir, cleanupWorkDir, initialKeepList, readKeepList, writeKeepList } from "./session.ts";
+import { claimWorkDir, cleanupWorkDir, initialKeepList, readKeepList, sourceMismatch, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
@@ -353,7 +355,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
-        { contentTaskId: true },
+        { requireSpeech: true },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -366,6 +368,80 @@ async function startCleanupApp(opts: {
       store.fail(job.id, error instanceof Error ? error.message : String(error));
     }
   }
+
+  /**
+   * Resposta de "Sugerir cortes", lida dos arquivos que a triagem grava.
+   * O proxy é gerado aqui dentro: só uma triagem por vez chega nele.
+   */
+  async function triageReply(): Promise<Record<string, unknown>> {
+    const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
+    const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
+      .catch(() => "");
+    // Preferir campos estruturados (drop / reviewFlags) em vez de
+    // parsear o markdown — o relatório muda de forma, a prévia não.
+    let drop: unknown[] | undefined;
+    let reviewFlags: unknown[] | undefined;
+    let stats: ReturnType<typeof editorialStats> | undefined;
+    try {
+      const json = await readJson(join(workDir, "out", "triage.json")) as {
+        drop?: { unit_ids: string[]; reason: string }[];
+        reviewFlags?: unknown[];
+      };
+      drop = json.drop;
+      reviewFlags = json.reviewFlags;
+      // Telemetria editorial: drop × índice dá os segundos e o motivo
+      // dominante. Falha aqui não tira a prévia — stats fica indefinido.
+      const index = await readJson(indexPath(pipelineJob)) as {
+        units?: { id: string; start: number; end: number }[];
+      };
+      // Índice cru pode trazer unidade sem tempo numérico; sem o filtro,
+      // ela vira "corta NaNmNaNs" no resumo da prévia.
+      const units = (index.units ?? []).filter((u) =>
+        typeof u.start === "number" && typeof u.end === "number"
+        && Number.isFinite(u.start) && Number.isFinite(u.end)
+      );
+      stats = editorialStats(units, json.drop ?? []);
+    } catch {
+      // triage.json é novo; fallback no markdown — e a leitura do índice
+      // ou do próprio stats falhando também cai aqui, sem stats.
+    }
+    return {
+      keepList: suggested,
+      motivos: motivosFromReport(report),
+      drop,
+      reviewFlags,
+      stats,
+      report,
+    };
+  }
+
+  /**
+   * O que decide se dois pedidos de triagem dão a mesma resposta: a fonte, o
+   * índice, o provedor resolvido e o passe (só estrutura, sem orçamento, no
+   * app). São as entradas da chave de cache que o servidor enxerga.
+   */
+  async function triageRequestKey(): Promise<string> {
+    const source = await stat(input).catch(() => null);
+    const index = await stat(indexPath(pipelineJob)).catch(() => null);
+    let providerId: string;
+    try {
+      providerId = (await triageIdentity({ provider, projectDir: process.cwd() })).providerId;
+    } catch (error) {
+      providerId = `sem provedor: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    return JSON.stringify({
+      source: source ? [input, source.size, source.mtimeMs] : null,
+      index: index ? [index.size, index.mtimeMs] : null,
+      providerId,
+      pass: "structure",
+      budgetSeconds: null,
+    });
+  }
+
+  // Fila de um para a triagem paga: duas abas ou um reload não disparam duas
+  // chamadas, e a segunda nunca lê o proxy ainda em escrita. Pedido
+  // equivalente espera a que está em voo e recebe a mesma resposta.
+  let triageFlight: { key: string; reply: Promise<Record<string, unknown>> } | null = null;
 
   let initialIngestStarted = false;
   let boundPort = opts.port ?? 7788;
@@ -460,57 +536,48 @@ async function startCleanupApp(opts: {
             sendJson(res, { error: "keepList precisa ser string, no formato \"u001-u003 u005\"" }, 400);
             return;
           }
+          const invalid = keepListError(body.keepList);
+          if (invalid) { sendJson(res, { error: invalid }, 400); return; }
           await replan(body.keepList);
           sendJson(res, { review: store.get(current.id)!.review });
           return;
         }
 
         if (parts[2] === "triage" && req.method === "POST") {
-          const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
-          const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
-            .catch(() => "");
-          // Preferir campos estruturados (drop / reviewFlags) em vez de
-          // parsear o markdown — o relatório muda de forma, a prévia não.
-          let drop: unknown[] | undefined;
-          let reviewFlags: unknown[] | undefined;
-          let stats: ReturnType<typeof editorialStats> | undefined;
-          try {
-            const json = await readJson(join(workDir, "out", "triage.json")) as {
-              drop?: { unit_ids: string[]; reason: string }[];
-              reviewFlags?: unknown[];
-            };
-            drop = json.drop;
-            reviewFlags = json.reviewFlags;
-            // Telemetria editorial: drop × índice dá os segundos e o motivo
-            // dominante. Falha aqui não tira a prévia — stats fica indefinido.
-            const index = await readJson(indexPath(pipelineJob)) as {
-              units?: { id: string; start: number; end: number }[];
-            };
-            // Índice cru pode trazer unidade sem tempo numérico; sem o filtro,
-            // ela vira "corta NaNmNaNs" no resumo da prévia.
-            const units = (index.units ?? []).filter((u) =>
-              typeof u.start === "number" && typeof u.end === "number"
-              && Number.isFinite(u.start) && Number.isFinite(u.end)
-            );
-            stats = editorialStats(units, json.drop ?? []);
-          } catch {
-            // triage.json é novo; fallback no markdown — e a leitura do índice
-            // ou do próprio stats falhando também cai aqui, sem stats.
+          // O proxy de triagem sai da fonte: vídeo trocado com o app aberto
+          // misturaria a transcrição antiga com a imagem nova.
+          const mismatch = await sourceMismatch(workDir, input);
+          if (mismatch) { sendJson(res, { error: mismatch }, 409); return; }
+          const key = await triageRequestKey();
+          if (triageFlight && triageFlight.key !== key) {
+            sendJson(res, {
+              error: "já há uma triagem em andamento com outros parâmetros (fonte, índice ou provedor). " +
+                "Espere ela terminar e peça de novo.",
+            }, 409);
+            return;
           }
-          sendJson(res, {
-            keepList: suggested,
-            motivos: motivosFromReport(report),
-            drop,
-            reviewFlags,
-            stats,
-            report,
-          });
+          if (!triageFlight) {
+            const flight = { key, reply: triageReply() };
+            triageFlight = flight;
+            void flight.reply.finally(() => {
+              if (triageFlight === flight) triageFlight = null;
+            }).catch(() => {});
+          }
+          sendJson(res, await triageFlight.reply);
           return;
         }
 
         if (parts[2] === "export" && req.method === "POST") {
           const body = await readBody(req);
           const kind = String(body.kind ?? "");
+          // Todo export sai do plano da fonte transcrita: com o vídeo trocado,
+          // EDL e MP4 apontariam cortes do antigo para a mídia nova.
+          const mismatch = await sourceMismatch(workDir, input);
+          if (mismatch) { sendJson(res, { error: mismatch }, 409); return; }
+          if (typeof body.keepList === "string") {
+            const invalid = keepListError(body.keepList);
+            if (invalid) { sendJson(res, { error: invalid }, 400); return; }
+          }
           // Export sempre re-planeja: nenhum arquivo sai de um plano velho.
           if (typeof body.keepList === "string") await replan(body.keepList);
           const plan = await readJson(planPath(pipelineJob)) as Record<string, any>;
@@ -518,9 +585,12 @@ async function startCleanupApp(opts: {
           if (kind === "edl") {
             // Do arquivo, nunca assumido: suporta frame rate inteiro ou 29,97 drop-frame.
             const fps = await probeFps(pipelineJob, exec, { allowDropFrame: true });
+            // In-points a partir do timecode embutido, como no OTIO da montagem.
+            const startSeconds = await probeSourceStartSeconds(pipelineJob, exec);
             const out = join(workDir, "corte.edl");
             await writeFile(out, buildEdl({
               clips: plan.clips, fps, title: basename(input),
+              sourceStartFrames: Math.round(startSeconds * fps),
             }), "utf8");
             sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/edl` });
             return;
@@ -559,6 +629,9 @@ async function startCleanupApp(opts: {
                 fps: rate,
                 width,
                 height,
+                // O mesmo parse da montagem: o OTIO soma o início da mídia aos
+                // in-points e recusa etiqueta ilegível.
+                timecode: info.timecode ? parseSourceTimecode(info.timecode, rate) : null,
                 role: "speech",
                 included: true,
                 name: basename(input),

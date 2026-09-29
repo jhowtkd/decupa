@@ -19,7 +19,7 @@ export { companyCredentialsFromEnv, envWithStoredTypeSafe, installCompanyCredent
 export { analysisClientOptions, assertStoredEndpoint, createAnalysisClient } from "./analysis-client.ts";
 export { isJsonFormatRejected, OpenAiCompatClient } from "./openai-compat.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
-export { parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiClient, ZaiTriageModel } from "./zai.ts";
+export { base64Bytes, MAX_VIDEO_PAYLOAD_BYTES, parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiClient, ZaiTriageModel } from "./zai.ts";
 export { keepListFrom } from "./keeplist.ts";
 export { FakeTriageModel } from "./model.ts";
 export { applyInspect, flagsWithoutSubstitute, normalizeInspectVerdict } from "./inspect.ts";

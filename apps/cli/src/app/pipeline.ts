@@ -4,6 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectSilence } from "@decupa/acoustics";
 import type { FileCoordinator } from "@decupa/coordinator";
+import { readTimecode, selectFrameRate } from "@decupa/media";
+import { CancelledError } from "@decupa/queue";
 import { createTracer, type Tracer } from "@decupa/trace";
 import { DEFAULT_LANGUAGE, DEFAULT_MODEL, transcribe, type TranscribeDeps } from "@decupa/transcript";
 
@@ -12,6 +14,7 @@ import { DEFAULT_LANGUAGE, DEFAULT_MODEL, transcribe, type TranscribeDeps } from
 import { runTriage as runTriageLibrary } from "../triage.ts";
 import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
+import { parseSourceTimecode, sourceMediaStartSeconds } from "./assembly/timecode.ts";
 
 export interface ExecResult {
   code: number;
@@ -55,11 +58,45 @@ export interface IngestOptions {
    */
   hwDecode?: boolean;
   /**
-   * Chave da transcrição no coordenador amarrada ao conteúdo da fonte
-   * (`transcriptTaskId`). Limpeza e montagem ligam; desligada, a chave é o
-   * caminho, o que devolveria a transcrição antiga de um arquivo trocado.
+   * Transcrição sem nenhuma palavra vira erro e não fica em cache (nem no
+   * `transcript.json`, nem no coordenador). A limpeza liga: sem fala não há o
+   * que limpar, e um vazio guardado se repetiria a cada abertura. A montagem
+   * deixa desligado, porque fonte de apoio sem fala é válida lá.
    */
-  contentTaskId?: boolean;
+  requireSpeech?: boolean;
+}
+
+/** Fim da chave da transcrição da limpeza (`requireSpeech`); a montagem não leva. */
+export const TASK_ID_SPEECH_SUFFIX = "#fala";
+
+/** Vídeo sem fala na limpeza: a causa, e o que acontece se abrir de novo. */
+export const NO_SPEECH_MESSAGE =
+  "a transcrição não encontrou fala neste vídeo. Confira se o áudio tem voz em português; " +
+  "o resultado vazio não foi guardado, então abrir o vídeo de novo transcreve outra vez.";
+
+/** Cancelado entre etapas: a próxima não começa. */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new CancelledError();
+}
+
+/** Um sinal só a partir dos que existirem (o do job e o do chamador). */
+function eitherSignal(...signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const present = signals.filter((s): s is AbortSignal => s !== undefined);
+  if (present.length <= 1) return present[0];
+  return AbortSignal.any(present);
+}
+
+/**
+ * Publica um derivado gravado em `.partial`: o destino só existe completo.
+ * Um encode interrompido deixava um MP4 válido e curto no nome final, e ele
+ * era reusado para sempre. Encoder que diz ok sem gravar nada não publica nada.
+ */
+async function publishPartial(partial: string, out: string): Promise<void> {
+  try {
+    await rename(partial, out);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 /**
@@ -249,6 +286,8 @@ function envFor(job: PipelineJob): Record<string, string> {
 async function must(exec: Executor, call: ExecCall, what: string): Promise<ExecResult> {
   const result = await exec.run(call);
   if (result.code !== 0) {
+    // Processo morto pelo cancelar não é falha da etapa.
+    throwIfAborted(call.signal);
     const detail = (result.stdout + result.stderr).trim().slice(0, 500);
     throw new Error(`${what} falhou (código ${result.code}): ${detail || "sem saída"}`);
   }
@@ -332,11 +371,17 @@ const SPEECH_DIR = dirname(SPEECH_SCRIPT);
  * vazio em silêncio e a etapa só cai depois, num ModuleNotFoundError que
  * ninguém liga ao setup. `sync --check` compara sem criar nem alterar nada.
  */
-export async function assertSidecarSynced(exec: Executor, dir: string, name: string): Promise<void> {
+export async function assertSidecarSynced(
+  exec: Executor,
+  dir: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const { code } = await exec.run({
     command: "uv",
     args: ["sync", "--locked", "--check", "--offline"],
     cwd: dir,
+    ...(signal ? { signal } : {}),
   });
   if (code !== 0) {
     throw new Error(
@@ -358,23 +403,40 @@ export async function runIngest(
 ): Promise<{ warning?: string }> {
   const wantsVisual = opts.visual ?? true;
   const activeTracer = tracer ?? createTracer();
+  // Os dois cancelam: o do job (cancelar na tela) e o de quem chamou.
+  const abort = eitherSignal(signal, job.signal);
+  throwIfAborted(abort);
   // transcript.json é o cache que a spec promete: re-rodar não re-transcreve.
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
     await activeTracer.run("transcribing", async () => {
       onStage("transcribing");
       if (speech?.worker) {
+        const worker = speech.worker;
         await runCondensePrep(
           { input: job.videoPath, out: transcriptPath(job) },
           {
             transcribe: async (o) => transcribe({
               ...o,
-              signal,
-              ...(opts.contentTaskId
-                ? { taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language) }
-                : {}),
+              signal: abort,
+              onProgress: onLine,
+              // Sempre pelo conteúdo: pelo caminho, o coordenador devolveria a
+              // transcrição antiga de um arquivo trocado no mesmo lugar. Com
+              // `requireSpeech`, o sufixo separa a chave da limpeza: um vazio
+              // já registrado como concluído (versão anterior) venceria a
+              // exigência de fala e o worker nunca seria chamado de novo.
+              taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language)
+                + (opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""),
             }, {
-              worker: speech.worker,
+              // O vazio estoura dentro do build: o coordenador não marca a
+              // tarefa como concluída, e a próxima abertura transcreve de novo.
+              worker: opts.requireSpeech
+                ? async (req) => {
+                  const out = await worker(req);
+                  if (out.words.length === 0) throw new Error(NO_SPEECH_MESSAGE);
+                  return out;
+                }
+                : worker,
               coordinator: speech.coordinator,
               extract: speech.extract,
             }),
@@ -397,15 +459,22 @@ export async function runIngest(
         ],
         env: envFor(job),
         cwd: REPO_ROOT,
+        signal: abort,
         onLine,
-        ...(signal ? { signal } : {}),
       }, "a transcrição");
     });
   }
+  throwIfAborted(abort);
 
   const emptySpeech = await activeTracer.run("indexing", async () => {
     onStage("indexing");
     if (await transcriptHasNoSegments(job)) {
+      if (opts.requireSpeech) {
+        // Vazio que já estava no disco (CLI de processo único ou sessão
+        // antiga) também sai do cache, pela mesma razão do worker.
+        await unlink(transcriptPath(job)).catch(() => {});
+        throw new Error(NO_SPEECH_MESSAGE);
+      }
       // Fonte de apoio sem fala é válida: o índice vazio permite que a montagem
       // continue usando apenas os trechos de fala de outras fontes.
       await writeEmptySpeechIndex(job);
@@ -415,13 +484,14 @@ export async function runIngest(
       command: "python3",
       args: [CONDENSE, "index", job.videoPath, transcriptPath(job), "--no-visual-survey"],
       env: envFor(job),
-      onLine,
       // Sem o sinal, o filho sobrevive quando outra operação toma o lugar
       // desta: o begin() da montagem só aborta, não mata mais tudo.
-      ...(signal ? { signal } : {}),
+      signal: abort,
+      onLine,
     }, "a medição do índice");
     return false;
   });
+  throwIfAborted(abort);
 
   // Visual desligado sai antes da etapa: sem span no tracer, sem onStage
   // ("visual" nunca chega a quem mostra progresso) e sem aviso de visão.
@@ -430,44 +500,59 @@ export async function runIngest(
   const warning = await activeTracer.run("visual", async () => {
     onStage("visual");
     if (emptySpeech) return undefined;
-    return runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin");
+    return runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin", abort);
   });
   return warning ? { warning } : {};
 }
 
 /**
  * Proxy 4 fps + sidecar MediaPipe. Falha não aborta o job: visual é opcional,
- * o keep-list mecânico segue sem as flags.
+ * o keep-list mecânico segue sem as flags. Cancelamento aborta: o processo
+ * morto pelo cancelar não é falha do visual e não pode seguir para a próxima.
  */
 async function runVisualIndex(
   job: PipelineJob,
   exec: Executor,
   onLine?: (line: string) => void,
   hwDecode = false,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const hasScript = await access(VISION_SCRIPT).then(() => true, () => false);
   if (!hasScript) return VISUAL_SKIP;
   // Visual é opcional: venv da visão sem sincronizar vira aviso, e nenhum
   // proxy é gerado nem `.venv` vazio criado pelo uv.
   try {
-    await assertSidecarSynced(exec, VISION_CWD, "visão");
+    await assertSidecarSynced(exec, VISION_CWD, "visão", signal);
   } catch (error) {
+    // A checagem morta pelo cancelar é cancelamento, não venv faltando.
+    throwIfAborted(signal);
     return `${error instanceof Error ? error.message : String(error)} — segue sem visual`;
   }
 
   const proxy = visualProxyPath(job);
   const hasProxy = await access(proxy).then(() => true, () => false);
   if (!hasProxy) {
+    // O ffmpeg escolhe o formato pela extensão: o parcial termina em .mp4.
+    const partial = join(job.workDir, "visual-proxy.partial.mp4");
     const encode = (hw: boolean) => exec.run({
       command: "ffmpeg",
-      args: visualProxyArgs(job.videoPath, proxy, hw),
+      args: visualProxyArgs(job.videoPath, partial, hw),
       env: envFor(job),
+      signal,
       onLine,
     });
     let made = await encode(hwDecode);
-    if (made.code !== 0 && hwDecode) made = await encode(false);
-    if (made.code !== 0) return VISUAL_SKIP;
+    // O ffmpeg morto pelo cancelamento também sai com código != 0; relançar
+    // em software desfaria o cancelar e seguiria por minutos.
+    if (made.code !== 0 && hwDecode && !signal?.aborted) made = await encode(false);
+    if (made.code !== 0) {
+      await unlink(partial).catch(() => {});
+      throwIfAborted(signal);
+      return VISUAL_SKIP;
+    }
+    await publishPartial(partial, proxy);
   }
+  throwIfAborted(signal);
 
   const result = await exec.run({
     command: "uv",
@@ -479,8 +564,10 @@ async function runVisualIndex(
     ],
     env: envFor(job),
     cwd: VISION_CWD,
+    signal,
     onLine,
   });
+  throwIfAborted(signal);
   if (result.code !== 0) return VISUAL_SKIP;
 
   const stdout = result.stdout.trim();
@@ -494,12 +581,29 @@ async function runVisualIndex(
   return undefined;
 }
 
+/** Uma faixa do keep-list: `u001` ou `u001-u003`. */
+const KEEP_RANGE = /^u\d+(-u\d+)?$/;
+
+/**
+ * Confere o keep-list antes de ele virar argumento do `condense.py`. Cada
+ * faixa entra como um argumento próprio depois de `--keep`; sem o formato,
+ * `--drop-fillers` ou qualquer outra opção passaria direto para o motor.
+ * Devolve a mensagem do problema, ou `null` se o keep-list serve.
+ */
+export function keepListError(keepList: string): string | null {
+  const bad = keepList.trim().split(/\s+/).filter(Boolean).find((range) => !KEEP_RANGE.test(range));
+  if (bad === undefined) return null;
+  return `faixa inválida no keep-list: "${bad.slice(0, 40)}". Use o formato "u001-u003 u005".`;
+}
+
 export async function runPlan(
   job: PipelineJob,
   keepList: string,
   exec: Executor,
   tracer: Tracer = createTracer(),
 ): Promise<void> {
+  const invalid = keepListError(keepList);
+  if (invalid) throw new Error(invalid);
   const ranges = keepList.trim().split(/\s+/).filter(Boolean);
   if (ranges.length === 0) {
     throw new Error("keep-list vazio: nada sobraria no corte");
@@ -513,6 +617,7 @@ export async function runPlan(
         "--drop-fillers", "hard",
       ],
       env: envFor(job),
+      signal: job.signal,
     }, "o plano");
   });
 }
@@ -526,17 +631,28 @@ export async function makeTriageProxy(
   const exists = fs.exists ?? (async (p) => access(p).then(() => true, () => false));
   if (await exists(out)) return out;
 
-  await must(exec, {
-    command: "ffmpeg",
-    args: [
-      "-i", job.videoPath,
-      "-vf", "fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
-      "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
-      "-c:a", "aac", "-b:a", "24k", "-ac", "1",
-      "-y", out,
-    ],
-    env: envFor(job),
-  }, "a geração do proxy de triagem");
+  // Parcial e rename, como o proxy visual: um ffmpeg morto no meio deixaria
+  // um MP4 curto que a triagem paga leria para sempre.
+  const partial = join(job.workDir, "triage-proxy.partial.mp4");
+  try {
+    await must(exec, {
+      command: "ffmpeg",
+      args: [
+        "-i", job.videoPath,
+        "-vf", "fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+        "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
+        "-c:a", "aac", "-b:a", "24k", "-ac", "1",
+        "-y", partial,
+      ],
+      env: envFor(job),
+      signal: job.signal,
+    }, "a geração do proxy de triagem");
+  } catch (error) {
+    await unlink(partial).catch(() => {});
+    throwIfAborted(job.signal);
+    throw error;
+  }
+  await publishPartial(partial, out);
   return out;
 }
 
@@ -625,14 +741,14 @@ export async function preflight(job: PipelineJob, exec: Executor): Promise<void>
   if (!readable) throw new Error(`não consegui ler o vídeo em ${job.videoPath}`);
 
   for (const bin of ["ffmpeg", "ffprobe"]) {
-    const { code } = await exec.run({ command: bin, args: ["-version"] });
+    const { code } = await exec.run({ command: bin, args: ["-version"], signal: job.signal });
     if (code !== 0) throw new Error(`${bin} não está no PATH — instale com \`brew install ffmpeg\``);
   }
 
   // CLI de processo único: `uv run python transcribe.py`. Serviço residente:
   // `worker.py --serve` no app HTTP. Preflight confirma o CLI; o worker
   // mora no mesmo diretório.
-  const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"] });
+  const { code: uvCode } = await exec.run({ command: "uv", args: ["--version"], signal: job.signal });
   const hasSpeech = await access(SPEECH_SCRIPT).then(() => true, () => false);
   if (uvCode !== 0 || !hasSpeech) {
     throw new Error(
@@ -670,14 +786,24 @@ export async function probeFps(
     command: "ffprobe",
     args: [
       "-v", "error", "-select_streams", "v:0",
-      "-show_entries", "stream=r_frame_rate", "-of", "default=nw=1:nk=1",
+      "-show_entries", "stream=r_frame_rate,avg_frame_rate", "-of", "json",
       job.videoPath,
     ],
+    signal: job.signal,
   });
   if (code !== 0) throw new Error("ffprobe não conseguiu ler o frame rate do vídeo");
 
-  const [num, den] = stdout.trim().split("/").map(Number);
-  const fps = den ? num! / den! : num!;
+  // A mesma checagem do probe da montagem: `r_frame_rate` absurdo (celular
+  // com VFR devolve 90000/1) cai para `avg_frame_rate`, e 0/0 não vira NaN.
+  let stream: { r_frame_rate?: string; avg_frame_rate?: string } | undefined;
+  try {
+    stream = (JSON.parse(stdout) as { streams?: typeof stream[] }).streams?.[0];
+  } catch {
+    stream = undefined;
+  }
+  const rate = selectFrameRate(stream?.r_frame_rate, stream?.avg_frame_rate);
+  if (!rate) throw new Error("ffprobe não achou um frame rate válido no vídeo");
+  const fps = rate.num / rate.den;
   if (!Number.isInteger(fps)) {
     if (opts?.allowDropFrame && Math.abs(fps - 29.97) < 0.01) {
       return fps;
@@ -690,11 +816,52 @@ export async function probeFps(
   return fps;
 }
 
+/**
+ * Início da fonte pelo timecode embutido, em segundos (0 sem etiqueta), com
+ * a mesma leitura da montagem. Sem isto o EDL da limpeza marcava in-points a
+ * partir de 00:00:00:00, e material de câmera em 01:00:00:00 ficava offline.
+ * Etiqueta ilegível estoura: assumir 0 deslocaria os cortes em silêncio.
+ */
+export async function probeSourceStartSeconds(job: PipelineJob, exec: Executor): Promise<number> {
+  const { code, stdout } = await exec.run({
+    command: "ffprobe",
+    args: [
+      "-v", "error",
+      "-show_entries", "stream=codec_type,r_frame_rate,avg_frame_rate:stream_tags=timecode:format_tags=timecode",
+      "-of", "json",
+      job.videoPath,
+    ],
+    signal: job.signal,
+  });
+  if (code !== 0) throw new Error("ffprobe não conseguiu ler o timecode do vídeo");
+  type Stream = { codec_type?: string; r_frame_rate?: string; avg_frame_rate?: string; tags?: Record<string, string | undefined> };
+  let parsed: { streams?: Stream[]; format?: { tags?: Record<string, string | undefined> } };
+  try {
+    parsed = JSON.parse(stdout) as typeof parsed;
+  } catch {
+    throw new Error("ffprobe devolveu uma saída ilegível ao ler o timecode do vídeo");
+  }
+  const streams = parsed.streams ?? [];
+  const video = streams.find((stream) => stream.codec_type === "video");
+  const raw = readTimecode(video, parsed.format?.tags, streams);
+  if (!raw) return 0;
+  const rate = selectFrameRate(video?.r_frame_rate, video?.avg_frame_rate);
+  const tc = parseSourceTimecode(raw, rate);
+  if (tc.frames == null) {
+    throw new Error(
+      `o vídeo tem timecode ilegível "${raw}" — corrija a etiqueta na mídia (ex.: ffmpeg -timecode) ` +
+      "ou grave a mídia sem timecode",
+    );
+  }
+  return sourceMediaStartSeconds({ fps: rate, timecode: tc }) ?? 0;
+}
+
 export async function runRender(job: PipelineJob, outPath: string, exec: Executor): Promise<string> {
   await must(exec, {
     command: "python3",
     args: [CONDENSE, "render", job.videoPath, outPath],
     env: envFor(job),
+    signal: job.signal,
   }, "o render");
   return outPath;
 }

@@ -8,10 +8,12 @@ explícito tenta e cai para CPU se falhar.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 import whisperx
@@ -29,6 +31,36 @@ _whisperx_logger.setLevel(logging.INFO)
 _whisperx_logger.propagate = False
 
 
+# Linha de progresso no stderr: o cliente Node rearma o watchdog a cada uma
+# e mostra o texto na tela. stdout continua só com as respostas JSON.
+PROGRESS_PREFIX = "DECUPA_PROGRESS "
+_progress_lock = threading.Lock()
+
+
+def stderr_progress(task_id: str, stage: str, percent: float | None = None) -> None:
+    payload: dict = {"taskId": task_id, "stage": stage}
+    if percent is not None:
+        payload["percent"] = round(float(percent), 1)
+    with _progress_lock:
+        # O "\n" inicial fecha uma barra `\r` que outro escritor deixou sem
+        # quebra: sem ele a linha de progresso cola nela, o cliente (que só
+        # reconhece linha que COMEÇA com o prefixo) a perde e o watchdog não
+        # rearma. O cliente descarta a linha vazia que sobra.
+        sys.stderr.write("\n" + PROGRESS_PREFIX + json.dumps(payload) + "\n")
+        sys.stderr.flush()
+
+
+# Enquanto um modelo carrega (o de alinhamento PT baixa mais de 1 GB na primeira
+# vez), nada sai do WhisperX. Uma thread repete a etapa corrente nesse ritmo para
+# o watchdog do cliente (10 min sem linha de progresso) não matar o worker com a
+# causa errada. Depois do teto ela para: uma carga realmente travada volta a ser
+# pega pelo watchdog. Lidas na hora do uso; o construtor de SpeechWorker aceita
+# outros valores (testes).
+HEARTBEAT_SECONDS = 30.0
+HEARTBEAT_MAX_SECONDS = 30 * 60.0
+HEARTBEAT_THREAD_NAME = "decupa-heartbeat"
+
+
 class CancelledError(Exception):
     def __init__(self, task_id: str = ""):
         super().__init__(f"tarefa cancelada{f': {task_id}' if task_id else ''}")
@@ -42,10 +74,23 @@ def resolve_device(requested: str | None) -> str:
 
 
 class SpeechWorker:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        progress=stderr_progress,
+        heartbeat_seconds: float | None = None,
+        heartbeat_max_seconds: float | None = None,
+    ) -> None:
+        self._heartbeat_seconds = heartbeat_seconds
+        self._heartbeat_max_seconds = heartbeat_max_seconds
         self._asr: dict[tuple[str, str, str, str], object] = {}
         self._align: dict[tuple[str, str], tuple[object, object]] = {}
-        self._cancel: dict[str, bool] = {}
+        # Cancelamento só vale para tarefa em andamento: um cancel que chega
+        # depois do fim não pode ficar guardado e matar a próxima com a mesma
+        # chave (a chave é o conteúdo, então a retomada repete o id).
+        self._active: set[str] = set()
+        self._cancel: set[str] = set()
+        self._state = threading.Lock()
+        self._progress = progress
         self._lock = threading.Lock()
         self.model_loads = 0
         self._preload = {
@@ -56,11 +101,69 @@ class SpeechWorker:
         }
 
     def _check(self, task_id: str) -> None:
-        if self._cancel.get(task_id):
+        with self._state:
+            cancelled = task_id in self._cancel
+        if cancelled:
             raise CancelledError(task_id)
 
+    def begin(self, task_id: str) -> None:
+        """Marca a tarefa como em andamento antes da thread começar."""
+        with self._state:
+            self._active.add(task_id)
+
+    def end(self, task_id: str) -> None:
+        with self._state:
+            self._active.discard(task_id)
+            self._cancel.discard(task_id)
+
     def cancel(self, task_id: str) -> None:
-        self._cancel[task_id] = True
+        with self._state:
+            if task_id in self._active:
+                self._cancel.add(task_id)
+
+    def _report(self, task_id: str, stage: str, percent: float | None = None) -> None:
+        try:
+            self._progress(task_id, stage, percent)
+        except Exception:  # noqa: BLE001 - progresso nunca derruba a tarefa
+            pass
+
+    @contextlib.contextmanager
+    def _heartbeat(self, task_id: str, stage: str):
+        """Repete `stage` enquanto o bloco roda, até o teto de batimento."""
+        every = self._heartbeat_seconds if self._heartbeat_seconds is not None else HEARTBEAT_SECONDS
+        cap = (
+            self._heartbeat_max_seconds
+            if self._heartbeat_max_seconds is not None
+            else HEARTBEAT_MAX_SECONDS
+        )
+        stop = threading.Event()
+        started = time.monotonic()
+
+        def beat() -> None:
+            while not stop.wait(every):
+                if time.monotonic() - started >= cap:
+                    return
+                self._report(task_id, stage)
+
+        thread = threading.Thread(target=beat, name=HEARTBEAT_THREAD_NAME, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+    def _percent_reporter(self, task_id: str, stage: str):
+        last = [-1]
+
+        def report(percent: float) -> None:
+            whole = int(percent)
+            if whole == last[0]:
+                return
+            last[0] = whole
+            self._report(task_id, stage, percent)
+
+        return report
 
     def _asr_for(self, model: str, language: str, compute_type: str, device: str):
         wanted = resolve_device(device)
@@ -123,11 +226,14 @@ class SpeechWorker:
         batch_size: int = 8,
         text_file: str | None = None,
     ) -> dict:
-        if self._cancel.pop(task_id, False):
-            raise CancelledError(task_id)
+        self.begin(task_id)
         try:
-            asr, device = self._asr_for(model, language, compute_type, device)
             self._check(task_id)
+            self._report(task_id, "carregando o modelo de fala")
+            with self._heartbeat(task_id, "carregando o modelo de fala"):
+                asr, device = self._asr_for(model, language, compute_type, device)
+            self._check(task_id)
+            self._report(task_id, "lendo o áudio")
             audio = whisperx.load_audio(wav)
             self._check(task_id)
             if text_file:
@@ -136,9 +242,17 @@ class SpeechWorker:
                     raise ValueError("texto vazio para alinhamento")
                 segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text}]
             else:
-                segments = asr.transcribe(audio, batch_size=batch_size)["segments"]
+                self._report(task_id, "transcrevendo", 0)
+                segments = asr.transcribe(
+                    audio,
+                    batch_size=batch_size,
+                    progress_callback=self._percent_reporter(task_id, "transcrevendo"),
+                )["segments"]
             self._check(task_id)
-            align_model, align_meta = self._align_for(language, device)
+            self._report(task_id, "carregando o modelo de alinhamento")
+            with self._heartbeat(task_id, "carregando o modelo de alinhamento"):
+                align_model, align_meta = self._align_for(language, device)
+            self._report(task_id, "alinhando as palavras", 0)
             aligned = whisperx.align(
                 segments,
                 align_model,
@@ -146,6 +260,7 @@ class SpeechWorker:
                 audio,
                 device,
                 return_char_alignments=False,
+                progress_callback=self._percent_reporter(task_id, "alinhando as palavras"),
             )
             self._check(task_id)
             words = []
@@ -168,7 +283,7 @@ class SpeechWorker:
                     )
             return {"language": language, "words": words, "unaligned": unaligned, "taskId": task_id}
         finally:
-            self._cancel.pop(task_id, None)
+            self.end(task_id)
 
     def benchmark(self, wavs: list[str]) -> dict:
         before = self.model_loads
@@ -207,6 +322,10 @@ def serve() -> None:
             reply({"error": str(exc), "taskId": exc.task_id or task_id})
         except Exception as exc:
             reply({"error": str(exc), "taskId": task_id})
+        finally:
+            # Argumento inválido estoura antes de transcribe começar; sem isto
+            # a tarefa ficaria "em andamento" para sempre.
+            worker.end(task_id)
 
     for line in sys.stdin:
         line = line.strip()
@@ -231,6 +350,9 @@ def serve() -> None:
             except Exception as exc:
                 reply({"error": str(exc)})
             continue
+        # Em andamento já na leitura da linha: um cancel que chega antes de a
+        # thread começar ainda vale, e um que chega depois do fim é ignorado.
+        worker.begin(str(args.get("task_id") or ""))
         thread = threading.Thread(target=run_transcribe, args=(args,), daemon=True)
         jobs.append(thread)
         thread.start()

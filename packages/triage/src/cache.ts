@@ -13,6 +13,8 @@ export interface CacheKeyParts {
   unitId?: string;
   framesSha?: string;
   providerId?: string;
+  /** Trecho da triagem em janelas (`<início>-<fim>` em segundos). */
+  window?: string;
 }
 
 /**
@@ -33,6 +35,7 @@ export function cacheKey(parts: CacheKeyParts): string {
     elements.push(parts.unitId ?? "");
     elements.push(parts.framesSha ?? "");
   }
+  if (parts.window) elements.push(`window:${parts.window}`);
   return createHash("sha256")
     .update(elements.join(" "))
     .digest("hex");

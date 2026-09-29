@@ -93,6 +93,8 @@ export type SpeechWorkerRequest = {
   model?: string;
   computeType?: string;
   signal?: AbortSignal;
+  /** Progresso do WhisperX em texto curto ("transcrevendo 42%"). */
+  onProgress?: (line: string) => void;
 };
 
 /** Padrões de `transcribe`, exportados para quem monta a chave da tarefa. */
@@ -118,6 +120,8 @@ export async function transcribe(
     model?: string;
     computeType?: string;
     signal?: AbortSignal;
+    /** Progresso do worker residente, repassado a quem mostra andamento. */
+    onProgress?: (line: string) => void;
     /** Chave da tarefa no coordenador. Padrão: o caminho. Um task "completed"
      *  com a mesma chave devolve a transcrição antiga, então quem troca o
      *  conteúdo no mesmo caminho precisa de uma chave que mude junto. */
@@ -141,6 +145,7 @@ export async function transcribe(
       model,
       computeType: opts.computeType,
       signal: opts.signal,
+      ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
     }, deps);
     return { language: parsed.language, tokens: toTokens(parsed.words), unaligned: parsed.unaligned };
   } finally {

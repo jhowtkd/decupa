@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import logging
 import queue
@@ -198,11 +199,55 @@ class ResidentWorkerTest(unittest.TestCase):
         }
         worker_mod = load_worker(whisper)
         worker = worker_mod.SpeechWorker()
+        # serve() marca a tarefa como em andamento ao ler o pedido; o cancel
+        # que chega antes de a thread começar vale uma vez.
+        worker.begin("soon")
         worker.cancel("soon")
         with self.assertRaises(worker_mod.CancelledError):
             worker.transcribe(task_id="soon", wav="a.wav")
         retry = worker.transcribe(task_id="soon", wav="a.wav")
         self.assertEqual(retry["words"][0]["text"], "oi")
+
+    def _worker_que_devolve_oi(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": [{"start": 0, "end": 1, "text": "oi"}]}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {
+            "segments": [{"words": [{"word": "oi", "start": 0.1, "end": 0.4, "score": 0.9}]}],
+        }
+        worker_mod = load_worker(whisper)
+        return worker_mod, whisper, asr, worker_mod.SpeechWorker()
+
+    def test_cancel_after_finish_does_not_cancel_retry_with_same_id(self):
+        # A chave é o conteúdo: a retomada repete o task_id. Um cancel atrasado
+        # não pode ficar armado para a próxima.
+        _worker_mod, _whisper, _asr, worker = self._worker_que_devolve_oi()
+        primeira = worker.transcribe(task_id="same", wav="a.wav")
+        self.assertEqual(primeira["words"][0]["text"], "oi")
+        worker.cancel("same")
+        segunda = worker.transcribe(task_id="same", wav="a.wav")
+        self.assertEqual(segunda["words"][0]["text"], "oi")
+
+    def test_transcribe_passes_progress_callback_and_writes_stderr(self):
+        worker_mod, whisper, asr, worker = self._worker_que_devolve_oi()
+        buf = io.StringIO()
+        with patch.object(worker_mod.sys, "stderr", buf):
+            worker.transcribe(task_id="a", wav="a.wav")
+        self.assertIn("progress_callback", asr.transcribe.call_args.kwargs)
+        self.assertIn("progress_callback", whisper.align.call_args.kwargs)
+        self.assertIn("DECUPA_PROGRESS", buf.getvalue())
+        self.assertIn("transcrevendo", buf.getvalue())
+
+    def test_progress_hook_receives_stages(self):
+        worker_mod, _whisper, _asr, _worker = self._worker_que_devolve_oi()
+        etapas = []
+        worker = worker_mod.SpeechWorker(progress=lambda task_id, stage, percent=None: etapas.append(stage))
+        worker.transcribe(task_id="a", wav="a.wav")
+        self.assertIn("transcrevendo", etapas)
+        self.assertIn("alinhando as palavras", etapas)
 
     def test_cpu_fallback_without_automatic_gpu(self):
         whisper = Mock()
@@ -426,6 +471,132 @@ class ResidentWorkerTest(unittest.TestCase):
             thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
+
+
+class HeartbeatDuringModelLoadTest(unittest.TestCase):
+    """O download do modelo não emite progresso; sem batimento o watchdog do
+    cliente (10 min) mata o worker com a causa errada.
+
+    Nada aqui depende de janela de tempo apertada: a carga espera (com teto
+    largo) até ver o número de batimentos que o teste quer, e o teto do
+    batimento é conferido com uma folga de mais de um segundo."""
+
+    STAGE_ASR = "carregando o modelo de fala"
+    STAGE_ALIGN = "carregando o modelo de alinhamento"
+    HEARTBEAT = 0.02
+    WAIT_LIMIT = 10.0
+
+    def build(self, asr_hold=None, align_hold=None, heartbeat_max=None):
+        """`*_hold`: ("beats", n) segura a carga até o estágio ter n linhas de
+        progresso; ("sleep", s) segura por s segundos."""
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": [{"start": 0.0, "end": 1.0, "text": "oi"}]}
+        marks: dict[str, float] = {}
+        records: list[tuple[str, float]] = []
+        lock = threading.Lock()
+        wanted: dict[str, int] = {}
+        reached = {self.STAGE_ASR: threading.Event(), self.STAGE_ALIGN: threading.Event()}
+
+        def progress(task_id, stage, percent=None):
+            with lock:
+                records.append((stage, time.monotonic()))
+                total = sum(1 for name, _ in records if name == stage)
+                if stage in reached and total >= wanted.get(stage, 1 << 30):
+                    reached[stage].set()
+
+        def hold_for(stage, hold):
+            if hold is None:
+                return
+            kind, value = hold
+            if kind == "sleep":
+                time.sleep(value)
+                return
+            wanted[stage] = value
+            with lock:
+                if sum(1 for name, _ in records if name == stage) >= value:
+                    reached[stage].set()
+            if not reached[stage].wait(self.WAIT_LIMIT):
+                raise AssertionError(f"o batimento de '{stage}' não repetiu durante a carga do modelo")
+
+        def load_model(*args, **kwargs):
+            marks["asr_start"] = time.monotonic()
+            hold_for(self.STAGE_ASR, asr_hold)
+            return asr
+
+        def load_align_model(*args, **kwargs):
+            marks["align_start"] = time.monotonic()
+            hold_for(self.STAGE_ALIGN, align_hold)
+            return ("align", "meta")
+
+        whisper.load_model.side_effect = load_model
+        whisper.load_align_model.side_effect = load_align_model
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {
+            "segments": [{"words": [{"word": "oi", "start": 0.1, "end": 0.4, "score": 0.9}]}],
+        }
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker(
+            progress=progress,
+            heartbeat_seconds=self.HEARTBEAT,
+            heartbeat_max_seconds=heartbeat_max,
+        )
+
+        def stamps(stage: str) -> list[float]:
+            with lock:
+                return [at for name, at in records if name == stage]
+
+        return worker, stamps, marks
+
+    def heartbeat_threads(self):
+        return [t for t in threading.enumerate() if t.name == "decupa-heartbeat" and t.is_alive()]
+
+    def test_heartbeat_while_speech_model_loads(self):
+        worker, stamps, _ = self.build(asr_hold=("beats", 3))
+        worker.transcribe(task_id="a", wav="a.wav")
+        # A chamada única de antes da carga não basta: tem de repetir.
+        self.assertGreaterEqual(len(stamps(self.STAGE_ASR)), 3)
+
+    def test_heartbeat_while_align_model_loads(self):
+        worker, stamps, _ = self.build(align_hold=("beats", 3))
+        worker.transcribe(task_id="a", wav="a.wav")
+        self.assertGreaterEqual(len(stamps(self.STAGE_ALIGN)), 3)
+
+    def test_heartbeat_stops_after_the_cap(self):
+        # Carga travada: depois do teto o watchdog do cliente volta a valer.
+        cap = 0.3
+        worker, stamps, marks = self.build(asr_hold=("sleep", 3.0), heartbeat_max=cap)
+        worker.transcribe(task_id="a", wav="a.wav")
+        beats = stamps(self.STAGE_ASR)
+        self.assertGreaterEqual(len(beats), 2, "sem batimento o teto não é exercitado")
+        # Com o batimento sem teto, o último chegaria perto de 3 s; a folga de
+        # mais de 1 s cobre CI carregado sem deixar esse caso passar.
+        self.assertLessEqual(max(beats) - marks["asr_start"], cap + 1.2)
+
+    def test_heartbeat_thread_dies_with_the_load(self):
+        worker, stamps, _ = self.build(asr_hold=("beats", 3))
+        worker.transcribe(task_id="a", wav="a.wav")
+        beats_after_return = len(stamps(self.STAGE_ASR))
+        self.assertGreaterEqual(beats_after_return, 3, "sem batimento o teste seria vazio")
+        self.assertEqual(self.heartbeat_threads(), [])
+        time.sleep(0.3)
+        self.assertEqual(len(stamps(self.STAGE_ASR)), beats_after_return)
+
+
+    def test_progress_line_starts_on_its_own_line_after_an_unfinished_stderr_line(self):
+        # O stderr pode ter uma barra com \r sem quebra de linha; se a linha de
+        # progresso colar nela, o cliente (que só reconhece linha que COMEÇA
+        # com o prefixo) a perde: o watchdog não rearma e o JSON vaza.
+        worker_mod = load_worker(Mock())
+        buf = io.StringIO()
+        buf.write("\r  10%|#####     |")
+        with patch.object(worker_mod.sys, "stderr", buf):
+            worker_mod.stderr_progress("a", "transcrevendo", 42)
+        linhas = [l for l in buf.getvalue().split("\n") if l.startswith("DECUPA_PROGRESS ")]
+        self.assertEqual(len(linhas), 1, repr(buf.getvalue()))
+        payload = json.loads(linhas[0][len("DECUPA_PROGRESS "):])
+        self.assertEqual(payload["taskId"], "a")
+        self.assertEqual(payload["percent"], 42)
 
 
 if __name__ == "__main__":

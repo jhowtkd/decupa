@@ -162,8 +162,10 @@ describe("createResidentSpeechClient", () => {
 
   it("cancelamento da tarefa lenta não devolve a resposta da outra", async () => {
     const written: string[] = [];
+    let spawns = 0;
     const client = createResidentSpeechClient({
       spawn: (_command, _args, options) => {
+        spawns += 1;
         const child = spawn(process.execPath, ["-e", fakeServe()], {
           cwd: options?.cwd,
           env: options?.env as NodeJS.ProcessEnv | undefined,
@@ -188,9 +190,10 @@ describe("createResidentSpeechClient", () => {
       await expect.poll(() => written.some((line) => line.includes('"slow"'))).toBe(true);
       ac.abort();
       await expect(slow).rejects.toThrow(/tarefa cancelada: slow/);
-      expect(written.some((line) => line.includes('"cancel"') && line.includes("slow"))).toBe(true);
       const fast = await client.transcribe({ taskId: "fast", wav: "fast.wav", language: "pt" });
       expect(fast.words[0]?.text).toBe("fast");
+      // Cancelar fecha o worker: a próxima tarefa roda num processo novo.
+      expect(spawns).toBe(2);
     } finally {
       await client.close();
     }
@@ -273,4 +276,191 @@ describe("createResidentSpeechClient", () => {
       await client.close();
     }
   });
+
+  it("linha DECUPA_PROGRESS vira progresso e não cai no stderr", async () => {
+    const stderr: string[] = [];
+    const progresso: string[] = [];
+    const client = createResidentSpeechClient({
+      onStderr: (chunk) => stderr.push(chunk),
+      spawn: (_command, _args, options) => spawn(process.execPath, ["-e", `
+        const readline = require("node:readline");
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on("line", (line) => {
+          const req = JSON.parse(line);
+          if ((req.cmd || "transcribe") === "cancel") return;
+          process.stderr.write('DECUPA_PROGRESS {"taskId":"a","stage":"transcrevendo","percent":42}\\n');
+          process.stderr.write("Loading WhisperX model\\n");
+          process.stdout.write(JSON.stringify({
+            language: "pt",
+            words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+            unaligned: [],
+            taskId: req.args.task_id,
+          }) + "\\n");
+        });
+      `], {
+        cwd: options?.cwd,
+        env: options?.env as NodeJS.ProcessEnv | undefined,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    });
+    try {
+      await client.transcribe({
+        taskId: "a", wav: "a.wav", language: "pt", onProgress: (linha) => progresso.push(linha),
+      });
+      expect(progresso).toEqual(["transcrevendo 42%"]);
+      expect(stderr.join("")).not.toMatch(/DECUPA_PROGRESS/);
+      expect(stderr.join("")).toMatch(/Loading WhisperX model/);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("linha de progresso depois de uma barra \\r sem quebra ainda vira progresso", async () => {
+    // Controle do worker que agora quebra a linha antes do prefixo: o cliente
+    // descarta o pedaço vazio e reconhece a linha de progresso.
+    const progresso: string[] = [];
+    const client = createResidentSpeechClient({
+      spawn: (_command, _args, options) => spawn(process.execPath, ["-e", `
+        const readline = require("node:readline");
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on("line", (line) => {
+          const req = JSON.parse(line);
+          if ((req.cmd || "transcribe") === "cancel") return;
+          process.stderr.write("\\r  10%|#####     |");
+          process.stderr.write('\\nDECUPA_PROGRESS {"taskId":"a","stage":"transcrevendo","percent":42}\\n');
+          process.stdout.write(JSON.stringify({
+            language: "pt",
+            words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+            unaligned: [],
+            taskId: req.args.task_id,
+          }) + "\\n");
+        });
+      `], {
+        cwd: options?.cwd,
+        env: options?.env as NodeJS.ProcessEnv | undefined,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    });
+    try {
+      await client.transcribe({
+        taskId: "a", wav: "a.wav", language: "pt", onProgress: (linha) => progresso.push(linha),
+      });
+      expect(progresso).toEqual(["transcrevendo 42%"]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("worker sem progresso é morto pelo watchdog", async () => {
+    const client = createResidentSpeechClient({
+      watchdogMs: 200,
+      spawn: (_command, _args, options) => spawn(process.execPath, ["-e", `
+        const readline = require("node:readline");
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on("line", () => {});
+      `], {
+        cwd: options?.cwd,
+        env: options?.env as NodeJS.ProcessEnv | undefined,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    });
+    const pendente = client.transcribe({ taskId: "a", wav: "a.wav", language: "pt" });
+    const desfecho = pendente.then(() => "ok", (error: Error) => error.message);
+    try {
+      const resultado = await Promise.race([
+        desfecho,
+        new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 3000)),
+      ]);
+      expect(resultado).toMatch(/sem dar sinal de progresso/);
+    } finally {
+      await client.close();
+    }
+  }, 5_000);
+
+  it("progresso periódico impede o watchdog de matar o worker", async () => {
+    // Folga para o processo filho subir numa suíte carregada: o watchdog arma
+    // na escrita do pedido, antes da primeira linha de progresso.
+    const client = createResidentSpeechClient({
+      watchdogMs: 600,
+      spawn: (_command, _args, options) => spawn(process.execPath, ["-e", `
+        const readline = require("node:readline");
+        const rl = readline.createInterface({ input: process.stdin });
+        rl.on("line", (line) => {
+          const req = JSON.parse(line);
+          if ((req.cmd || "transcribe") === "cancel") return;
+          const send = () => process.stderr.write(
+            'DECUPA_PROGRESS {"taskId":"' + req.args.task_id + '","stage":"transcrevendo","percent":10}\\n',
+          );
+          send();
+          const timer = setInterval(send, 100);
+          setTimeout(() => {
+            clearInterval(timer);
+            process.stdout.write(JSON.stringify({
+              language: "pt",
+              words: [{ text: "ok", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId: req.args.task_id,
+            }) + "\\n");
+          }, 1500);
+        });
+      `], {
+        cwd: options?.cwd,
+        env: options?.env as NodeJS.ProcessEnv | undefined,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    });
+    try {
+      const out = await client.transcribe({ taskId: "a", wav: "a.wav", language: "pt" });
+      expect(out.words[0]?.text).toBe("ok");
+    } finally {
+      await client.close();
+    }
+  }, 5_000);
+
+  it("worker que ignora o cancel ainda rejeita a tarefa e a próxima sobe outro processo", async () => {
+    let spawns = 0;
+    const client = createResidentSpeechClient({
+      spawn: (_command, _args, options) => {
+        spawns += 1;
+        return spawn(process.execPath, ["-e", `
+          const readline = require("node:readline");
+          const rl = readline.createInterface({ input: process.stdin });
+          rl.on("line", (line) => {
+            const req = JSON.parse(line);
+            if ((req.cmd || "transcribe") === "cancel") return;
+            if (req.args.task_id === "preso") return;
+            process.stdout.write(JSON.stringify({
+              language: "pt",
+              words: [{ text: req.args.task_id, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId: req.args.task_id,
+            }) + "\\n");
+          });
+        `], {
+          cwd: options?.cwd,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      },
+    });
+    const ac = new AbortController();
+    const pendente = client.transcribe({
+      taskId: "preso", wav: "preso.wav", language: "pt", signal: ac.signal,
+    });
+    const desfecho = pendente.then(() => "ok", (error: Error) => error.message);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      ac.abort();
+      const resultado = await Promise.race([
+        desfecho,
+        new Promise<string>((resolve) => setTimeout(() => resolve("pendurou"), 3000)),
+      ]);
+      expect(resultado).toMatch(/tarefa cancelada/);
+      const seguinte = await client.transcribe({ taskId: "depois", wav: "depois.wav", language: "pt" });
+      expect(seguinte.words[0]?.text).toBe("depois");
+      expect(spawns).toBe(2);
+    } finally {
+      await client.close();
+    }
+  }, 5_000);
 });

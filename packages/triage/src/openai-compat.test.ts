@@ -82,6 +82,19 @@ describe("OpenAiCompatClient", () => {
     });
     await expect(client.send(["oi"])).rejects.toThrow(/tempo esgotado/);
   });
+
+  it("timeout cresce com o teto de tokens", async () => {
+    // 64k é 4× o orçamento de 16k: 1s de base vira 4s, senão a chamada morre cedo.
+    const fetchImpl = ((_url: string, init: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason));
+      })) as unknown as typeof fetch;
+    const client = new OpenAiCompatClient({
+      apiKey: "k", baseUrl: "https://example.test/v1", model: "m",
+      fetchImpl, timeoutMs: 1000, maxTokens: 64000, retries: 0,
+    });
+    await expect(client.send(["oi"])).rejects.toThrow(/depois de 4s/);
+  }, 15_000);
 });
 
 
@@ -101,4 +114,19 @@ it("limita raciocínio do GLM Flash apenas em chamadas de texto", async () => {
   expect(payloads[0]).toHaveProperty("reasoning_effort", "low");
   expect(payloads[1]).not.toHaveProperty("reasoning_effort");
   expect(payloads[2]).not.toHaveProperty("reasoning_effort");
+});
+
+it("limita o raciocínio do GLM Flash também quando a chamada leva vídeo", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    payloads.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify(body({ content: "{}" })));
+  }) as typeof fetch;
+  await new OpenAiCompatClient({
+    apiKey: "k", baseUrl: "https://example.test", model: "glm-5.3-flash", fetchImpl,
+  }).send([
+    { type: "video_url", video_url: { url: "data:video/mp4;base64,AAAA" } },
+    { type: "text", text: "unidades" },
+  ]);
+  expect(payloads[0]).toHaveProperty("reasoning_effort", "low");
 });

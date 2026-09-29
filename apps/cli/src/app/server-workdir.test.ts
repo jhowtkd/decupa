@@ -119,13 +119,37 @@ describe("cache da limpeza", () => {
     expect(fresh.size).toBe(4);
   });
 
-  it("mtime diferente com o mesmo tamanho transcreve de novo e guarda a pasta antiga", async () => {
+  it("só o mtime diferente, com a mesma amostra, reaproveita a pasta e regrava o manifesto", async () => {
+    // Cópia, sincronização de nuvem e `touch` mexem na data sem mexer no vídeo:
+    // retranscrever e mandar o keep.txt para o lado seria custo sem motivo.
+    const dir = await mkdtemp(join(tmpdir(), "decupa-touch-"));
+    const input = join(dir, "aula.mp4");
+    await writeFile(input, "AAAA");
+    const calls: string[] = [];
+    const transcript = await transcribeOnce(dir, input, calls);
+    const shifted = new Date("2019-01-01T00:00:00.000Z");
+    await utimes(input, shifted, shifted);
+    const after = await stat(input);
+
+    await runCleanup(input, calls);
+
+    expect(calls).toHaveLength(1);
+    expect((await readdir(dir)).filter((name) => name.includes(".stale-"))).toEqual([]);
+    const work = join(dir, ".decupa-aula.mp4");
+    expect(await readFile(join(work, "transcript.json"), "utf8")).toBe(transcript);
+    expect(await readFile(join(work, "corte.edl"), "utf8")).toBe(EXPORT_EDL);
+    const manifest = JSON.parse(await readFile(join(work, "source.json"), "utf8")) as { mtimeMs: number };
+    expect(manifest.mtimeMs).toBe(after.mtimeMs);
+  });
+
+  it("mtime diferente com o mesmo tamanho e outro conteúdo transcreve de novo e guarda a pasta antiga", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-mtime-"));
     const input = join(dir, "aula.mp4");
     await writeFile(input, "AAAA");
     const calls: string[] = [];
     const oldTranscript = await transcribeOnce(dir, input, calls);
     const before = await stat(input);
+    await writeFile(input, "BBBB");
     const shifted = new Date("2019-01-01T00:00:00.000Z");
     await utimes(input, shifted, shifted);
     const after = await stat(input);

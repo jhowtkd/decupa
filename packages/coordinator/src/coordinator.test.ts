@@ -1,5 +1,6 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { mkdir, readFile, unlink, utimes, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AbandonedError, createFileCoordinator } from "./index.ts";
@@ -191,5 +192,53 @@ describe("createFileCoordinator", () => {
     release();
     expect(await Promise.all([blocker, batch, interactive])).toEqual(["blocker", "batch", "edit"]);
     expect(order).toEqual(["interactive", "batch"]);
+  });
+
+  /** Se a trava prender, apaga o arquivo para o loop antigo conseguir sair. */
+  async function correOuSolta(root: string, windowMs: number): Promise<"done" | "stuck"> {
+    const coord = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const run = coord.run({ id: "tarefa", stage: "speech", build: async () => "ok" });
+    const settled = run.then(() => "done" as const, () => "done" as const);
+    const winner = await Promise.race([
+      settled,
+      delay(windowMs).then(() => "stuck" as const),
+    ]);
+    if (winner === "stuck") {
+      await unlink(join(root, ".lock")).catch(() => undefined);
+      await settled;
+    }
+    return winner;
+  }
+
+  it("trava com o PID de um processo morto não segura a tarefa seguinte", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    const code = await new Promise<number>((resolve, reject) => {
+      child.on("exit", (status) => resolve(status ?? 1));
+      child.on("error", reject);
+    });
+    expect(code).toBe(0);
+    const pid = child.pid ?? 0;
+    expect(() => process.kill(pid, 0)).toThrow();
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, ".lock"), `${pid} ${hostname()}\n`, "utf8");
+    expect(await correOuSolta(root, 800)).toBe("done");
+  });
+
+  it("trava sem PID e com data velha não segura a tarefa seguinte", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const lock = join(root, ".lock");
+    await writeFile(lock, "sem pid\n", "utf8");
+    const passado = new Date(Date.now() - 60_000);
+    await utimes(lock, passado, passado);
+    expect(await correOuSolta(root, 800)).toBe("done");
+  });
+
+  it("trava de um processo vivo e recente continua segurando", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, ".lock"), `${process.pid} ${hostname()}\n`, "utf8");
+    expect(await correOuSolta(root, 250)).toBe("stuck");
   });
 });
