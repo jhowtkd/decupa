@@ -289,13 +289,18 @@ describe("createResidentSpeechClient", () => {
           const req = JSON.parse(line);
           if ((req.cmd || "transcribe") === "cancel") return;
           process.stderr.write('DECUPA_PROGRESS {"taskId":"a","stage":"transcrevendo","percent":42}\\n');
-          process.stderr.write("Loading WhisperX model\\n");
-          process.stdout.write(JSON.stringify({
-            language: "pt",
-            words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
-            unaligned: [],
-            taskId: req.args.task_id,
-          }) + "\\n");
+          // stderr e stdout são pipes distintos, sem ordem entre si (no Windows
+          // a resposta chegou antes do stderr). O cliente descarta progresso de
+          // tarefa já respondida, então a resposta só sai depois do stderr lido,
+          // como no worker real, em que o progresso vem segundos antes.
+          process.stderr.write("Loading WhisperX model\\n", () => setTimeout(() => {
+            process.stdout.write(JSON.stringify({
+              language: "pt",
+              words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId: req.args.task_id,
+            }) + "\\n");
+          }, 200));
         });
       `], {
         cwd: options?.cwd,
@@ -308,8 +313,8 @@ describe("createResidentSpeechClient", () => {
         taskId: "a", wav: "a.wav", language: "pt", onProgress: (linha) => progresso.push(linha),
       });
       expect(progresso).toEqual(["transcrevendo 42%"]);
+      await expect.poll(() => stderr.join("")).toMatch(/Loading WhisperX model/);
       expect(stderr.join("")).not.toMatch(/DECUPA_PROGRESS/);
-      expect(stderr.join("")).toMatch(/Loading WhisperX model/);
     } finally {
       await client.close();
     }
@@ -327,13 +332,15 @@ describe("createResidentSpeechClient", () => {
           const req = JSON.parse(line);
           if ((req.cmd || "transcribe") === "cancel") return;
           process.stderr.write("\\r  10%|#####     |");
-          process.stderr.write('\\nDECUPA_PROGRESS {"taskId":"a","stage":"transcrevendo","percent":42}\\n');
-          process.stdout.write(JSON.stringify({
-            language: "pt",
-            words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
-            unaligned: [],
-            taskId: req.args.task_id,
-          }) + "\\n");
+          // A resposta só depois do stderr lido: ver o teste anterior.
+          process.stderr.write('\\nDECUPA_PROGRESS {"taskId":"a","stage":"transcrevendo","percent":42}\\n', () => setTimeout(() => {
+            process.stdout.write(JSON.stringify({
+              language: "pt",
+              words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId: req.args.task_id,
+            }) + "\\n");
+          }, 200));
         });
       `], {
         cwd: options?.cwd,
