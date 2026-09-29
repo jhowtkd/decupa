@@ -68,9 +68,16 @@ export async function runMarkWeb(opts: {
     // escolheu, e o listen abaixo atualiza isso antes de aceitar conexões.
     let boundPort = opts.port ?? 7777;
     const server = createServer((req, res) => {
-      const url = new URL(req.url ?? "/", "http://localhost");
-
       const handle = async (): Promise<void> => {
+        // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
+        // isso derrubava o marcador no meio da medição.
+        let url: URL;
+        try {
+          url = new URL(req.url ?? "/", "http://localhost");
+        } catch {
+          sendJson(res, { error: "URL inválida" }, 400);
+          return;
+        }
         // Mesmo portão do app limpar: bind em 127.0.0.1 protege da rede, não
         // do navegador — e aqui o POST sobrescreve o truth-file da medição.
         if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {

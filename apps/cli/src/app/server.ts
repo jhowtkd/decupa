@@ -25,7 +25,7 @@ import {
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
-import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
+import { claimWorkDir, cleanupWorkDir, initialKeepList, readKeepList, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
@@ -69,6 +69,14 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
     "cache-control": "no-store",
   });
   res.end(payload);
+}
+
+function parseRequestUrl(raw: string | undefined): URL | null {
+  try {
+    return new URL(raw ?? "/", "http://localhost");
+  } catch {
+    return null;
+  }
 }
 
 async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
@@ -227,8 +235,12 @@ async function startCleanupApp(opts: {
   const provider = opts.provider;
   const page = await readFile(join(HERE, "page.html"), "utf8");
 
-  const workDir = opts.workDir
-    ?? join(dirname(input), `.decupa-${basename(input).replace(/\.[^.]+$/, "")}`);
+  const workDir = opts.workDir ?? cleanupWorkDir(input);
+  // Antes do coordenador e de qualquer leitura: ele mora dentro da pasta, e
+  // uma pasta de outra fonte vai inteira para o lado. O ingest roda uma vez
+  // por processo, então conferir aqui cobre todo reuso da sessão.
+  const { staleDir } = await claimWorkDir(workDir, input);
+  if (staleDir) console.log(`a fonte mudou desde a última sessão; os arquivos antigos foram para ${staleDir}`);
   await mkdir(join(workDir, "out"), { recursive: true });
   const { speech, closeSpeech } = attachResidentSpeech({
     dir: workDir,
@@ -309,6 +321,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
+        { contentTaskId: true },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -325,10 +338,13 @@ async function startCleanupApp(opts: {
   let initialIngestStarted = false;
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const parts = url.pathname.split("/").filter(Boolean);
-
     const handle = async (): Promise<void> => {
+      // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
+      // isso derrubava o processo inteiro.
+      const url = parseRequestUrl(req.url);
+      if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
+      const parts = url.pathname.split("/").filter(Boolean);
+
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;

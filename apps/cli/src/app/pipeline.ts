@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { detectSilence } from "@decupa/acoustics";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { createTracer, type Tracer } from "@decupa/trace";
-import { transcribe, type TranscribeDeps } from "@decupa/transcript";
+import { DEFAULT_LANGUAGE, DEFAULT_MODEL, transcribe, type TranscribeDeps } from "@decupa/transcript";
 
 // Import direto da biblioteca de triagem: mesmo repo, sem subprocesso — o
 // contrato é a assinatura TypeScript, não uma regex sobre stdout.
@@ -54,6 +54,26 @@ export interface IngestOptions {
    * ligado no macOS. Se a decodificação por hardware falhar, refaz em software.
    */
   hwDecode?: boolean;
+  /**
+   * Chave da transcrição no coordenador amarrada ao conteúdo da fonte
+   * (`transcriptTaskId`). Limpeza e montagem ligam; desligada, a chave é o
+   * caminho, o que devolveria a transcrição antiga de um arquivo trocado.
+   */
+  contentTaskId?: boolean;
+}
+
+/**
+ * Chave da transcrição no coordenador: caminho, tamanho, mtime, modelo e
+ * idioma. Só o caminho devolveria a transcrição antiga de um arquivo trocado
+ * no mesmo lugar. Sem hash: a fonte tem dezenas de GB.
+ */
+export function transcriptTaskId(
+  input: string,
+  source: { size: number; mtimeMs: number },
+  model: string = DEFAULT_MODEL,
+  language: string = DEFAULT_LANGUAGE,
+): string {
+  return `${input}#${source.size}-${source.mtimeMs}#${model}#${language}`;
 }
 
 /**
@@ -300,7 +320,13 @@ export async function runIngest(
         await runCondensePrep(
           { input: job.videoPath, out: transcriptPath(job) },
           {
-            transcribe: (opts) => transcribe({ ...opts, signal }, {
+            transcribe: async (o) => transcribe({
+              ...o,
+              signal,
+              ...(opts.contentTaskId
+                ? { taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language) }
+                : {}),
+            }, {
               worker: speech.worker,
               coordinator: speech.coordinator,
               extract: speech.extract,

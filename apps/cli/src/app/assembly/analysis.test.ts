@@ -1,6 +1,7 @@
-import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFileCoordinator } from "@decupa/coordinator";
 import { expect, it } from "vitest";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
@@ -442,5 +443,109 @@ it("dois arquivos no serviço usam o worker residente e não spawnam transcribe.
     analyzeSource(a, dir, exec, { speech }),
     analyzeSource(b, dir, exec, { speech }),
   ]);
-  expect(workerCalls.sort()).toEqual([aPath, bPath].sort());
+  expect(workerCalls).toHaveLength(2);
+  expect(workerCalls.map((id) => id.split("#")[0]).sort()).toEqual([aPath, bPath].sort());
+});
+
+function unit(id: string, index: number, start: number, end: number, text: string) {
+  return {
+    id, index, start, end, duration: end - start, text,
+    has_terminal_punct: true, is_question: false,
+    word_count: 1, cps: 1, lead_gap: 0,
+    disfluency: { hard: [], soft: [], stutter: [] },
+  };
+}
+
+it("unidade que termina além da fonte é limitada e a que começa depois do fim sai", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-span-eof-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "a", "speech");
+  source.durationSeconds = 3;
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      const work = call.env?.CLAUDE_PROJECT_DIR;
+      if (work && call.args.includes("index")) {
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), JSON.stringify({
+          units: [
+            unit("u001", 1, 0, 1, "olá"),
+            unit("u002", 2, 2.5, 3.004, "fim"),
+            unit("u003", 3, 3, 3.1, "no-fim"),
+            unit("u004", 4, 3.02, 3.2, "depois"),
+          ],
+        }));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const result = await analyzeSource(source, dir, exec);
+  expect(result.status).toBe("ready");
+  expect(result.speech.map((span) => [span.id, span.start, span.end, span.text])).toEqual([
+    ["a:u001", 0, 1, "olá"],
+    ["a:u002", 2.5, source.durationSeconds, "fim"],
+  ]);
+});
+
+it("arquivo trocado no mesmo caminho gera outra transcrição no coordenador", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-task-key-"));
+  const media = join(dir, "fala.mp4");
+  await writeFile(media, "a");
+  const sourceA = await sourceFrom(media, "fala", "speech");
+  sourceA.durationSeconds = 10;
+  const coordinator = createFileCoordinator(join(dir, "coordinator"), { limit: 1, pollMs: 5 });
+  const textos = ["primeira", "segunda"];
+  let calls = 0;
+  const speech = {
+    worker: async (req: { taskId: string; language: string }) => {
+      const text = textos[calls] ?? "extra";
+      calls += 1;
+      return {
+        language: req.language,
+        words: [{ text, startMs: 0, endMs: 80, confidence: 1, sentenceIndex: 0 }],
+        unaligned: [],
+      };
+    },
+    coordinator,
+    extract: async () => {},
+    detectSilence: async () => [],
+  };
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("transcribe.py") || call.args.includes("condense-prep")) {
+        throw new Error(`sidecar efêmero: ${call.args.join(" ")}`);
+      }
+      if (call.args.includes("index")) {
+        const transcriptArg = call.args.find((arg) => arg.endsWith("transcript.json"));
+        if (!transcriptArg) throw new Error("index sem transcript");
+        const raw = JSON.parse(await readFile(transcriptArg, "utf8")) as {
+          segments: { words: { text: string; start: number; end: number }[] }[];
+        };
+        const word = raw.segments[0]?.words[0];
+        if (!word) throw new Error("transcript sem palavra");
+        const work = call.env?.CLAUDE_PROJECT_DIR;
+        if (!work) throw new Error("index sem diretório de trabalho");
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), JSON.stringify({
+          units: [unit("u001", 1, word.start, word.end, word.text)],
+        }));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const primeira = await analyzeSource(sourceA, dir, exec, { speech });
+  expect(primeira.words.map((word) => word.text)).toEqual(["primeira"]);
+  expect(primeira.speech.map((span) => span.text)).toEqual(["primeira"]);
+
+  await writeFile(media, "bbbb-conteudo-novo");
+  const sourceB = await sourceFrom(media, "fala", "speech");
+  sourceB.durationSeconds = 10;
+  expect(sourceB.sha256).not.toBe(sourceA.sha256);
+  expect(sourceB.path).toBe(sourceA.path);
+
+  const segunda = await analyzeSource(sourceB, dir, exec, { speech });
+  expect(calls).toBe(2);
+  expect(segunda.words.map((word) => word.text)).toEqual(["segunda"]);
+  expect(segunda.speech.map((span) => span.text)).toEqual(["segunda"]);
+  expect(segunda.status).toBe("ready");
 });

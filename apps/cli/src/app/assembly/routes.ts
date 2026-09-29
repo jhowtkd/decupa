@@ -36,10 +36,10 @@ import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
-import { proposeScenes, validateProposal } from "./scenes.ts";
+import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
-import type { Project, Source } from "./types.ts";
+import type { Assembly, Project, Source } from "./types.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
@@ -182,6 +182,43 @@ function bump(project: Project): Project {
     previewRevision: null,
     finalApprovedRevision: null,
   };
+}
+
+type Canvas = Pick<Assembly, "fps" | "width" | "height" | "canvasSourceId" | "canvasManual">;
+
+/**
+ * Formato novo é transição de revisão como uma edição: a timeline é
+ * recompilada no canvas novo (a fala vem de segundos) e o apoio, guardado em
+ * quadros, é convertido antes para ficar no mesmo tempo. Se a recompilação
+ * falhar, nada é salvo — nunca formato novo com clipes do fps antigo.
+ */
+function applyCanvas(project: Project, canvas: Canvas): Project {
+  const scenes = rescaleSupport(project.scenes, project.assembly.fps, canvas.fps);
+  const next = bump({ ...project, scenes, assembly: { ...project.assembly, ...canvas } });
+  let assembly: Assembly;
+  try {
+    assembly = compileScenes(next, next.scenes);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HttpError(409, `não foi possível recompilar a montagem no novo formato: ${message}`);
+  }
+  return { ...next, assembly: { ...assembly, revision: next.revision } };
+}
+
+/**
+ * Fonte nova passa pela política de formato. Se ela trocou fps ou tamanho
+ * (primeiro vídeo numa montagem feita só com áudio), a transição é a mesma
+ * da troca manual; senão, só a revisão avança, como antes.
+ */
+function withCanvasPolicy(project: Project): Project {
+  const chosen = applyCanvasPolicy(project);
+  const before = project.assembly;
+  const { fps, width, height, canvasSourceId, canvasManual } = chosen.assembly;
+  if (fps.num === before.fps.num && fps.den === before.fps.den
+    && width === before.width && height === before.height) {
+    return bump(chosen);
+  }
+  return applyCanvas(project, { fps, width, height, canvasSourceId, canvasManual });
 }
 
 async function sourceFromFile(path: string, id: string, displayName?: string): Promise<Source> {
@@ -382,6 +419,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
+  // Ajuste de fala aguardando o modelo: um segundo pedido recebe 409.
+  let speechProposalInFlight = false;
   const livePreviews = new Set<AbortController>();
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
@@ -444,7 +483,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
-      project = bump(applyCanvasPolicy(project));
+      project = withCanvasPolicy(project);
       await saveProject(dir, expected, project);
     }
     return loadProject(dir);
@@ -771,7 +810,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             const source = await sourceFromFile(stored, nextSourceId(loaded), name);
-            return bump(applyCanvasPolicy(addSource(loaded, source)));
+            return withCanvasPolicy(addSource(loaded, source));
           });
         } catch (err) {
           await unlink(stored).catch(() => {});
@@ -803,7 +842,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           for (const source of sources) {
             next = addSource(next, { ...source, id: nextSourceId(next) });
           }
-          return bump(applyCanvasPolicy(next));
+          return withCanvasPolicy(next);
         });
         const project = await loadProject(dir);
         sendJson(res, { project, ...snapshot() });
@@ -835,14 +874,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             if (!source) throw new HttpError(404, "fonte não cadastrada");
             if (!source.hasVideo) throw new HttpError(400, `fonte ${source.id} não tem vídeo`);
             const canvas = canvasForSource(source, assembly);
-            return bump({
-              ...project,
-              assembly: {
-                ...assembly, ...canvas,
-                canvasSourceId: source.id,
-                canvasManual: true,
-              },
-            });
+            return applyCanvas(project, { ...canvas, canvasSourceId: source.id, canvasManual: true });
           }
           const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
           const width = Number(body.width);
@@ -857,16 +889,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           if (!Number.isSafeInteger(height) || height <= 0 || height % 2 !== 0) {
             throw new HttpError(400, "height precisa ser inteiro par positivo");
           }
-          return bump({
-            ...project,
-            assembly: {
-              ...assembly,
-              fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
-              width,
-              height,
-              canvasSourceId: null,
-              canvasManual: true,
-            },
+          return applyCanvas(project, {
+            fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
+            width,
+            height,
+            canvasSourceId: null,
+            canvasManual: true,
           });
         });
         sendJson(res, { project, ...snapshot() });
@@ -1140,6 +1168,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
           throw new HttpError(402, PAID_BLOCKED);
         }
+        // Clique repetido não aborta a chamada já cobrada: begin() derrubaria
+        // o pedido em voo. Checar e marcar sem await no meio fecha a corrida.
+        if (speechProposalInFlight) {
+          throw new HttpError(409, "Já há um ajuste de fala em andamento. Aguarde a resposta antes de pedir outro.");
+        }
+        speechProposalInFlight = true;
         const { gen, signal } = begin("proposing");
         try {
           const proposal = await proposeSpeechAdjustment(
@@ -1170,6 +1204,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(400, message);
           }
           throw err;
+        } finally {
+          speechProposalInFlight = false;
         }
         return true;
       }

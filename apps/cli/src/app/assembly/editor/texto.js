@@ -14,6 +14,7 @@ import {
   takeWords,
   wordAtPlayhead,
 } from "./montage.js";
+import { singleFlight } from "./sequencia.js";
 
 /** Contexto antes do trecho em "ouvir" — padrão JOIN_PAD da tela de limpeza. */
 export const LISTEN_PAD = 0.7;
@@ -571,6 +572,31 @@ const WORD_ACTION_LABEL = {
 const DRAG_PX = 6;
 
 /**
+ * "Propor ajuste" de fala: chamada paga, um pedido por vez. Em voo, o
+ * botão fica travado com o rótulo de andamento; sucesso ou erro (inclusive
+ * o 409 de outra proposta em voo) devolvem o botão ao normal. O erro já
+ * aparece no status pelo api.call.
+ * @param {{ state: any, api: any, button: any, readTarget: () => { sourceId: string, speechId: string, request: string }, onProposal: () => void }} deps
+ */
+export function speechProposalAction({ state, api, button, readTarget, onProposal }) {
+  const idleLabel = button.textContent;
+  return singleFlight(() => {
+    const p = state.get("project");
+    if (!p) return undefined;
+    const { sourceId, speechId, request } = readTarget();
+    return api.call("/project/speech-proposal", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, sourceId, speechId, request }),
+      label: "Propondo ajuste…",
+    }).then(({ res }) => { if (res.ok) onProposal(); }, () => {});
+  }, (busy) => {
+    button.disabled = busy;
+    button.setAttribute("aria-busy", String(busy));
+    button.textContent = busy ? "Propondo ajuste…" : idleLabel;
+  });
+}
+
+/**
  * Monta a região do texto: renderiza os documentos e instala os gestos
  * (spec, Interações 1-5). Clique em mantida só busca; riscado restaura na
  * hora; arraste abre o menu ancorado; cabeçalho move/exclui a cena.
@@ -750,22 +776,17 @@ export function mountTexto({ state, api, player }) {
   }
 
   speechDialog.querySelector("#closeSpeech").onclick = () => speechDialog.close();
-  speechDialog.querySelector("#proposeSpeech").onclick = async () => {
-    const p = state.get("project");
-    if (!p) return;
-    const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
-    const request = speechDialog.querySelector("#speechRequest").value.trim();
-    const { res } = await api.call("/project/speech-proposal", {
-      method: "POST",
-      body: JSON.stringify({
-        baseRevision: p.revision,
-        sourceId: picked[0], speechId: picked[1],
-        request,
-      }),
-      label: "Propondo ajuste…",
-    });
-    if (res.ok) paintSpeechDiff(state.get("speechProposal"));
-  };
+  const proposeSpeech = speechProposalAction({
+    state, api,
+    button: speechDialog.querySelector("#proposeSpeech"),
+    readTarget: () => {
+      const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
+      const request = speechDialog.querySelector("#speechRequest").value.trim();
+      return { sourceId: picked[0], speechId: picked[1], request };
+    },
+    onProposal: () => paintSpeechDiff(state.get("speechProposal")),
+  });
+  speechDialog.querySelector("#proposeSpeech").onclick = () => proposeSpeech();
   speechDialog.querySelector("#acceptSpeech").onclick = async () => {
     const p = state.get("project");
     const proposal = state.get("speechProposal");

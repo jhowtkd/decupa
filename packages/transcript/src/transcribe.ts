@@ -64,6 +64,10 @@ export type SpeechWorkerRequest = {
   signal?: AbortSignal;
 };
 
+/** Padrões de `transcribe`, exportados para quem monta a chave da tarefa. */
+export const DEFAULT_LANGUAGE = "pt";
+export const DEFAULT_MODEL = "small";
+
 export type TranscribeDeps = {
   extract?: (opts: { input: string; output: string }) => Promise<void>;
   coordinator?: FileCoordinator;
@@ -83,11 +87,15 @@ export async function transcribe(
     model?: string;
     computeType?: string;
     signal?: AbortSignal;
+    /** Chave da tarefa no coordenador. Padrão: o caminho. Um task "completed"
+     *  com a mesma chave devolve a transcrição antiga, então quem troca o
+     *  conteúdo no mesmo caminho precisa de uma chave que mude junto. */
+    taskId?: string;
   },
   deps: TranscribeDeps = {},
 ): Promise<Transcript> {
-  const language = opts.language ?? "pt";
-  const model = opts.model ?? "small";
+  const language = opts.language ?? DEFAULT_LANGUAGE;
+  const model = opts.model ?? DEFAULT_MODEL;
   const extract = deps.extract ?? extractAudio;
   const dir = await mkdtemp(join(tmpdir(), "decupa-asr-"));
   const wav = join(dir, "audio.wav");
@@ -96,7 +104,7 @@ export async function transcribe(
     if (opts.signal?.aborted) throw new Error(`tarefa cancelada: ${opts.input}`);
     await extract({ input: opts.input, output: wav });
     const parsed = await runSpeechSidecar({
-      taskId: opts.input,
+      taskId: opts.taskId ?? opts.input,
       wav,
       language,
       model,

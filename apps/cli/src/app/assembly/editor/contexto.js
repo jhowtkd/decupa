@@ -8,6 +8,7 @@ import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrig
 import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
+import { singleFlight } from "./sequencia.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -326,6 +327,42 @@ function backgroundBusy(project, operation, player) {
   if (project && project.preparation && project.preparation.status === "running") return true;
   if (player.previewBusy()) return true;
   return false;
+}
+
+/** Aviso quando "Pedir ajuste à IA" é enviado sem texto. */
+export const EMPTY_ADJUST_MESSAGE = "Escreva o ajuste que você quer antes de enviar.";
+
+/**
+ * "Pedir ajuste à IA": pedido vazio não sai (aviso na tela, sem chamada);
+ * com texto, um pedido pago por vez. `onChange(busy)` pinta o botão; o
+ * erro já aparece no status pelo api.call.
+ * @param {{ state: any, api: any, readRequest: () => string, onChange?: (busy: boolean) => void }} deps
+ */
+export function adjustAction({ state, api, readRequest, onChange }) {
+  return singleFlight(() => {
+    const p = state.get("project");
+    if (!p) return undefined;
+    const request = readRequest();
+    if (!request.trim()) {
+      api.notifyError(EMPTY_ADJUST_MESSAGE);
+      return undefined;
+    }
+    return api.call("/project/adjust", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: p.revision,
+        request,
+        modelOptIn: true, visualOptIn: true,
+      }),
+      label: "Ajustando montagem…",
+    }).catch(() => {});
+  }, onChange);
+}
+
+/** Botão de ajuste (puro): em voo trava com o rótulo de andamento; fora dele, trabalho de fundo ou falta de cena travam. */
+export function adjustButtonView(inflight, background, hasScenes) {
+  if (inflight) return { disabled: true, label: "Ajustando montagem…", busy: true };
+  return { disabled: !!background || !hasScenes, label: "Aplicar ajuste com IA", busy: false };
 }
 
 /** Pendências do monitor (puro): correções não alinhadas, lacunas e animações a fazer. */
@@ -753,26 +790,32 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("cancelPrep").hidden = !(
       preparing || (operation && operation.stage === "preparing")
     );
-    // Ajustar dispara trabalho longo no servidor: evita o segundo clique
-    // parecer travado (o servidor cancelaria o anterior).
-    const bg = backgroundBusy(project, operation, player);
-    setDisabled(document.getElementById("adjust"), bg || !project.scenes.length);
+    paintAdjust(project);
     renderDelivery(project);
+  }
+
+  // Ajustar dispara trabalho longo no servidor: evita o segundo clique
+  // parecer travado (o servidor cancelaria o anterior).
+  function paintAdjust(project) {
+    const button = document.getElementById("adjust");
+    const view = adjustButtonView(requestAdjust.busy(),
+      backgroundBusy(project, state.get("operation"), player), project.scenes.length > 0);
+    setDisabled(button, view.disabled);
+    button.setAttribute("aria-label", view.label);
+    button.title = view.label;
+    button.setAttribute("aria-busy", String(view.busy));
   }
 
   document.getElementById("cancelPrep").onclick = () => api.call(
     "/project/cancel",
     { method: "POST", body: "{}", label: "Cancelando…" },
   );
-  document.getElementById("adjust").onclick = () => api.call("/project/adjust", {
-    method: "POST",
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      request: document.getElementById("request").value,
-      modelOptIn: true, visualOptIn: true,
-    }),
-    label: "Ajustando montagem…",
+  const requestAdjust = adjustAction({
+    state, api,
+    readRequest: () => document.getElementById("request").value,
+    onChange: () => { if (state.get("project")) paintAdjust(state.get("project")); },
   });
+  document.getElementById("adjust").onclick = () => requestAdjust();
   document.getElementById("exportTimeline").onclick = async () => {
     const project = state.get("project");
     exportUi.status = "running";
