@@ -35,9 +35,17 @@ export function readChoice(raw: unknown): string {
   }
 
   const content: string = choice.message?.content ?? "";
+  const reasoningChars = (choice.message?.reasoning_content ?? "").length;
+  // Cortada no teto não é resposta: o JSON sai truncado ou, pior, parseia
+  // com metade das decisões. Mesmo remédio do raciocínio que come o teto.
+  if (choice.finish_reason === "length" && content.trim().length > 0) {
+    throw new Error(
+      `a resposta do modelo foi cortada no teto de tokens (finish_reason=length, ${content.length} ` +
+      `caracteres de resposta e ${reasoningChars} de raciocínio) e não é confiável. Suba max_tokens.`,
+    );
+  }
   if (content.trim().length > 0) return content;
 
-  const reasoningChars = (choice.message?.reasoning_content ?? "").length;
   if (choice.finish_reason === "length") {
     throw new Error(
       `o modelo gastou o orçamento inteiro pensando (${reasoningChars} caracteres de raciocínio) ` +
@@ -119,19 +127,34 @@ export class OpenAiCompatClient {
     }
   }
 
+  /**
+   * O timeout cresce com o teto de tokens: o padrão vale para 16k, e dobrar
+   * o teto quando o raciocínio come a resposta (até 64k) dobra a espera.
+   * Com 120 s fixos, a chamada de 64k estourava antes de poder terminar.
+   */
+  private timeoutForBudget(): number {
+    return Math.round(this.timeoutMs * Math.max(1, this.maxTokens / DEFAULT_MAX_TOKENS));
+  }
+
   private async once(content: unknown[], signal?: AbortSignal): Promise<string> {
-    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const timeoutMs = this.timeoutForBudget();
+    const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
     const payload: Record<string, unknown> = {
       model: this.model,
       messages: [{ role: "user", content }],
       max_tokens: this.maxTokens,
     };
-    // GLM-5.3 defaults to maximum reasoning, too slow for interactive text edits.
-    // Keep multimodal analysis and other models on their existing settings.
-    if (this.model.toLowerCase() === "glm-5.3-flash" && content.every(part =>
-      typeof part === "string" || (part !== null && typeof part === "object" && "type" in part && part.type === "text")
-    )) payload.reasoning_effort = "low";
+    // GLM-5.3 defaults to maximum reasoning, too slow for interactive text edits
+    // and for the cleanup triage, which sends the whole video: at maximum it ate
+    // the token ceiling and the timeout. Image analysis and other models keep
+    // their existing settings.
+    const kinds = content.map((part) => typeof part === "string"
+      ? "text"
+      : part !== null && typeof part === "object" && "type" in part ? String(part.type) : "other");
+    const textOnly = kinds.every((kind) => kind === "text");
+    const withVideo = kinds.includes("video_url") && kinds.every((kind) => kind === "text" || kind === "video_url");
+    if (this.model.toLowerCase() === "glm-5.3-flash" && (textOnly || withVideo)) payload.reasoning_effort = "low";
     if (this.jsonObject) payload.response_format = { type: "json_object" };
     let res: Response;
     try {
@@ -145,7 +168,7 @@ export class OpenAiCompatClient {
       if (signal?.aborted) throw err;
       if ((err as Error)?.name === "TimeoutError" || (combined.aborted && timeout.aborted)) {
         throw new Error(
-          `tempo esgotado depois de ${(this.timeoutMs / 1000).toFixed(0)}s esperando ${this.who}`,
+          `tempo esgotado depois de ${(timeoutMs / 1000).toFixed(0)}s esperando ${this.who}`,
         );
       }
       throw err;

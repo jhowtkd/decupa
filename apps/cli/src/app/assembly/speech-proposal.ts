@@ -13,6 +13,8 @@ import type { Analysis, Project, Scene, SourceRange, SpeechTake, Word } from "./
 import {
   applySpeechCuts,
   effectiveWords,
+  mergeRemoved,
+  mergeableGap,
   normalizeRanges,
   retainedRanges,
   subtractRanges,
@@ -87,14 +89,33 @@ export function buildSpeechProposal(
   const cuts: SpeechCut[] = [];
   for (const raw of rawCuts) {
     if (!raw.wordIds.length) continue;
-    const parts: SourceRange[] = [];
+    const indices: number[] = [];
     for (const wordId of raw.wordIds) {
       const index = byId.get(wordId);
       if (index === undefined) {
         throw new Error(`corte fora do escopo: a palavra ${wordId} não é da fala ${scope.speech.id}`);
       }
-      parts.push(wordCutInterval(ordered[index]!, ordered[index - 1], ordered[index + 1]));
+      indices.push(index);
     }
+    // Palavras contíguas viram um corte só, do início da primeira ao fim da
+    // última: cortar uma a uma deixava o silêncio entre elas como fatia de
+    // 1–3 quadros na timeline. Só o vão curto se funde (mergeableGap): uma
+    // pausa longa entre duas palavras vizinhas continua na timeline.
+    const parts: SourceRange[] = [];
+    const sorted = [...new Set(indices)].sort((a, b) => a - b);
+    let current: SourceRange | null = null;
+    let previous = -1;
+    for (const index of sorted) {
+      const interval = wordCutInterval(ordered[index]!, ordered[index - 1], ordered[index + 1]);
+      if (current && index === previous + 1 && mergeableGap({ start: current.end, end: interval.start }, project.assembly.fps)) {
+        current.end = Math.max(current.end, interval.end);
+      } else {
+        if (current) parts.push(current);
+        current = { ...interval };
+      }
+      previous = index;
+    }
+    if (current) parts.push(current);
     const merged = normalizeRanges(parts);
     for (const range of merged) {
       cuts.push({ start: range.start, end: range.end, wordIds: [...raw.wordIds], reason: raw.reason });
@@ -108,6 +129,7 @@ export function buildSpeechProposal(
   let skippedProtected = 0;
   const changedTakeIds: string[] = [];
   const removedWordIds = new Set<string>();
+  const sourceWords = effectiveWords(project, scope.speech.sourceId);
   let beforeSeconds = 0;
   let afterSeconds = 0;
   for (const { take } of scope.takes) {
@@ -139,7 +161,9 @@ export function buildSpeechProposal(
       }
     }
     beforeSeconds += rangesDuration(retainedRanges(take));
-    afterSeconds += rangesDuration(subtractRanges(retainedRanges(take), allowed));
+    // Mesma fusão que applySpeechCuts aplica: a duração do "depois" é a real.
+    const removed = allowed.length ? mergeRemoved(take, allowed, sourceWords, project.assembly.fps) : take.removed;
+    afterSeconds += rangesDuration(retainedRanges({ ...take, removed }));
   }
 
   const afterText = scope.words.filter((word) => !removedWordIds.has(word.id)).map((word) => word.text).join(" ");

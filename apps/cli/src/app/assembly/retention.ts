@@ -17,6 +17,20 @@ export type PruneResult = {
 const REV_DIR = /^rev-(\d+)$/;
 const REV_HISTORY = /^rev-(\d+)\.json$/;
 const EXPORTED = /^\d+$/;
+const PREVIEW_KEY = /^[0-9a-f]{64}$/;
+
+/** Arquivo em `rev-N/` com a chave da entrada de `preview-cache/` que ela usa. */
+export const PREVIEW_CACHE_MARKER = "preview-cache.json";
+
+async function chaveDaPrevia(revDir: string): Promise<string | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(revDir, PREVIEW_CACHE_MARKER), "utf8"));
+    const key = typeof parsed === "object" && parsed !== null ? (parsed as { key?: unknown }).key : null;
+    return typeof key === "string" && PREVIEW_KEY.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
 
 function motivo(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -24,6 +38,15 @@ function motivo(err: unknown): string {
 
 function inteiro(valor: unknown): number | null {
   return typeof valor === "number" && Number.isInteger(valor) && valor >= 0 ? valor : null;
+}
+
+/** Revisões das fotos na pilha do desfazer (`project.undo.steps`). */
+function passosDaPilha(undo: unknown): Set<number> {
+  const passos = typeof undo === "object" && undo !== null ? (undo as Record<string, unknown>)["steps"] : null;
+  if (!Array.isArray(passos)) return new Set();
+  return new Set(passos.map((passo: unknown) =>
+    typeof passo === "object" && passo !== null ? inteiro((passo as Record<string, unknown>)["revision"]) : null,
+  ).filter((n): n is number => n !== null));
 }
 
 async function ehDiretorioReal(path: string): Promise<boolean> {
@@ -38,15 +61,20 @@ async function ehArquivoReal(path: string): Promise<boolean> {
 }
 
 /**
- * Poda derivados antigos do projeto (`rev-N/`, `history/rev-N.json`).
+ * Poda derivados antigos do projeto (`rev-N/`, `history/rev-N.json`,
+ * `preview-cache/<chave>/`).
  *
  * Mantém sempre: a revisão atual (`project.json`), revisões com diretório
  * em `exports/`, e as referenciadas por `previewArtifact`/`previewRevision`/
- * `finalApprovedRevision`. Das demais, mantém as `K` mais recentes.
+ * `finalApprovedRevision`. Das demais, mantém as `K` mais recentes. A foto
+ * `history/rev-N.json` de cada passo da pilha do desfazer também fica. Uma
+ * entrada do `preview-cache/` fica enquanto alguma `rev-N/` mantida a
+ * registra em `preview-cache.json`; sem registro, sai.
  *
  * Segurança: só remove nomes casando exatamente `rev-<int>` (diretórios,
- * nunca symlinks) na raiz e `rev-<int>.json` (arquivos) em `history/`;
- * nunca toca `project.json`, `imports/`, `media/`, `analysis/` ou `exports/`.
+ * nunca symlinks) na raiz, `rev-<int>.json` (arquivos) em `history/` e
+ * chaves sha256 (diretórios) em `preview-cache/`; nunca toca `project.json`,
+ * `imports/`, `media/`, `analysis/` ou `exports/`.
  * Best-effort: falha de um delete não aborta os outros; havendo falhas, o
  * erro final (em pt-BR) lista cada uma.
  */
@@ -57,7 +85,7 @@ export async function pruneProject(
   const k = keep.revisions ?? DEFAULT_KEPT_REVISIONS;
 
   if (!Number.isSafeInteger(k) || k < 0) throw new Error("retenção: revisions deve ser inteiro não negativo");
-  for (const path of [dir, join(dir, "history"), join(dir, "exports")]) {
+  for (const path of [dir, join(dir, "history"), join(dir, "exports"), join(dir, "preview-cache")]) {
     const st = await lstat(path).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") return null;
       throw err;
@@ -141,8 +169,24 @@ export async function pruneProject(
   for (const [n, nome] of [...dirsRev.entries()].sort((a, b) => a[0] - b[0])) {
     if (!manter.has(n)) alvos.push(nome);
   }
+  // Fotos da pilha do desfazer ficam, mas só o JSON: o rev-N/ do mesmo passo
+  // segue a regra geral.
+  const pilha = passosDaPilha(projeto["undo"]);
   for (const [n, nome] of [...arquivosHistory.entries()].sort((a, b) => a[0] - b[0])) {
-    if (!manter.has(n)) alvos.push(`history/${nome}`);
+    if (!manter.has(n) && !pilha.has(n)) alvos.push(`history/${nome}`);
+  }
+  // Prévias em cache seguem as revisões mantidas (atual, aprovada, exportadas
+  // e as K recentes); as marcas são lidas antes de listar o cache.
+  const chavesMantidas = new Set<string>();
+  for (const n of manter) {
+    const nome = dirsRev.get(n);
+    const chave = nome ? await chaveDaPrevia(join(dir, nome)) : null;
+    if (chave) chavesMantidas.add(chave);
+  }
+  const entradasCache = await readdir(join(dir, "preview-cache")).catch(() => null);
+  for (const nome of [...(entradasCache ?? [])].sort()) {
+    if (!PREVIEW_KEY.test(nome) || chavesMantidas.has(nome)) continue;
+    if (await ehDiretorioReal(join(dir, "preview-cache", nome))) alvos.push(`preview-cache/${nome}`);
   }
 
   const deleted: string[] = [];

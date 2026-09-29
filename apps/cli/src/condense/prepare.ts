@@ -1,4 +1,5 @@
-import { writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { trimTrailingSilence } from "@decupa/acoustics";
 import type { Interval } from "@decupa/core";
 import type { Transcript, TranscriptToken } from "@decupa/transcript";
@@ -78,6 +79,15 @@ export async function writeCondenseTranscript(
   opts: { silences?: Interval[] } = {},
 ): Promise<CondenseTranscript> {
   const converted = toCondenseTranscript(transcript, opts);
-  await writeFile(outPath, `${JSON.stringify(converted, null, 2)}\n`, "utf8");
+  // `transcript.json` é cache: existir basta para nunca mais transcrever. Um
+  // processo morto no meio da escrita deixaria JSON truncado no nome final.
+  const partial = `${outPath}.${process.pid}.${randomUUID()}.partial`;
+  try {
+    await writeFile(partial, `${JSON.stringify(converted, null, 2)}\n`, "utf8");
+    await rename(partial, outPath);
+  } catch (error) {
+    await rm(partial, { force: true });
+    throw error;
+  }
   return converted;
 }

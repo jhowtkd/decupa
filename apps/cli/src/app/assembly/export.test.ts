@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { referenceForAssembly } from "../../../../../tests/fixtures/timeline-reference.ts";
 import { hashFile } from "@decupa/media";
 import { exportApproved } from "./export.ts";
 import { fixtureAssembly } from "./fixture.ts";
@@ -57,7 +58,7 @@ async function projectWithMedia(dir: string, revision = 1): Promise<Project> {
   };
   await mkdir(join(dir, `rev-${revision}`), { recursive: true });
   const reference = join(dir, `rev-${revision}`, "reference.mp4");
-  await copyFile(join(FIXTURES, "clip.mp4"), reference);
+  await copyFile(await referenceForAssembly(assembly), reference);
   const { createHash } = await import("node:crypto");
   const { relative } = await import("node:path");
   project.previewArtifact = {

@@ -378,9 +378,17 @@ function toggleLoop() {
   render();
 }
 
+// Marca nova ou apagada depois de salvar deixa o arquivo velho: volta a
+// pedir para salvar e a avisar ao fechar a aba.
+function marksChanged() {
+  saved = false;
+  el("save").disabled = false;
+}
+
 function addMark() {
   if (!marks.includes(cursorMs)) {
     marks = [...marks, cursorMs].sort((a, b) => a - b);
+    marksChanged();
   }
   render();
 }
@@ -389,6 +397,7 @@ function removeNearest() {
   if (marks.length === 0) return;
   const best = nearestIndex(marks, cursorMs);
   marks = marks.filter((_, i) => i !== best);
+  marksChanged();
   render();
 }
 
@@ -398,14 +407,20 @@ async function save() {
     return;
   }
   el("save").disabled = true;
+  const sent = marks;
   try {
     const res = await fetch("/truth", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ boundariesMs: marks }),
+      body: JSON.stringify({ boundariesMs: sent }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || "Falhou ao salvar");
+    // Marca que entrou enquanto salvava não está no arquivo: segue não salvo.
+    if (marks !== sent) {
+      toast(`${body.count} marcas salvas; há marcas novas para salvar.`);
+      return;
+    }
     saved = true;
     toast(`${body.count} marcas salvas. Pode fechar a aba.`);
   } catch (error) {

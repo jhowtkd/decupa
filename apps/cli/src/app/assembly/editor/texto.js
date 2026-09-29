@@ -9,11 +9,13 @@ import {
   effectiveWords,
   montageDuration,
   montageTimeOfWord,
+  montageWordTimes,
   omittedWords,
   retainedDuration,
   takeWords,
   wordAtPlayhead,
 } from "./montage.js";
+import { singleFlight } from "./sequencia.js";
 
 /** Contexto antes do trecho em "ouvir" — padrão JOIN_PAD da tela de limpeza. */
 export const LISTEN_PAD = 0.7;
@@ -129,24 +131,33 @@ export function selectionKey(sceneId, takeId, wordId) {
 /**
  * Novo conjunto de seleção sem as ocorrências que saíram do catálogo (puro;
  * ex.: correção alinhada). Inclui as zonas omitidas, que são selecionáveis
- * para o menu ouvir/incluir.
+ * para o menu ouvir/incluir. Só confere os takes e zonas que a seleção cita:
+ * seleção vazia sai na hora, e o custo não cresce com o projeto inteiro.
  */
 export function pruneSelection(p, selection) {
+  const next = new Set();
+  if (!selection || selection.size === 0) return next;
+  const cited = new Set();
+  for (const key of selection) {
+    const [sceneId, takeId] = key.split("\0");
+    cited.add(sceneId + "\0" + takeId);
+  }
   const known = new Set();
   for (const scene of p.scenes) {
     for (const take of scene.takes) {
+      if (!cited.has(scene.id + "\0" + take.id)) continue;
       for (const word of takeWords(p, scene, take)) {
         known.add(selectionKey(scene.id, take.id, word.id));
       }
     }
+    if (!cited.has(scene.id + "\0")) continue;
     for (const source of p.assembly.sources) {
       for (const word of omittedWords(p, scene, source.id)) {
         known.add(selectionKey(scene.id, "", word.id));
       }
     }
   }
-  const next = new Set();
-  for (const key of selection || []) {
+  for (const key of selection) {
     if (known.has(key)) next.add(key);
   }
   return next;
@@ -403,6 +414,7 @@ function chipHtml(p, scene, support, index) {
 
 function renderProse(p, selection) {
   let html = "";
+  const { starts } = montageWordTimes(p);
   p.scenes.forEach((scene, index) => {
     html += '<section class="scene" id="cena-' + esc(scene.id) + '" data-scene-section="' + esc(scene.id) + '">';
     html += '<header class="scene-head" data-scene="' + esc(scene.id) + '">'
@@ -420,7 +432,7 @@ function renderProse(p, selection) {
     const flat = [];
     for (const take of scene.takes) {
       for (const word of takeWords(p, scene, take)) {
-        flat.push({ takeId: take.id, time: montageTimeOfWord(p, scene.id, take.id, word) });
+        flat.push({ takeId: take.id, time: starts.get(selectionKey(scene.id, take.id, word.id)) ?? null });
       }
     }
     const anchors = new Map();
@@ -571,11 +583,58 @@ const WORD_ACTION_LABEL = {
 const DRAG_PX = 6;
 
 /**
+ * "Propor ajuste" de fala: chamada paga, um pedido por vez. Em voo, o
+ * botão fica travado com o rótulo de andamento; sucesso ou erro (inclusive
+ * o 409 de outra proposta em voo) devolvem o botão ao normal. O erro já
+ * aparece no status pelo api.call.
+ * @param {{ state: any, api: any, button: any, readTarget: () => { sourceId: string, speechId: string, request: string }, onProposal: () => void }} deps
+ */
+export function speechProposalAction({ state, api, button, readTarget, onProposal }) {
+  const idleLabel = button.textContent;
+  return singleFlight(() => {
+    const p = state.get("project");
+    if (!p) return undefined;
+    const { sourceId, speechId, request } = readTarget();
+    return api.call("/project/speech-proposal", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, sourceId, speechId, request }),
+      label: "Propondo ajuste…",
+    }).then(({ res }) => { if (res.ok) onProposal(); }, () => {});
+  }, (busy) => {
+    button.disabled = busy;
+    button.setAttribute("aria-busy", String(busy));
+    button.textContent = busy ? "Propondo ajuste…" : idleLabel;
+  });
+}
+
+/**
+ * "Apagar cena" só sai depois de confirmar: a pergunta nomeia a cena e
+ * lembra que o Desfazer volta atrás. Cancelar não chama o servidor.
+ * @param {{ state: any, api: any, confirm: (message: string) => boolean }} deps
+ * @returns {Promise<boolean>} se o pedido foi enviado
+ */
+export async function deleteScene({ state, api, confirm }, sceneId) {
+  const p = state.get("project");
+  const index = p ? p.scenes.findIndex((item) => item.id === sceneId) : -1;
+  if (index < 0) return false;
+  const scene = p.scenes[index];
+  const name = "cena " + (index + 1) + (scene.objective ? " (" + scene.objective + ")" : "");
+  if (!confirm("Apagar a " + name + "? Dá para voltar com Desfazer.")) return false;
+  await api.call("/project/edit", {
+    method: "POST",
+    body: JSON.stringify({ baseRevision: p.revision, action: { type: "delete-scene", sceneId } }),
+    label: "Excluindo cena…",
+  });
+  return true;
+}
+
+/**
  * Monta a região do texto: renderiza os documentos e instala os gestos
  * (spec, Interações 1-5). Clique em mantida só busca; riscado restaura na
- * hora; arraste abre o menu ancorado; cabeçalho move/exclui a cena.
+ * hora; arraste abre o menu ancorado; cabeçalho move/exclui a cena (excluir
+ * pergunta antes, por `confirm`).
  */
-export function mountTexto({ state, api, player }) {
+export function mountTexto({ state, api, player, confirm: confirmAction = (message) => window.confirm(message) }) {
   const root = () => document.getElementById("texto");
   let drag = null;
   let suppressClick = false;
@@ -584,10 +643,9 @@ export function mountTexto({ state, api, player }) {
   const selection = () => state.get("selection") || new Set();
 
   let lastSig = null;
-  function render(p) {
+  function render(p, sig = p ? docSignature(p) : null) {
     if (!p) return;
     paintMeta(p);
-    const sig = docSignature(p);
     if (sig === lastSig) {
       const el = root();
       if (el) paintSelection(el, selection());
@@ -750,22 +808,17 @@ export function mountTexto({ state, api, player }) {
   }
 
   speechDialog.querySelector("#closeSpeech").onclick = () => speechDialog.close();
-  speechDialog.querySelector("#proposeSpeech").onclick = async () => {
-    const p = state.get("project");
-    if (!p) return;
-    const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
-    const request = speechDialog.querySelector("#speechRequest").value.trim();
-    const { res } = await api.call("/project/speech-proposal", {
-      method: "POST",
-      body: JSON.stringify({
-        baseRevision: p.revision,
-        sourceId: picked[0], speechId: picked[1],
-        request,
-      }),
-      label: "Propondo ajuste…",
-    });
-    if (res.ok) paintSpeechDiff(state.get("speechProposal"));
-  };
+  const proposeSpeech = speechProposalAction({
+    state, api,
+    button: speechDialog.querySelector("#proposeSpeech"),
+    readTarget: () => {
+      const picked = speechDialog.querySelector("#speechPick").value.split("\u0000");
+      const request = speechDialog.querySelector("#speechRequest").value.trim();
+      return { sourceId: picked[0], speechId: picked[1], request };
+    },
+    onProposal: () => paintSpeechDiff(state.get("speechProposal")),
+  });
+  speechDialog.querySelector("#proposeSpeech").onclick = () => proposeSpeech();
   speechDialog.querySelector("#acceptSpeech").onclick = async () => {
     const p = state.get("project");
     const proposal = state.get("speechProposal");
@@ -1118,11 +1171,7 @@ export function mountTexto({ state, api, player }) {
       return;
     }
     if (sceneAction === "delete") {
-      await api.call("/project/edit", {
-        method: "POST",
-        body: JSON.stringify({ baseRevision: p.revision, action: { type: "delete-scene", sceneId: scene } }),
-        label: "Excluindo cena…",
-      });
+      await deleteScene({ state, api, confirm: confirmAction }, scene);
       return;
     }
     await api.call("/project/edit", {
@@ -1262,28 +1311,35 @@ export function mountTexto({ state, api, player }) {
   }
 
   state.subscribe("project", (p) => {
-    if (closeMenu) closeMenu();
-    if (!p) return;
+    if (!p) {
+      if (closeMenu) closeMenu();
+      return;
+    }
     const pruned = pruneSelection(p, selection());
-    if (!sameKeys(pruned, selection())) state.set("selection", pruned);
-    render(p);
+    const lost = !sameKeys(pruned, selection());
+    const sig = docSignature(p);
+    // Só fecha o menu (e o que foi digitado em "Corrigir") quando o documento
+    // mudou ou a seleção perdeu palavras: prévia nova e poll igual não fecham.
+    if (closeMenu && (sig !== lastSig || lost)) closeMenu();
+    if (lost) state.set("selection", pruned);
+    render(p, sig);
   });
   state.subscribe("selection", (next) => {
     const el = root();
     if (el) paintSelection(el, next || new Set());
   });
 
+  /** Acende só a palavra sob o playhead: troca duas classes, sem varrer a prosa. */
   function paintPlayhead(playhead) {
     const el = root();
     if (!el || el.hidden) return;
     const hit = wordAtPlayhead(state.get("project"), playhead);
-    for (const btn of el.querySelectorAll("button.word")) {
-      const on = hit
-        && btn.dataset.scene === hit.sceneId
-        && btn.dataset.take === hit.takeId
-        && btn.dataset.wordId === hit.wordId;
-      btn.classList.toggle("ativa", !!on);
-    }
+    const target = hit
+      ? el.querySelector(`button.word[data-scene="${CSS.escape(hit.sceneId)}"][data-take="${CSS.escape(hit.takeId)}"]`
+        + `[data-word-id="${CSS.escape(hit.wordId)}"]`)
+      : null;
+    for (const btn of el.querySelectorAll("button.word.ativa")) btn.classList.toggle("ativa", btn === target);
+    target?.classList.add("ativa");
   }
   state.subscribe("playhead", (t) => paintPlayhead(t));
   state.subscribe("selectedScene", paintCurrentScene);

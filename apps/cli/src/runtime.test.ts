@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { browserCommand, enginePython } from "./runtime.ts";
 import { SpawnExecutor } from "./app/pipeline.ts";
@@ -6,6 +9,23 @@ import { SpawnExecutor } from "./app/pipeline.ts";
 it("usa Python explícito e preserva caminhos com espaços", () => {
   expect(enginePython({ DECUPA_ENGINE_PYTHON: "C:\\Decupa App\\python.exe" }, "win32"))
     .toBe("C:\\Decupa App\\python.exe");
+});
+
+it("usa o venv do root informado e, sem ele, o python do PATH", async () => {
+  // Root temporário: o work/engine-venv do repositório não entra na conta.
+  // O override de ambiente continua vencendo o arquivo.
+  const root = await mkdtemp(join(tmpdir(), "engine-py-"));
+  const python = join(root, "work", "engine-venv", "bin", "python");
+  try {
+    await mkdir(dirname(python), { recursive: true });
+    await writeFile(python, "");
+    expect(enginePython({ DECUPA_ENGINE_PYTHON: "/opt/py" }, "linux", root)).toBe("/opt/py");
+    expect(enginePython({}, "linux", root)).toBe(python);
+    await rm(python);
+    expect(enginePython({}, "linux", root)).toBe("python3");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 it("Windows abre URL loopback sem interpolação em shell", () => {
@@ -89,6 +109,70 @@ it("grupo que ignora SIGTERM recebe SIGKILL após 2s", async () => {
   expect((await pending).code).not.toBe(0);
   expect(Date.now() - start).toBeGreaterThanOrEqual(1500);
 }, 15000);
+
+// Filho que ignora SIGTERM: o shutdown não pode chamar process.exit logo depois
+// do sinal, senão o grupo sobrevive. terminateAll só resolve com o grupo morto.
+async function filhoQueIgnoraSigterm(exec: SpawnExecutor): Promise<{ pid: number; pending: Promise<unknown> }> {
+  let ready!: () => void;
+  const isReady = new Promise<void>((resolve) => { ready = resolve; });
+  const pids: number[] = [];
+  const pending = exec.run({
+    command: process.execPath,
+    args: ["-e", "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000);"],
+    onLine: (line) => { if (/^\d+$/.test(line)) { pids.push(Number(line)); ready(); } },
+  });
+  await isReady;
+  return { pid: pids[0]!, pending };
+}
+
+const vivoPid = (pid: number): boolean => {
+  try { process.kill(-pid, 0); return true; } catch { return false; }
+};
+
+it.skipIf(process.platform === "win32")("terminateAll só resolve com o grupo morto, mesmo ignorando SIGTERM", async () => {
+  const exec = new SpawnExecutor();
+  const { pid, pending } = await filhoQueIgnoraSigterm(exec);
+  try {
+    await exec.terminateAll(300);
+    expect(vivoPid(pid)).toBe(false);
+    await pending;
+  } finally {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* saiu */ }
+  }
+}, 15000);
+
+it.skipIf(process.platform === "win32")("killNow mata o filho que ignora SIGTERM, de forma síncrona", async () => {
+  const exec = new SpawnExecutor();
+  const { pid, pending } = await filhoQueIgnoraSigterm(exec);
+  try {
+    exec.killNow();
+    await vi.waitFor(() => expect(vivoPid(pid)).toBe(false), { timeout: 2000 });
+    await pending;
+  } finally {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* saiu */ }
+  }
+}, 15000);
+
+// /cancel chama killAll (esvazia `running`) e o shutdown vem logo depois: o
+// terminateAll ainda tem de enxergar o grupo que ignora SIGTERM e esperá-lo.
+it.skipIf(process.platform === "win32")("killAll seguido de terminateAll ainda espera o grupo que ignora SIGTERM morrer", async () => {
+  const exec = new SpawnExecutor();
+  const { pid, pending } = await filhoQueIgnoraSigterm(exec);
+  try {
+    exec.killAll();
+    await exec.terminateAll(300);
+    expect(vivoPid(pid)).toBe(false);
+    await pending;
+  } finally {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* saiu */ }
+  }
+}, 15000);
+
+it("terminateAll sem filhos resolve na hora", async () => {
+  const start = Date.now();
+  await new SpawnExecutor().terminateAll();
+  expect(Date.now() - start).toBeLessThan(200);
+});
 
 it("openBrowser trata falha do spawn sem lançar erro não tratado", async () => {
   let captured: EventEmitter | undefined;

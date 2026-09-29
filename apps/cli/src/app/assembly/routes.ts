@@ -1,7 +1,7 @@
 import { publishAtomic } from "@decupa/cache";
 import { loadRecipe } from "../templates/store.ts";
 import { deliverApproved, readDelivery } from "./delivery.ts";
-import { brollCandidates, candidateSupport } from "./broll.ts";
+import { brollCandidates, brollIndex, candidateSupport } from "./broll.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
@@ -36,10 +36,11 @@ import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
 } from "./revisions.ts";
-import { proposeScenes, validateProposal } from "./scenes.ts";
+import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
-import type { Project, Source } from "./types.ts";
+import type { Assembly, Project, Source } from "./types.ts";
+import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 
@@ -182,6 +183,43 @@ function bump(project: Project): Project {
     previewRevision: null,
     finalApprovedRevision: null,
   };
+}
+
+type Canvas = Pick<Assembly, "fps" | "width" | "height" | "canvasSourceId" | "canvasManual">;
+
+/**
+ * Formato novo é transição de revisão como uma edição: a timeline é
+ * recompilada no canvas novo (a fala vem de segundos) e o apoio, guardado em
+ * quadros, é convertido antes para ficar no mesmo tempo. Se a recompilação
+ * falhar, nada é salvo — nunca formato novo com clipes do fps antigo.
+ */
+function applyCanvas(project: Project, canvas: Canvas): Project {
+  const scenes = rescaleSupport(project.scenes, project.assembly.fps, canvas.fps);
+  const next = bump({ ...project, scenes, assembly: { ...project.assembly, ...canvas } });
+  let assembly: Assembly;
+  try {
+    assembly = compileScenes(next, next.scenes);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HttpError(409, `não foi possível recompilar a montagem no novo formato: ${message}`);
+  }
+  return { ...next, assembly: { ...assembly, revision: next.revision } };
+}
+
+/**
+ * Fonte nova passa pela política de formato. Se ela trocou fps ou tamanho
+ * (primeiro vídeo numa montagem feita só com áudio), a transição é a mesma
+ * da troca manual; senão, só a revisão avança, como antes.
+ */
+function withCanvasPolicy(project: Project): Project {
+  const chosen = applyCanvasPolicy(project);
+  const before = project.assembly;
+  const { fps, width, height, canvasSourceId, canvasManual } = chosen.assembly;
+  if (fps.num === before.fps.num && fps.den === before.fps.den
+    && width === before.width && height === before.height) {
+    return bump(chosen);
+  }
+  return applyCanvas(project, { fps, width, height, canvasSourceId, canvasManual });
 }
 
 async function sourceFromFile(path: string, id: string, displayName?: string): Promise<Source> {
@@ -382,6 +420,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
+  // Ajuste de fala aguardando o modelo: um segundo pedido recebe 409.
+  let speechProposalInFlight = false;
+  // Sinal da preparação em curso: Retomar sem pedido novo recebe 409 em vez
+  // de abortar e recomeçar (duas abas cobravam duas vezes). Abortada por
+  // /cancel ou por outra operação, deixa de valer.
+  let preparationSignal: AbortSignal | null = null;
   const livePreviews = new Set<AbortController>();
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
@@ -401,11 +445,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     for (const preview of livePreviews) preview.abort();
   }
 
+  // Aborta só a operação corrente: os filhos dela recebem o sinal. O
+  // executor é compartilhado com a entrega ao DaVinci, a análise de template
+  // e o proxy de playback, e killAll aqui matava esses também.
   function begin(stage: string, sourceId?: string): { gen: number; signal: AbortSignal } {
     cancelled = false;
     abortOperations();
     livePreviews.clear();
-    if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
     controller = new AbortController();
     const gen = ++opGen;
     operation = { stage, sourceId };
@@ -444,7 +490,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
-      project = bump(applyCanvasPolicy(project));
+      project = withCanvasPolicy(project);
       await saveProject(dir, expected, project);
     }
     return loadProject(dir);
@@ -569,17 +615,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             void alignCorrectionJob(dir, correction.id, project.revision);
           }
         }
+        // Desfazer só aparece com a foto do topo da pilha legível; histórico
+        // ausente ou corrompido vira "sem desfazer", nunca 500.
         let undoRevision: number | null = null;
-        if (project.revision > 0) {
-          const revision = project.revision - 1;
-          const exists = await stat(join(dir, "history", `rev-${revision}.json`)).then(() => true, error => {
-            if (error.code === "ENOENT") return false;
-            throw error;
-          });
-          if (exists) undoRevision = (await readHistorySnapshot(dir, revision)).revision;
+        const undoStep = undoTop(project);
+        if (undoStep) {
+          undoRevision = await readHistorySnapshot(dir, undoStep.revision).then(() => undoStep.revision, () => null);
         }
         const fps=project.assembly.fps.num/project.assembly.fps.den;
-        const candidates=brollCandidates(project).map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps))}));
+        const listed=brollCandidates(project),index=brollIndex(project,listed);
+        const candidates=listed.map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps),index)}));
         sendJson(res, {
           project, undoRevision,
           templateProposal:await readTemplateProposal(),
@@ -771,7 +816,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             const source = await sourceFromFile(stored, nextSourceId(loaded), name);
-            return bump(applyCanvasPolicy(addSource(loaded, source)));
+            return withCanvasPolicy(addSource(loaded, source));
           });
         } catch (err) {
           await unlink(stored).catch(() => {});
@@ -803,7 +848,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           for (const source of sources) {
             next = addSource(next, { ...source, id: nextSourceId(next) });
           }
-          return bump(applyCanvasPolicy(next));
+          return withCanvasPolicy(next);
         });
         const project = await loadProject(dir);
         sendJson(res, { project, ...snapshot() });
@@ -835,14 +880,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             if (!source) throw new HttpError(404, "fonte não cadastrada");
             if (!source.hasVideo) throw new HttpError(400, `fonte ${source.id} não tem vídeo`);
             const canvas = canvasForSource(source, assembly);
-            return bump({
-              ...project,
-              assembly: {
-                ...assembly, ...canvas,
-                canvasSourceId: source.id,
-                canvasManual: true,
-              },
-            });
+            return applyCanvas(project, { ...canvas, canvasSourceId: source.id, canvasManual: true });
           }
           const fpsRaw = body.fps as { num?: unknown; den?: unknown } | undefined;
           const width = Number(body.width);
@@ -857,16 +895,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           if (!Number.isSafeInteger(height) || height <= 0 || height % 2 !== 0) {
             throw new HttpError(400, "height precisa ser inteiro par positivo");
           }
-          return bump({
-            ...project,
-            assembly: {
-              ...assembly,
-              fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
-              width,
-              height,
-              canvasSourceId: null,
-              canvasManual: true,
-            },
+          return applyCanvas(project, {
+            fps: { num: Number(fpsRaw.num), den: Number(fpsRaw.den) },
+            width,
+            height,
+            canvasSourceId: null,
+            canvasManual: true,
           });
         });
         sendJson(res, { project, ...snapshot() });
@@ -1033,17 +1067,24 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           { modelOptIn, visualOptIn, needsModel: true },
         );
         if (blocked) throw new HttpError(402, blocked);
-        // Um novo início cancela o anterior (mesma semântica de analyze e
+        if (mode === "prepare" && request.trim() === "" && preparationSignal && !preparationSignal.aborted) {
+          throw new HttpError(409, "Já há uma preparação em andamento. Aguarde ela terminar ou cancele antes de retomar.");
+        }
+        // Um pedido novo cancela o anterior (mesma semântica de analyze e
         // propose): o percurso abortado registra cancelled sem escrever mais.
         const { gen, signal } = begin("preparing");
         const releaseHold = holdPreparation(dir);
+        preparationSignal = signal;
         void runPreparation(
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
           { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
           { signal, isCurrent: () => stillCurrent(gen) },
-        ).finally(releaseHold).then(
+        ).finally(() => {
+          releaseHold();
+          if (preparationSignal === signal) preparationSignal = null;
+        }).then(
           (result) => {
             if (!stillCurrent(gen)) return;
             const prep = result.preparation;
@@ -1093,7 +1134,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const expected=requireRevision(body);const proposal=await readTemplateProposal();
         if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
         let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
-        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return applyProposal(p,proposal);});
+        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return recordUndo(p,applyProposal(p,proposal),"Aplicar template");});
         // Preserve a newer candidate if another generation finished concurrently.
         if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
         sendJson(res,{project,templateProposal:null,...snapshot()});return true;
@@ -1140,6 +1181,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
           throw new HttpError(402, PAID_BLOCKED);
         }
+        // Clique repetido não aborta a chamada já cobrada: begin() derrubaria
+        // o pedido em voo. Checar e marcar sem await no meio fecha a corrida.
+        if (speechProposalInFlight) {
+          throw new HttpError(409, "Já há um ajuste de fala em andamento. Aguarde a resposta antes de pedir outro.");
+        }
+        speechProposalInFlight = true;
         const { gen, signal } = begin("proposing");
         try {
           const proposal = await proposeSpeechAdjustment(
@@ -1170,6 +1217,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(400, message);
           }
           throw err;
+        } finally {
+          speechProposalInFlight = false;
         }
         return true;
       }
@@ -1183,7 +1232,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const project = await mutate(baseRevision, async (loaded) => {
           await writeHistorySnapshot(dir, loaded);
-          return applySpeechProposal(loaded, proposal);
+          return recordUndo(loaded, applySpeechProposal(loaded, proposal), "Ajuste de fala");
         });
         await unlink(speechProposalPath).catch(() => {});
         sendJson(res, { project, speechProposal: null, ...snapshot() });
@@ -1239,7 +1288,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             await writeHistorySnapshot(dir, loaded);
-            return applySupportSwap(loaded, proposal, candidateId);
+            return recordUndo(loaded, applySupportSwap(loaded, proposal, candidateId), "Troca de apoio");
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -1311,7 +1360,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         const project = await mutate(baseRevision, async (loaded) => {
           await writeHistorySnapshot(dir, loaded);
-          return applyRhythmProposal(loaded, proposal);
+          return recordUndo(loaded, applyRhythmProposal(loaded, proposal), "Ritmo do corte");
         });
         await unlink(rhythmProposalPath).catch(() => {});
         sendJson(res, { project, rhythmProposal: null, ...snapshot() });
@@ -1339,7 +1388,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(409, "proposta ausente ou desatualizada");
           }
           await writeHistorySnapshot(dir, project);
-          return applyProposal(project, project.proposal);
+          return recordUndo(project, applyProposal(project, project.proposal), "Aplicar proposta");
         });
         sendJson(res, { project, ...snapshot() });
         return true;
@@ -1375,7 +1424,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         try {
           project = await mutate(baseRevision, async (loaded) => {
             await writeHistorySnapshot(dir, loaded);
-            return applyEdit(loaded, action);
+            return recordUndo(loaded, applyEdit(loaded, action), editLabel(action));
           });
         } catch (err) {
           if (err instanceof HttpError) throw err;
@@ -1401,7 +1450,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
-        if (target >= loaded.revision) {
+        // Só o topo da pilha se desfaz: pedir outro passo (ou um alvo já
+        // desfeito) é conflito, não um salto no histórico.
+        if (undoTop(loaded)?.revision !== target) {
           throw new HttpError(409, "nada a desfazer nessa revisão");
         }
         let snap;
@@ -1410,11 +1461,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           throw new HttpError(404, err instanceof Error ? err.message : String(err));
         }
-        await writeHistorySnapshot(dir, loaded);
         try {
           // Forma funcional: substitui o conteúdo editorial (sem unir correções
-          // antigas de volta) e valida antes de gravar.
-          await saveProject(dir, baseRevision, (current) => applyHistorySnapshot(current, snap));
+          // antigas de volta) e valida antes de gravar. O estado desfeito não
+          // vira foto nem passo: o próximo desfazer volta mais um, nunca refaz.
+          await saveProject(dir, baseRevision, (current) => {
+            if (current.revision !== baseRevision || undoTop(current)?.revision !== target) {
+              throw new Error(`revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
+            }
+            return popUndo(current, applyHistorySnapshot(current, snap));
+          });
         } catch (err) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));
         }

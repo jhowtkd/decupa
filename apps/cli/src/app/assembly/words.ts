@@ -3,6 +3,7 @@ import { energyEnvelope, snapCut } from "@decupa/acoustics";
 import type {
   EditAction,
   Project,
+  Rate,
   Scene,
   SourceRange,
   SpeechTake,
@@ -226,6 +227,56 @@ export function overlaps(range: SourceRange, list: SourceRange[]): boolean {
   return list.some((item) => range.start < item.end && item.start < range.end);
 }
 
+/** Referência, em segundos, do maior vão sem palavra que a fusão de cortes engole. */
+export const MERGE_GAP_SECONDS = 1;
+
+/**
+ * O vão é curto o bastante para a fusão: no máximo `floor(MERGE_GAP_SECONDS ×
+ * fps)` quadros da taxa da montagem, e no mínimo 1 quadro (30 quadros a
+ * 30 fps, 23 a 23,976 fps). A pausa entre palavras vizinhas de uma frase ou
+ * hesitação removida inteira cabe aí; pausa maior de um segundo fica na
+ * timeline.
+ */
+export function mergeableGap(gap: SourceRange, fps: Rate): boolean {
+  const maxFrames = Math.max(1, Math.floor((MERGE_GAP_SECONDS * fps.num) / fps.den + 1e-9));
+  return ((gap.end - gap.start) * fps.num) / fps.den <= maxFrames + 1e-9;
+}
+
+/**
+ * Junta cortes novos ao `removed` do take e funde o vão entre dois cortes
+ * quando ele passa em `mergeableGap` (até `floor(1 s × fps)` quadros, no
+ * mínimo 1) e nenhuma palavra cai nele: remover palavras
+ * contíguas numa ação ou em várias dá o mesmo corte, sem fatia de silêncio de
+ * poucos quadros entre elas. Pausa maior fica na timeline: pode ter
+ * respiração, som ambiente ou gesto. Só funde vão vizinho de corte novo e
+ * nunca vão protegido; sem palavras no catálogo não há como saber o que o
+ * vão contém.
+ */
+export function mergeRemoved(
+  take: SpeechTake,
+  added: SourceRange[],
+  words: Word[],
+  fps: Rate,
+): SourceRange[] {
+  const merged = normalizeRanges([...take.removed, ...added]);
+  if (words.length === 0) return merged;
+  const touches = (range: SourceRange): boolean =>
+    added.some((cut) => cut.start <= range.end && range.start <= cut.end);
+  const result: SourceRange[] = [];
+  for (const range of merged) {
+    const last = result[result.length - 1];
+    if (last && (touches(last) || touches(range))) {
+      const gap = { start: last.end, end: range.start };
+      if (mergeableGap(gap, fps) && !overlaps(gap, words) && !overlaps(gap, take.protected)) {
+        last.end = Math.max(last.end, range.end);
+        continue;
+      }
+    }
+    result.push({ ...range });
+  }
+  return result;
+}
+
 function withTake(project: Project, sceneId: string, takeId: string, next: SpeechTake): Project {
   return {
     ...project,
@@ -270,7 +321,7 @@ export function applySpeechCuts(
     touched = true;
     next = withTake(next, scene.id, take.id, {
       ...take,
-      removed: normalizeRanges([...take.removed, ...allowed]),
+      removed: mergeRemoved(take, allowed, effectiveWords(project, take.sourceId), project.assembly.fps),
     });
   }
   return touched ? invalidatePreview(next) : next;
@@ -318,7 +369,7 @@ function applyRemoveRestore(
     if (intervals.some((range) => overlaps(range, take.protected))) {
       throw new Error("trecho protegido: remova a proteção antes de cortar");
     }
-    const removed = normalizeRanges([...take.removed, ...intervals]);
+    const removed = mergeRemoved(take, intervals, ordered, project.assembly.fps);
     return invalidatePreview(withTake(project, scene.id, take.id, { ...take, removed }));
   }
   const before = normalizeRanges(take.removed);

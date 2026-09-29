@@ -301,12 +301,19 @@ export function parseLocalSpans(text: string, source: Source, window: VisualWind
   const rawSpans = Array.isArray(payload.spans) ? payload.spans : [];
   // Spans são inferidos de frames timestampados: valida os limites locais
   // ANTES de somar fetchStart — uma única soma.
+  const localEnd = window.end - window.fetchStart;
   const local = validateVisual(
     rawSpans.map((span) => {
       const rec = (span && typeof span === "object") ? span as Record<string, unknown> : {};
-      return { ...rec, sourceId: source.id };
+      // Quadros saem de 1 em 1 s: na janela final fracionária (60,4 s → 1,4 s
+      // locais) o último quadro, local 1, é descrito como [1, 2]. O excesso
+      // de até um período de amostragem é cortado antes de validar, como o
+      // corte à janela logo abaixo; além disso a resposta segue inválida.
+      const end = Number(rec.end);
+      const clipped = end > localEnd && end <= localEnd + 1 ? { end: localEnd } : {};
+      return { ...rec, ...clipped, sourceId: source.id };
     }),
-    { ...source, durationSeconds: window.end - window.fetchStart },
+    { ...source, durationSeconds: localEnd },
   );
   const converted = local
     .map((span) => ({

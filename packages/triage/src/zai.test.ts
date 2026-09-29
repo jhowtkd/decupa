@@ -37,6 +37,12 @@ describe("readChoice", () => {
     expect(() => readChoice(body({ content: "" }))).toThrow(/vazia/);
   });
 
+  it("estoura quando a resposta foi cortada no teto mesmo com content", () => {
+    // Content truncado parseava pela metade e ia para o cache como decisão.
+    const raw = body({ content: '{"claims":', reasoning_content: "x" }, "length");
+    expect(() => readChoice(raw)).toThrow(/Suba max_tokens/);
+  });
+
   it("estoura quando a resposta traz erro no lugar de choices", () => {
     const raw = { error: { code: "1113", message: "Insufficient balance" } };
     expect(() => readChoice(raw)).toThrow(/1113|Insufficient balance/);
@@ -83,8 +89,13 @@ describe("parseStructureClaims", () => {
     expect(out[0]!.reason).toBe("porque_sim");
   });
 
-  it("devolve lista vazia quando não há a chave claims", () => {
-    expect(parseStructureClaims('{"outra":[]}')).toEqual([]);
+  it("estoura quando não há a chave claims, em vez de devolver lista vazia", () => {
+    // Lista vazia vai para o cache como "o modelo não achou nada".
+    expect(() => parseStructureClaims('{"outra":[]}')).toThrow(/claims/);
+  });
+
+  it("objeto vazio também não é lista de alegações", () => {
+    expect(() => parseStructureClaims("{}")).toThrow(/claims/);
   });
 
   it("estoura em JSON malformado, com um pedaço do texto no erro", () => {
@@ -93,7 +104,7 @@ describe("parseStructureClaims", () => {
 
   it("descarta entrada sem unit_ids utilizável", () => {
     const ruim = { reason: "preroll", note: "sem ids" };
-    expect(parseStructureClaims(JSON.stringify({ claims: [ruim] }))).toEqual([]);
+    expect(parseStructureClaims(JSON.stringify({ claims: [ruim, claim] }))).toHaveLength(1);
   });
 });
 
@@ -128,8 +139,8 @@ describe("parseDensityCandidates", () => {
     expect(parseDensityCandidates(raw)[0]!.rank).toBe(Number.MAX_SAFE_INTEGER);
   });
 
-  it("devolve lista vazia sem a chave candidates", () => {
-    expect(parseDensityCandidates("{}")).toEqual([]);
+  it("estoura sem a chave candidates, em vez de devolver lista vazia", () => {
+    expect(() => parseDensityCandidates("{}")).toThrow(/candidates/);
   });
 });
 
@@ -243,7 +254,8 @@ describe("auto-escalonar max_tokens", () => {
 describe("medidor de uso", () => {
   it("acumula usage e raciocínio entre chamadas", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({
-      ...body({ content: '{"claims":[]}', reasoning_content: "think" }),
+      // As duas listas: estrutura lê `claims`, densidade lê `candidates`.
+      ...body({ content: '{"claims":[],"candidates":[]}', reasoning_content: "think" }),
       usage: { prompt_tokens: 1000, completion_tokens: 40 },
     }))) as typeof fetch;
     const model = new ZaiTriageModel({ apiKey: "k", fetchImpl });
@@ -284,6 +296,39 @@ describe("ZaiTriageModel — rede", () => {
     const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, timeoutMs: 20, retries: 0 });
     await expect(model.structure({ unitsBlock: "u001 oi", videoPath: await videoFalso() }))
       .rejects.toThrow(/tempo esgotado/);
+  });
+
+  it("payload acima de 5 MB em base64 não chama o fetch", async () => {
+    let chamadas = 0;
+    const fetchImpl = (async () => {
+      chamadas += 1;
+      return new Response(JSON.stringify(body({ content: '{"claims":[]}' })), { status: 200 });
+    }) as typeof fetch;
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-grande-"));
+    const video = join(dir, "grande.mp4");
+    await writeFile(video, Buffer.alloc(4 * 1024 * 1024));
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, retries: 0 });
+    await expect(model.structure({ unitsBlock: "u001 oi", videoPath: video })).rejects.toThrow(/não foi feita/);
+    expect(chamadas).toBe(0);
+  });
+
+  it("cada caminho de vídeo vai no próprio data URL", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-zai-janelas-"));
+    const primeiro = join(dir, "a.mp4");
+    const segundo = join(dir, "b.mp4");
+    await writeFile(primeiro, "AAAA");
+    await writeFile(segundo, "BBBBBBBB");
+    const corpos: string[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      corpos.push(String(init.body));
+      return new Response(JSON.stringify(body({ content: '{"claims":[]}' })), { status: 200 });
+    }) as typeof fetch;
+    const model = new ZaiTriageModel({ apiKey: "k", fetchImpl, retries: 0 });
+    await model.structure({ unitsBlock: "u001", videoPath: primeiro });
+    await model.structure({ unitsBlock: "u002", videoPath: segundo });
+    expect(corpos[0]).toContain(Buffer.from("AAAA").toString("base64"));
+    expect(corpos[1]).toContain(Buffer.from("BBBBBBBB").toString("base64"));
+    expect(corpos[1]).not.toContain(Buffer.from("AAAA").toString("base64"));
   });
 });
 

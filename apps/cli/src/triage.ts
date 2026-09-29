@@ -47,6 +47,7 @@ import {
 } from "@decupa/triage";
 import { bootProjectDecision } from "./app/assembly/decision-boot.ts";
 import { sharedVisualPools, type VisualPools } from "./app/assembly/visual-pool.ts";
+import { prepareTriageWindows, windowedTriageModel, type CutWindow } from "./triage-windows.ts";
 
 export interface TriageOptions {
   indexPath: string;
@@ -79,6 +80,8 @@ export interface TriageOptions {
   typeSafeClient?: TypeSafeDecideClient;
   env?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
+  /** Injetável: recorte de cada janela da triagem longa sem ffmpeg real. */
+  cutWindow?: CutWindow;
 }
 
 export interface TriageJson {
@@ -207,12 +210,12 @@ export async function ensureLightVideo(
     sourceSha?: (p: string) => Promise<string>;
   } = {},
 ): Promise<string> {
-  // O app entrega o proxy com este nome exato; re-transcodificar o proxy
-  // seria gastar minuto para piorar o arquivo.
-  if (basename(videoPath) === "triage-proxy.mp4") return videoPath;
-
   const fileSize = deps.fileSize ?? (async (p: string) => (await stat(p)).size);
   if ((await fileSize(videoPath)) / 1024 / 1024 <= MAX_DIRECT_VIDEO_MB) return videoPath;
+  // O app entrega o proxy com este nome exato, já leve: re-transcodificá-lo
+  // seria gastar minuto sem encolher nada. O tamanho dele não é ignorado:
+  // acima do teto de payload, `runTriage` tria em janelas.
+  if (basename(videoPath) === "triage-proxy.mp4") return videoPath;
 
   const proxy = join(outDir, "triage-proxy.mp4");
   const sidecar = join(outDir, "triage-proxy.source.sha256");
@@ -262,12 +265,21 @@ export async function defaultTranscode(src: string, dst: string): Promise<void> 
   if (code !== 0) throw new Error(`não consegui gerar o proxy leve em ${dst} (ffmpeg código ${code})`);
 }
 
-export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
+/**
+ * Provedor, modelo e endpoint que a triagem vai usar, resolvidos como em
+ * `runTriage`. É a parte da chave de cache que não vem dos arquivos.
+ */
+export async function triageIdentity(opts: Pick<TriageOptions, "provider" | "projectDir" | "modelName">) {
   const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null)
     ?? await readCredentials(homedir()).catch(() => null);
   const provider = resolveProvider(opts.provider, process.env, stored);
   const cfg = presetConfig(provider, process.env, stored);
   const modelName = opts.modelName ?? cfg.model;
+  return { stored, provider, cfg, modelName, providerId: providerIdentity({ provider, model: modelName, baseUrl: cfg.baseUrl }) };
+}
+
+export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
+  const { stored, provider, modelName, providerId } = await triageIdentity(opts);
   const model = opts.model ?? new ZaiTriageModel({
     provider,
     stored,
@@ -284,9 +296,20 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const cacheDir = join(opts.outDir, "triage_cache");
   await mkdir(cacheDir, { recursive: true });
   const shas = { videoSha: await sha256(videoPath), indexSha: await sha256(opts.indexPath) };
-  const providerId = providerIdentity({ provider, model: modelName, baseUrl: cfg.baseUrl });
-  const keyOf = (pass: "structure" | "density", budgetSeconds?: number) =>
-    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds });
+  const keyOf = (pass: "structure" | "density", budgetSeconds?: number, window?: string) =>
+    cacheKey({ ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId, pass, budgetSeconds, window });
+
+  // Vídeo acima do teto de payload vira uma chamada por trecho de ~10 min;
+  // o curto continua numa chamada só, pelo mesmo modelo.
+  const windows = await prepareTriageWindows({
+    index, videoPath, videoSha: shas.videoSha, outDir: opts.outDir, cutWindow: opts.cutWindow, signal: opts.signal,
+  });
+  const passModel = windows
+    ? windowedTriageModel(model, windows, {
+      dir: cacheDir,
+      keyOf: (pass, window, budgetSeconds) => keyOf(pass, budgetSeconds, window),
+    })
+    : model;
 
   const env = envWithStoredTypeSafe(opts.env ?? process.env, stored);
   let routeMode = opts.routeMode;
@@ -330,7 +353,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     const structureKey = keyOf("structure");
     let claims = await readCache<StructureClaim[]>(cacheDir, structureKey);
     if (claims === null) {
-      claims = await model.structure({ unitsBlock, videoPath });
+      claims = await passModel.structure({ unitsBlock, videoPath });
       await writeCache(cacheDir, structureKey, claims);
     }
     const modelVerdicts = verifyClaims(claims, index, dropped);
@@ -340,7 +363,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     const routed = await routeTriage({
       mode: routeMode,
       index,
-      model,
+      model: passModel,
       unitsBlock,
       videoPath,
       decide: opts.decide ?? (typeSafeClient
@@ -422,7 +445,7 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
     const densityKey = keyOf("density", budgetSeconds);
     let candidates = await readCache<DensityCandidate[]>(cacheDir, densityKey);
     if (candidates === null) {
-      candidates = await model.density({ unitsBlock, videoPath, budgetSeconds });
+      candidates = await passModel.density({ unitsBlock, videoPath, budgetSeconds });
       await writeCache(cacheDir, densityKey, candidates);
     }
     const applied = applyDensityBudget(candidates, index, { budgetSeconds, alreadyDropped: dropped });

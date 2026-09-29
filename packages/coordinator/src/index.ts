@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { CancelledError, isCancelledError } from "@decupa/queue";
 import { inspectArtifact, publishAtomic } from "@decupa/cache";
@@ -25,6 +26,8 @@ export type FileCoordinatorOptions = {
   leaseMs?: number;
   pollMs?: number;
   now?: () => number;
+  /** Trava sem dono vivo e mais velha que isto é vencida. Padrão: 30 s. */
+  staleLockMs?: number;
 };
 
 export type FileCoordinator = {
@@ -57,10 +60,34 @@ type Claim =
 const DEFAULT_LIMIT = 1;
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_POLL_MS = 25;
+const DEFAULT_STALE_LOCK_MS = 30_000;
 
 function lockBusy(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return code === "EEXIST" || code === "EPERM" || code === "EACCES" || code === "EBUSY" || code === "ENOTEMPTY";
+}
+
+/** PID vivo nesta máquina? EPERM é processo de outro usuário: vivo. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * A trava guarda `<pid> <host>` de quem a criou. Ela é vencida quando o dono
+ * morreu (mesma máquina) ou quando está velha demais para uma seção que dura
+ * milissegundos (dono em outra máquina, PID ilegível ou reusado).
+ */
+function lockIsStale(content: string, mtimeMs: number, staleMs: number): boolean {
+  if (Date.now() - mtimeMs > staleMs) return true;
+  const [rawPid, host] = content.trim().split(/\s+/, 2);
+  const pid = Number(rawPid);
+  if (!Number.isInteger(pid) || pid <= 0 || host !== hostname()) return false;
+  return !pidAlive(pid);
 }
 
 export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions = {}): FileCoordinator {
@@ -70,6 +97,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
   }
   const leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+  const staleLockMs = opts.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
   const now = opts.now ?? Date.now;
   const liveClock = opts.now === undefined;
 
@@ -93,15 +121,36 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 
+  /**
+   * Remove a trava de um processo que morreu com ela. Sem isto um `.lock`
+   * órfão travava para sempre toda transcrição seguinte. Confere de novo o
+   * inode e o mtime logo antes de apagar, para não levar a trava nova de
+   * quem acabou de pegá-la.
+   */
+  const clearStaleLock = async (): Promise<void> => {
+    const before = await stat(paths.lock).catch(() => null);
+    if (!before) return;
+    const content = await readFile(paths.lock, "utf8").catch(() => "");
+    if (!lockIsStale(content, before.mtimeMs, staleLockMs)) return;
+    const again = await stat(paths.lock).catch(() => null);
+    if (!again || again.ino !== before.ino || again.mtimeMs !== before.mtimeMs) return;
+    await unlink(paths.lock).catch(() => undefined);
+  };
+
   const withLock = async <T>(fn: () => Promise<T>): Promise<T> => {
     await mkdir(dir, { recursive: true });
     for (;;) {
       try {
         const handle = await open(paths.lock, "wx");
-        await handle.close();
+        try {
+          await handle.writeFile(`${process.pid} ${hostname()}\n`, "utf8");
+        } finally {
+          await handle.close();
+        }
         break;
       } catch (error) {
         if (!lockBusy(error)) throw error;
+        await clearStaleLock();
         await sleep(pollMs);
       }
     }
