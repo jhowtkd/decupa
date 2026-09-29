@@ -51,9 +51,13 @@ process.exit(0);
 const temRun = (calls: string[][]) => calls.some((args) => args.includes("run"));
 const temSync = (calls: string[][]) => calls.some((args) => args.includes("sync"));
 
+// Só POSIX: no Windows o spawn não executa script com shebang sem extensão,
+// então o `uv` e o `ffmpeg` falsos não existem para ele.
+const posix = it.skipIf(process.platform === "win32");
+
 // Sem o venv da fala sincronizado, `uv run` (mesmo com --no-sync) não deve
 // nem começar: o erro tem de mandar rodar o setup, em vez de um traceback.
-it("alignText com o venv da fala fora de sincronia manda rodar o setup e não chama uv run", async () => {
+posix("alignText com o venv da fala fora de sincronia manda rodar o setup e não chama uv run", async () => {
   await comUvFalso(1, async (log) => {
     const erro = await alignText({ input: "x", text: "ola", startSeconds: 0, endSeconds: 1 })
       .then(() => undefined, (e: unknown) => e as Error);
@@ -65,7 +69,7 @@ it("alignText com o venv da fala fora de sincronia manda rodar o setup e não ch
   });
 });
 
-it("transcribe sem worker com o venv da fala fora de sincronia manda rodar o setup e não chama uv run", async () => {
+posix("transcribe sem worker com o venv da fala fora de sincronia manda rodar o setup e não chama uv run", async () => {
   await comUvFalso(1, async (log) => {
     const erro = await transcribe({ input: "x" }, { extract: async () => undefined })
       .then(() => undefined, (e: unknown) => e as Error);
@@ -78,7 +82,7 @@ it("transcribe sem worker com o venv da fala fora de sincronia manda rodar o set
 });
 
 // Contraste: sync ok segue para o uv run.
-it("com o venv da fala sincronizado o fluxo chega ao uv run", async () => {
+posix("com o venv da fala sincronizado o fluxo chega ao uv run", async () => {
   await comUvFalso(0, async (log) => {
     await alignText({ input: "x", text: "ola", startSeconds: 0, endSeconds: 1 });
     const calls = await log();

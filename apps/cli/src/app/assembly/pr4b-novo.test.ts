@@ -39,7 +39,8 @@ it("POST /project/new devolve a pasta criada, registra no log e na meta da pági
     if (body.dir) existe = await access(body.dir).then(() => true, () => false);
     const html = body.url ? await (await fetch(body.url)).text() : "";
     expect({
-      log: logs.some((linha) => new RegExp(`novo projeto em ${body.dir ?? "\\S+"}`).test(linha)),
+      // Comparação literal: o caminho do Windows traz `\`, que num RegExp vira escape.
+      log: body.dir !== undefined && logs.some((linha) => linha.includes(`novo projeto em ${body.dir}`)),
       dirExiste: existe,
       meta: body.dir ? html.includes(`name="decupa-project-dir" content="${escapado(body.dir)}"`) : false,
     }).toEqual({ log: true, dirExiste: true, meta: true });

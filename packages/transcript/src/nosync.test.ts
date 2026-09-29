@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { alignText } from "./transcribe.ts";
 
-it("alignText sobe o sidecar com uv run --no-sync", async () => {
+// Só POSIX: no Windows o spawn não executa script com shebang sem extensão,
+// então o `uv` e o `ffmpeg` falsos não existem para ele.
+it.skipIf(process.platform === "win32")("alignText sobe o sidecar com uv run --no-sync", async () => {
   // PATH só com binários falsos: o shebang é o node absoluto, porque
   // `#!/usr/bin/env node` não acharia o node neste PATH.
   const dir = await mkdtemp(join(tmpdir(), "nosync-"));
