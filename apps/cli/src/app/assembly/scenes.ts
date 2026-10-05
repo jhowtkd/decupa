@@ -22,6 +22,7 @@ import { validateAssembly } from "./validate.ts";
 import { effectiveWords, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
+- Quando targetSeconds for 0, o briefing não tem duração alvo: deixe a duração resultar do conteúdo e não proponha cortes apenas para caber em um tempo.
 - Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
 - Monte a sequência de cenas usando apenas estes IDs de fala e este mapa visual (com confiança e cobertura); explique lacunas em gaps.
 - Para cada cena, devolva \`selections\` ordenada: {"takeId"} reaproveita um take existente com todos os cortes e proteções; {"speechId"} acrescenta fala do catálogo como take novo.

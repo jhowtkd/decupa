@@ -210,8 +210,9 @@ async function sourceFromFile(path: string, id: string, displayName?: string): P
   };
 }
 
-function nextSourceId(project: Project): string {
-  return `src-${project.assembly.sources.length + 1}`;
+function nextSourceId(): string {
+  // Remoções não podem reutilizar IDs ainda referidos por histórico ou cache.
+  return `src-${randomUUID()}`;
 }
 
 function mediaError(err: unknown): HttpError {
@@ -440,13 +441,68 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     let changed = false;
     for (const input of inputs) {
       const before = project.assembly.sources.length;
-      project = addSource(project, await sourceFromFile(input, nextSourceId(project)));
+      project = addSource(project, await sourceFromFile(input, nextSourceId()));
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
       project = bump(applyCanvasPolicy(project));
       await saveProject(dir, expected, project);
     }
+    return loadProject(dir);
+  }
+
+  // Classificar como fala antecipa somente a transcrição local. A montagem
+  // completa a cobertura por imagens pelo percurso de preparação existente.
+  async function analyzeSources(project: Project, sourceIds: string[], wantVisual: boolean): Promise<Project> {
+    const { gen, signal } = begin("analyzing");
+    let done = 0;
+    for (const sourceId of sourceIds) {
+      if (!stillCurrent(gen)) break;
+      const source = project.assembly.sources.find((item) => item.id === sourceId);
+      if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
+      operation = {
+        stage: "analyzing",
+        sourceId,
+        progress: `${done + 1}/${sourceIds.length}`,
+      };
+      try {
+        const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
+        if (wantVisual && source.role !== "speech" && deps.describeClient && source.hasVideo && !signal.aborted) {
+          try {
+            analysis.visual = await describeSource(source, dir, signal, {
+              client: deps.describeClient,
+              exec: deps.exec,
+            });
+            analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
+          } catch (err) {
+            analysis.status = "partial";
+            analysis.error = err instanceof Error ? err.message : String(err);
+          }
+        }
+        try {
+          await saveProject(dir, project.revision, (current) => {
+            if (current.revision !== project.revision) {
+              throw new HttpError(
+                409,
+                `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
+              );
+            }
+            return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
+          });
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+          throw err;
+        }
+        done += 1;
+      } catch (err) {
+        if (isCancelledError(err) || signal.aborted) break;
+        throw err;
+      }
+      if (!stillCurrent(gen)) break;
+    }
+    if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
     return loadProject(dir);
   }
 
@@ -770,7 +826,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         let project: Project;
         try {
           project = await mutate(baseRevision, async (loaded) => {
-            const source = await sourceFromFile(stored, nextSourceId(loaded), name);
+            const source = await sourceFromFile(stored, nextSourceId(), name);
             return bump(applyCanvasPolicy(addSource(loaded, source)));
           });
         } catch (err) {
@@ -801,7 +857,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         await saveProject(dir, baseRevision, (project) => {
           let next = project;
           for (const source of sources) {
-            next = addSource(next, { ...source, id: nextSourceId(next) });
+            next = addSource(next, { ...source, id: nextSourceId() });
           }
           return bump(applyCanvasPolicy(next));
         });
@@ -884,7 +940,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (role !== "speech" && role !== "support" && role !== "both") {
           throw new HttpError(400, "role inválido");
         }
-        const project = await mutate(baseRevision, (project) => {
+        let project = await mutate(baseRevision, (project) => {
           const nextRole = role as Source["role"];
           const known = new Set(project.assembly.sources.map((source) => source.id));
           for (const id of sourceIds) {
@@ -896,6 +952,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           );
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
+        if (role === "speech") {
+          const pending = sourceIds.filter((sourceId) => {
+            const analysis = project.analyses.find((item) => item.sourceId === sourceId);
+            return !analysis || analysis.status === "error";
+          });
+          if (pending.length) project = await analyzeSources(project, pending, false);
+        }
         sendJson(res, { project, ...snapshot() });
         return true;
       }
@@ -918,6 +981,50 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
         sendJson(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "source-remove" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sourceId = String(body.sourceId ?? "");
+        if (!sourceId) throw new HttpError(400, "sourceId ausente");
+        // Escrita funcional sob o lock: o merge de snapshots preservaria as
+        // análises/correções que precisam sair junto da fonte removida.
+        await saveProject(dir, baseRevision, (project) => {
+          if (project.revision !== baseRevision) {
+            throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${project.revision}`);
+          }
+          if (!project.assembly.sources.some((source) => source.id === sourceId)) {
+            throw new HttpError(404, "fonte não cadastrada");
+          }
+          if (isPreparationActive(dir) || operation && ["analyzing", "preparing", "rendering", "proposing"].includes(operation.stage)) {
+            throw new HttpError(409, "aguarde ou cancele o processamento antes de remover o material");
+          }
+          const analysis = project.analyses.find((item) => item.sourceId === sourceId);
+          const speechIds = new Set(analysis?.speech.map((span) => span.id) ?? []);
+          const visualIds = new Set(analysis?.visual.map((span) => span.id) ?? []);
+          const inUse = project.assembly.tracks.some((track) => track.clips.some((clip) => clip.sourceId === sourceId))
+            || project.scenes.some((scene) => scene.takes.some((take) => take.sourceId === sourceId)
+              || scene.speechIds.some((id) => speechIds.has(id))
+              || scene.support.some((item) => visualIds.has(item.visualId))
+              || scene.visualEvidenceIds.some((id) => visualIds.has(id)));
+          if (inUse) throw new HttpError(409, "material em uso: remova suas ocorrências das cenas antes de removê-lo do projeto");
+          return bump({
+            ...project,
+            assembly: {
+              ...project.assembly,
+              sources: project.assembly.sources.filter((source) => source.id !== sourceId),
+              canvasSourceId: project.assembly.canvasSourceId === sourceId ? null : project.assembly.canvasSourceId,
+            },
+            analyses: project.analyses.filter((item) => item.sourceId !== sourceId),
+            corrections: project.corrections.filter((item) => item.sourceId !== sourceId),
+            proposal: null,
+            preparation: null,
+            previewArtifact: null,
+          });
+        });
+        operation = { stage: "idle" };
+        sendJson(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 
@@ -956,61 +1063,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (parts[1] === "analyze" && req.method === "POST") {
         const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds.map(String) : [];
         if (sourceIds.length === 0) throw new HttpError(400, "sourceIds ausente");
+        const project = await loadProject(dir);
         const wantVisual = body.visual === true;
-        if (wantVisual && (!deps.allowPaidVisual || !deps.describeClient)) {
+        const needsVisual = wantVisual && project.assembly.sources.some((source) =>
+          sourceIds.includes(source.id) && source.role !== "speech" && source.hasVideo,
+        );
+        if (needsVisual && (!deps.allowPaidVisual || !deps.describeClient)) {
           throw new HttpError(402, PAID_BLOCKED);
         }
-        const { gen, signal } = begin("analyzing");
-        const project = await loadProject(dir);
-        let done = 0;
-        for (const sourceId of sourceIds) {
-          if (!stillCurrent(gen)) break;
-          const source = project.assembly.sources.find((item) => item.id === sourceId);
-          if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
-          operation = {
-            stage: "analyzing",
-            sourceId,
-            progress: `${done + 1}/${sourceIds.length}`,
-          };
-          try {
-            const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
-            if (wantVisual && deps.describeClient && source.hasVideo && !signal.aborted) {
-              try {
-                analysis.visual = await describeSource(source, dir, signal, {
-                  client: deps.describeClient,
-                  exec: deps.exec,
-                });
-                analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
-              } catch (err) {
-                analysis.status = "partial";
-                analysis.error = err instanceof Error ? err.message : String(err);
-              }
-            }
-            try {
-              await saveProject(dir, project.revision, (current) => {
-                if (current.revision !== project.revision) {
-                  throw new HttpError(
-                    409,
-                    `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
-                  );
-                }
-                return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
-              });
-            } catch (err) {
-              if (err instanceof HttpError) throw err;
-              const message = err instanceof Error ? err.message : String(err);
-              if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
-              throw err;
-            }
-            done += 1;
-          } catch (err) {
-            if (isCancelledError(err) || signal.aborted) break;
-            throw err;
-          }
-          if (!stillCurrent(gen)) break;
-        }
-        if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
-        sendJson(res, { project: await loadProject(dir), ...snapshot() });
+        const analyzed = await analyzeSources(project, sourceIds, wantVisual);
+        sendJson(res, { project: analyzed, ...snapshot() });
         return true;
       }
 

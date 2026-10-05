@@ -108,6 +108,22 @@ it("recusa Origin de outra página", async () => {
   expect(res.status).toBe(403);
 });
 
+it("guarda e reabre briefing sem duração alvo e permite definir um alvo depois", async () => {
+  const { base, dir } = await boot();
+  let revision = 0;
+  for (const targetSeconds of [0, 120, 0]) {
+    const res = await fetch(`${base}/project/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: revision, kind: "brief", text: "seguir o conteúdo", targetSeconds }),
+    });
+    expect(res.status).toBe(200);
+    const loaded = await loadProject(dir);
+    expect(loaded.input).toEqual({ kind: "brief", text: "seguir o conteúdo", targetSeconds });
+    expect(loaded.revision).toBe(++revision);
+  }
+});
+
 it("seleção preserva alterações feitas enquanto o seletor está aberto", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-select-"));
   const app = await startApp({
@@ -129,7 +145,7 @@ it("seleção preserva alterações feitas enquanto o seletor está aberto", asy
   const project = await loadProject(dir);
   expect(project.revision).toBe(2);
   expect(project.input.text).toBe("briefing atualizado");
-  expect(project.assembly.sources.map((source) => source.id)).toEqual(["src-1"]);
+  expect(project.assembly.sources[0]?.id).toMatch(/^src-/);
   await selectClip(base, 0);
   expect((await loadProject(dir)).assembly.sources).toHaveLength(1);
 });
@@ -236,6 +252,67 @@ it("não chama o provedor visual sem visual=true mesmo com cliente injetado", as
   expect(called).toBe(0);
 });
 
+it("marcar Fala transcreve só áudio e adia imagens para a montagem", async () => {
+  const worker = vi.fn(async () => ({
+    language: "pt",
+    words: [{ text: "oi", startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+    unaligned: [],
+  }));
+  const send = vi.fn(async () => { throw new Error("imagens devem aguardar a montagem"); });
+  const executor = indexingExec();
+  const run = vi.spyOn(executor, "run");
+  const { base, dir } = await boot([], {
+    executor,
+    describeClient: { send },
+    speech: { worker, extract: async () => {}, detectSilence: async () => [] },
+  });
+  await selectClip(base);
+  let project = ((await (await fetch(`${base}/project`)).json()) as { project: Project }).project;
+  const sourceIds = project.assembly.sources.map((source) => source.id);
+  for (const role of ["support", "both", "speech"]) {
+    const res = await fetch(`${base}/project/source-role`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: project.revision, sourceIds, role }),
+    });
+    expect(res.status).toBe(200);
+    project = ((await res.json()) as { project: Project }).project;
+    expect(worker).toHaveBeenCalledTimes(role === "speech" ? 1 : 0);
+  }
+  expect(project.analyses[0]?.status).toBe("ready");
+  expect(project.analyses[0]?.speech.length).toBeGreaterThan(0);
+  expect(project.analyses[0]?.words[0]?.text).toBe("oi");
+  expect(project.analyses[0]?.visual).toEqual([]);
+  // Mesmo um pedido visual explícito na análise inicial respeita a categoria Fala.
+  const again = await fetch(`${base}/project/analyze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceIds, visual: true }),
+  });
+  expect(again.status).toBe(200);
+  expect(worker).toHaveBeenCalledTimes(1);
+  expect(send).not.toHaveBeenCalled();
+  expect(run.mock.calls.some(([call]) => call.command === "ffmpeg" && call.args.some((arg) => arg.includes("%03d")))).toBe(false);
+  // Voltar a marcar Fala após uma montagem preserva os resultados já disponíveis.
+  const visual = [{
+    id: "visual-1", sourceId: sourceIds[0]!, start: 0, end: 0.04,
+    text: "pessoa falando", confidence: "observed" as const, tags: [],
+  }];
+  await saveProject(dir, project.revision, (current) => ({
+    ...current,
+    analyses: current.analyses.map((analysis) => ({ ...analysis, visual })),
+  }));
+  const execCalls = run.mock.calls.length;
+  const marked = await fetch(`${base}/project/source-role`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: project.revision, sourceIds, role: "speech" }),
+  });
+  expect(marked.status).toBe(200);
+  expect(((await marked.json()) as { project: Project }).project.analyses[0]?.visual).toEqual(visual);
+  expect(run.mock.calls).toHaveLength(execCalls);
+});
+
 it("POST /analyze no serviço residente usa o worker e não spawnam transcribe.py", async () => {
   const workerCalls: string[] = [];
   const { base, clip } = await boot([], {
@@ -327,6 +404,12 @@ it("POST /project/cancel cancela só o worker da fonte em análise", async () =>
     }),
   });
   await started;
+  const removal = await fetch(`${base}/project/source-remove`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 1, sourceId: opened.project.assembly.sources[0]!.id }),
+  });
+  expect(removal.status).toBe(409);
+  expect((await removal.json() as { error: string }).error).toContain("processamento");
   const cancel = await fetch(`${base}/project/cancel`, { method: "POST" });
   expect(cancel.status).toBe(200);
   expect((await cancel.json() as { operation: { stage: string } }).operation.stage).toBe("cancelled");
@@ -336,12 +419,20 @@ it("POST /project/cancel cancela só o worker da fonte em análise", async () =>
 
 it("recusa visual pago sem autorização explícita mesmo com cliente", async () => {
   const { base } = await boot([], {
+    executor: indexingExec(),
     describeClient: { async send() { throw new Error("não deveria chamar"); } },
+  });
+  const selected = await selectClip(base);
+  const sourceIds = selected.project.assembly.sources.map((source) => source.id);
+  await fetch(`${base}/project/source-role`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: selected.project.revision, sourceIds, role: "support" }),
   });
   const res = await fetch(`${base}/project/analyze`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sourceIds: ["src-1"], visual: true }),
+    body: JSON.stringify({ sourceIds, visual: true }),
   });
   expect(res.status).toBe(402);
 });
@@ -721,7 +812,7 @@ it("upload abortado não registra fonte nem deixa .part", async () => {
 });
 
 it("lote e categorias: selection e role em lote e singular", async () => {
-  const { base } = await boot();
+  const { base } = await boot([], { executor: indexingExec() });
   const clip = await readFile(join(FIXTURES, "clip.mp4"));
   const wav = await readFile(join(FIXTURES, "edited.wav"));
   const one = (await (await importBytes(base, "um.mp4", 0, clip)).json()) as { source: { id: string } };
@@ -755,6 +846,82 @@ it("lote e categorias: selection e role em lote e singular", async () => {
     body: JSON.stringify({ baseRevision: 5, sourceIds: ["fantasma"], included: false }),
   });
   expect(unknown.status).toBe(404);
+});
+
+it("remove material sem apagar arquivo/cache e reimporta com identidade nova", async () => {
+  const { base, dir } = await boot([], { executor: indexingExec() });
+  const clip = await readFile(join(FIXTURES, "clip.mp4"));
+  const wav = await readFile(join(FIXTURES, "edited.wav"));
+  await importBytes(base, "um.mp4", 0, clip);
+  await importBytes(base, "dois.wav", 1, wav);
+  const before = await loadProject(dir);
+  const [one, two] = before.assembly.sources;
+  const cache = join(dir, "analysis", "cache-preservado.json");
+  await mkdir(join(dir, "analysis"), { recursive: true });
+  await writeFile(cache, "cache local");
+  await saveProject(dir, before.revision, (project) => ({
+    ...project,
+    analyses: project.assembly.sources.map((source) => ({
+      sourceId: source.id, key: source.sha256, status: "ready", speech: [], visual: [],
+      words: [], wordsStatus: "ready", visualCoverage: { requested: [], returned: [], missing: [] },
+    })),
+    corrections: [{ id: "correction-1", sourceId: one!.id, start: 0, end: 0.04, text: "oi", status: "aligned", words: [] }],
+  }));
+  const remove = (sourceId: string, baseRevision: number) => fetch(`${base}/project/source-remove`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision, sourceId }),
+  });
+  expect((await remove(one!.id, 1)).status).toBe(409);
+  expect((await remove("fantasma", 2)).status).toBe(404);
+  expect((await remove(one!.id, 2)).status).toBe(200);
+  const after = await loadProject(dir);
+  expect(after.revision).toBe(3);
+  expect(after.assembly.sources).toEqual([two]);
+  expect(after.assembly.canvasSourceId).toBeNull();
+  expect(after.analyses.map((analysis) => analysis.sourceId)).toEqual([two!.id]);
+  expect(after.corrections).toEqual([]);
+  expect(await readFile(one!.path)).toEqual(clip);
+  expect(await readFile(cache, "utf8")).toBe("cache local");
+  expect(await readFile(join(FIXTURES, "clip.mp4"))).toEqual(clip);
+  const imported = await importBytes(base, "de-novo.mp4", 3, clip);
+  expect(imported.status).toBe(200);
+  const reloaded = await loadProject(dir);
+  const ids = reloaded.assembly.sources.map((source) => source.id);
+  expect(new Set(ids).size).toBe(2);
+  expect(ids).not.toContain(one!.id);
+  expect(ids).toContain(two!.id);
+  expect((await remove(two!.id, 4)).status).toBe(200);
+  expect((await remove(ids.find((id) => id !== two!.id)!, 5)).status).toBe(200);
+  expect((await loadProject(dir)).assembly.sources).toEqual([]);
+});
+
+it.each(["take", "clip", "visual"])("bloqueia remoção de material usado em %s", async (usage) => {
+  const { base, dir } = await boot();
+  const project = blankProject("em-uso");
+  project.assembly = fixtureAssembly();
+  const source = project.assembly.sources[0]!;
+  if (usage !== "clip") project.assembly.tracks = project.assembly.tracks.map((track) => ({ ...track, clips: [] }));
+  if (usage === "take") {
+    project.scenes = [{ id: "scene-1", objective: "abertura", rationale: "tema", speechIds: [],
+      takes: [{ id: "take-1", sourceId: source.id, speechId: null, start: 0, end: 1, removed: [], protected: [] }],
+      support: [], visualEvidenceIds: [], gaps: [] }];
+  }
+  if (usage === "visual") {
+    project.analyses = [{ sourceId: source.id, key: "key", status: "ready", speech: [], words: [], wordsStatus: "ready",
+      visual: [{ id: "visual-1", sourceId: source.id, start: 0, end: 1, text: "imagem", confidence: "observed", tags: [] }],
+      visualCoverage: { requested: [], returned: [], missing: [] } }];
+    project.scenes = [{ id: "scene-1", objective: "abertura", rationale: "tema", speechIds: [], takes: [],
+      support: [{ visualId: "visual-1", offsetFrames: 0, durationFrames: 1 }], visualEvidenceIds: [], gaps: [] }];
+  }
+  await saveProject(dir, 0, () => project);
+  const before = await loadProject(dir);
+  const res = await fetch(`${base}/project/source-remove`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0, sourceId: source.id }),
+  });
+  expect(res.status).toBe(409);
+  expect((await res.json() as { error: string }).error).toContain("material em uso");
+  expect(await loadProject(dir)).toEqual(before);
 });
 
 it("publishCorrection faz rebase e publica quando a revisão avançou por edição concorrente", async () => {

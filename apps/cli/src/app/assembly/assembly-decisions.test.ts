@@ -64,6 +64,19 @@ it.each(["off","observe"] as const)("%s não aplica cortes", async mode => {
   expect(result.decisionReport?.cuts.every(c=>!c.applied)).toBe(true);
 });
 
+it.each([0, 60])("decisão de cortes respeita briefing com alvo %s (0 = livre)", async targetSeconds => {
+  const { p, proposal, raw } = fixture();
+  p.input.targetSeconds = targetSeconds;
+  let instructions = "";
+  await decideAssemblyCuts(p, proposal, resolveCutCandidates(p, proposal, raw), {
+    mode: "observe", model: "test", client: { decide: async req => {
+      instructions = Object.values(req.questions).map(question => question.instructions).join(" ");
+      return { model: "test", answers: Object.fromEntries(Object.keys(req.questions).map(id => [id, { type: "noul" as const, noul: 0 }])) };
+    } },
+  }, new AbortController().signal);
+  expect(instructions.includes("Sem duração alvo: não corte apenas para reduzir a duração.")).toBe(targetSeconds === 0);
+});
+
 it("sem candidatos não chama; erro preserva fala e não vaza segredo; cancelamento relança", async () => {
   const {p,proposal,raw}=fixture(); let calls=0;
   const context:AssemblyDecisionContext={mode:"hybrid",model:"test",client:{decide:async()=>{calls++;throw Error("sk-secret");}}};

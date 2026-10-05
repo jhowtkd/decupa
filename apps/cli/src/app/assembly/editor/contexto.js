@@ -160,6 +160,15 @@ export function mountStage({ state, api, player }) {
 
   function renderPreview(project) {
     if (!project) return;
+    const sourceId = previewPlayer.dataset.source;
+    if (sourceId && !project.assembly.sources.some((source) => source.id === sourceId)) {
+      previewPlayer.pause();
+      previewPlayer.removeAttribute("src");
+      previewPlayer.removeAttribute("data-source");
+      previewPlayer.load();
+      state.set("view", "montagem");
+      return;
+    }
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
       previewPlayer.pause();

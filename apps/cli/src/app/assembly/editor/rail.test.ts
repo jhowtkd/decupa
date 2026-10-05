@@ -339,6 +339,9 @@ it("briefingSummary compara a duração com o alvo", () => {
   expect(briefingSummary({ text: "", targetSeconds: 60 }, 45).note).toBe("15 s abaixo do alvo");
   expect(briefingSummary({ text: "", targetSeconds: 60 }, 60.2).note).toBe("No alvo");
   expect(briefingSummary({ text: "x", targetSeconds: 60 }, null)).toMatchObject({ duration: null, note: "", fill: 0 });
+  expect(briefingSummary({ text: "livre", targetSeconds: 0 }, 120)).toEqual({
+    text: "livre", target: null, duration: 120, over: null, fill: 0, note: "",
+  });
 });
 
 it("preparationSteps: cancelada pelo usuário fica neutra; falha real continua Falhou", () => {

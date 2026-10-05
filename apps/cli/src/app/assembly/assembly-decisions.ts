@@ -53,7 +53,7 @@ export async function decideAssemblyCuts(project:Project, proposal:Proposal, can
     try {
       signal.throwIfAborted();
       const result=await context.client.decide({model:context.model,state:{brief:project.input,request:project.preparation?.request??"",candidates:batch},questions:Object.fromEntries(batch.map(c=>[c.id,{
-        type:"noul" as const,instructions:`Candidato ${c.id}: a remoção integral atende ao briefing sem perder informação necessária? Na dúvida mantenha.`,
+        type:"noul" as const,instructions:`Candidato ${c.id}: a remoção integral atende ao briefing sem perder informação necessária? Na dúvida mantenha.${project.input.targetSeconds === 0 ? " Sem duração alvo: não corte apenas para reduzir a duração." : ""}`,
         criteria:{true:"Corte justificado pelo contexto",false:"Preservar informação, ressalva ou contexto"},
       }]))},signal);
       signal.throwIfAborted();

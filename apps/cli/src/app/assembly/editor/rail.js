@@ -342,7 +342,7 @@ export function mountRail({ state, api, player }) {
     + '<button type="button" id="openBriefing" class="quiet small">Editar</button></div>'
     + '<p id="briefText" class="brief-text"></p>'
     + '<div class="brief-duration"><span id="briefDuration" class="mono big"></span><span id="briefTarget" class="mono"></span></div>'
-    + '<div class="brief-bar" aria-hidden="true"><span id="briefFill"></span><span id="briefOver"></span></div>'
+    + '<div id="briefBar" class="brief-bar" aria-hidden="true"><span id="briefFill"></span><span id="briefOver"></span></div>'
     + '<p id="briefNote" class="brief-note"></p>';
   root.appendChild(brief);
 
@@ -355,10 +355,14 @@ export function mountRail({ state, api, player }) {
     + '<p class="muted briefing-intro">Diga o que o vídeo precisa ser. A montagem usa isto para escolher e ordenar as cenas.</p>'
     + '<label>Tipo <select id="kind"><option value="brief">Briefing</option><option value="script">Roteiro</option></select></label>'
     + '<label>Texto <textarea id="inputText" rows="6"></textarea></label>'
-    + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60"></label>'
+    + '<label class="duration-option"><input id="noTarget" type="checkbox"> Sem duração alvo</label>'
+    + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60" required></label>'
     + '<button type="button" id="saveInput">Guardar briefing</button></div>'
     + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
+  const noTarget = document.getElementById("noTarget");
+  const targetInput = document.getElementById("target");
+  noTarget.onchange = () => { targetInput.disabled = noTarget.checked; };
   document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
   const briefingForm = document.getElementById("briefingForm");
@@ -492,7 +496,7 @@ export function mountRail({ state, api, player }) {
         button.onclick = () => api.call("/project/source-role", {
           method: "POST",
           body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: value }),
-          label: "Atualizando categoria…",
+          label: value === "speech" ? "Transcrevendo áudio…" : "Atualizando categoria…",
         });
         role.append(button);
       }
@@ -516,7 +520,19 @@ export function mountRail({ state, api, player }) {
       watch.type = "button";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
-      pop.append(role, toggle, relink, watch);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger";
+      remove.textContent = "Remover do projeto";
+      remove.addEventListener("click", () => {
+        if (!window.confirm('Remover "' + source.name + '" do projeto? O arquivo original será mantido.')) return;
+        return api.call("/project/source-remove", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
+          label: "Removendo material…",
+        });
+      });
+      pop.append(role, toggle, relink, watch, remove);
       menu.append(summary, pop);
       li.append(check, preview, body, menu);
       list.appendChild(li);
@@ -625,7 +641,8 @@ export function mountRail({ state, api, player }) {
     const summary = briefingSummary(project.input, project.scenes.length ? montageDuration(project) : null);
     document.getElementById("briefText").textContent = summary.text || "Sem briefing ainda.";
     document.getElementById("briefDuration").textContent = summary.duration != null ? clock(summary.duration) : "–:––";
-    document.getElementById("briefTarget").textContent = summary.target != null ? "alvo " + clock(summary.target) : "";
+    document.getElementById("briefTarget").textContent = summary.target != null ? "alvo " + clock(summary.target) : "Sem duração alvo";
+    document.getElementById("briefBar").hidden = summary.target == null;
     document.getElementById("briefFill").style.width = (summary.fill * 100).toFixed(1) + "%";
     document.getElementById("briefOver").style.width = summary.over > 0 ? ((1 - summary.fill) * 100).toFixed(1) + "%" : "0%";
     const note = document.getElementById("briefNote");
@@ -639,7 +656,10 @@ export function mountRail({ state, api, player }) {
     if (!briefingDialog.open && !briefingForm.contains(document.activeElement)) {
       document.getElementById("kind").value = project.input.kind;
       document.getElementById("inputText").value = project.input.text;
-      document.getElementById("target").value = String(project.input.targetSeconds);
+      const hasTarget = project.input.targetSeconds > 0;
+      noTarget.checked = !hasTarget;
+      targetInput.disabled = !hasTarget;
+      targetInput.value = hasTarget ? String(project.input.targetSeconds) : "60";
     }
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
     renderSources(project);
@@ -677,16 +697,19 @@ export function mountRail({ state, api, player }) {
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), included: false }),
     label: "Excluindo seleção…",
   });
-  document.getElementById("saveInput").onclick = () => api.call("/project/input", {
-    method: "POST",
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      kind: document.getElementById("kind").value,
-      text: document.getElementById("inputText").value,
-      targetSeconds: Number(document.getElementById("target").value),
-    }),
-    label: "Guardando briefing…",
-  });
+  document.getElementById("saveInput").onclick = () => {
+    if (!noTarget.checked && !targetInput.reportValidity()) return;
+    return api.call("/project/input", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: state.get("project").revision,
+        kind: document.getElementById("kind").value,
+        text: document.getElementById("inputText").value,
+        targetSeconds: noTarget.checked ? 0 : Number(targetInput.value),
+      }),
+      label: "Guardando briefing…",
+    });
+  };
   const prepareClick = () => {
     const action = primaryAction(state.get("project"), state.get("operation"));
     if (action.stage) {

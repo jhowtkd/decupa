@@ -411,9 +411,11 @@ it("aceita texto fora do JSON sem outra chamada e ainda valida suas referências
   expect(proposal.scenes[0]!.speechIds).toEqual(["a:u001"]);
 });
 
-it("envia briefing salvo e pedido adicional sem apagar a duração", async () => {
+it.each([2, 0])("envia briefing salvo e pedido adicional com alvo %s (0 = livre)", async (targetSeconds) => {
   let sent = "";
-  await proposeScenes(project(), "destacar abertura", new AbortController().signal, {
+  const p = project();
+  p.input.targetSeconds = targetSeconds;
+  await proposeScenes(p, "destacar abertura", new AbortController().signal, {
     send: async content => {
       sent = JSON.stringify(content);
       return JSON.stringify({scenes: [], changedSceneIds: [], explanation: "sem proposta"});
@@ -422,6 +424,12 @@ it("envia briefing salvo e pedido adicional sem apagar a duração", async () =>
   expect(sent).toContain("abrir com o tema");
   expect(sent).toContain("targetSeconds");
   expect(sent).toContain("destacar abertura");
+  const prompt = JSON.parse(sent)[0].text as string;
+  expect(prompt).toContain(`"targetSeconds":${targetSeconds}`);
+  if (targetSeconds === 0) {
+    expect(prompt).toContain("não tem duração alvo");
+    expect(prompt).toContain("não proponha cortes apenas para caber em um tempo");
+  }
 });
 
 

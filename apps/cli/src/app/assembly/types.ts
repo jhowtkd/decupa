@@ -234,6 +234,7 @@ export type Project = {
   version: 2;
   id: string;
   revision: number;
+  /** targetSeconds = 0 indica ausência de duração alvo. */
   input: { kind: "script" | "brief"; text: string; targetSeconds: number };
   assembly: Assembly;
   scenes: Scene[];

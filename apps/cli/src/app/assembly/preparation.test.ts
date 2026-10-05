@@ -11,6 +11,7 @@ import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { holdPreparation, isPreparationActive, runPreparation, type PreparationDeps } from "./preparation.ts";
 import { mediaWork } from "./media-work.ts";
 import { applyTextEdit } from "./words.ts";
+import { analyzeSource } from "./analysis.ts";
 import type { ExecCall, ExecResult } from "../pipeline.ts";
 import type { Project, Source } from "./types.ts";
 
@@ -436,6 +437,32 @@ describe("runPreparation", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "decupa-prep-"));
     vi.restoreAllMocks();
+  });
+
+  it("montagem reutiliza áudio antecipado de Fala e acrescenta análise por imagens", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
+    const { deps, calls } = makeFakes({ withWords: true });
+    const audio = await analyzeSource(base.assembly.sources[0]!, dir, deps.exec);
+    expect(audio.status).toBe("ready");
+    expect(audio.visual).toEqual([]);
+    expect(calls.describe).toBe(0);
+    const audioCalls = calls.ingest;
+    expect(audioCalls).toBeGreaterThan(0);
+    await saveProject(dir, base.revision, (project) => ({ ...project, analyses: [audio] }));
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+    expect(calls.ingest).toBe(audioCalls);
+    expect(calls.describe).toBeGreaterThan(0);
+    expect(done.analyses[0]?.words).toEqual(audio.words);
+    expect(done.analyses[0]?.visual.length).toBeGreaterThan(0);
+    expect(done.analyses[0]?.visualCoverage.missing).toEqual([]);
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.scenes).toHaveLength(1);
   });
 
   it("prepare leva do zero a cenas aplicadas e prévia atual", async () => {
