@@ -11,15 +11,17 @@ import type {
   Clip,
   Project,
   Proposal,
+  Rate,
   Scene,
   Source,
   Span,
   SpeechTake,
   VisualSpan,
+  Word,
 } from "./types.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import { validateAssembly } from "./validate.ts";
-import { effectiveWords, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
+import { effectiveWords, overlaps, retainedRanges, subtractRanges, tightenSpeechTake } from "./words.ts";
 
 export const SCENE_PROMPT = `Você monta a sequência de cenas a partir das unidades de fala e mapa abaixo.
 - Informe objective e rationale por cena. Opcionalmente retorne cutCandidates: [{sceneId, speechId, reason}] para remoção de um take completo que ainda esteja presente nas cenas propostas. Não execute esses cortes na proposta: a decisão será feita separadamente. Duração alvo não autoriza truncar uma frase.
@@ -215,7 +217,9 @@ function resolveScene(
       sourceId: source.id,
       speechId: span.id,
       start: span.start,
-      end: span.end,
+      // Análise em cache anterior ao limite de analysis.ts ainda pode trazer
+      // fim alguns ms além da fonte; o take salvo nunca passa dela.
+      end: Math.min(span.end, source.durationSeconds),
       removed: [],
       protected: [],
     };
@@ -367,6 +371,11 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
   const fpsDen = project.assembly.fps.den;
   const toFrames = (seconds: number): number => Math.round((seconds * fpsNum) / fpsDen);
   const toSeconds = (frames: number): number => (frames * fpsDen) / fpsNum;
+  // Último quadro inteiro dentro da fonte: arredondar o fim de uma fala que
+  // termina no fim do arquivo não pode passar dele. O epsilon só absorve erro
+  // de ponto flutuante, como a tolerância de assertClipFits (validate.ts).
+  const sourceFrames = (source: Source): number =>
+    Math.floor((source.durationSeconds * fpsNum) / fpsDen + 1e-9);
   const bySource = new Map(project.assembly.sources.map((source) => [source.id, source]));
   const v1: Clip[] = [];
   const v2: Clip[] = [];
@@ -379,10 +388,22 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
     for (const take of takes) {
       const source = bySource.get(take.sourceId);
       if (!source) throw new Error(`take ${take.id} referencia fonte ausente ${take.sourceId}`);
+      let words: Word[] | undefined;
       retainedRanges(take).forEach((fragment, i) => {
+        // Sobra de menos de um quadro entre dois cortes (ou entre um corte e
+        // a ponta do take) viraria piscada de imagem e estalo: os cortes se
+        // fundem. Um take inteiro curto continua com o seu quadro, e a sobra
+        // com palavra mantida ou trecho protegido também: descartá-la tiraria
+        // da timeline o que a pessoa manteve ou protegeu.
+        const partial = fragment.start > take.start || fragment.end < take.end;
+        if (partial && ((fragment.end - fragment.start) * fpsNum) / fpsDen < 1) {
+          words ??= effectiveWords(project, take.sourceId);
+          if (!overlaps(fragment, words) && !overlaps(fragment, take.protected)) return;
+        }
         const first = Math.floor((fragment.start * fpsNum) / fpsDen);
         const lastRounded = Math.round((fragment.end * fpsNum) / fpsDen);
-        const last = Math.max(first + 1, lastRounded);
+        const last = Math.min(Math.max(first + 1, lastRounded), sourceFrames(source));
+        // Fragmento menor que um quadro colado no fim da fonte não cabe.
         if (last <= first) return;
         const id = `${scene.id}-${take.id}#${i}`;
         const clip = {
@@ -407,7 +428,7 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
       if (!source.hasVideo) continue;
       const sceneBounds = bounds.get(scene.id)!;
       const available = sceneBounds.end - (sceneBounds.start + item.offsetFrames);
-      const srcAvailable = toFrames(span.end) - toFrames(span.start);
+      const srcAvailable = Math.min(toFrames(span.end), sourceFrames(source)) - toFrames(span.start);
       const durationFrames = Math.min(item.durationFrames, available, srcAvailable);
       // Apoio sem duração na cena é descartado aqui e anotado na validação;
       // nunca atravessa outra cena silenciosamente.
@@ -430,6 +451,26 @@ export function compileScenes(project: Project, scenes: Scene[]): Assembly {
       { kind: "Audio", name: "A1", clips: a1 },
     ],
     revision: project.assembly.revision,
+  });
+}
+
+/**
+ * Troca de fps preserva o tempo do apoio: offset e duração estão em quadros
+ * da montagem, então convertem pelas pontas (a ordem se mantém e nada passa
+ * a se sobrepor). Apoio que fica sem duração no fps novo sai da cena.
+ */
+export function rescaleSupport(scenes: Scene[], from: Rate, to: Rate): Scene[] {
+  if (from.num * to.den === to.num * from.den) return scenes;
+  const scale = (frames: number): number =>
+    Math.round((frames * from.den * to.num) / (from.num * to.den));
+  return scenes.map((scene) => {
+    if (scene.support.length === 0) return scene;
+    const support = scene.support.flatMap((item) => {
+      const offsetFrames = scale(item.offsetFrames);
+      const durationFrames = scale(item.offsetFrames + item.durationFrames) - offsetFrames;
+      return durationFrames > 0 ? [{ ...item, offsetFrames, durationFrames }] : [];
+    });
+    return { ...scene, support };
   });
 }
 

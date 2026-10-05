@@ -32,6 +32,18 @@ describe("buildEdl", () => {
     { start: 31.956, end: 35.141 },
   ];
 
+  it("soma o timecode da fonte aos in-points", () => {
+    // 01:00:00:00 a 25 fps são 90000 quadros; o clipe em 1s cai em 01:00:01:00.
+    const edl = buildEdl({
+      clips: [{ start: 1, end: 2 }],
+      fps: 25,
+      title: "camera",
+      sourceStartFrames: 90000,
+    });
+    expect(edl).toContain("01:00:01:00");
+    expect(edl).toContain("01:00:02:00");
+  });
+
   it("abre com título e FCM não-drop-frame", () => {
     const edl = buildEdl({ clips, fps: 30, title: "corte" });
     expect(edl).toContain("TITLE: corte");

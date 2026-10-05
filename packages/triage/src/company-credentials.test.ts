@@ -13,6 +13,17 @@ describe("companyCredentialsFromEnv", () => {
     });
   });
 
+  it("chave definida com preset vazio usa zai", () => {
+    expect(companyCredentialsFromEnv({
+      DECUPA_COMPANY_API_KEY: "empresa-secret",
+      DECUPA_COMPANY_PRESET: "",
+    })).toEqual({ preset: "zai", apiKey: "empresa-secret" });
+    expect(companyCredentialsFromEnv({
+      DECUPA_COMPANY_API_KEY: "empresa-secret",
+      DECUPA_COMPANY_PRESET: "   ",
+    })).toEqual({ preset: "zai", apiKey: "empresa-secret" });
+  });
+
   it("respeita DECUPA_COMPANY_PRESET", () => {
     expect(companyCredentialsFromEnv({
       DECUPA_COMPANY_API_KEY: "g",

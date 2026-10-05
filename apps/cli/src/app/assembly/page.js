@@ -15,7 +15,8 @@ const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
   watched: { revision: null, ended: false }, stage: "materiais", transcriptNotice: "",
 });
-const ui = { importing: false, busy: false, label: null, error: null };
+// errorFromPoll: o erro veio de pedido de fundo. notice: aviso até a primeira ação.
+const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
 let previewInflight = false;
@@ -71,6 +72,10 @@ function renderStatus() {
     setStatus("Erro: " + (operation.error || "falha no processamento"), false, "error");
     return;
   }
+  if (ui.notice) {
+    setStatus(ui.notice, false);
+    return;
+  }
   if (previewInflight || previewPending) {
     setStatus("Atualizando prévia…", true);
     return;
@@ -97,39 +102,67 @@ const client = createApi({
 
 // Resposta com projeto sincroniza o estado (era o corpo do api() antigo) e
 // dispara a auto-prévia; erro valida ui.error como o lastError de antes.
+// O erro de uma ação fica até a próxima ação (chamada com rótulo): pedido de
+// fundo que dá certo (polling, auto-prévia) só apaga erro de outro pedido de fundo.
 async function call(path, opts = {}) {
-  if (ui.importing && (opts.method || "GET").toUpperCase() !== "GET") {
+  const method = (opts.method || "GET").toUpperCase();
+  const action = opts.label != null;
+  if (ui.importing && method !== "GET") {
     ui.error = "Aguarde o envio dos arquivos terminar antes de alterar o projeto.";
+    ui.errorFromPoll = false;
     renderStatus();
     return { res: { ok: false, status: 409 }, body: { error: ui.error } };
   }
-  if (opts.label != null) ui.error = null;
+  if (action) {
+    ui.error = null;
+    ui.errorFromPoll = false;
+  }
+  // O aviso de chegada (pasta do projeto novo) fica até a primeira alteração.
+  if (method !== "GET") ui.notice = null;
+  // Resposta atrasada (poll lento, POST antigo) não volta o projeto para
+  // uma revisão mais velha que a que já está na tela.
+  const fresh = (next) => {
+    const current = state.get("project");
+    return !current || next.revision >= current.revision;
+  };
   try {
     const { res, body } = await client.call(path, opts);
     if (res.status === 409) {
+      // O 409 diz que a base desta aba está errada: a resposta de reconciliação
+      // é a fonte da verdade, mesmo com revisão menor (servidor que voltou
+      // à cópia anterior). Só poll e POST passam pela guarda de revisão velha.
       const latest = await client.call("/project");
       if (latest.res.ok && latest.body.project) {
         state.set("project", latest.body.project);
         state.set("operation", latest.body.operation || null);
       }
     }
-    if (!res.ok) ui.error = body.error || ("erro " + res.status);
-    else ui.error = null;
-    for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
-      if (Object.hasOwn(body, key)) state.set(key, body[key]);
+    if (!res.ok) {
+      ui.error = body.error || ("erro " + res.status);
+      ui.errorFromPoll = !action;
+    } else if (action || ui.errorFromPoll) {
+      ui.error = null;
+      ui.errorFromPoll = false;
     }
-    if (body.project) {
+    const current = !body.project || fresh(body.project);
+    if (current) {
+      for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
+        if (Object.hasOwn(body, key)) state.set(key, body[key]);
+      }
+    }
+    if (body.project && current) {
       state.set("project", body.project);
       state.set("operation", body.operation || null);
       maybeScheduleAutoPreview(path);
-    } else if (body.operation !== undefined) {
+    } else if (!body.project && body.operation !== undefined) {
       state.set("operation", body.operation);
     }
-    if (res.ok && res.status !== 202 && (opts.method || "GET").toUpperCase() !== "GET") await call("/project");
+    if (res.ok && res.status !== 202 && method !== "GET") await call("/project");
     renderStatus();
     return { res, body };
   } catch (err) {
     ui.error = (err && err.message) || String(err);
+    ui.errorFromPoll = !action;
     renderStatus();
     throw err;
   }
@@ -139,6 +172,7 @@ const api = {
   call,
   notifyError: (message) => {
     ui.error = message;
+    ui.errorFromPoll = false;
     renderStatus();
   },
 };
@@ -199,25 +233,37 @@ function maybeScheduleAutoPreview(path) {
   scheduleAutoPreview();
 }
 
+/** Prévia automática cabe agora? Sem cena, prévia em dia ou servidor preparando/renderizando: não. */
+function autoPreviewWanted(p, operation) {
+  if (!p || !p.scenes.length) return false;
+  if (p.previewRevision === p.revision) return false;
+  if (p.preparation && p.preparation.status === "running") return false;
+  return !(operation && (operation.stage === "preparing" || operation.stage === "rendering"));
+}
+
 function scheduleAutoPreview() {
-  const p = project();
-  const operation = state.get("operation");
-  if (!p || !p.scenes.length) return;
-  if (p.previewRevision === p.revision) return;
-  if (p.preparation && p.preparation.status === "running") return;
-  if (operation && (operation.stage === "preparing" || operation.stage === "rendering")) return;
+  if (!autoPreviewWanted(project(), state.get("operation"))) {
+    // Desistir também desarma o agendamento anterior: "Atualizando prévia…"
+    // não fica preso sem nada para rodar.
+    if (previewPending) {
+      clearTimeout(previewTimer);
+      previewPending = false;
+      renderStatus();
+    }
+    return;
+  }
   previewPending = true;
   renderStatus();
   clearTimeout(previewTimer);
   previewTimer = setTimeout(async () => {
-    const current = project();
-    const op = state.get("operation");
-    if (previewInflight || !current) return;
-    if (current.previewRevision === current.revision || !current.scenes.length) return;
-    if (current.preparation && current.preparation.status === "running") return;
-    if (op && (op.stage === "preparing" || op.stage === "rendering")) return;
-    const base = current.revision;
+    // O agendamento termina aqui, rodando ou desistindo.
     previewPending = false;
+    const current = project();
+    if (previewInflight || !autoPreviewWanted(current, state.get("operation"))) {
+      renderStatus();
+      return;
+    }
+    const base = current.revision;
     previewInflight = true;
     renderStatus();
     let ok = false;
@@ -227,6 +273,8 @@ function scheduleAutoPreview() {
         body: JSON.stringify({ baseRevision: base }),
       });
       ok = result.res.ok;
+    } catch {
+      // Sem conexão: o erro já está no status; segue para a reconciliação.
     } finally {
       previewInflight = false;
       renderStatus();
@@ -235,7 +283,7 @@ function scheduleAutoPreview() {
       // Conflito por nova edição (409 sem corpo) ou erro real: reconcilia
       // com o servidor antes de decidir — a operação local pode estar
       // obsoleta e travar o reagendamento (R2).
-      await call("/project");
+      await call("/project").catch(() => {});
     }
     // Reagenda só se a revisão andou (edição durante o render); erro real
     // de render não entra em loop: fica para o botão manual.
@@ -261,10 +309,12 @@ const poller = createProjectPoller({
 async function importFiles(files) {
   if (ui.importing || ui.busy) {
     ui.error = "Aguarde a operação atual terminar antes de enviar mais arquivos.";
+    ui.errorFromPoll = false;
     renderStatus();
     return;
   }
   ui.importing = true;
+  ui.notice = null;
   const drop = document.getElementById("dropzone");
   drop.setAttribute("aria-disabled", "true");
   try {
@@ -284,6 +334,7 @@ async function importFiles(files) {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
           ui.error = body.error || ("erro " + res.status);
+          ui.errorFromPoll = false;
           renderStatus();
           return;
         }
@@ -296,6 +347,7 @@ async function importFiles(files) {
         ui.error = err instanceof TypeError
           ? "Sem conexão com o Decupa. Confira o terminal do aplicativo, reabra o mesmo projeto e recarregue esta página antes de tentar importar novamente."
           : (err && err.message) || String(err);
+        ui.errorFromPoll = false;
         return;
       } finally {
         ui.label = null;
@@ -434,6 +486,21 @@ state.subscribe("project", (p) => {
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });
 
 document.addEventListener("decupa:schedule-preview", () => scheduleAutoPreview());
+
+// Pasta do projeto, injetada pelo servidor no HTML: fica no menu do projeto e,
+// na chegada por "Novo projeto" (#novo), no status até a primeira ação.
+{
+  const dir = document.querySelector('meta[name="decupa-project-dir"]')?.getAttribute("content") || "";
+  const line = document.getElementById("projectDirLine");
+  if (dir && line) {
+    document.getElementById("projectDir").textContent = dir;
+    line.hidden = false;
+  }
+  if (location.hash === "#novo") {
+    if (dir) ui.notice = "Projeto novo em " + dir;
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+}
 
 const dropzone = document.getElementById("dropzone");
 const filePicker = document.getElementById("filePicker");

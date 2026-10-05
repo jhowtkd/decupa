@@ -8,24 +8,27 @@ import { analysisClientOptions, envWithStoredTypeSafe, installCompanyCredentials
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
-import { originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import {
-  audioProxyPath, ensureAudioProxy, indexPath, planPath, preflight, probeFps, runIngest, runPlan, runRender, runTriage,
-  SpawnExecutor, transcriptPath, visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
+  assertSidecarSynced, audioProxyPath, ensureAudioProxy, indexPath, keepListError, planPath, preflight, probeFps,
+  probeSourceStartSeconds, runIngest, runPlan, runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath,
+  visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
+import { triageIdentity } from "../triage.ts";
+import { parseSourceTimecode } from "./assembly/timecode.ts";
 import { buildReview, type ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
-import { initialKeepList, readKeepList, writeKeepList } from "./session.ts";
+import { claimWorkDir, cleanupWorkDir, initialKeepList, readKeepList, sourceMismatch, writeKeepList } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
@@ -71,9 +74,35 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(payload);
 }
 
-async function readBody(req: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
+function parseRequestUrl(raw: string | undefined): URL | null {
+  try {
+    return new URL(raw ?? "/", "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
+/** Os corpos da limpeza são um keep-list e um `kind`: 1 MiB sobra. Sem teto,
+ *  um POST gigante enche a memória do processo que segura os jobs. */
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("corpo do pedido excede 1 MiB");
+  }
+}
+
+async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw new BodyTooLargeError();
+  // Sem content-length, drena até o fim antes de recusar: largar o stream no
+  // meio derruba o socket e o 413 nunca chega.
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size <= MAX_BODY_BYTES) chunks.push(chunk as Buffer);
+  }
+  if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
@@ -110,9 +139,12 @@ export interface AppHandle {
   address: string;
   jobId: string;
   close(): Promise<void>;
+  /** SIGKILL síncrono no que restar de filho: o handler de `exit` do CLI só
+   *  roda código síncrono e não tem como esperar a escalada do `close()`. */
+  killChildren(): void;
 }
 
-function attachResidentSpeech(opts: {
+export function attachResidentSpeech(opts: {
   dir: string;
   speech?: IngestSpeech;
   executorInjected: boolean;
@@ -121,8 +153,18 @@ function attachResidentSpeech(opts: {
   if (opts.executorInjected) return { closeSpeech: async () => undefined };
   const client = createResidentSpeechClient();
   const coordinator = createFileCoordinator(join(opts.dir, ".decupa", "coordinator"), { limit: 1 });
+  // O worker sobe com `uv run --no-sync`: sem o venv da fala sincronizado a
+  // montagem (que não passa pelo preflight da limpeza) quebraria só na
+  // primeira transcrição, com um ModuleNotFoundError cru. Confere uma vez;
+  // falha não fica em cache, para o setup poder ser feito com o app aberto.
+  let synced: Promise<void> | undefined;
+  const ensureSynced = (): Promise<void> => {
+    synced ??= assertSidecarSynced(new SpawnExecutor(), dirname(SPEECH_SCRIPT), "fala")
+      .catch((error: unknown) => { synced = undefined; throw error; });
+    return synced;
+  };
   return {
-    speech: { worker: (req) => client.transcribe(req), coordinator },
+    speech: { worker: async (req) => { await ensureSynced(); return client.transcribe(req); }, coordinator },
     closeSpeech: () => client.close(),
   };
 }
@@ -227,8 +269,12 @@ async function startCleanupApp(opts: {
   const provider = opts.provider;
   const page = await readFile(join(HERE, "page.html"), "utf8");
 
-  const workDir = opts.workDir
-    ?? join(dirname(input), `.decupa-${basename(input).replace(/\.[^.]+$/, "")}`);
+  const workDir = opts.workDir ?? cleanupWorkDir(input);
+  // Antes do coordenador e de qualquer leitura: ele mora dentro da pasta, e
+  // uma pasta de outra fonte vai inteira para o lado. O ingest roda uma vez
+  // por processo, então conferir aqui cobre todo reuso da sessão.
+  const { staleDir } = await claimWorkDir(workDir, input);
+  if (staleDir) console.log(`a fonte mudou desde a última sessão; os arquivos antigos foram para ${staleDir}`);
   await mkdir(join(workDir, "out"), { recursive: true });
   const { speech, closeSpeech } = attachResidentSpeech({
     dir: workDir,
@@ -309,6 +355,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
+        { requireSpeech: true },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -322,13 +369,91 @@ async function startCleanupApp(opts: {
     }
   }
 
+  /**
+   * Resposta de "Sugerir cortes", lida dos arquivos que a triagem grava.
+   * O proxy é gerado aqui dentro: só uma triagem por vez chega nele.
+   */
+  async function triageReply(): Promise<Record<string, unknown>> {
+    const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
+    const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
+      .catch(() => "");
+    // Preferir campos estruturados (drop / reviewFlags) em vez de
+    // parsear o markdown — o relatório muda de forma, a prévia não.
+    let drop: unknown[] | undefined;
+    let reviewFlags: unknown[] | undefined;
+    let stats: ReturnType<typeof editorialStats> | undefined;
+    try {
+      const json = await readJson(join(workDir, "out", "triage.json")) as {
+        drop?: { unit_ids: string[]; reason: string }[];
+        reviewFlags?: unknown[];
+      };
+      drop = json.drop;
+      reviewFlags = json.reviewFlags;
+      // Telemetria editorial: drop × índice dá os segundos e o motivo
+      // dominante. Falha aqui não tira a prévia — stats fica indefinido.
+      const index = await readJson(indexPath(pipelineJob)) as {
+        units?: { id: string; start: number; end: number }[];
+      };
+      // Índice cru pode trazer unidade sem tempo numérico; sem o filtro,
+      // ela vira "corta NaNmNaNs" no resumo da prévia.
+      const units = (index.units ?? []).filter((u) =>
+        typeof u.start === "number" && typeof u.end === "number"
+        && Number.isFinite(u.start) && Number.isFinite(u.end)
+      );
+      stats = editorialStats(units, json.drop ?? []);
+    } catch {
+      // triage.json é novo; fallback no markdown — e a leitura do índice
+      // ou do próprio stats falhando também cai aqui, sem stats.
+    }
+    return {
+      keepList: suggested,
+      motivos: motivosFromReport(report),
+      drop,
+      reviewFlags,
+      stats,
+      report,
+    };
+  }
+
+  /**
+   * O que decide se dois pedidos de triagem dão a mesma resposta: a fonte, o
+   * índice, o provedor resolvido e o passe (só estrutura, sem orçamento, no
+   * app). São as entradas da chave de cache que o servidor enxerga.
+   */
+  async function triageRequestKey(): Promise<string> {
+    const source = await stat(input).catch(() => null);
+    const index = await stat(indexPath(pipelineJob)).catch(() => null);
+    let providerId: string;
+    try {
+      providerId = (await triageIdentity({ provider, projectDir: process.cwd() })).providerId;
+    } catch (error) {
+      providerId = `sem provedor: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    return JSON.stringify({
+      source: source ? [input, source.size, source.mtimeMs] : null,
+      index: index ? [index.size, index.mtimeMs] : null,
+      providerId,
+      pass: "structure",
+      budgetSeconds: null,
+    });
+  }
+
+  // Fila de um para a triagem paga: duas abas ou um reload não disparam duas
+  // chamadas, e a segunda nunca lê o proxy ainda em escrita. Pedido
+  // equivalente espera a que está em voo e recebe a mesma resposta.
+  let triageFlight: { key: string; reply: Promise<Record<string, unknown>> } | null = null;
+
   let initialIngestStarted = false;
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const parts = url.pathname.split("/").filter(Boolean);
-
     const handle = async (): Promise<void> => {
+      if (!guardLocalRequest(req, res, boundPort)) return;
+      // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
+      // isso derrubava o processo inteiro.
+      const url = parseRequestUrl(req.url);
+      if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
+      const parts = url.pathname.split("/").filter(Boolean);
+
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
@@ -411,57 +536,48 @@ async function startCleanupApp(opts: {
             sendJson(res, { error: "keepList precisa ser string, no formato \"u001-u003 u005\"" }, 400);
             return;
           }
+          const invalid = keepListError(body.keepList);
+          if (invalid) { sendJson(res, { error: invalid }, 400); return; }
           await replan(body.keepList);
           sendJson(res, { review: store.get(current.id)!.review });
           return;
         }
 
         if (parts[2] === "triage" && req.method === "POST") {
-          const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
-          const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
-            .catch(() => "");
-          // Preferir campos estruturados (drop / reviewFlags) em vez de
-          // parsear o markdown — o relatório muda de forma, a prévia não.
-          let drop: unknown[] | undefined;
-          let reviewFlags: unknown[] | undefined;
-          let stats: ReturnType<typeof editorialStats> | undefined;
-          try {
-            const json = await readJson(join(workDir, "out", "triage.json")) as {
-              drop?: { unit_ids: string[]; reason: string }[];
-              reviewFlags?: unknown[];
-            };
-            drop = json.drop;
-            reviewFlags = json.reviewFlags;
-            // Telemetria editorial: drop × índice dá os segundos e o motivo
-            // dominante. Falha aqui não tira a prévia — stats fica indefinido.
-            const index = await readJson(indexPath(pipelineJob)) as {
-              units?: { id: string; start: number; end: number }[];
-            };
-            // Índice cru pode trazer unidade sem tempo numérico; sem o filtro,
-            // ela vira "corta NaNmNaNs" no resumo da prévia.
-            const units = (index.units ?? []).filter((u) =>
-              typeof u.start === "number" && typeof u.end === "number"
-              && Number.isFinite(u.start) && Number.isFinite(u.end)
-            );
-            stats = editorialStats(units, json.drop ?? []);
-          } catch {
-            // triage.json é novo; fallback no markdown — e a leitura do índice
-            // ou do próprio stats falhando também cai aqui, sem stats.
+          // O proxy de triagem sai da fonte: vídeo trocado com o app aberto
+          // misturaria a transcrição antiga com a imagem nova.
+          const mismatch = await sourceMismatch(workDir, input);
+          if (mismatch) { sendJson(res, { error: mismatch }, 409); return; }
+          const key = await triageRequestKey();
+          if (triageFlight && triageFlight.key !== key) {
+            sendJson(res, {
+              error: "já há uma triagem em andamento com outros parâmetros (fonte, índice ou provedor). " +
+                "Espere ela terminar e peça de novo.",
+            }, 409);
+            return;
           }
-          sendJson(res, {
-            keepList: suggested,
-            motivos: motivosFromReport(report),
-            drop,
-            reviewFlags,
-            stats,
-            report,
-          });
+          if (!triageFlight) {
+            const flight = { key, reply: triageReply() };
+            triageFlight = flight;
+            void flight.reply.finally(() => {
+              if (triageFlight === flight) triageFlight = null;
+            }).catch(() => {});
+          }
+          sendJson(res, await triageFlight.reply);
           return;
         }
 
         if (parts[2] === "export" && req.method === "POST") {
           const body = await readBody(req);
           const kind = String(body.kind ?? "");
+          // Todo export sai do plano da fonte transcrita: com o vídeo trocado,
+          // EDL e MP4 apontariam cortes do antigo para a mídia nova.
+          const mismatch = await sourceMismatch(workDir, input);
+          if (mismatch) { sendJson(res, { error: mismatch }, 409); return; }
+          if (typeof body.keepList === "string") {
+            const invalid = keepListError(body.keepList);
+            if (invalid) { sendJson(res, { error: invalid }, 400); return; }
+          }
           // Export sempre re-planeja: nenhum arquivo sai de um plano velho.
           if (typeof body.keepList === "string") await replan(body.keepList);
           const plan = await readJson(planPath(pipelineJob)) as Record<string, any>;
@@ -469,9 +585,12 @@ async function startCleanupApp(opts: {
           if (kind === "edl") {
             // Do arquivo, nunca assumido: suporta frame rate inteiro ou 29,97 drop-frame.
             const fps = await probeFps(pipelineJob, exec, { allowDropFrame: true });
+            // In-points a partir do timecode embutido, como no OTIO da montagem.
+            const startSeconds = await probeSourceStartSeconds(pipelineJob, exec);
             const out = join(workDir, "corte.edl");
             await writeFile(out, buildEdl({
               clips: plan.clips, fps, title: basename(input),
+              sourceStartFrames: Math.round(startSeconds * fps),
             }), "utf8");
             sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/edl` });
             return;
@@ -510,6 +629,9 @@ async function startCleanupApp(opts: {
                 fps: rate,
                 width,
                 height,
+                // O mesmo parse da montagem: o OTIO soma o início da mídia aos
+                // in-points e recusa etiqueta ilegível.
+                timecode: info.timecode ? parseSourceTimecode(info.timecode, rate) : null,
                 role: "speech",
                 included: true,
                 name: basename(input),
@@ -598,7 +720,7 @@ async function startCleanupApp(opts: {
 
     handle().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!res.headersSent) sendJson(res, { error: message }, 500);
+      if (!res.headersSent) sendJson(res, { error: message }, error instanceof BodyTooLargeError ? 413 : 500);
       else res.end();
     });
   });
@@ -619,10 +741,14 @@ async function startCleanupApp(opts: {
   return {
     port, address: "127.0.0.1", jobId: job.id,
     close: async () => {
-      if (exec instanceof SpawnExecutor) exec.killAll();
-      await closeSpeech();
-      await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
+      // síncrono roda, e é nele que os filhos recebem o sinal.
+      const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const speechClosed = closeSpeech();
+      const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      await Promise.all([killed, speechClosed, closed]);
     },
+    killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };
 }
 
@@ -648,6 +774,17 @@ function lazyPaidSend(
     }
     return client.send(content, signal);
   };
+}
+
+/**
+ * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
+ * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
+ */
+export function withProjectDir(page: string, dir: string): string {
+  const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+  // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
+  return page.replace('<meta name="decupa-project-dir" content="">',
+    () => `<meta name="decupa-project-dir" content="${escaped}">`);
 }
 
 async function startAssemblyApp(opts: {
@@ -724,6 +861,7 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      if (!guardLocalRequest(req, res, boundPort)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
         sendJson(res, { error: "origem não permitida" }, 403);
@@ -736,14 +874,17 @@ async function startAssemblyApp(opts: {
           ...opts, projectDir: nextDir, inputs: undefined, port: 0,
         });
         newProjects.push(next);
-        sendJson(res, { url: `http://127.0.0.1:${next.port}/` }, 201);
+        const nextUrl = `http://127.0.0.1:${next.port}/`;
+        // A pasta nova precisa ser achável depois: vai no log e na resposta.
+        console.log(`novo projeto em ${nextDir}: ${nextUrl}`);
+        sendJson(res, { url: nextUrl, dir: nextDir }, 201);
         return;
       }
 
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(page);
+        res.end(withProjectDir(page, dir));
         return;
       }
       if (url.pathname === "/page.css") {
@@ -780,10 +921,17 @@ async function startAssemblyApp(opts: {
   return {
     port, address: "127.0.0.1", jobId: project.id,
     close: async () => {
-      if (exec instanceof SpawnExecutor) exec.killAll();
-      await Promise.all(newProjects.map(app => app.close()));
-      await closeSpeech();
-      await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
+      // síncrono roda, e é nele que os filhos e o worker de fala morrem.
+      const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const speechClosed = closeSpeech();
+      const nested = Promise.all(newProjects.map(app => app.close()));
+      const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
+      await Promise.all([killed, speechClosed, nested, closed]);
+    },
+    killChildren: () => {
+      if (exec instanceof SpawnExecutor) exec.killNow();
+      for (const app of newProjects) app.killChildren();
     },
   };
 }

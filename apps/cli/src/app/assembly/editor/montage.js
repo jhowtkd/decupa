@@ -3,11 +3,45 @@
 // Recebe `project` como argumento; nunca lê estado global.
 
 /**
+ * Catálogos por objeto de projeto. Cada resposta do servidor traz um objeto
+ * novo, e o mesmo objeto nunca é alterado depois: a chave por identidade não
+ * envelhece. `deps` (análises, cenas, correções…) trocadas no mesmo objeto
+ * recalculam.
+ * @template T
+ * @param {WeakMap<object, { deps: unknown[], value: any }>} cache
+ * @param {object} project
+ * @param {unknown[]} deps
+ * @param {() => T} build
+ * @returns {T}
+ */
+function memo(cache, project, deps, build) {
+  const hit = cache.get(project);
+  if (hit && hit.deps.every((dep, i) => dep === deps[i])) return hit.value;
+  const value = build();
+  cache.set(project, { deps, value });
+  return value;
+}
+
+const wordCache = new WeakMap();
+
+/**
  * Catálogo efetivo de palavras da fonte (espelho de effectiveWords do
  * servidor): o reconhecido com as correções `aligned` substituídas no
  * intervalo corrigido. Correções `pending`/`error` não alteram o catálogo.
+ * O array devolvido é compartilhado entre chamadas: não altere.
  */
 export function effectiveWords(project, sourceId) {
+  /** @type {Map<string, ReturnType<typeof buildEffectiveWords>>} */
+  const bySource = memo(wordCache, project, [project.analyses, project.corrections], () => new Map());
+  let words = bySource.get(sourceId);
+  if (!words) {
+    words = buildEffectiveWords(project, sourceId);
+    bySource.set(sourceId, words);
+  }
+  return words;
+}
+
+function buildEffectiveWords(project, sourceId) {
   const analysis = project.analyses.find((item) => item.sourceId === sourceId);
   if (!analysis) return [];
   let words = [...analysis.words];
@@ -20,6 +54,18 @@ export function effectiveWords(project, sourceId) {
     words.push(...correction.words);
   }
   return words.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+/** Primeiro índice com `start >= t` num catálogo ordenado por início. */
+function firstStartingAt(words, t) {
+  let lo = 0;
+  let hi = words.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (words[mid].start < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 function inRanges(ranges, start, end) {
@@ -88,21 +134,44 @@ export function montageTimeOfWord(project, sceneId, takeId, word) {
   return null;
 }
 
+/**
+ * Intervalos ordenados, fundindo só os que se sobrepõem de fato (encostar não
+ * funde): a sobreposição de uma palavra com eles fica igual à da lista crua.
+ */
+function disjointRanges(ranges) {
+  const merged = [];
+  for (const range of [...ranges].sort((a, b) => a.start - b.start || a.end - b.end)) {
+    const last = merged[merged.length - 1];
+    if (last && range.start < last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ start: range.start, end: range.end });
+  }
+  return merged;
+}
+
 /** Palavras da fonte fora da seleção atual da cena (para inclusão). */
 export function omittedWords(project, scene, sourceId) {
-  const retained = scene.takes
+  const retained = disjointRanges(scene.takes
     .filter((take) => take.sourceId === sourceId)
-    .flatMap((take) => retainedOfTake(take));
-  return effectiveWords(project, sourceId).filter(
-    (word) => !retained.some((range) => range.start < word.end && word.start < range.end),
-  );
+    .flatMap((take) => retainedOfTake(take)));
+  // Palavras e intervalos em ordem: um ponteiro só, sem varrer os intervalos por palavra.
+  const out = [];
+  let j = 0;
+  for (const word of effectiveWords(project, sourceId)) {
+    while (j < retained.length && retained[j].end <= word.start) j += 1;
+    if (j < retained.length && retained[j].start < word.end) continue;
+    out.push(word);
+  }
+  return out;
 }
 
 /** Palavras do take com marcas de remoção/proteção/correção. */
 export function takeWords(project, scene, take) {
   const kept = [];
-  for (const word of effectiveWords(project, take.sourceId)) {
-    if (word.start < take.start || word.end > take.end) continue;
+  const words = effectiveWords(project, take.sourceId);
+  // O catálogo é ordenado por início: começa na primeira palavra do take.
+  for (let i = firstStartingAt(words, take.start); i < words.length && words[i].start <= take.end; i += 1) {
+    const word = words[i];
+    if (word.end > take.end) continue;
     const removed = take.removed ? inRanges(take.removed, word.start, word.end) : false;
     const keptWord = { ...word, takeId: take.id, sceneId: scene.id, removed };
     keptWord.protected = take.protected ? inRanges(take.protected, word.start, word.end) : false;
@@ -117,7 +186,15 @@ export function takeWords(project, scene, take) {
   }));
 }
 
+const blockCache = new WeakMap();
+
+/** Blocos da faixa (cena e apoio) no tempo da montagem; calculados uma vez por projeto. Não altere. */
 export function timelineBlocks(project) {
+  return memo(blockCache, project, [project.scenes, project.analyses, project.assembly],
+    () => buildTimelineBlocks(project));
+}
+
+function buildTimelineBlocks(project) {
   const blocks = [];
   let cursor = 0;
   for (const scene of project.scenes) {
@@ -170,36 +247,79 @@ export function montageDuration(project) {
   return blocks.reduce((max, b) => Math.max(max, b.end), 0);
 }
 
+const timeCache = new WeakMap();
+
+/**
+ * Tabela de tempos da montagem, calculada uma vez por objeto de projeto:
+ * `starts` leva `cena\0take\0palavra` ao início na montagem (o mesmo valor de
+ * montageTimeOfWord), e `spans` guarda as palavras retidas ordenadas por
+ * início, com o maior fim acumulado para a busca do playhead.
+ */
+export function montageWordTimes(project) {
+  return memo(timeCache, project, [project.scenes, project.analyses, project.corrections],
+    () => buildWordTimes(project));
+}
+
+function buildWordTimes(project) {
+  const starts = new Map();
+  const spans = [];
+  let elapsed = 0;
+  for (const scene of project.scenes) {
+    for (const take of scene.takes) {
+      const removed = normalizeRanges(take.removed || []);
+      for (const word of takeWords(project, scene, take)) {
+        const key = scene.id + "\0" + take.id + "\0" + word.id;
+        if (starts.has(key)) continue;
+        let offset = word.start - take.start;
+        for (const range of removed) {
+          if (range.end <= word.start) offset -= range.end - Math.max(range.start, take.start);
+        }
+        const start = Math.max(0, elapsed + Math.max(0, offset));
+        starts.set(key, start);
+        if (word.removed) continue;
+        const srcStart = word.cutStart ?? word.start;
+        const srcEnd = word.cutEnd ?? word.end;
+        spans.push({ start, end: start + Math.max(0, srcEnd - srcStart), sceneId: scene.id, takeId: take.id, wordId: word.id });
+      }
+      elapsed += retainedDuration(take);
+    }
+  }
+  // Ordenação estável: no empate de início vence a última na ordem da montagem.
+  spans.sort((a, b) => a.start - b.start);
+  const maxEnd = [];
+  for (const span of spans) maxEnd.push(Math.max(maxEnd.length ? maxEnd[maxEnd.length - 1] : -Infinity, span.end));
+  return { starts, spans, maxEnd };
+}
+
 /**
  * Palavra retida sob o playhead da montagem (pura). Usa o mesmo eixo de
- * montageTimeOfWord: a prosa acende o botão cujo intervalo contém t.
+ * montageTimeOfWord: a prosa acende o botão cujo intervalo contém t; com
+ * palavras sobrepostas, vence a de início mais tarde.
  */
 export function wordAtPlayhead(project, playhead) {
   if (typeof playhead !== "number" || !Number.isFinite(playhead) || !project) return null;
-  let best = null;
-  let bestStart = -Infinity;
-  for (const scene of project.scenes) {
-    for (const take of scene.takes) {
-      for (const word of takeWords(project, scene, take)) {
-        if (word.removed) continue;
-        const start = montageTimeOfWord(project, scene.id, take.id, word);
-        if (start == null) continue;
-        const srcStart = word.cutStart ?? word.start;
-        const srcEnd = word.cutEnd ?? word.end;
-        const end = start + Math.max(0, srcEnd - srcStart);
-        if (playhead >= start && playhead < end && start >= bestStart) {
-          best = { sceneId: scene.id, takeId: take.id, wordId: word.id };
-          bestStart = start;
-        }
-      }
-    }
+  const { spans, maxEnd } = montageWordTimes(project);
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid].start <= playhead) lo = mid + 1;
+    else hi = mid;
   }
-  return best;
+  // Da última que começa até t para trás, enquanto alguma ainda pode conter t.
+  for (let i = lo - 1; i >= 0 && maxEnd[i] > playhead; i -= 1) {
+    const span = spans[i];
+    if (playhead < span.end) return { sceneId: span.sceneId, takeId: span.takeId, wordId: span.wordId };
+  }
+  return null;
 }
+
+const visualCache = new WeakMap();
 
 /** Um apoio visual contínuo pode ocupar vários spans de análise. */
 export function supportGroups(project, scene) {
-  const catalog=new Map(project.analyses.flatMap(a=>a.visual).map(v=>[v.id,v]));
+  // O catálogo de trechos visuais é montado uma vez por projeto, não por cena.
+  const catalog=memo(visualCache,project,[project.analyses],()=>new Map(project.analyses.flatMap(a=>a.visual).map(v=>[v.id,v])));
   const fps=project.assembly.fps.num/project.assembly.fps.den,groups=[];
   for(const [index,entry] of scene.support.map((e,i)=>[i,e]).sort((a,b)=>a[1].offsetFrames-b[1].offsetFrames)) {
     const span=catalog.get(entry.visualId),previous=groups.at(-1),sourceStart=span?Math.round(span.start*fps):null;

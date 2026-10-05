@@ -1,6 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { access, mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { Transcript } from "@decupa/transcript";
-import { toCondenseTranscript } from "./prepare.ts";
+import { toCondenseTranscript, writeCondenseTranscript } from "./prepare.ts";
+
+const fsTrace = vi.hoisted(() => ({ paths: [] as string[], failRename: false }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: async (path: Parameters<typeof actual.writeFile>[0], ...args: unknown[]) => {
+      fsTrace.paths.push(String(path));
+      return (actual.writeFile as (p: unknown, ...rest: unknown[]) => Promise<void>)(path, ...args);
+    },
+    rename: async (from: Parameters<typeof actual.rename>[0], to: Parameters<typeof actual.rename>[1]) => {
+      if (fsTrace.failRename) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return actual.rename(from, to);
+    },
+  };
+});
 
 const transcript: Transcript = {
   language: "pt",
@@ -107,5 +129,34 @@ describe("toCondenseTranscript", () => {
 
   it("devolve segments vazio para transcript sem tokens", () => {
     expect(toCondenseTranscript({ language: "pt", tokens: [] })).toEqual({ segments: [] });
+  });
+});
+
+describe("writeCondenseTranscript", () => {
+  it("grava num temporário e só então publica o JSON final", async () => {
+    // Escrever direto no nome final deixava JSON truncado no cache da transcrição.
+    fsTrace.paths.length = 0;
+    fsTrace.failRename = false;
+    const dir = await mkdtemp(join(tmpdir(), "decupa-transcript-"));
+    const out = join(dir, "transcript.json");
+    await writeCondenseTranscript(transcript, out);
+    expect(fsTrace.paths.some((path) => path.endsWith(".partial"))).toBe(true);
+    expect(fsTrace.paths).not.toContain(out);
+    expect(JSON.parse(await readFile(out, "utf8"))).toMatchObject({
+      segments: expect.any(Array),
+    });
+  });
+
+  it("rename que falha não deixa o parcial nem o destino", async () => {
+    fsTrace.paths.length = 0;
+    fsTrace.failRename = true;
+    const dir = await mkdtemp(join(tmpdir(), "decupa-transcript-"));
+    const out = join(dir, "transcript.json");
+    await expect(writeCondenseTranscript(transcript, out)).rejects.toThrow(/EPERM/);
+    fsTrace.failRename = false;
+    const parciais = fsTrace.paths.filter((path) => path.endsWith(".partial"));
+    expect(parciais.length).toBeGreaterThan(0);
+    for (const parcial of parciais) await expect(access(parcial)).rejects.toThrow();
+    await expect(access(out)).rejects.toThrow();
   });
 });

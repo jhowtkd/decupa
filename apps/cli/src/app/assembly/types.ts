@@ -245,7 +245,20 @@ export type Project = {
   preparation: Preparation | null;
   permissions: { model: boolean; visual: boolean };
   previewArtifact: PreviewArtifact | null;
+  /** Pilha do desfazer; ausente em projeto antigo (sem desfazer). */
+  undo?: UndoStack;
+  /** Revisão em que a última preparação aplicou as cenas. */
+  preparedRevision?: number;
 };
+
+/** Passo do desfazer: a foto `history/rev-<revision>.json` tirada antes de `label`. */
+export type UndoStep = { revision: number; label: string };
+
+/**
+ * Pilha do desfazer, o passo mais recente por último. Só vale enquanto
+ * `head` for a revisão atual: mudança de revisão sem foto quebra a pilha.
+ */
+export type UndoStack = { head: number; steps: UndoStep[] };
 
 /** Formato do projeto antes da migração — somente leitura e migração. */
 export type LegacyAnalysis = {

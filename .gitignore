@@ -18,7 +18,6 @@ work/
 
 # Artefatos soltos na raiz: testes que rodam no cwd gravam aqui, e o
 # Playwright CLI guarda logs/capturas de cada sessão.
-/-encoders
 /reference.mp4
 /:memory:.ses
 .playwright-cli/

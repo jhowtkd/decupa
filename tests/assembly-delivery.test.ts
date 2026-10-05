@@ -7,6 +7,7 @@ import { hashFile } from "../packages/media/src/hash.ts";
 import { startApp } from "../apps/cli/src/app/server.ts";
 import type { ExecCall, Executor } from "../apps/cli/src/app/pipeline.ts";
 import { FIXTURES } from "./fixtures/global-setup.ts";
+import { writeTimelineReference } from "./fixtures/timeline-reference.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -29,7 +30,9 @@ function indexingAndRender(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call)) && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };

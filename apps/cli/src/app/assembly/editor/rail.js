@@ -1,6 +1,7 @@
 import { clock } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedDuration } from "./montage.js";
+import { singleFlight } from "./sequencia.js";
 
 // Região do projeto (Task 5): materiais, briefing, preparação e entrega.
 // Cada render assina `state.subscribe("project", ...)` e porta o bloco
@@ -228,6 +229,19 @@ const OP_STAGE_LABEL = {
   ready: "Pronta",
 };
 
+/** Etapas da operação em que o servidor ainda trabalha. */
+const BUSY_STAGES = ["analyzing", "preparing", "rendering", "proposing"];
+
+/**
+ * Servidor ocupado com a montagem (puro): preparação `running` ou operação
+ * em curso. O 202 de /project/prepare pode chegar antes de o servidor gravar
+ * `running` (preparação ainda `interrupted`, operação `preparing`); um novo
+ * prepare nesse intervalo reiniciaria o percurso e cobraria de novo.
+ */
+export function preparationBusy(project, operation) {
+  return project?.preparation?.status === "running" || BUSY_STAGES.includes(operation?.stage);
+}
+
 /** Rótulo pt-BR da etapa da operação (puro); desconhecida repassa crua. */
 export function stageLabel(stage) {
   return OP_STAGE_LABEL[stage] || String(stage);
@@ -242,8 +256,7 @@ export function primaryAction(project, operation) {
   const assembly = project?.assembly;
   const included = (assembly?.sources ?? []).filter((source) => source.included);
   const prep = project?.preparation ?? null;
-  const busyStage = operation && ["analyzing", "preparing", "rendering", "proposing"].includes(operation.stage)
-    ? operation.stage : null;
+  const busyStage = operation && BUSY_STAGES.includes(operation.stage) ? operation.stage : null;
   if (busyStage) {
     return { kind: "busy", label: stageLabel(busyStage) + "…", disabled: true, stage: null };
   }
@@ -260,13 +273,121 @@ export function primaryAction(project, operation) {
   if (needsPrep) {
     return { kind: "preparar", label: "Preparar montagem", disabled: false, stage: null };
   }
-  if (hasClips || prep?.status === "ready") {
+  // Preparação "ready" sem cenas é a que sobra depois de desfazer "Preparar":
+  // não há o que revisar, e a saída é montar de novo.
+  if (hasClips || (prep?.status === "ready" && project.scenes.length > 0)) {
     return { kind: "revisar", label: "Revisar prévia", disabled: false, stage: "revisao" };
   }
   if (prep && ["interrupted", "attention", "cancelled"].includes(prep.status)) {
     return { kind: "preparar", label: "Retomar preparação", disabled: false, stage: null };
   }
   return { kind: "montar", label: "Montar vídeo", disabled: false, stage: null };
+}
+
+/** Rótulo dos botões de preparar enquanto o pedido pago está em voo. */
+export const PREPARE_BUSY_LABEL = "Preparando montagem…";
+
+/**
+ * Botões que chamam /project/prepare (puro): com o pedido em voo, ação
+ * principal e "Retomar" ficam travados com o rótulo de andamento. Depois
+ * do 202, enquanto o servidor segue ocupado (`preparationBusy`), os dois
+ * continuam travados e "Retomar" mostra o andamento; livre, a ação
+ * principal segue `primaryAction`.
+ */
+export function prepareControls(action, serverBusy, inflight) {
+  if (inflight) {
+    return {
+      label: PREPARE_BUSY_LABEL, disabled: true,
+      resumeLabel: PREPARE_BUSY_LABEL, resumeDisabled: true, busy: true,
+    };
+  }
+  if (serverBusy) {
+    return {
+      label: action.label, disabled: true,
+      resumeLabel: action.kind === "busy" ? action.label : PREPARE_BUSY_LABEL, resumeDisabled: true, busy: true,
+    };
+  }
+  return {
+    label: action.label, disabled: action.disabled,
+    resumeLabel: "Retomar preparação", resumeDisabled: false, busy: false,
+  };
+}
+
+/**
+ * Rascunho do briefing (puro, sem DOM): o que foi digitado não é
+ * sobrescrito pelo projeto que chega do servidor. `edit` marca alterado;
+ * `sync` só repopula sem alteração pendente; `discard` desmarca e
+ * repopula; `flush` salva o que está nos campos quando há alteração (ou
+ * sempre, com `force`), espera um salvamento já em voo e salva de novo
+ * enquanto houver edição feita durante a chamada. Falha mantém a marca.
+ * `save` devolve se o servidor aceitou; o erro na tela é do api.call.
+ * @param {{ read: () => any, write: (input: any) => void, save: (values: any) => Promise<boolean> }} io
+ */
+export function createBriefingDraft({ read, write, save }) {
+  let dirty = false;
+  let edits = 0;
+  let inflight = null;
+  async function flush({ force = false } = {}) {
+    while (inflight) await inflight;
+    if (!dirty && !force) return true;
+    // Edição feita durante a chamada entra num novo salvamento: quem espera
+    // o flush (ex.: o prepare) nunca segue com um briefing mais velho que o campo.
+    do {
+      const seen = edits;
+      const attempt = Promise.resolve().then(() => save(read())).then((ok) => ok === true, () => false);
+      inflight = attempt;
+      let ok = false;
+      try {
+        ok = await attempt;
+      } finally {
+        inflight = null;
+      }
+      if (!ok) return false;
+      if (seen === edits) dirty = false;
+    } while (dirty);
+    return true;
+  }
+  return {
+    edit() {
+      dirty = true;
+      edits += 1;
+    },
+    dirty: () => dirty,
+    sync(input) {
+      if (!dirty && input) write(input);
+    },
+    discard(input) {
+      dirty = false;
+      edits += 1;
+      if (input) write(input);
+    },
+    flush,
+  };
+}
+
+/**
+ * Montar/Preparar: briefing alterado é salvo antes de /project/prepare; se
+ * o salvamento falhar, a preparação paga não é chamada.
+ * @param {{ flush: () => Promise<boolean> }} draft
+ * @param {() => Promise<unknown>} prepare
+ */
+export async function prepareAfterBriefing(draft, prepare) {
+  if (!(await draft.flush())) return false;
+  await prepare();
+  return true;
+}
+
+/** Pergunta feita antes de preparar por cima de cenas que mudaram. */
+export const PREPARE_CONFIRM = "Preparar de novo substitui as cenas atuais, inclusive o que você editou à mão. "
+  + "Dá para voltar com Desfazer. Continuar?";
+
+/**
+ * Montar/Preparar/Retomar trocam as cenas (puro): pede confirmação quando já
+ * há cenas e o projeto mudou desde a última preparação que as aplicou
+ * (`preparedRevision`). Projeto antigo, sem o registro, também pergunta.
+ */
+export function prepareNeedsConfirm(project) {
+  return !!project && project.scenes.length > 0 && project.revision !== project.preparedRevision;
 }
 
 /** A lista de cenas só é a mesma quando número, título, início e lacuna não mudam. */
@@ -305,7 +426,7 @@ export function briefingSummary(input, durationSeconds) {
   return { text: input?.text ?? "", target, duration, over, fill, note };
 }
 
-export function mountRail({ state, api, player }) {
+export function mountRail({ state, api, player, confirm: confirmAction = (message) => window.confirm(message) }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
@@ -359,11 +480,45 @@ export function mountRail({ state, api, player }) {
     + '<button type="button" id="saveInput">Guardar briefing</button></div>'
     + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
-  document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
-  document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
   const briefingForm = document.getElementById("briefingForm");
   const inlineBriefing = document.getElementById("monitorBriefing");
   inlineBriefing.innerHTML = '<h2 class="briefing-title">Briefing</h2>';
+  const kindField = document.getElementById("kind");
+  const textField = document.getElementById("inputText");
+  const targetField = document.getElementById("target");
+  const setField = (field, value) => { if (field.value !== value) field.value = value; };
+  const briefing = createBriefingDraft({
+    read: () => ({ kind: kindField.value, text: textField.value, targetSeconds: Number(targetField.value) }),
+    write: (input) => {
+      setField(kindField, input.kind);
+      setField(textField, input.text);
+      setField(targetField, String(input.targetSeconds));
+    },
+    save: async (values) => {
+      const { res } = await api.call("/project/input", {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: state.get("project").revision, ...values }),
+        label: "Guardando briefing…",
+      });
+      return res.ok;
+    },
+  });
+  for (const field of [kindField, textField, targetField]) {
+    field.addEventListener("input", () => briefing.edit());
+    field.addEventListener("change", () => {
+      briefing.edit();
+      // Inline (projeto vazio) não tem "Guardar" à vista: salva ao confirmar o campo.
+      if (briefingForm.parentElement === inlineBriefing) void briefing.flush();
+    });
+  }
+  // Fechar e Esc cancelam a edição no diálogo: o formulário volta ao servidor.
+  const discardBriefing = () => briefing.discard(state.get("project")?.input);
+  document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
+  document.getElementById("closeBriefing").onclick = () => {
+    discardBriefing();
+    briefingDialog.close();
+  };
+  briefingDialog.addEventListener("cancel", discardBriefing);
   /** Projeto vazio: o briefing sai do diálogo e fica ao lado da área de importar. */
   function placeBriefing(project) {
     const empty = project.assembly.sources.length === 0;
@@ -382,7 +537,8 @@ export function mountRail({ state, api, player }) {
       const { res, body } = await api.call("/project/new", {
         method: "POST", body: "{}", label: "Criando projeto…",
       });
-      if (res.ok) window.location.assign(body.url);
+      // #novo: a página nova anuncia a pasta criada no status.
+      if (res.ok) window.location.assign(body.url + "#novo");
     } finally {
       newProject.disabled = false;
     }
@@ -636,11 +792,8 @@ export function mountRail({ state, api, player }) {
   function render(project) {
     if (!project) return;
     placeBriefing(project);
-    if (!briefingDialog.open && !briefingForm.contains(document.activeElement)) {
-      document.getElementById("kind").value = project.input.kind;
-      document.getElementById("inputText").value = project.input.text;
-      document.getElementById("target").value = String(project.input.targetSeconds);
-    }
+    // Edição não salva vence o projeto que chega (import, polling, resposta).
+    briefing.sync(project.input);
     document.getElementById("invite").hidden = project.assembly.sources.length > 0;
     renderSources(project);
     renderScenes(project);
@@ -649,13 +802,23 @@ export function mountRail({ state, api, player }) {
       project.preparation && project.preparation.status !== "running"
       && project.preparation.status !== "ready"
     );
-    const preparing = project.preparation && project.preparation.status === "running";
-    const action = primaryAction(project, state.get("operation"));
-    const prepareButton = document.getElementById("prepare");
-    prepareButton.textContent = action.label;
-    prepareButton.dataset.action = action.kind;
-    setDisabled(prepareButton, preparing || action.disabled);
+    paintPrepare(project);
     renderPreparation(project);
+  }
+
+  function paintPrepare(project) {
+    const operation = state.get("operation");
+    const action = primaryAction(project, operation);
+    const view = prepareControls(action, preparationBusy(project, operation), prepareMontage.busy());
+    const prepareButton = document.getElementById("prepare");
+    const resumeButton = document.getElementById("resume");
+    prepareButton.textContent = view.label;
+    prepareButton.dataset.action = action.kind;
+    setDisabled(prepareButton, view.disabled);
+    prepareButton.setAttribute("aria-busy", String(view.busy));
+    resumeButton.textContent = view.resumeLabel;
+    setDisabled(resumeButton, view.resumeDisabled);
+    resumeButton.setAttribute("aria-busy", String(view.busy));
   }
 
   document.getElementById("select").onclick = () => api.call("/project/select", {
@@ -677,16 +840,7 @@ export function mountRail({ state, api, player }) {
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), included: false }),
     label: "Excluindo seleção…",
   });
-  document.getElementById("saveInput").onclick = () => api.call("/project/input", {
-    method: "POST",
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      kind: document.getElementById("kind").value,
-      text: document.getElementById("inputText").value,
-      targetSeconds: Number(document.getElementById("target").value),
-    }),
-    label: "Guardando briefing…",
-  });
+  document.getElementById("saveInput").onclick = () => void briefing.flush({ force: true });
   const prepareClick = () => {
     const action = primaryAction(state.get("project"), state.get("operation"));
     if (action.stage) {
@@ -695,19 +849,38 @@ export function mountRail({ state, api, player }) {
     }
     prepareMontage();
   };
-  const prepareMontage = () => api.call("/project/prepare", {
+  const callPrepare = () => api.call("/project/prepare", {
     method: "POST",
     body: JSON.stringify({
       baseRevision: state.get("project").revision,
       request: "",
       modelOptIn: true, visualOptIn: true,
     }),
-    label: "Preparando montagem…",
+    label: PREPARE_BUSY_LABEL,
   });
+  // Montar, Preparar e Retomar são a mesma chamada paga: um pedido por vez,
+  // e nenhum enquanto o servidor segue preparando depois do 202 (os botões
+  // já ficam travados; a guarda cobre o clique que chegar antes da pintura).
+  // O erro já aparece no status pelo api.call; aqui só destrava o botão.
+  // Cenas mudadas desde a última preparação só são trocadas com confirmação.
+  const prepareMontage = singleFlight(
+    () => {
+      const project = state.get("project");
+      if (preparationBusy(project, state.get("operation"))) return undefined;
+      if (prepareNeedsConfirm(project) && !confirmAction(PREPARE_CONFIRM)) return undefined;
+      return prepareAfterBriefing(briefing, callPrepare).catch(() => false);
+    },
+    () => { if (state.get("project")) paintPrepare(state.get("project")); },
+  );
   document.getElementById("prepare").onclick = prepareClick;
   document.getElementById("resume").onclick = prepareMontage;
   state.subscribe("project", render);
-  state.subscribe("operation", () => { if (state.get("project")) renderPreparation(state.get("project")); });
+  state.subscribe("operation", () => {
+    const project = state.get("project");
+    if (!project) return;
+    paintPrepare(project);
+    renderPreparation(project);
+  });
   state.subscribe("selectedScene", () => renderScenes(state.get("project")));
   render(state.get("project"));
 

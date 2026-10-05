@@ -69,6 +69,44 @@ const USAGE = `decupa — bancada de medição
       configure_provider). Não imprime nada além de JSON-RPC.
 `;
 
+/**
+ * Segura o servidor até um sinal de encerramento. Ctrl+C, `kill` e fechar a
+ * janela do terminal (SIGHUP) passam pelo mesmo shutdown; `process.on` com a
+ * flag `closing` faz o segundo sinal — o launcher repassando, o terminal
+ * mandando de novo — ser ignorado em vez de matar o processo no meio do
+ * close(). O evento `exit` cobre a saída que não veio de sinal (erro fatal):
+ * lá só o trecho síncrono roda, e é nele que close() derruba os filhos, que
+ * são líderes de grupo e sobreviveriam ao processo. No caminho por sinal o
+ * close() espera os filhos saírem (SIGKILL para quem ignora SIGTERM) antes do
+ * process.exit; um timer solto morreria com ele.
+ */
+function serveUntilShutdown(app: { close(): Promise<void>; killChildren(): void }): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let closing = false;
+    const shutdown = async () => {
+      if (closing) return;
+      closing = true;
+      await app.close();
+      resolve();
+      process.exit(0);
+    };
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.on(signal, () => { void shutdown(); });
+    }
+    // Sem sinal (erro fatal) só o trecho síncrono roda: o close() já mandou
+    // SIGTERM e não dá para esperar a escalada, então quem sobrar leva SIGKILL.
+    process.on("exit", () => { void shutdown(); app.killChildren(); });
+  });
+}
+
+/** `listen` ocupado chega como `EADDRINUSE` cru; quem abriu o app só precisa
+ *  saber que a porta está em uso e como escolher outra. */
+function friendlyError(error: unknown): string {
+  const err = error as NodeJS.ErrnoException & { port?: number };
+  if (err?.code === "EADDRINUSE") return `porta ${err.port ?? "pedida"} ocupada; use --port`;
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -355,18 +393,7 @@ async function main(argv: string[]): Promise<number> {
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
     openBrowser(url);
-    await new Promise<void>((resolve) => {
-      let closing = false;
-      const shutdown = async () => {
-        if (closing) return;
-        closing = true;
-        await app.close();
-        resolve();
-        process.exit(0);
-      };
-      process.once("SIGINT", () => { void shutdown(); });
-      process.once("SIGTERM", () => { void shutdown(); });
-    });
+    await serveUntilShutdown(app);
     return 0;
   }
 
@@ -398,18 +425,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     openBrowser(url);
-    await new Promise<void>((resolve) => {
-      let closing = false;
-      const shutdown = async () => {
-        if (closing) return;
-        closing = true;
-        await app.close();
-        resolve();
-        process.exit(0);
-      };
-      process.once("SIGINT", () => { void shutdown(); });
-      process.once("SIGTERM", () => { void shutdown(); });
-    });
+    await serveUntilShutdown(app);
     return 0;
   }
 
@@ -422,7 +438,7 @@ try {
 } catch (error) {
   // Uma falha esperada (arquivo ausente, terminal errado) deve sair com uma
   // frase, não com pilha de chamadas. A pilha só aparece se DECUPA_DEBUG=1.
-  console.error(error instanceof Error ? `erro: ${error.message}` : `erro: ${String(error)}`);
+  console.error(`erro: ${friendlyError(error)}`);
   if (process.env.DECUPA_DEBUG === "1" && error instanceof Error) {
     console.error(error.stack);
   }

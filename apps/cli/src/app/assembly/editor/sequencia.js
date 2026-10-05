@@ -189,6 +189,22 @@ export function singleFlight(run, onChange = () => {}) {
   return call;
 }
 
+/**
+ * Botão de desfazer (puro): anuncia o passo do topo da pilha do servidor
+ * (`project.undo`). Só libera quando o GET confirmou a mesma foto
+ * (`undoRevision`); pilha quebrada ou foto ilegível deixam travado.
+ * @returns {{ disabled: boolean, busy: boolean, title: string, text: string }}
+ */
+export function undoView(project, undoRevision, busy) {
+  const undo = project?.undo;
+  const top = undo && undo.head === project.revision ? undo.steps[undo.steps.length - 1] : null;
+  if (busy) return { disabled: true, busy: true, title: "Desfazendo…", text: top ? top.label : "" };
+  if (!top || undoRevision == null || top.revision !== undoRevision) {
+    return { disabled: true, busy: false, title: "Nenhuma alteração com histórico para desfazer", text: "" };
+  }
+  return { disabled: false, busy: false, title: "Desfazer: " + top.label, text: top.label };
+}
+
 function esc(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -208,7 +224,7 @@ export function mountSequencia({ state, api, player }) {
    */
   const undoEdit = singleFlight(() => {
     const p = state.get("project");
-    if (!p || state.get("undoRevision") == null) return undefined;
+    if (!p || undoView(p, state.get("undoRevision"), false).disabled) return undefined;
     return api.call("/project/undo", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
@@ -224,16 +240,23 @@ export function mountSequencia({ state, api, player }) {
       undo.type = "button";
       undo.id = "undo";
       undo.className = "icon";
-      undo.innerHTML = ICON.undo;
+      undo.innerHTML = ICON.undo + '<span class="undo-what" hidden></span>';
       undo.setAttribute("aria-label", "Desfazer edição");
       undo.onclick = () => void undoEdit();
       (document.getElementById("undoSlot") || root()).appendChild(undo);
     }
-    const busy = undoEdit.busy();
-    undo.disabled = !p || state.get("undoRevision") == null || busy;
-    undo.setAttribute("aria-busy", String(busy));
-    undo.title = busy ? "Desfazendo…"
-      : undo.disabled ? "Nenhuma alteração com histórico para desfazer" : "Desfazer edição";
+    const view = undoView(p, state.get("undoRevision"), undoEdit.busy());
+    undo.disabled = view.disabled;
+    undo.setAttribute("aria-busy", String(view.busy));
+    // O botão diz o que vai voltar: "Desfazer: Tirar trecho".
+    undo.title = view.title;
+    undo.setAttribute("aria-label", view.text ? "Desfazer: " + view.text : "Desfazer edição");
+    const what = undo.querySelector(".undo-what");
+    if (what) {
+      what.textContent = view.text;
+      what.hidden = !view.text;
+    }
+    undo.classList.toggle("has-label", !!view.text);
   }
 
   let signature = "";
@@ -342,13 +365,16 @@ export function mountSequencia({ state, api, player }) {
 
   // Peaks por fonte com cache no tempo de vida do mount (a invalidação é
   // por sha no servidor; 204/erro vira null e o bloco segue sem waveform).
+  // O GET vai direto, fora do api.call: a waveform é enfeite e sua resposta
+  // não pode apagar o erro de uma ação nem sincronizar o projeto.
   const peaksCache = new Map();
   async function peaksFor(sourceId) {
     if (peaksCache.has(sourceId)) return peaksCache.get(sourceId);
     let peaks = null;
     try {
-      const { res, body } = await api.call("/project/waveform/" + encodeURIComponent(sourceId));
-      if (res && res.status !== 204 && res.ok && body && Array.isArray(body.peaks) && body.peaks.length > 0) {
+      const res = await fetch("/project/waveform/" + encodeURIComponent(sourceId));
+      const body = res.ok && res.status !== 204 ? await res.json() : null;
+      if (body && Array.isArray(body.peaks) && body.peaks.length > 0) {
         peaks = body;
       }
     } catch {
@@ -364,7 +390,7 @@ export function mountSequencia({ state, api, player }) {
 
   /** Busca os peaks das fontes da cena e desenha os trechos retidos. */
   async function hydrateWaves(p) {
-    if (!p || !api || typeof api.call !== "function") return;
+    if (!p || typeof fetch !== "function") return;
     const token = ++waveGen;
     const el = root();
     const strip = el && el.querySelector(".seq-strip");

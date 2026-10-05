@@ -26,11 +26,12 @@ function framesToDropFrameTimecode(frameNumber: number): string {
 
 /** Segundos → `HH:MM:SS:FF` ou `HH:MM:SS;FF` (drop-frame). */
 export function timecode(seconds: number, fps: number, dropFrame = false): string {
-  if (dropFrame) {
-    const totalFrames = Math.round(seconds * fps);
-    return framesToDropFrameTimecode(totalFrames);
-  }
-  const totalFrames = Math.round(seconds * fps);
+  return framesTimecode(Math.round(seconds * fps), fps, dropFrame);
+}
+
+/** Quadros decorridos → `HH:MM:SS:FF` ou `HH:MM:SS;FF` (drop-frame). */
+function framesTimecode(totalFrames: number, fps: number, dropFrame: boolean): string {
+  if (dropFrame) return framesToDropFrameTimecode(totalFrames);
   const frame = totalFrames % fps;
   const whole = Math.floor(totalFrames / fps);
   const parts = [Math.floor(whole / 3600), Math.floor(whole / 60) % 60, whole % 60, frame];
@@ -51,6 +52,11 @@ export function buildEdl(opts: {
   title: string;
   /** Nome do arquivo de origem, para o relink na NLE. Default: o título. */
   sourceName?: string;
+  /**
+   * Início da mídia em quadros, pelo timecode embutido (01:00:00:00 de
+   * câmera). Os in-points da fonte somam isto; sem, o relink cai fora da mídia.
+   */
+  sourceStartFrames?: number;
 }): string {
   const { clips, fps, title } = opts;
   const sourceName = opts.sourceName ?? title;
@@ -70,14 +76,18 @@ export function buildEdl(opts: {
     "",
   ];
   let recordFrames = 0;
+  const sourceStart = opts.sourceStartFrames ?? 0;
 
   clips.forEach((clip, i) => {
-    const durationFrames = Math.round(clip.end * fps) - Math.round(clip.start * fps);
+    const sourceIn = Math.round(clip.start * fps);
+    const sourceOut = Math.round(clip.end * fps);
+    const durationFrames = sourceOut - sourceIn;
     const recordIn = recordFrames / fps;
     const recordOut = (recordFrames + durationFrames) / fps;
     lines.push(
       `${String(i + 1).padStart(3, "0")}  AX       V     C        ` +
-      `${timecode(clip.start, fps, isDropFrame)} ${timecode(clip.end, fps, isDropFrame)} ` +
+      `${framesTimecode(sourceStart + sourceIn, fps, isDropFrame)} ` +
+      `${framesTimecode(sourceStart + sourceOut, fps, isDropFrame)} ` +
       `${timecode(recordIn, fps, isDropFrame)} ${timecode(recordOut, fps, isDropFrame)}`,
     );
     // `AX` no campo de reel significa "sem reel atribuído", e o campo tem só 8

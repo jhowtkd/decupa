@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { DoctorLine } from "../doctor.ts";
-import { writeCredentials, type Credentials } from "@decupa/triage";
+import { assertStoredEndpoint, writeCredentials, type Credentials } from "@decupa/triage";
 
 type AppHandle = { port: number; close(): Promise<void> };
 
@@ -120,6 +120,11 @@ export function createMcpSession(deps: McpDeps) {
         if (typeof args.model === "string" && args.model) creds.model = args.model;
         if (typeof args.baseUrl === "string" && args.baseUrl) creds.baseUrl = args.baseUrl;
         if (typeof args.apiKey === "string" && args.apiKey) creds.apiKey = args.apiKey;
+        // Mesma regra da leitura: um baseUrl gravado sem apiKey própria nunca
+        // funciona (a chave do ambiente não vai para um endpoint escolhido pelo
+        // arquivo), e um agente poderia usar isso para apontar a chave para
+        // outro servidor. Recusa antes de gravar.
+        if (creds.baseUrl) assertStoredEndpoint(creds.baseUrl, creds.apiKey);
         const path = await deps.writeCredentials(projectDir, creds);
         return { preset, model: creds.model, baseUrl: creds.baseUrl, path, hasKey: Boolean(creds.apiKey) };
       }

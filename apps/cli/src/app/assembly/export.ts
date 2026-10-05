@@ -9,6 +9,7 @@ import { pipeline } from "node:stream/promises";
 import { buildOtio } from "./otio.ts";
 import { hashFile, probe } from "@decupa/media";
 import { verifySourceIdentity } from "./media.ts";
+import { timelineDurationMismatch } from "./render.ts";
 import { loadProject, missingMedia } from "./store.ts";
 import type { Project } from "./types.ts";
 
@@ -264,6 +265,10 @@ export async function exportApproved(project: Project, dir: string): Promise<str
   }
   if (info.durationMs <= 0) {
     throw new Error("prévia com duração zerada");
+  }
+  const mismatch = timelineDurationMismatch(info, project.assembly);
+  if (mismatch) {
+    throw new Error(`prévia com duração errada (${mismatch}): gere a prévia da revisão atual`);
   }
 
   const dest = join(dir, "exports", String(project.revision));

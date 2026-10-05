@@ -1,4 +1,4 @@
-import { access, lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -73,6 +73,19 @@ it("ignora nomes fora do padrão", async () => {
   expect(resultado.deleted).not.toContain("rev-abc");
   expect(resultado.deleted).not.toContain("reference.mp4");
   expect(resultado.deleted).not.toContain("rev-9");
+});
+
+it("protege o json da pilha e poda o diretório da mesma revisão", async () => {
+  const dir = await fixture({ revisoes: [1, 8, 9, 10], atual: 10, historico: [1, 8, 9, 10] });
+  const projeto = JSON.parse(await readFile(join(dir, "project.json"), "utf8")) as Record<string, unknown>;
+  projeto.undo = { head: 10, steps: [{ revision: 1, label: "Tirar trecho" }] };
+  await writeFile(join(dir, "project.json"), JSON.stringify(projeto));
+  await pruneProject(dir);
+  expect({
+    json: await existe(join(dir, "history", "rev-1.json")),
+    dir: await existe(join(dir, "rev-1")),
+    recente: await existe(join(dir, "history", "rev-8.json")),
+  }).toEqual({ json: true, dir: false, recente: true });
 });
 
 it("history acompanha", async () => {

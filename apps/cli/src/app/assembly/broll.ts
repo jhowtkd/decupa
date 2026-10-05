@@ -1,7 +1,7 @@
 import type { ChoiceQuestion } from "@decupa/typesafe";
 import { decisionFailure, type AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { compileScenes, effectiveSpanText, speechCatalog, validateResolvedProposal, visualCatalog } from "./scenes.ts";
-import type { Project, Proposal, Scene } from "./types.ts";
+import type { Project, Proposal, Scene, VisualSpan } from "./types.ts";
 
 export type BrollCandidate={id:string;sourceId:string;visualIds:string[];start:number;end:number;description:string};
 
@@ -15,7 +15,9 @@ export function brollCandidates(project:Project):BrollCandidate[] {
     spans.forEach((first,i)=>{
       let endFrame=Math.round(first.start*fps);
       const limit=Math.round((first.start+3)*fps), ids:string[]=[],texts:string[]=[];
-      for(const span of spans.slice(i)) {
+      // Índice em vez de slice: copiar o resto da lista a cada trecho era O(N²).
+      for(let j=i;j<spans.length;j++) {
+        const span=spans[j]!;
         // A cobertura precisa ser contígua nos frames que o render realmente usa.
         if(Math.round(span.start*fps)!==endFrame || endFrame>=limit) break;
         ids.push(span.id);texts.push(span.text);
@@ -27,13 +29,20 @@ export function brollCandidates(project:Project):BrollCandidate[] {
   return result;
 }
 
-export function candidateSupport(project:Project,candidate:BrollCandidate,offsetFrames:number,durationFrames:number):Scene["support"] {
-  const canonical=brollCandidates(project).find(c=>c.id===candidate.id);
+/** Candidatos e catálogo visual calculados uma vez para várias chamadas de candidateSupport. */
+export type BrollIndex={byId:Map<string,BrollCandidate>;catalog:Map<string,VisualSpan>};
+
+export function brollIndex(project:Project,candidates=brollCandidates(project)):BrollIndex {
+  return {byId:new Map(candidates.map(c=>[c.id,c])),catalog:visualCatalog(project)};
+}
+
+export function candidateSupport(project:Project,candidate:BrollCandidate,offsetFrames:number,durationFrames:number,index:BrollIndex=brollIndex(project)):Scene["support"] {
+  const canonical=index.byId.get(candidate.id);
   if(!canonical || JSON.stringify(canonical)!==JSON.stringify(candidate)) throw Error("candidato de apoio inválido");
   const fps=project.assembly.fps.num/project.assembly.fps.den;
   const first=Math.round(candidate.start*fps), last=first+durationFrames;
   if(!Number.isSafeInteger(offsetFrames)||offsetFrames<0||!Number.isSafeInteger(durationFrames)||durationFrames<=0||last>Math.round(candidate.end*fps)) throw Error("duração ou posição do apoio inválida");
-  const catalog=visualCatalog(project),entries:Scene["support"]=[];
+  const catalog=index.catalog,entries:Scene["support"]=[];
   let cursor=first;
   for(const id of candidate.visualIds) {
     const span=catalog.get(id)!;

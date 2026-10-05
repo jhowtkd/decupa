@@ -1,6 +1,6 @@
 import type {IncomingMessage,ServerResponse} from "node:http";
 import {randomUUID} from "node:crypto";
-import {readFile,realpath} from "node:fs/promises";
+import {readFile,realpath,stat} from "node:fs/promises";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {hashFile,probe} from "@decupa/media";
@@ -20,6 +20,16 @@ async function body(req:IncomingMessage):Promise<Record<string,unknown>>{
 }
 type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;selectFn?:()=>Promise<SelectResult>};
 export function createTemplateRuntime(root:string,deps:Deps){
+ // O player pede a referência em dezenas de Range requests: hash do vídeo
+ // inteiro em cada uma travava a tela. Como verifySourceIdentity, o hash roda
+ // uma vez e tamanho+mtime iguais dispensam o próximo; mudou, recalcula.
+ const verified=new Map<string,{size:number;mtimeMs:number}>();
+ async function sameReference(path:string,sha256:string):Promise<boolean>{
+  const key=`${path}\0${sha256}`;const current=await stat(path);const seen=verified.get(key);
+  if(seen&&seen.size===current.size&&seen.mtimeMs===current.mtimeMs)return true;
+  if(await hashFile(path)!==sha256){verified.delete(key);return false;}
+  verified.set(key,{size:current.size,mtimeMs:current.mtimeMs});return true;
+ }
  async function recover(r:Recipe):Promise<Recipe>{
   if(r.analysis.status!=="running"||jobs.has(join(root,r.id)))return r;
   let alive=false;if(r.analysis.pid&&r.analysis.pid!==process.pid)try{process.kill(r.analysis.pid,0);alive=true;}catch{/* stopped */}
@@ -50,7 +60,7 @@ export function createTemplateRuntime(root:string,deps:Deps){
    if(revision!==undefined&&(!Number.isSafeInteger(revision)||revision<1))throw new HttpError(400,"revisão inválida");
    let recipe=await recover(await loadRecipe(root,id,req.method==="GET"?revision:undefined));
    if(req.method==="GET"){
-    if(action==="media"){if(await hashFile(recipe.source.path)!==recipe.source.sha256)throw new HttpError(409,"referência mudou; religue o original");await serveMedia(req,res,recipe.source.path);return true;}
+    if(action==="media"){if(!await sameReference(recipe.source.path,recipe.source.sha256))throw new HttpError(409,"referência mudou; religue o original");await serveMedia(req,res,recipe.source.path);return true;}
     if(action)throw new HttpError(404,"rota desconhecida");json(res,{recipe});return true;
    }
    if(input.baseRevision!==recipe.revision)throw new HttpError(409,"revisão desatualizada; recarregue o template");

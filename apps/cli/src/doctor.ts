@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { resolveProvider } from "@decupa/triage";
+import { analysisClientOptions, readCredentials, resolveProvider } from "@decupa/triage";
 import { DEFAULT_ENGINE, enginePatchError, SPEECH_SCRIPT, SpawnExecutor } from "./app/pipeline.ts";
 import { enginePython } from "./runtime.ts";
 
@@ -22,7 +23,12 @@ export interface DoctorDeps {
    * ainda executa os imports reais de fala/visão e o Python do motor.
    */
   localOnly?: boolean;
+  /** Onde fica `.decupa/credentials` do usuário; os testes não leem o real. */
+  home?: string;
 }
+
+/** Mínimo de vite 8 e oxlint; o mesmo número de `engines` e do setup. */
+const NODE_MIN = [22, 12] as const;
 
 /**
  * Diagnóstico sem efeito colateral: não baixa, não chama rede, não escreve.
@@ -44,11 +50,11 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
   const lines: DoctorLine[] = [];
 
   const [major, minor] = process.versions.node.split(".").map(Number);
-  lines.push(major > 22 || (major === 22 && minor >= 6)
+  lines.push(major > NODE_MIN[0] || (major === NODE_MIN[0] && minor >= NODE_MIN[1])
     ? { ok: true, name: "node", detail: process.versions.node }
     : {
         ok: false, name: "node", detail: process.versions.node,
-        fix: "o decupa precisa de Node >= 22.6 — veja o guia em docs/setup/GUIA.md",
+        fix: `o decupa precisa de Node >= ${NODE_MIN.join(".")} — veja o guia em docs/setup/GUIA.md`,
       });
 
   // Pré-requisito de sistema aponta ao guia, não a um gerenciador de uma
@@ -90,15 +96,17 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
   }
 
   // Existir no PATH não basta: o sidecar só funciona se o pacote importa no
-  // venv dele. `--no-sync --offline` prova o ambiente sem transformar o
-  // doctor em instalador; o projeto vai em caminho absoluto derivado de
-  // SPEECH_SCRIPT, sem depender do cwd de quem chamou.
+  // venv dele. O import roda no Python do próprio venv, sem `uv run`: mesmo
+  // com --no-sync, o uv criava um .venv vazio quando ele faltava, e o doctor
+  // não pode instalar nada. Venv ausente é spawn que falha — ambiente
+  // incompleto. O caminho é absoluto, derivado de SPEECH_SCRIPT.
   const speechDir = dirname(SPEECH_SCRIPT);
+  const venvBin = process.platform === "win32" ? "Scripts/python.exe" : "bin/python";
   for (const [name, dir, code] of [
     ["pacote de fala", speechDir, "import whisperx"],
     ["pacote de visão", resolve(speechDir, "..", "vision"), "import mediapipe"],
   ]) {
-    const result = await run("uv", ["run", "--no-sync", "--offline", "--project", dir, "python", "-c", code]);
+    const result = await run(join(dir, ".venv", venvBin), ["-c", code]);
     lines.push({
       name,
       ok: result.code === 0,
@@ -107,22 +115,35 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
     });
   }
 
-  const python = await run(enginePython(env), ["-c", "import sys; assert sys.version_info >= (3, 11)"]);
-  lines.push({
-    name: "Python do motor",
-    ok: python.code === 0,
-    detail: python.code === 0 ? "disponível" : "indisponível",
-  });
+  // Versão não basta: o motor importa cv2, numpy e scenedetect, e o python3
+  // de uma máquina limpa passa na versão e quebra no primeiro condense.
+  const enginePy = enginePython(env);
+  const version = await run(enginePy, ["-c", "import sys; assert sys.version_info >= (3, 11)"]);
+  const imports = version.code === 0 ? await run(enginePy, ["-c", "import cv2, numpy, scenedetect"]) : version;
+  lines.push(imports.code === 0
+    ? { ok: true, name: "Python do motor", detail: `${enginePy} com cv2, numpy e scenedetect` }
+    : {
+        ok: false, name: "Python do motor",
+        detail: version.code === 0 ? `${enginePy} sem cv2, numpy ou scenedetect` : `${enginePy} indisponível ou abaixo de 3.11`,
+        fix: "execute node scripts/setup.mjs (cria work/engine-venv com as dependências do motor)",
+      });
 
   // Provedor/IA só entra no relatório completo: `--local` prova a máquina
   // sem exigir credencial (exit 0 quando apenas o provedor falta).
   if (!deps.localOnly) {
+    // A mesma resolução do app: ~/.decupa/credentials (gravado pelo setup ou
+    // pela primeira abertura) vence o ambiente. Credencial ilegível vale como
+    // ausente, como no servidor.
+    const stored = await readCredentials(deps.home ?? homedir()).catch(() => null);
     try {
-      const provider = resolveProvider(undefined, env);
-      lines.push({ ok: true, name: "chave de análise", detail: `setada (provedor ${provider})` });
-    } catch {
+      const provider = resolveProvider(undefined, env, stored);
+      analysisClientOptions({ stored, env });
+      const where = stored?.preset === provider && stored.apiKey ? "~/.decupa/credentials" : "ambiente";
+      lines.push({ ok: true, name: "chave de análise", detail: `setada (provedor ${provider}, ${where})` });
+    } catch (error) {
       lines.push({
-        ok: false, name: "chave de análise", detail: "nenhuma chave setada",
+        ok: false, name: "chave de análise",
+        detail: stored && error instanceof Error ? error.message : "nenhuma chave setada",
         fix: "exporte uma de ZAI_API_KEY, GEMINI_API_KEY, MINIMAX_API_KEY ou DECUPA_API_KEY no ambiente "
           + "(ou configure_provider para gravar a credencial em .decupa/) — sem ela a triagem não roda; "
           + "ou monte o keep-list na mão (SKILL)",

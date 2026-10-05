@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 async function fixture(prefix: string) {
@@ -172,7 +173,7 @@ it("preparo dos modelos é testado sem downloads nos sidecars", () => {
 
 it("provision-provider resolve o módulo de credencial fora do workspace CLI", async () => {
   const home = await mkdtemp(join(tmpdir(), "decupa-provision-home-"));
-  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
   for (const key of [
     "DECUPA_COMPANY_API_KEY", "ZAI_API_KEY", "GEMINI_API_KEY", "MINIMAX_API_KEY",
     "DECUPA_API_KEY", "TYPESAFE_API_KEY", "DECUPA_COMPANY_TYPESAFE_API_KEY",
@@ -181,4 +182,43 @@ it("provision-provider resolve o módulo de credencial fora do workspace CLI", a
     "--experimental-strip-types", join(process.cwd(), "scripts/provision-provider.ts"),
   ], { cwd: process.cwd(), env, encoding: "utf8" });
   expect(stdout).toMatch(/Nenhuma chave de empresa/);
+});
+
+it("nodeMissing exige Node 22.12", async () => {
+  const { nodeMissing } = await import("./setup.mjs");
+  expect(nodeMissing).toEqual(expect.any(Function));
+  expect(nodeMissing("22.11.0")).toMatch(/22\.12/);
+  expect(nodeMissing("22.12.0")).toBeNull();
+  expect(nodeMissing("23.0.0")).toBeNull();
+});
+
+it("instala o Python do motor com o lock e scenedetect sem dependências", async () => {
+  const { installEnginePython } = await import("./setup.mjs");
+  expect(installEnginePython).toEqual(expect.any(Function));
+  const calls: string[][] = [];
+  const root = "/tmp/decupa-setup-root";
+  await installEnginePython(root, "/tmp/py", async (command: string, args: string[]) => {
+    calls.push([command, ...args]);
+  });
+  const lock = join(root, "scripts/engine/requirements.lock.txt");
+  expect(calls[0]).toEqual([
+    "uv", "pip", "install", "--python", "/tmp/py",
+    "-r", join(root, "work/video-agent-kit-plugin/requirements.txt"), "-c", lock,
+  ]);
+  expect(calls[1]).toEqual([
+    "uv", "pip", "install", "--python", "/tmp/py", "--no-deps", "scenedetect>=0.6", "-c", lock,
+  ]);
+});
+
+it("o lock do motor é nome==versão, com headless e sem opencv de GUI", async () => {
+  const text = await readFile(join(dirname(fileURLToPath(import.meta.url)), "engine", "requirements.lock.txt"), "utf8");
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+  for (const line of lines) expect(line, line).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._-]*$/);
+  for (const name of [
+    "mcp", "requests", "pillow", "opencv-python-headless", "numpy", "jieba",
+    "fonttools", "click", "platformdirs", "tqdm", "scenedetect",
+  ]) {
+    expect(lines.some((line) => line.startsWith(`${name}==`)), name).toBe(true);
+  }
+  expect(lines.some((line) => line.startsWith("opencv-python=="))).toBe(false);
 });
