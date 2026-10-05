@@ -87,6 +87,11 @@ async function analyzeAll(base: string, project: ProjectView): Promise<ProjectVi
   return (await res.json() as { project: ProjectView }).project;
 }
 
+/** Pedido de correção do requestValidated: último bloco aponta a validação. */
+function isRepair(content: unknown[]): boolean {
+  return /não passou na validação/.test((content.at(-1) as { text?: string }).text ?? "");
+}
+
 it("troca de apoio: candidatos com evidência, aplicação, desfazer (#65)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-swap-"));
   const speech = join(dir, "fala.mp4");
@@ -110,8 +115,9 @@ it("troca de apoio: candidatos com evidência, aplicação, desfazer (#65)", asy
     executor: executor(),
     allowPaidVisual: true,
     describeClient: {
-      async send() {
-        const spans = spansByCall[describeCalls++] ?? [];
+      async send(content: unknown[]) {
+        // A correção de lacuna repete a resposta da mesma fonte, sem avançar.
+        const spans = spansByCall[isRepair(content) ? describeCalls - 1 : describeCalls++] ?? [];
         return JSON.stringify({ spans });
       },
     },
@@ -206,8 +212,8 @@ it("sem candidato adequado a montagem é preservada e a lacuna explicada (#65)",
     executor: executor(),
     allowPaidVisual: true,
     describeClient: {
-      async send() {
-        return JSON.stringify({ spans: spansByCall[describeCalls++] ?? [] });
+      async send(content: unknown[]) {
+        return JSON.stringify({ spans: spansByCall[isRepair(content) ? describeCalls - 1 : describeCalls++] ?? [] });
       },
     },
   });

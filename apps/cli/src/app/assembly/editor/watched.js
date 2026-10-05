@@ -1,6 +1,6 @@
-// Estado "assistido de verdade" (Task 9): pura e testável. O front só
-// considera assistida a prévia da revisão atual vista até o fim; qualquer
-// outro caso bloqueia o approveFinal (o back-end rejeita de todo jeito).
+// Estado "assistido de verdade" (Task 9): pura e testável. Assistida é a
+// prévia da revisão atual vista até o fim. Aprovar só exige a prévia atual:
+// sem ter visto tudo, o botão pede confirmação antes de enviar.
 export function watchedState(project, watched) {
   const revision = project ? project.revision : null;
   const previewRevision = project ? project.previewRevision : null;
@@ -17,5 +17,5 @@ export function watchedState(project, watched) {
   if (watchedOk) {
     return { fresh, watched: true, canApprove: true, label: "assistida ✓" };
   }
-  return { fresh, watched: false, canApprove: false, label: "prévia atualizada ✓" };
+  return { fresh, watched: false, canApprove: true, label: "prévia atualizada ✓" };
 }

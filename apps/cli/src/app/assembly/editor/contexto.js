@@ -260,19 +260,22 @@ export function mountStage({ state, api, player }) {
   });
   document.getElementById("refreshPreview").onclick = () => refreshPreview();
   document.getElementById("approveFinal").onclick = () => {
-    // O front nunca mente: só parte com canApprove e envia a revisão
-    // assistida de verdade do state (o back-end rejeita divergência).
+    // Só parte com a prévia atual; sem tê-la visto inteira, confirma antes.
+    // Envia a revisão da prévia conferida (o back-end rejeita divergência).
     const project = state.get("project");
-    const watched = state.get("watched") || { revision: null, ended: false };
-    if (!watchedState(project, watched).canApprove) {
-      api.notifyError("Assista à prévia atual até o fim antes de aprovar.");
+    const status = watchedState(project, state.get("watched"));
+    if (!status.canApprove) {
+      api.notifyError("Gere a prévia da versão atual antes de aprovar.");
       return;
     }
+    if (!status.watched && !window.confirm(
+      "Você ainda não assistiu à prévia inteira. Aprovar mesmo assim?",
+    )) return;
     void api.call("/project/approve-final", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: project.revision,
-        watchedRevision: watched.revision,
+        watchedRevision: project.previewRevision,
       }),
       label: "Aprovando prévia…",
     });

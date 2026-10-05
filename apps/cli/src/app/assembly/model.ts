@@ -282,14 +282,20 @@ function uniqueSpanId(base: string, taken: Set<string>): string {
 }
 
 function windowCovered(spans: VisualSpan[], window: VisualWindow): boolean {
+  return windowMissing(spans, window).length === 0;
+}
+
+/** Segundos de [start, end) sem nenhuma evidência, na origem da fonte. */
+function windowMissing(spans: VisualSpan[], window: VisualWindow): number[] {
   const clipped = spans
     .map((span) => ({ start: Math.max(span.start, window.start), end: Math.min(span.end, window.end) }))
     .filter((range) => range.start < range.end);
+  const missing: number[] = [];
   for (let start = window.start; start < window.end; start += 1) {
     const end = Math.min(start + 1, window.end);
-    if (!clipped.some((range) => range.start < end && start < range.end)) return false;
+    if (!clipped.some((range) => range.start < end && start < range.end)) missing.push(start);
   }
-  return true;
+  return missing;
 }
 
 /**
@@ -439,6 +445,7 @@ export async function describeSource(
         throw error;
       }
       if (signal.aborted) throw new Error("descrição visual cancelada");
+      let strictCoverage = true;
       const fresh = await requestValidated(frameMessage(frames, window, profile), async (content, requestSignal) => {
         const queued = now();
         const attempt = ++attempts;
@@ -461,7 +468,22 @@ export async function describeSource(
         }, { signal: requestSignal });
         if (deps?.isCurrent && !deps.isCurrent()) throw new Error("descrição visual obsoleta");
         return text;
-      }, (text) => parseLocalSpans(text, source, window, profile), signal);
+      }, (text) => {
+        const spans = parseLocalSpans(text, source, window, profile);
+        // Só a primeira resposta é recusada por lacuna: a correção aponta os
+        // segundos que faltaram. Se ainda faltar, o parcial fica no cache e a
+        // retomada pede só esta janela de novo.
+        const first = strictCoverage;
+        strictCoverage = false;
+        const missing = first ? windowMissing([...previous, ...spans], window) : [];
+        if (missing.length > 0) {
+          throw new Error(
+            "faltam os segundos locais " + missing.map((second) => second - window.fetchStart).join(", ") +
+            "; cada segundo do intervalo solicitado precisa de um span (use confidence unavailable se não for observável)",
+          );
+        }
+        return spans;
+      }, signal);
       signal.throwIfAborted();
       if (deps?.isCurrent && !deps.isCurrent()) throw new Error("descrição visual obsoleta");
       const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
