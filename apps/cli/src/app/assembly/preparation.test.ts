@@ -917,7 +917,8 @@ describe("runPreparation", () => {
       first.deps,
       ctrl(),
     );
-    expect(first.calls.describe).toBe(2);
+    // [20,21) voltou vazia: uma correção automática, ainda vazia, fica parcial.
+    expect(first.calls.describe).toBe(3);
     expect(done.preparation?.status).toBe("interrupted");
     expect(done.scenes).toHaveLength(0);
     const retry = makeFakes({
