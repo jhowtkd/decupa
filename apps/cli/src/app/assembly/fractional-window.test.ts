@@ -35,12 +35,20 @@ async function sourceOf(durationSeconds: number) {
   };
 }
 
+/**
+ * Janelas inteiras cobrem o intervalo pedido (senão a lacuna pediria
+ * correção); só a janela final, de [60, 60.4), recebe o quadro local [1, end].
+ */
 function clientReturning(end: number, sends: { n: number }) {
   return {
-    async send() {
+    async send(content: unknown[]) {
       sends.n += 1;
+      const text = (content[0] as { text: string }).text;
+      const [, start, stop] = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(text)!.map(Number);
+      const fetchStart = start === 0 ? 0 : start! - 1;
+      const span = start! >= 60 ? { start: 1, end } : { start: start! - fetchStart, end: stop! - fetchStart };
       return JSON.stringify({
-        spans: [{ id: "local-0", start: 1, end, text: "fundo", confidence: "observed", tags: [] }],
+        spans: [{ id: "local-0", ...span, text: `fundo-${start}`, confidence: "observed", tags: [] }],
       });
     },
   };

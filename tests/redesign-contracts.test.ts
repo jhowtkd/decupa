@@ -27,9 +27,10 @@ it("fiação shell↔módulos: regiões e ids dinâmicos existem", async () => {
   expect(js).toContain('entrega: "delivery"');
 });
 
-it("aprovação no front continua condicionada ao assistido real", async () => {
+it("aprovação no front pede confirmação quando a prévia não foi vista inteira", async () => {
   const contexto = await read(CONTEXTO);
-  expect(contexto).toContain("watchedState(project, watched).canApprove");
+  expect(contexto).toContain("watchedState(project, state.get(\"watched\"))");
+  expect(contexto).toContain("window.confirm(");
 });
 
 it("nenhum atalho de simulação nas superfícies servidas", async () => {
