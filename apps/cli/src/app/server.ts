@@ -626,14 +626,25 @@ async function startCleanupApp(opts: {
   };
 }
 
-function lazyPaidSend(projectDir: string, configDir?: string): (content: unknown[], signal?: AbortSignal) => Promise<string> {
+/**
+ * A proposta escreve o JSON de todas as cenas de uma vez: com várias fontes
+ * longas a geração passa dos 120s padrão do transporte (feitos para janelas
+ * visuais curtas). Cancelar continua imediato pelo signal.
+ */
+const PROPOSAL_TIMEOUT_MS = 10 * 60_000;
+
+function lazyPaidSend(
+  projectDir: string,
+  configDir?: string,
+  timeoutMs?: number,
+): (content: unknown[], signal?: AbortSignal) => Promise<string> {
   let client: { send(content: unknown[], signal?: AbortSignal): Promise<string> } | undefined;
   return async (content, signal) => {
     if (!client) {
       const { createAnalysisClient, readCredentials } = await import("@decupa/triage");
       const stored = await readCredentials(projectDir).catch(() => null)
         ?? (configDir ? await readCredentials(configDir).catch(() => null) : null);
-      client = createAnalysisClient({ stored });
+      client = createAnalysisClient({ stored, timeoutMs });
     }
     return client.send(content, signal);
   };
@@ -704,7 +715,7 @@ async function startAssemblyApp(opts: {
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
-    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir) : undefined),
+    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir, PROPOSAL_TIMEOUT_MS) : undefined),
     describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir), ...visualIdentity } : undefined),
     speech,
   });
