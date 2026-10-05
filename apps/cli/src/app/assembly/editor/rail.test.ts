@@ -219,10 +219,11 @@ describe("primaryAction — montar/preparar/revisar/entregar", () => {
     }), null)).toMatchObject({ kind: "preparar", label: "Retomar preparação" });
   });
 
-  it("preparação pronta sem cortes → Revisar prévia (gratuito)", () => {
+  it("preparação pronta com cenas, mas sem cortes → Revisar prévia (gratuito)", () => {
     expect(primaryAction(project({
       assembly: { sources: [{ id: "a", included: true }], tracks: [] },
       preparation: prep({ a: {} }),
+      scenes: [{ id: "s0" }],
     }), null)).toMatchObject({ kind: "revisar", label: "Revisar prévia", stage: "revisao" });
   });
 
@@ -242,6 +243,26 @@ describe("primaryAction — montar/preparar/revisar/entregar", () => {
       preparation: prep({ a: {} }),
       finalApprovedRevision: 7,
     }), null)).toMatchObject({ kind: "entregar", stage: "entrega" });
+  });
+
+  it("preparação pronta com cenas desfeitas (sem cenas nem cortes) → Montar vídeo", () => {
+    expect(primaryAction(project({
+      revision: 6,
+      assembly: { sources: [{ id: "a", included: true }], tracks: [] },
+      preparation: prep({ a: {} }),
+      scenes: [],
+      finalApprovedRevision: null,
+    }), null)).toEqual({ kind: "montar", label: "Montar vídeo", disabled: false, stage: null });
+  });
+
+  it("preparação pronta com cenas e cortes segue Revisar prévia", () => {
+    expect(primaryAction(project({
+      revision: 6,
+      assembly: { sources: [{ id: "a", included: true }], ...withClips },
+      preparation: prep({ a: {} }),
+      scenes: [{ id: "s0" }],
+      finalApprovedRevision: null,
+    }), null)).toMatchObject({ kind: "revisar", stage: "revisao" });
   });
 
   it("fonte incluída sem análise registrada → Preparar montagem", () => {

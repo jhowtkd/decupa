@@ -55,3 +55,26 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm smoke
       - run: pnpm test
+
+      # Testes Python com mocks: não baixam modelo nem precisam dos venvs dos
+      # sidecars (WhisperX, MediaPipe), só da biblioteca padrão.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Um passo por comando: no Windows o pwsh só olha o código do último
+      # comando do script, e a falha da fala sumiria atrás do passo da visão.
+      - name: testes Python da fala
+        run: python -m unittest discover -s services/speech -p "test_*.py"
+
+      - name: testes Python da visão
+        run: python -m unittest discover -s services/vision -p "test_*.py"
+
+      # O render importa o motor, clonado do bundle do repositório sem rede.
+      # Só no macOS: a prova de recursos lê a árvore de processos pelo `ps` e
+      # usa sinais POSIX.
+      - name: testes Python do render
+        if: matrix.os == 'macos-latest'
+        run: |
+          node scripts/setup.mjs --engine-only
+          python -m unittest discover -s scripts -p "test_render_*.py"

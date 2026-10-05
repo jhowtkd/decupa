@@ -35,7 +35,8 @@ export function companyCredentialsFromEnv(
 ): Credentials | null {
   const companyKey = env.DECUPA_COMPANY_API_KEY?.trim();
   if (companyKey) {
-    const presetRaw = (env.DECUPA_COMPANY_PRESET ?? "zai").trim();
+    // Vazio é ausente: um `export DECUPA_COMPANY_PRESET=` não trava o app.
+    const presetRaw = env.DECUPA_COMPANY_PRESET?.trim() || "zai";
     if (!isProvider(presetRaw)) {
       throw new Error(
         `DECUPA_COMPANY_PRESET aceita zai, gemini, minimax ou custom, não "${presetRaw}"`,

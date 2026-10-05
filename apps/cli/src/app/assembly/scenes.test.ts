@@ -1,7 +1,9 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import { compileScenes, proposeScenes, validateProposal } from "./scenes.ts";
-import type { Project } from "./types.ts";
+import { validateProject } from "./store.ts";
+import type { Project, Rate, Scene, Source } from "./types.ts";
+import { validateAssembly } from "./validate.ts";
 
 function project(): Project {
   const assembly = fixtureAssembly();
@@ -475,4 +477,176 @@ it("nova proposta aplica pausas compactas antes de compilar a prévia",()=>{
  expect(proposal.scenes[0]!.takes[0]!.removed).toEqual([{start:0.55,end:1.45}]);
  const audio=compileScenes(p,proposal.scenes).tracks.find(t=>t.kind==="Audio")!.clips;
  expect(audio).toHaveLength(2);expect(audio[1]!.startFrame).toBe(audio[0]!.durationFrames);
+});
+
+function fonte(id: string, role: Source["role"], durationSeconds: number, fps: Rate): Source {
+  return {
+    id,
+    path: `/tmp/${id}.mp4`,
+    sha256: id === "fala" ? "a".repeat(64) : "b".repeat(64),
+    durationSeconds,
+    hasVideo: true,
+    hasAudio: role !== "support",
+    fps,
+    width: 1920,
+    height: 1080,
+    role,
+    included: true,
+    name: `${id}.mp4`,
+  };
+}
+
+function projetoVazio(fps: Rate): Project {
+  return {
+    version: 2,
+    id: "p-eof",
+    revision: 1,
+    input: { kind: "brief", text: "", targetSeconds: 60 },
+    assembly: {
+      version: 1, revision: 1, name: "m", fps, width: 1920, height: 1080,
+      sources: [], tracks: [],
+    },
+    scenes: [],
+    analyses: [],
+    proposal: null,
+    previewRevision: null,
+    finalApprovedRevision: null,
+    corrections: [],
+    preparation: null,
+    permissions: { model: true, visual: true },
+    previewArtifact: null,
+  };
+}
+
+function fimDoClipe(
+  clip: { sourceStartSeconds: number; durationFrames: number },
+  fps: Rate,
+): number {
+  return clip.sourceStartSeconds + (clip.durationFrames * fps.den) / fps.num;
+}
+
+it("fala no fim da fonte a 24000/1001 e a 30 fps compila sem ultrapassar", () => {
+  const casos = [
+    { dur: 60, fps: { num: 24000, den: 1001 }, start: 59, end: 60 },
+    { dur: 10.02, fps: { num: 30, den: 1 }, start: 9, end: 10.02 },
+  ];
+  for (const caso of casos) {
+    const p = projetoVazio(caso.fps);
+    p.assembly.sources = [fonte("fala", "speech", caso.dur, caso.fps)];
+    const scene: Scene = {
+      id: "c1", objective: "", rationale: "", speechIds: [],
+      takes: [{
+        id: "t1", sourceId: "fala", speechId: null,
+        start: caso.start, end: caso.end, removed: [], protected: [],
+      }],
+      visualEvidenceIds: [], support: [], gaps: [],
+    };
+    p.scenes = [scene];
+    const assembly = compileScenes(p, [scene]);
+    const salvo = validateProject({ ...p, assembly });
+    validateAssembly(salvo.assembly);
+    const clips = salvo.assembly.tracks.flatMap((track) => track.clips);
+    expect(clips.length).toBeGreaterThan(0);
+    for (const clip of clips) {
+      expect(fimDoClipe(clip, caso.fps)).toBeLessThanOrEqual(caso.dur + 1e-9);
+    }
+  }
+});
+
+it("apoio V2 encerrado no fim da fonte não ultrapassa a duração", () => {
+  const fps = { num: 30, den: 1 };
+  const p = projetoVazio(fps);
+  p.assembly.sources = [
+    fonte("fala", "speech", 30, fps),
+    fonte("apoio", "support", 10.02, fps),
+  ];
+  p.analyses = [{
+    sourceId: "apoio", key: "k", status: "ready", speech: [],
+    visual: [{
+      id: "apoio:v0", sourceId: "apoio", start: 0, end: 10.02, text: "plano",
+      confidence: "observed", tags: [],
+    }],
+    words: [], wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  }];
+  const scene: Scene = {
+    id: "c1", objective: "", rationale: "", speechIds: [],
+    takes: [{
+      id: "t1", sourceId: "fala", speechId: null,
+      start: 0, end: 20, removed: [], protected: [],
+    }],
+    visualEvidenceIds: ["apoio:v0"],
+    support: [{ visualId: "apoio:v0", offsetFrames: 0, durationFrames: 400 }],
+    gaps: [],
+  };
+  p.scenes = [scene];
+  const assembly = compileScenes(p, [scene]);
+  const salvo = validateProject({ ...p, assembly });
+  const v2 = salvo.assembly.tracks.find((track) => track.name === "V2")!.clips;
+  expect(v2).toHaveLength(1);
+  expect(fimDoClipe(v2[0]!, fps)).toBeLessThanOrEqual(10.02 + 1e-9);
+});
+
+it("proposeScenes com fala no fim da fonte chama o modelo uma vez", async () => {
+  const fps = { num: 24000, den: 1001 };
+  const p = projetoVazio(fps);
+  p.revision = 3;
+  p.assembly.revision = 3;
+  p.assembly.sources = [fonte("s1", "speech", 60, fps)];
+  p.assembly.sources[0]!.sha256 = "c".repeat(64);
+  p.analyses = [{
+    sourceId: "s1", key: "k", status: "ready",
+    speech: [
+      { id: "s1:u1", sourceId: "s1", start: 2, end: 30, text: "a" },
+      { id: "s1:u2", sourceId: "s1", start: 55, end: 60, text: "tchau" },
+    ],
+    visual: [], words: [], wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  }];
+  let calls = 0;
+  let caught: unknown;
+  try {
+    await proposeScenes(p, "", new AbortController().signal, {
+      send: async () => {
+        calls += 1;
+        return JSON.stringify({
+          scenes: [{
+            id: "c1", objective: "o", rationale: "r",
+            selections: [{ speechId: "s1:u1" }, { speechId: "s1:u2" }],
+          }],
+          changedSceneIds: ["c1"],
+          explanation: "",
+        });
+      },
+    });
+  } catch (err) {
+    caught = err;
+  }
+  expect(calls).toBe(1);
+  expect(caught).toBeUndefined();
+});
+
+describe("rescaleSupport", () => {
+  it("30 para 25 conserva o tempo, descarta apoio de zero quadro e o mesmo fps devolve as cenas", async () => {
+    const { rescaleSupport } = await import("./scenes.ts");
+    expect(rescaleSupport).toEqual(expect.any(Function));
+    const fps30 = { num: 30, den: 1 };
+    const fps25 = { num: 25, den: 1 };
+    const scenes: Scene[] = [{
+      id: "c1", objective: "", rationale: "", speechIds: [], takes: [],
+      visualEvidenceIds: [], gaps: [],
+      support: [
+        { visualId: "v", offsetFrames: 30, durationFrames: 60 },
+        { visualId: "z", offsetFrames: 3, durationFrames: 1 },
+      ],
+    }];
+    const scaled = rescaleSupport(scenes, fps30, fps25);
+    expect(scaled[0]!.support).toEqual([
+      { visualId: "v", offsetFrames: 25, durationFrames: 50 },
+    ]);
+    const kept = scaled[0]!.support[0]!;
+    expect(kept.offsetFrames / fps25.num).toBe(30 / fps30.num);
+    expect((kept.offsetFrames + kept.durationFrames) / fps25.num).toBe((30 + 60) / fps30.num);
+    expect(rescaleSupport(scenes, fps30, { num: 60, den: 2 })).toBe(scenes);
+  });
 });

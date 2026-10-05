@@ -60,12 +60,16 @@ export async function verifySourceIdentity(source: Source): Promise<void> {
   }
 }
 
+/** Diferença máxima entre o proxy de reprodução e a fonte, em segundos. */
+export const PROXY_DURATION_TOLERANCE_SECONDS = 1;
+
 async function proxyIsValid(path: string, source: Source): Promise<boolean> {
   try {
     const info = await probe(path);
     if (!info.hasVideo && !info.hasAudio) return false;
     const duration = info.durationMs / 1000;
-    return Math.abs(duration - source.durationSeconds) <= Math.max(0.6, source.durationSeconds * 0.03);
+    // Folga absoluta: 3% de uma fonte de 1 h aceitava um proxy 108 s mais curto.
+    return Math.abs(duration - source.durationSeconds) <= PROXY_DURATION_TOLERANCE_SECONDS;
   } catch {
     return false;
   }

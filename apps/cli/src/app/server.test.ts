@@ -1,11 +1,13 @@
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import diagnosticsChannel from "node:diagnostics_channel";
+import { copyFile, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
-import { FakeExecutor, SpawnExecutor, type Executor } from "./pipeline.ts";
+import { FakeExecutor, SpawnExecutor, type ExecCall, type Executor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
+import { sourceManifestPath } from "./session.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -19,8 +21,8 @@ async function boot() {
 
 /** Sobe com índice e plano já no disco, para exercitar o caminho de sucesso
  *  sem rodar WhisperX nem o motor. */
-async function bootComPlano(
-  exec: FakeExecutor = new FakeExecutor(),
+async function bootComPlano<E extends Executor = FakeExecutor>(
+  exec: E = new FakeExecutor() as unknown as E,
   // A triagem agora é biblioteca: sem injeção ela exigiria provider e chave
   // de verdade, então quem testa a borda injeta o resultado dela.
   triageFn?: (opts: {
@@ -30,8 +32,18 @@ async function bootComPlano(
     provider?: string;
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>,
+  /** Mídia copiada para `v.mp4`; sem ela, um arquivo que não é vídeo. */
+  source?: string,
 ) {
   const dir = await mkdtemp(join(tmpdir(), "decupa-app-"));
+  // A fonte e o manifesto existem antes da subida, como numa sessão real:
+  // triagem e export conferem a fonte contra o manifesto.
+  if (source) await copyFile(source, join(dir, "v.mp4"));
+  else await writeFile(join(dir, "v.mp4"), "não é vídeo", "utf8");
+  // A fonte mora dentro da pasta aqui, então o manifesto é gravado direto:
+  // claimWorkDir veria a pasta com conteúdo e a moveria para o lado.
+  const { size, mtimeMs } = await stat(join(dir, "v.mp4"));
+  await writeFile(sourceManifestPath(dir), JSON.stringify({ path: join(dir, "v.mp4"), size, mtimeMs }), "utf8");
   await mkdir(join(dir, "out"), { recursive: true });
   const units = ["u001", "u002", "u003"].map((id, i) => ({ id, index: i, text: `t${i}` }));
   await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({ units }), "utf8");
@@ -531,8 +543,7 @@ describe("startApp", () => {
   });
 
   it("export otio gera timeline compatível e serve no endpoint de download", async () => {
-    const { base, app, dir } = await bootComPlano();
-    await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "v.mp4"));
+    const { base, app, dir } = await bootComPlano(undefined, undefined, join(FIXTURES, "clip.mp4"));
     await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
       source_duration: 3, output_duration: 1.5,
       clips: [{ unit_ids: ["u002"], start: 0.5, end: 1.5 }, { unit_ids: ["u003"], start: 2, end: 2.5 }],
@@ -560,8 +571,7 @@ describe("startApp", () => {
   });
 
   it("export otio recusa clipe além da duração real da fonte", async () => {
-    const { base, app, dir } = await bootComPlano();
-    await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "v.mp4"));
+    const { base, app } = await bootComPlano(undefined, undefined, join(FIXTURES, "clip.mp4"));
     const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -596,5 +606,276 @@ describe("startApp", () => {
       headers: { origin: `http://127.0.0.1:${app.port}` },
     });
     expect(proprio.status).toBe(200);
+  });
+});
+
+/** ffprobe antigo lê texto `25/1`; o novo lê JSON com as duas taxas. */
+function stdoutDoProbe(call: ExecCall, extra?: string): string {
+  if (extra && call.args.some((arg) => arg.includes("timecode"))) return extra;
+  const json = call.args.includes("json") || call.args.some((arg) => arg.includes("avg_frame_rate"));
+  return json
+    ? JSON.stringify({ streams: [{ r_frame_rate: "25/1", avg_frame_rate: "25/1" }] })
+    : "25/1\n";
+}
+
+class ExecutorQueGrava extends FakeExecutor {
+  override async run(call: ExecCall) {
+    this.calls.push(call);
+    if (call.command === "ffprobe") {
+      return { code: 0, stdout: stdoutDoProbe(call), stderr: "" };
+    }
+    if (call.command === "ffmpeg" || call.args.includes("render")) {
+      const destino = call.args.at(-1);
+      if (destino && !destino.startsWith("-")) await writeFile(destino, "parcial");
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  }
+}
+
+describe("triagem serializada", () => {
+  it("dois pedidos iguais em voo chamam a triagem uma vez e devolvem o mesmo keep-list", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let chamadas = 0;
+    const { base, app } = await bootComPlano(new FakeExecutor(), async () => {
+      chamadas += 1;
+      await gate;
+      return { keepList: "u001-u003" };
+    });
+    let triagensChegaram = 0;
+    const noPedido = (message: unknown) => {
+      const req = (message as { request?: { method?: string; url?: string } }).request;
+      if (req?.method === "POST" && req.url?.includes("/triage")) triagensChegaram += 1;
+    };
+    try {
+      diagnosticsChannel.subscribe("http.server.request.start", noPedido);
+      const primeiro = fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+      await expect.poll(() => chamadas).toBe(1);
+      const segundo = fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+      // Soltar o portão no mesmo turno do fetch deixa a primeira triagem
+      // terminar antes de o servidor ler a segunda, e nasce outro voo.
+      await expect.poll(() => triagensChegaram).toBe(2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(chamadas).toBe(1);
+      release();
+      const [a, b] = await Promise.all([primeiro, segundo]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      const corpoA = await a.json() as { keepList: string };
+      const corpoB = await b.json() as { keepList: string };
+      expect(corpoA.keepList).toBe("u001-u003");
+      expect(corpoB.keepList).toBe(corpoA.keepList);
+      expect(chamadas).toBe(1);
+    } finally {
+      diagnosticsChannel.unsubscribe("http.server.request.start", noPedido);
+      release();
+    }
+  });
+
+  it("pedido diferente com uma triagem em voo responde 409 e não aborta a primeira", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let chamadas = 0;
+    let signal: AbortSignal | undefined;
+    const { base, app, dir } = await bootComPlano(new FakeExecutor(), async (opts) => {
+      chamadas += 1;
+      signal = opts.signal;
+      await gate;
+      return { keepList: "u001" };
+    });
+    try {
+      const primeiro = fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+      await expect.poll(() => chamadas).toBe(1);
+      await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({
+        units: [{ id: "u009", index: 0, text: "outro índice, outro tamanho" }],
+      }), "utf8");
+      // Sem o 409, o código antigo entra na mesma triagem e o fetch não volta.
+      const pedido = fetch(`${base}/jobs/${app.jobId}/triage`, { method: "POST" });
+      const segundo = await Promise.race([
+        pedido,
+        new Promise<Response>((resolve) => {
+          setTimeout(() => resolve(new Response(JSON.stringify({ error: "sem resposta" }), {
+            status: 599,
+            headers: { "content-type": "application/json" },
+          })), 800);
+        }),
+      ]);
+      expect(segundo.status).toBe(409);
+      expect((await segundo.json() as { error: string }).error).toMatch(/em andamento/);
+      expect(signal?.aborted).toBe(false);
+      release();
+      expect((await primeiro).status).toBe(200);
+      expect(signal?.aborted).toBe(false);
+      expect(chamadas).toBe(1);
+    } finally {
+      release();
+    }
+  });
+});
+
+describe("fonte trocada com o app aberto", () => {
+  it("triagem e export respondem 409 e não geram proxy nem corte", async () => {
+    let triagens = 0;
+    const { base, app, dir } = await bootComPlano(new ExecutorQueGrava(), async () => {
+      triagens += 1;
+      return { keepList: "u001" };
+    });
+    await writeFile(join(dir, "v.mp4"), "conteúdo diferente e maior que o original");
+    const pedir = (path: string, body?: unknown) => fetch(`${base}/jobs/${app.jobId}/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const triagem = await pedir("triage");
+    expect(triagem.status).toBe(409);
+    expect((await triagem.json() as { error: string }).error).toMatch(/mudou depois que o app abriu/);
+    expect(triagens).toBe(0);
+    for (const kind of ["edl", "srt", "mp4"]) {
+      const res = await pedir("export", { kind });
+      expect(res.status, kind).toBe(409);
+      expect((await res.json() as { error: string }).error).toMatch(/mudou depois que o app abriu/);
+    }
+    await expect(readFile(join(dir, "triage-proxy.mp4"))).rejects.toThrow();
+    for (const nome of ["corte.edl", "corte.srt", "corte.mp4", "corte.otio"]) {
+      await expect(readFile(join(dir, nome))).rejects.toThrow();
+    }
+  });
+});
+
+describe("timecode embutido no export", () => {
+  it("EDL e OTIO começam em 01:00:00:00 mais o offset do clipe", async () => {
+    const { base, app, dir } = await bootComPlano(new SpawnExecutor(), undefined, join(FIXTURES, "tc-1h-25.mov"));
+    await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+      source_duration: 2, output_duration: 0.5,
+      clips: [{ unit_ids: ["u002"], start: 1, end: 1.5 }],
+      joins: [],
+    }), "utf8");
+    const edlRes = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "edl" }),
+    });
+    expect(edlRes.status).toBe(200);
+    expect(await readFile(join(dir, "corte.edl"), "utf8")).toContain("01:00:01:00");
+
+    const otioRes = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "otio" }),
+    });
+    expect(otioRes.status).toBe(200);
+    const otio = JSON.parse(await readFile(join(dir, "corte.otio"), "utf8")) as {
+      tracks: { children: { children: { OTIO_SCHEMA: string; source_range: { start_time: { value: number; rate: number } } }[] }[] };
+    };
+    const clipe = otio.tracks.children.flatMap((trilha) => trilha.children)
+      .find((item) => item.OTIO_SCHEMA === "Clip.1");
+    expect(clipe?.source_range.start_time).toEqual({ OTIO_SCHEMA: "RationalTime.1", value: 90025, rate: 25 });
+  }, 30_000);
+
+  it("timecode ilegível recusa o export EDL", async () => {
+    const exec = new FakeExecutor();
+    const original = exec.run.bind(exec);
+    exec.run = async (call) => {
+      exec.calls.push(call);
+      if (call.command === "ffprobe") {
+        return { code: 0, stdout: stdoutDoProbe(call, JSON.stringify({
+          streams: [{ codec_type: "video", r_frame_rate: "25/1", avg_frame_rate: "25/1" }],
+          format: { tags: { timecode: "99:99:99:99" } },
+        })), stderr: "" };
+      }
+      return original(call);
+    };
+    const { base, app, dir } = await bootComPlano(exec);
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "edl" }),
+    });
+    expect(res.status).toBe(500);
+    expect((await res.json() as { error: string }).error).toMatch(/timecode ilegível/);
+    await expect(readFile(join(dir, "corte.edl"))).rejects.toThrow();
+  });
+});
+
+describe("keep-list na borda HTTP", () => {
+  it("POST /keep com faixa inválida responde 400 sem rodar o plano", async () => {
+    const { base, app, exec } = await bootComPlano();
+    const res = await fetch(`${base}/jobs/${app.jobId}/keep`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keepList: "u001 --foo" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toMatch(/faixa inválida/);
+    expect(exec.calls.some((call) => call.args.includes("plan"))).toBe(false);
+  });
+
+  it("export com keep-list inválido responde 400", async () => {
+    const { base, app } = await bootComPlano();
+    const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "edl", keepList: "u001 --foo" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toMatch(/faixa inválida/);
+  });
+});
+
+describe("fonte com só o mtime diferente", () => {
+  /** Sobe sem `workDir`: o `claimWorkDir` da subida grava o manifesto com amostra. */
+  async function bootSemWorkDir(triagens: { n: number }) {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-mtime-"));
+    const input = join(dir, "v.mp4");
+    await writeFile(input, Buffer.alloc(2 * 1024 * 1024, 7));
+    const app = await startApp({
+      input, port: 0, autoStart: false, executor: new FakeExecutor(),
+      triageFn: async () => {
+        triagens.n += 1;
+        return { keepList: "u001" };
+      },
+    });
+    stop = app.close;
+    const workDir = join(dir, ".decupa-v.mp4");
+    await mkdir(join(workDir, "out"), { recursive: true });
+    const units = ["u001", "u002", "u003"].map((id, i) => ({ id, index: i, text: `t${i}` }));
+    await writeFile(join(workDir, "out", "speech_index.json"), JSON.stringify({ units }), "utf8");
+    await writeFile(join(workDir, "out", "condense_plan.json"), JSON.stringify({
+      source_duration: 30, output_duration: 20,
+      clips: [{ unit_ids: ["u002", "u003"], start: 10, end: 30 }],
+      joins: [],
+    }), "utf8");
+    await writeFile(join(workDir, "transcript.json"), JSON.stringify({
+      segments: [{ start: 10, end: 11, text: "oi", words: [{ text: "oi", start: 10, end: 11 }] }],
+    }), "utf8");
+    const pedir = (path: string, body?: unknown) => fetch(`http://127.0.0.1:${app.port}/jobs/${app.jobId}/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { input, pedir };
+  }
+
+  it("triagem e export srt seguem funcionando depois de um utimes", async () => {
+    // Hoje: 409 "mudou depois que o app abriu" por causa só da data.
+    const triagens = { n: 0 };
+    const { input, pedir } = await bootSemWorkDir(triagens);
+    const novo = new Date((await stat(input)).mtimeMs + 60_000);
+    await utimes(input, novo, novo);
+    expect((await pedir("triage")).status).toBe(200);
+    expect(triagens.n).toBe(1);
+    expect((await pedir("export", { kind: "srt" })).status).toBe(200);
+  });
+
+  it("conteúdo diferente do mesmo tamanho, com outra data, continua dando 409", async () => {
+    // Controle: a amostra distingue vídeo trocado de vídeo apenas tocado.
+    const triagens = { n: 0 };
+    const { input, pedir } = await bootSemWorkDir(triagens);
+    await writeFile(input, Buffer.alloc(2 * 1024 * 1024, 9));
+    const novo = new Date((await stat(input)).mtimeMs + 60_000);
+    await utimes(input, novo, novo);
+    const res = await pedir("triage");
+    expect(res.status).toBe(409);
+    expect(triagens.n).toBe(0);
   });
 });

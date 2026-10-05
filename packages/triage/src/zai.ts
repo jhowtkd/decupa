@@ -50,12 +50,32 @@ function parseJsonPayload(text: string): Record<string, unknown> {
   }
 }
 
+/**
+ * A lista que a forma pede, ou erro. `{}` ou uma chave trocada viravam lista
+ * vazia, e a lista vazia ia para o cache como "o modelo não achou nada".
+ * Itens que não servem saem; se nenhum servir, a resposta inteira não serve.
+ */
+function listField(payload: Record<string, unknown>, key: string, text: string): unknown[] {
+  const list = payload[key];
+  if (!Array.isArray(list)) {
+    throw new Error(`a resposta do modelo não tem a lista \`${key}\`: ${text.slice(0, 200)}`);
+  }
+  return list;
+}
+
+function usableItems(list: unknown[], key: string, text: string): any[] {
+  const usable = list.filter((c: any) => Array.isArray(c?.unit_ids) && c.unit_ids.length > 0);
+  if (list.length > 0 && usable.length === 0) {
+    throw new Error(`nenhum item de \`${key}\` na resposta do modelo tem \`unit_ids\`: ${text.slice(0, 200)}`);
+  }
+  return usable;
+}
+
 export function parseStructureClaims(text: string): StructureClaim[] {
   const payload = parseJsonPayload(text);
-  const claims = Array.isArray(payload.claims) ? payload.claims : [];
+  const claims = listField(payload, "claims", text);
 
-  return claims
-    .filter((c: any) => Array.isArray(c?.unit_ids) && c.unit_ids.length > 0)
+  return usableItems(claims, "claims", text)
     .map((c: any) => ({
       unit_ids: c.unit_ids.map(String),
       reason: c.reason,
@@ -71,10 +91,9 @@ export function parseInspectVerdict(text: string, unitId: string): InspectVerdic
 
 export function parseDensityCandidates(text: string): DensityCandidate[] {
   const payload = parseJsonPayload(text);
-  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+  const candidates = listField(payload, "candidates", text);
 
-  return candidates
-    .filter((c: any) => Array.isArray(c?.unit_ids) && c.unit_ids.length > 0)
+  return usableItems(candidates, "candidates", text)
     .map((c: any) => {
       const rank = Number(c.rank);
       return {
@@ -85,36 +104,52 @@ export function parseDensityCandidates(text: string): DensityCandidate[] {
     });
 }
 
+/**
+ * Teto do vídeo em base64 numa chamada. Medido na Z.ai: 2,2 MB passou e
+ * 14,9 MB falhou com "internal network failure"; acima de ~5 MB o erro
+ * genérico já aparecia. Vídeo maior é triado em janelas (apps/cli/src/triage.ts).
+ */
+export const MAX_VIDEO_PAYLOAD_BYTES = 5 * 1024 * 1024;
+
+/** Tamanho em base64 de um arquivo de `bytes` bytes. */
+export function base64Bytes(bytes: number): number {
+  return Math.ceil(bytes / 3) * 4;
+}
+
 export class ZaiTriageModel implements TriageModel {
   private readonly client: ZaiClient;
-  private videoDataUrl: string | null = null;
+  /** Por caminho: com janelas, cada trecho é um vídeo diferente. */
+  private video: { path: string; dataUrl: string } | null = null;
 
   constructor(opts: ConstructorParameters<typeof ZaiClient>[0] = {}) {
     this.client = new ZaiClient(opts);
   }
 
-  private async video(path: string): Promise<string> {
-    if (this.videoDataUrl) return this.videoDataUrl;
+  private async videoDataUrl(path: string): Promise<string> {
+    if (this.video?.path === path) return this.video.dataUrl;
     const bytes = await readFile(path);
-    this.videoDataUrl = `data:video/mp4;base64,${bytes.toString("base64")}`;
-    return this.videoDataUrl;
+    const base64 = bytes.toString("base64");
+    // Recusa antes de pagar: a chamada com payload acima do teto falha no
+    // provedor com erro genérico, depois de cobrada.
+    if (base64.length > MAX_VIDEO_PAYLOAD_BYTES) {
+      throw new Error(
+        `o vídeo da triagem virou ${(base64.length / 1024 / 1024).toFixed(1)} MB em base64, acima do teto de ` +
+        `${(MAX_VIDEO_PAYLOAD_BYTES / 1024 / 1024).toFixed(0)} MB por chamada; a chamada não foi feita. ` +
+        "Gere um proxy mais leve com `-vf fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease -crf 32`.",
+      );
+    }
+    const dataUrl = `data:video/mp4;base64,${base64}`;
+    this.video = { path, dataUrl };
+    return dataUrl;
   }
 
   private async ask(videoPath: string, instructions: string, text: string): Promise<string> {
-    const dataUrl = await this.video(videoPath);
-    const payloadMb = (dataUrl.length * 3) / 4 / 1024 / 1024;
-    try {
-      return await this.client.send([
-        { type: "video_url", video_url: { url: dataUrl } },
-        { type: "text", text: `${instructions}\n\n---\n\n${text}` },
-      ]);
-    } catch (err) {
-      const hint = payloadMb > 5
-        ? ` (o vídeo virou ${payloadMb.toFixed(1)} MB em base64 — corpo grande já causou erro genérico aqui; ` +
-          "gere um proxy mais leve com `-vf fps=1,scale='min(270,iw)':'min(480,ih)':force_original_aspect_ratio=decrease -crf 32`)"
-        : "";
-      throw new Error(`${err instanceof Error ? err.message : String(err)}${hint}`);
-    }
+    // O teto de payload já foi conferido em `videoDataUrl`, antes de pagar.
+    const dataUrl = await this.videoDataUrl(videoPath);
+    return this.client.send([
+      { type: "video_url", video_url: { url: dataUrl } },
+      { type: "text", text: `${instructions}\n\n---\n\n${text}` },
+    ]);
   }
 
   usage() {

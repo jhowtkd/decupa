@@ -1,10 +1,13 @@
+import { execFile } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, unlink, writeFile, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
 import type { Executor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
 import { mediaWork } from "./media-work.ts";
@@ -12,7 +15,9 @@ import { applyCanvasPolicy } from "./canvas.ts";
 import { paidBlockedReason, PAID_BLOCKED, blankProject, publishCorrection, createAssemblyRuntime } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { applyHistorySnapshot } from "./revisions.ts";
-import type { Project, Source } from "./types.ts";
+import { buildOtio } from "./otio.ts";
+import { compileScenes } from "./scenes.ts";
+import type { Assembly, Project, Source } from "./types.ts";
 import { createProject, loadProject, readHistorySnapshot, saveProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
@@ -39,7 +44,9 @@ function indexingExec(): Executor {
         await mkdir(join(work, "out"), { recursive: true });
         await writeFile(join(work, "out", "speech_index.json"), `${JSON.stringify(INDEX)}\n`);
       }
-      if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call)) && work) {
+        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -350,9 +357,10 @@ it("POST /analyze no serviço residente usa o worker e não spawnam transcribe.p
   const stored = opened.project.assembly.sources[0]?.path;
   expect(stored).toBeTruthy();
   // sourceFromFile canonicaliza com realpath: no macOS /var vs /private/var,
-  // no Windows 8.3 (RUNNER~1) vs o caminho longo. O taskId do worker é esse
-  // path gravado, não a grafia do mkdtemp que o boot() devolve.
-  expect(workerCalls).toEqual([stored]);
+  // no Windows 8.3 (RUNNER~1) vs o caminho longo. A chave do worker começa
+  // nesse path gravado (e pode trazer tamanho, mtime, modelo e idioma).
+  expect(workerCalls).toHaveLength(1);
+  expect(workerCalls[0]!.split("#")[0]).toBe(stored);
   expect(stored).toBe(await realpath(clip));
 });
 
@@ -414,7 +422,8 @@ it("POST /project/cancel cancela só o worker da fonte em análise", async () =>
   expect(cancel.status).toBe(200);
   expect((await cancel.json() as { operation: { stage: string } }).operation.stage).toBe("cancelled");
   await analyze;
-  expect(cancelled).toEqual([stored]);
+  expect(cancelled).toHaveLength(1);
+  expect(cancelled[0]!.split("#")[0]).toBe(stored);
 });
 
 it("recusa visual pago sem autorização explícita mesmo com cliente", async () => {
@@ -592,7 +601,9 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         workDirs.push(work);
         // Mídia válida: o probe recusa bytes arbitrários com 500.
-        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        if (!(await writeTimelineReference(call)) && work) {
+          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        }
         await new Promise((r) => setTimeout(r, 40));
         return { code: 0, stdout: "ok", stderr: "" };
       },
@@ -600,13 +611,28 @@ it("duas prévias da mesma revisão usam pastas de trabalho distintas", async ()
   });
   stop = app.close;
   const opened = await loadProject(dir);
-  await saveProject(dir, opened.revision, (current) => ({
-    ...current,
-    scenes: [{
-      id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
-      visualEvidenceIds: [], support: [], gaps: [],
-    }],
-  }));
+  await saveProject(dir, opened.revision, (current) => {
+    const source = current.assembly.sources[0];
+    const fps = current.assembly.fps.num / current.assembly.fps.den;
+    const frames = source ? Math.round(source.durationSeconds * fps) : 0;
+    const placed = (id: string) => ({
+      id, sceneId: "s1", sourceId: source?.id ?? "a",
+      sourceStartSeconds: 0, startFrame: 0, durationFrames: frames,
+    });
+    return {
+      ...current,
+      scenes: [{
+        id: "s1", objective: "abrir", rationale: "tema", speechIds: [], takes: [],
+        visualEvidenceIds: [], support: [], gaps: [],
+      }],
+      assembly: source ? {
+        ...current.assembly,
+        tracks: current.assembly.tracks.map((track) => (
+          track.name === "V2" ? track : { ...track, clips: [placed(track.kind === "Audio" ? "a1-fala" : "v1-fala")] }
+        )),
+      } : current.assembly,
+    };
+  });
   const loaded = await loadProject(dir);
   const url = `http://127.0.0.1:${app.port}`;
   const [a, b] = await Promise.all([
@@ -640,7 +666,7 @@ it("prévia cancelada na fila não lança render pela rota", async () => {
         calls.push({ command: call.command, args: call.args });
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         if (work && call.command === "python3") {
-          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+          await writeTimelineReference(call);
         }
         return { code: 0, stdout: "", stderr: "" };
       },
@@ -1269,7 +1295,7 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   const source = js.slice(js.indexOf("async function call("), js.indexOf("const api ="));
   const ui = { importing: true, error: null };
   const client = { call: vi.fn() };
-  const state = { set: vi.fn() };
+  const state = { set: vi.fn(), get: vi.fn() };
   const call = runInNewContext(source + "; call", { ui, client, state, renderStatus: vi.fn(), maybeScheduleAutoPreview: vi.fn() });
   const opts = { method: "POST", body: JSON.stringify({ baseRevision: 1 }) };
   expect((await call("/project/source-role", opts)).res.ok).toBe(false);
@@ -1284,20 +1310,24 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   expect(state.set).toHaveBeenCalledWith("project", { revision: 3 });
 });
 
-it("GET deriva Desfazer de histórico persistido e diagnostica corrupção", async()=>{
+it("GET deriva Desfazer da pilha persistida e trata histórico corrompido como sem desfazer", async()=>{
   const {dir,base,app}=await boot();
   expect((await (await fetch(`${base}/project`)).json() as {undoRevision:number|null}).undoRevision).toBeNull();
   const p=await loadProject(dir);
   const {writeHistorySnapshot}=await import("./store.ts");
+  const {recordUndo}=await import("./undo.ts");
   await writeHistorySnapshot(dir,p);
-  await saveProject(dir,p.revision,{...p,revision:1,assembly:{...p.assembly,revision:1}});
+  await saveProject(dir,p.revision,recordUndo(p,{...p,revision:1,assembly:{...p.assembly,revision:1}},"Tirar trecho"));
   await app.close();
   const reopened=await startApp({projectDir:dir,port:0});stop=reopened.close;
   const url=`http://127.0.0.1:${reopened.port}/project`;
-  expect((await (await fetch(url)).json() as {undoRevision:number|null}).undoRevision).toBe(0);
+  const ok=await (await fetch(url)).json() as {undoRevision:number|null;project:Project};
+  expect(ok.undoRevision).toBe(0);
+  expect(ok.project.undo).toEqual({head:1,steps:[{revision:0,label:"Tirar trecho"}]});
   await writeFile(join(dir,"history","rev-0.json"),"{quebrado");
   const corrupt=await fetch(url);
-  expect(corrupt.ok).toBe(false);
+  expect(corrupt.status).toBe(200);
+  expect((await corrupt.json() as {undoRevision:number|null}).undoRevision).toBeNull();
 });
 
 it("edita apoio por HTTP, protege revisão e restaura por undo",async()=>{
@@ -1394,4 +1424,373 @@ it("relatório do template acompanha aceite/rejeição/desfazer (#68)",async()=>
  const undo=await fetch(base+"/project/undo",{method:"POST",body:JSON.stringify({baseRevision:cur3.revision,revision:cur3.revision-1})});
  expect(undo.status).toBe(200);
  expect(await getReport()).toEqual({recipe:null,rules:[],animations:[]});
+});
+
+const SHA_FALA = "a".repeat(64);
+const SHA_APOIO = "b".repeat(64);
+const TRECHOS_FALA = [[10, 14], [20, 30]];
+
+function segundosNaFonte(
+  clips: { sourceStartSeconds: number; durationFrames: number }[],
+  fps: { num: number; den: number },
+): number[][] {
+  return clips.map((clip) => [
+    clip.sourceStartSeconds,
+    clip.sourceStartSeconds + (clip.durationFrames * fps.den) / fps.num,
+  ]);
+}
+
+function segundosOtio(assembly: Assembly, trackName: string): number[][] {
+  const doc = JSON.parse(buildOtio(assembly)) as {
+    tracks: {
+      children: {
+        name: string;
+        children: {
+          OTIO_SCHEMA: string;
+          source_range: {
+            start_time: { value: number; rate: number };
+            duration: { value: number; rate: number };
+          };
+        }[];
+      }[];
+    };
+  };
+  const track = doc.tracks.children.find((item) => item.name === trackName);
+  if (!track) throw new Error(`pista ${trackName} ausente no OTIO`);
+  return track.children
+    .filter((item) => item.OTIO_SCHEMA === "Clip.1")
+    .map((item) => {
+      const start = item.source_range.start_time.value / item.source_range.start_time.rate;
+      const duration = item.source_range.duration.value / item.source_range.duration.rate;
+      return [start, start + duration];
+    });
+}
+
+/** Take 10–30 s com corte [14, 20) e apoio de 1 s a 3 s, compilado a 30 fps. */
+function projetoCompiladoEm30(sourceFps: { num: number; den: number }): Project {
+  const projeto = blankProject("p-fps");
+  projeto.revision = 1;
+  projeto.assembly.revision = 1;
+  projeto.assembly.fps = { num: 30, den: 1 };
+  projeto.assembly.width = 1920;
+  projeto.assembly.height = 1080;
+  projeto.assembly.canvasManual = true;
+  projeto.assembly.canvasSourceId = null;
+  projeto.assembly.sources = [
+    {
+      id: "fala", path: "/tmp/decupa-fps-fala.mp4", sha256: SHA_FALA, durationSeconds: 100,
+      hasVideo: true, hasAudio: true, fps: sourceFps, width: 1920, height: 1080,
+      role: "speech", included: true, name: "fala.mp4",
+    },
+    {
+      id: "apoio", path: "/tmp/decupa-fps-apoio.mp4", sha256: SHA_APOIO, durationSeconds: 100,
+      hasVideo: true, hasAudio: false, fps: sourceFps, width: 1920, height: 1080,
+      role: "support", included: true, name: "apoio.mp4",
+    },
+  ];
+  projeto.analyses = [{
+    sourceId: "apoio", key: "k", status: "ready", speech: [],
+    visual: [{
+      id: "apoio:v0", sourceId: "apoio", start: 0, end: 10, text: "plano",
+      confidence: "observed", tags: [],
+    }],
+    words: [], wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  }];
+  projeto.scenes = [{
+    id: "c1", objective: "meio", rationale: "", speechIds: [],
+    takes: [{
+      id: "t1", sourceId: "fala", speechId: null,
+      start: 10, end: 30, removed: [{ start: 14, end: 20 }], protected: [],
+    }],
+    visualEvidenceIds: ["apoio:v0"],
+    support: [{ visualId: "apoio:v0", offsetFrames: 30, durationFrames: 60 }],
+    gaps: [],
+  }];
+  projeto.assembly = { ...compileScenes(projeto, projeto.scenes), revision: 1 };
+  return projeto;
+}
+
+function confereTempoA25(project: Project): void {
+  const fps = { num: 25, den: 1 };
+  expect(project.assembly.fps).toEqual(fps);
+  const v1 = project.assembly.tracks.find((track) => track.name === "V1")!.clips;
+  const a1 = project.assembly.tracks.find((track) => track.name === "A1")!.clips;
+  const v2 = project.assembly.tracks.find((track) => track.name === "V2")!.clips;
+  expect(segundosNaFonte(v1, fps)).toEqual(TRECHOS_FALA);
+  expect(segundosNaFonte(a1, fps)).toEqual(TRECHOS_FALA);
+  expect(v1[0]!.startFrame).toBe(0);
+  expect(v2).toEqual([expect.objectContaining({
+    startFrame: v1[0]!.startFrame + 25,
+    durationFrames: 50,
+  })]);
+  expect(project.scenes[0]!.support).toEqual([
+    { visualId: "apoio:v0", offsetFrames: 25, durationFrames: 50 },
+  ]);
+  expect(segundosOtio(project.assembly, "V1")).toEqual(TRECHOS_FALA);
+  expect(segundosOtio(project.assembly, "A1")).toEqual(TRECHOS_FALA);
+}
+
+it("troca manual de 30 fps para 25 recompila fala, apoio e OTIO no mesmo tempo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-fps-manual-"));
+  await createProject(dir, projetoCompiladoEm30({ num: 30, den: 1 }));
+  const resposta = await chamadaDireta(dir, "/project/settings", {
+    baseRevision: 1,
+    fps: { num: 25, den: 1 },
+    width: 1920,
+    height: 1080,
+  });
+  expect(resposta.status).toBe(200);
+  const salvo = await loadProject(dir);
+  expect(salvo.revision).toBe(2);
+  expect(salvo.assembly.canvasSourceId).toBeNull();
+  expect(salvo.assembly.canvasManual).toBe(true);
+  confereTempoA25(salvo);
+});
+
+it("troca de formato por sourceId recompila quando o fps da fonte difere do canvas", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-fps-source-"));
+  await createProject(dir, projetoCompiladoEm30({ num: 25, den: 1 }));
+  const antes = await loadProject(dir);
+  expect(antes.assembly.fps).toEqual({ num: 30, den: 1 });
+  const resposta = await chamadaDireta(dir, "/project/settings", {
+    baseRevision: 1,
+    sourceId: "fala",
+  });
+  expect(resposta.status).toBe(200);
+  const salvo = await loadProject(dir);
+  expect(salvo.revision).toBe(2);
+  expect(salvo.assembly.canvasSourceId).toBe("fala");
+  expect(salvo.assembly.width).toBe(1920);
+  expect(salvo.assembly.height).toBe(1080);
+  confereTempoA25(salvo);
+});
+
+function projetoComFalaAjustavel(): Project {
+  const assembly = fixtureAssembly();
+  assembly.revision = 0;
+  const words = ["oi", "é", "tipo", "tema", "valeu"].map((text, i) => ({
+    id: `a:w${i}`, sourceId: "a", text, confidence: null,
+    start: i * 0.4, end: i * 0.4 + 0.3,
+  }));
+  return {
+    version: 2,
+    id: "p-fala",
+    revision: 0,
+    input: { kind: "brief", text: "tema", targetSeconds: 2 },
+    assembly,
+    scenes: [{
+      id: "s1", objective: "abrir", rationale: "tema", speechIds: ["u1"],
+      takes: [{
+        id: "t1", sourceId: "a", speechId: "u1",
+        start: 0, end: 2, removed: [], protected: [],
+      }],
+      visualEvidenceIds: [], support: [], gaps: [],
+    }],
+    analyses: [{
+      sourceId: "a", key: "k", status: "ready",
+      speech: [{ id: "u1", sourceId: "a", start: 0, end: 2, text: "oi é tipo tema valeu" }],
+      visual: [],
+      words, wordsStatus: "ready",
+      visualCoverage: { requested: [], returned: [], missing: [] },
+    }],
+    proposal: null,
+    previewRevision: null,
+    finalApprovedRevision: null,
+    corrections: [],
+    preparation: null,
+    permissions: { model: true, visual: false },
+    previewArtifact: null,
+  };
+}
+
+async function postNoRuntime(
+  runtime: ReturnType<typeof createAssemblyRuntime>,
+  dir: string,
+  caminho: string,
+  corpo: unknown,
+): Promise<RespostaDireta> {
+  const carga = Buffer.from(JSON.stringify(corpo));
+  const req = {
+    method: "POST",
+    url: caminho,
+    headers: {},
+    async *[Symbol.asyncIterator]() {
+      yield carga;
+    },
+  };
+  let status = 0;
+  let texto = "";
+  const res = {
+    writeHead(codigo: number) { status = codigo; },
+    end(parte?: unknown) { if (typeof parte === "string") texto = parte; },
+  };
+  await runtime.handleAssembly(
+    req as unknown as IncomingMessage,
+    res as unknown as ServerResponse,
+    dir,
+  );
+  return { status, corpo: JSON.parse(texto) as Record<string, unknown> };
+}
+
+it("segundo speech-proposal enquanto o primeiro espera o modelo recebe 409 e não aborta o primeiro", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-speech-flight-"));
+  await createProject(dir, projetoComFalaAjustavel());
+  const modelo = JSON.stringify({ cuts: [{ wordIds: ["a:w2"], reason: "muleta" }] });
+  let release: (value: string) => void = () => {};
+  const gate = new Promise<string>((resolve) => { release = resolve; });
+  const signals: AbortSignal[] = [];
+  let calls = 0;
+  const proposeSend = async (_content: unknown[], signal?: AbortSignal) => {
+    calls += 1;
+    if (signal) signals.push(signal);
+    return gate;
+  };
+  const runtime = createAssemblyRuntime(dir, {
+    exec: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+    port: () => 0,
+    allowPaidModel: true,
+    proposeSend,
+  });
+  const pedido = { baseRevision: 0, sourceId: "a", speechId: "u1", request: "tira a muleta" };
+  const primeiroP = postNoRuntime(runtime, dir, "/project/speech-proposal", pedido)
+    .catch((err: unknown): RespostaDireta => ({
+      status: 0,
+      corpo: { error: err instanceof Error ? err.message : String(err) },
+    }));
+  for (let i = 0; i < 50 && calls < 1; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  expect(calls).toBe(1);
+  let segundo: RespostaDireta | undefined;
+  const segundoP = postNoRuntime(runtime, dir, "/project/speech-proposal", pedido)
+    .then((resposta) => { segundo = resposta; return resposta; });
+  for (let i = 0; i < 50 && !segundo && calls === 1; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  expect(calls).toBe(1);
+  expect(signals[0]!.aborted).toBe(false);
+  expect(segundo?.status).toBe(409);
+  expect(segundo?.corpo.error).toBe(
+    "Já há um ajuste de fala em andamento. Aguarde a resposta antes de pedir outro.",
+  );
+  release(modelo);
+  const primeiro = await primeiroP;
+  expect(primeiro.status).toBe(200);
+  expect(primeiro.corpo.speechProposal).toEqual(expect.objectContaining({
+    scope: expect.objectContaining({ sourceId: "a", speechId: "u1" }),
+  }));
+  expect(signals[0]!.aborted).toBe(false);
+  expect(calls).toBe(1);
+  const terceiro = await postNoRuntime(runtime, dir, "/project/speech-proposal", pedido);
+  expect(terceiro.status).toBe(200);
+  expect(terceiro.corpo.speechProposal).not.toBeNull();
+  expect(calls).toBe(2);
+  await segundoP;
+});
+
+const runFile = promisify(execFile);
+
+/**
+ * Áudio montado a 25 fps, canvas ainda não escolhido, take [10, 30) com
+ * corte [14, 20). O apoio já está na cena (1 s a 3 s), mas sem vídeo:
+ * validateAssembly carimba canvasSourceId na primeira fonte com hasVideo
+ * e a política deixa de adotar o fps do vídeo importado.
+ */
+function montagemAudioEm25(): Project {
+  const projeto = blankProject("p-import");
+  projeto.assembly.sources = [
+    {
+      id: "audio", path: "/tmp/decupa-import-audio.wav", sha256: "c".repeat(64),
+      durationSeconds: 100, hasVideo: false, hasAudio: true, fps: null,
+      width: null, height: null, role: "speech", included: true, name: "audio.wav",
+    },
+    {
+      id: "apoio", path: "/tmp/decupa-import-apoio.mp4", sha256: "d".repeat(64),
+      durationSeconds: 20, hasVideo: false, hasAudio: false, fps: null,
+      width: null, height: null, role: "support", included: true, name: "apoio.mp4",
+    },
+  ];
+  projeto.analyses = [{
+    sourceId: "apoio", key: "k", status: "ready", speech: [],
+    visual: [{
+      id: "apoio:v0", sourceId: "apoio", start: 0, end: 10, text: "plano",
+      confidence: "observed", tags: [],
+    }],
+    words: [], wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  }];
+  projeto.scenes = [{
+    id: "c1", objective: "meio", rationale: "", speechIds: [],
+    takes: [{
+      id: "t1", sourceId: "audio", speechId: null,
+      start: 10, end: 30, removed: [{ start: 14, end: 20 }], protected: [],
+    }],
+    visualEvidenceIds: ["apoio:v0"],
+    support: [{ visualId: "apoio:v0", offsetFrames: 25, durationFrames: 50 }],
+    gaps: [],
+  }];
+  projeto.assembly = { ...compileScenes(projeto, projeto.scenes), revision: 0 };
+  return projeto;
+}
+
+async function videoEm30(dir: string): Promise<string> {
+  const path = join(dir, "fala-30.mp4");
+  await runFile("ffmpeg", [
+    "-v", "error", "-y",
+    "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+    path,
+  ], { timeout: 20_000 });
+  return path;
+}
+
+function confereImportacao30(project: Project, revisionAntes: number): void {
+  const fps = { num: 30, den: 1 };
+  expect(project.assembly.fps).toEqual(fps);
+  const a1 = project.assembly.tracks.find((track) => track.name === "A1")!.clips;
+  expect(segundosNaFonte(a1, fps)).toEqual(TRECHOS_FALA);
+  expect(segundosOtio(project.assembly, "A1")).toEqual(TRECHOS_FALA);
+  expect(project.scenes[0]!.support).toEqual([
+    { visualId: "apoio:v0", offsetFrames: 30, durationFrames: 60 },
+  ]);
+  const video = project.assembly.sources.find((source) => source.hasVideo);
+  expect(video?.role).toBe("speech");
+  expect(project.assembly.canvasSourceId).toBe(video?.id);
+  expect(project.revision).toBe(revisionAntes + 1);
+  expect(project.assembly.revision).toBe(revisionAntes + 1);
+}
+
+it("importar o primeiro vídeo por /project/select recompila o áudio e o apoio no mesmo tempo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-import-select-"));
+  await createProject(dir, montagemAudioEm25());
+  const antes = await loadProject(dir);
+  expect(antes.assembly.canvasSourceId).toBeUndefined();
+  expect(antes.assembly.fps).toEqual({ num: 25, den: 1 });
+  expect(antes.revision).toBe(0);
+  const video = await videoEm30(dir);
+  const runtime = createAssemblyRuntime(dir, {
+    exec: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+    port: () => 0,
+    selectFn: async () => ({ paths: [video] }),
+  });
+  const resposta = await postNoRuntime(runtime, dir, "/project/select", { baseRevision: 0 });
+  expect(resposta.status).toBe(200);
+  confereImportacao30(await loadProject(dir), 0);
+});
+
+it("importar o primeiro vídeo por ensureProject recompila o áudio e o apoio no mesmo tempo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-import-ensure-"));
+  await createProject(dir, montagemAudioEm25());
+  const antes = await loadProject(dir);
+  expect(antes.assembly.canvasSourceId).toBeUndefined();
+  const video = await videoEm30(dir);
+  const runtime = createAssemblyRuntime(dir, {
+    exec: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+    port: () => 0,
+  });
+  const project = await runtime.ensureProject([video]);
+  confereImportacao30(project, 0);
+  confereImportacao30(await loadProject(dir), 0);
 });

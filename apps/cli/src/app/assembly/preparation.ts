@@ -13,6 +13,7 @@ import { loadProject, mergeAnalyses, saveProject, writeHistorySnapshot } from ".
 import { visualCoverage } from "./visual.ts";
 import { buildPeaks, peaksPath } from "./waveform.ts";
 import type { Preparation, PreviewArtifact, Project, Source } from "./types.ts";
+import { recordUndo } from "./undo.ts";
 
 export type PreparationMode = "prepare" | "adjust" | "preview";
 
@@ -512,8 +513,15 @@ export async function runPreparation(
         try {
           await writeHistorySnapshot(dir, current);
           checkAlive();
-          await saveProject(dir, current.revision, (p) =>
-            p.preparation?.id === id ? applyProposal(p, proposal) : p);
+          // As cenas trocadas viram um passo do desfazer. Só o Preparar marca a
+          // revisão: o Ajuste com IA parte das cenas atuais, e marcá-lo
+          // dispensaria a confirmação de um Retomar depois de edições à mão.
+          await saveProject(dir, current.revision, (p) => {
+            if (p.preparation?.id !== id) return p;
+            const next = applyProposal(p, proposal);
+            const undone = recordUndo(p, next, req.mode === "adjust" ? "Ajuste com IA" : "Preparar montagem");
+            return req.mode === "prepare" ? { ...undone, preparedRevision: next.revision } : undone;
+          });
           current = await loadProject(dir);
         } catch (err) {
           checkAlive();

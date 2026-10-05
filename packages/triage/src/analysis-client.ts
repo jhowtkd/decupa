@@ -17,6 +17,34 @@ export type AnalysisClientOptions = {
 };
 
 /**
+ * Um `.decupa/credentials` pode chegar dentro de uma pasta de projeto
+ * recebida de outra pessoa. O arquivo vence o ambiente (GUIA §7), então o
+ * endpoint dele é conferido na leitura, não só quando foi gravado, e nunca
+ * recebe a chave de outro lugar: sem `apiKey` própria, a chave do ambiente
+ * ou da empresa iria junto com os quadros para o host que o arquivo escolheu.
+ */
+export function assertStoredEndpoint(baseUrl: string, apiKey: string | undefined): void {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    // Sem ecoar o valor: uma URL malformada ainda pode carregar segredo.
+    throw new Error("credentials do Decupa com baseUrl inválido: use um endpoint HTTPS");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      `credentials do Decupa com baseUrl recusado (${url.origin}): use um endpoint HTTPS sem credenciais ou parâmetros na URL.`,
+    );
+  }
+  if (!apiKey) {
+    throw new Error(
+      `credentials do Decupa definem baseUrl (${url.origin}) sem apiKey própria. A chave do ambiente ou da empresa ` +
+      "não é enviada a um endpoint escolhido pelo arquivo: grave apiKey no mesmo arquivo ou remova o baseUrl.",
+    );
+  }
+}
+
+/**
  * Monta as opções do transporte a partir de --provider, credentials e env.
  * apiKey explícito (testes) não passa pelo resolver e usa defaults Z.ai.
  */
@@ -36,7 +64,9 @@ export function analysisClientOptions(opts: AnalysisClientOptions = {}): OpenAiC
   }
   const provider = resolveProvider(opts.provider, env, opts.stored);
   const cfg = presetConfig(provider, env, opts.stored);
-  const apiKey = (opts.stored?.preset === provider ? opts.stored.apiKey : undefined) ?? env[cfg.envKey];
+  const fromStore = opts.stored?.preset === provider ? opts.stored : null;
+  if (fromStore?.baseUrl) assertStoredEndpoint(fromStore.baseUrl, fromStore.apiKey);
+  const apiKey = fromStore?.apiKey ?? env[cfg.envKey];
   if (!apiKey) {
     throw new Error(
       `${cfg.envKey} não está setada. Sem a chave a análise não roda — ` +

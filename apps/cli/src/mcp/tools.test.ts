@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { access, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -66,6 +66,50 @@ describe("MCP tools", () => {
     expect(result.preset).toBe("gemini");
     expect(result.hasKey).toBe(true);
     expect(JSON.stringify(result)).not.toContain("segredo");
+  });
+
+  // O MCP grava a chave em disco: endpoint inválido ou sem chave tem de ser
+  // recusado ANTES de gravar, e sem repetir userinfo/query no erro.
+  describe("configure_provider valida o endpoint antes de gravar", () => {
+    const existe = (p: string) => access(p).then(() => true, () => false);
+    async function recusa(args: Record<string, unknown>) {
+      const dir = await mkdtemp(join(tmpdir(), "decupa-mcp-"));
+      const error = await session()
+        .call("configure_provider", { preset: "custom", model: "m", projectDir: dir, ...args })
+        .then(() => null, (e: unknown) => e as Error);
+      expect(error, "devia recusar").not.toBeNull();
+      expect(await existe(join(dir, ".decupa", "credentials"))).toBe(false);
+      return error!.message;
+    }
+
+    it("custom com baseUrl e sem apiKey", async () => {
+      expect(await recusa({ baseUrl: "https://gateway.example/v1" })).toMatch(/apiKey/);
+    });
+
+    it("baseUrl http", async () => {
+      expect(await recusa({ baseUrl: "http://gateway.example/v1", apiKey: "k-secreta" })).toMatch(/HTTPS/);
+    });
+
+    it("baseUrl com userinfo e query não vaza no erro", async () => {
+      const msg = await recusa({ baseUrl: "https://user:pw@gateway.example/v1?k=SEGREDO", apiKey: "k-secreta" });
+      for (const s of ["pw", "SEGREDO", "k-secreta"]) expect(msg).not.toContain(s);
+    });
+
+    it("baseUrl que não é URL", async () => {
+      await recusa({ baseUrl: "isto não é url", apiKey: "k-secreta" });
+    });
+
+    it("continuam gravando: preset+apiKey, só o ambiente, https válido", async () => {
+      for (const args of [
+        { preset: "gemini", apiKey: "k", model: undefined },
+        { preset: "zai", model: "m" },
+        { baseUrl: "https://gateway.example/v1", apiKey: "k" },
+      ]) {
+        const dir = await mkdtemp(join(tmpdir(), "decupa-mcp-"));
+        await session().call("configure_provider", { preset: "custom", model: "m", projectDir: dir, ...args });
+        expect(await existe(join(dir, ".decupa", "credentials"))).toBe(true);
+      }
+    });
   });
 
   it("dispatch initialize e tools/list", async () => {

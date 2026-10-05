@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { FakeExecutor, type Executor } from "../pipeline.ts";
 import { hashFile } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
+import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { ensurePlayback, proxyPath } from "./media.ts";
 import { mediaWork } from "./media-work.ts";
@@ -82,8 +83,7 @@ it("devolve o mp4 quando o Executor conclui e o arquivo existe", async () => {
   }
   const exec: Executor = {
     async run(call) {
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      await writeTimelineReference(call);
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -114,8 +114,7 @@ it("render inválido não substitui a prévia válida anterior (V1)", async () =
   const assembly = await assemblyWithMedia(dir);
   const good: Executor = {
     async run(call) {
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      await writeTimelineReference(call);
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -137,9 +136,8 @@ it("concorrentes válido + inválido preservam referência válida (V1)", async 
   const assembly = await assemblyWithMedia(dir);
   const good: Executor = {
     async run(call) {
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
       await new Promise((r) => setTimeout(r, 30));
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      await writeTimelineReference(call);
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -184,7 +182,7 @@ it("proxy e render simultâneos executam um pesado por vez", async () => {
         }
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         if (call.command === "python3" && work) {
-          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+          await writeTimelineReference(call);
         } else {
           const out = call.args.at(-1)!;
           if (out.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), out);
@@ -234,7 +232,7 @@ it("render cancelado na fila não lança ffmpeg e preserva a referência", async
         await gate;
         const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
         if (call.command === "python3" && work) {
-          await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+          await writeTimelineReference(call);
         } else {
           const out = call.args.at(-1)!;
           if (out.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), out);
@@ -421,8 +419,7 @@ it("renderAssembly aceita fontes com identidade verificada sem exigir recalculo 
   a.sources[1]!.mtimeMs = st.mtimeMs;
   const rendered = await renderAssembly(a, dir, {
     async run(call) {
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      await writeTimelineReference(call);
       return { code: 0, stdout: "ok", stderr: "" };
     },
   });
@@ -434,8 +431,10 @@ function copyingRenderExec(): Executor & { python: number } {
     python: 0,
     async run(call) {
       if (call.command === "python3") exec.python += 1;
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      if (!(await writeTimelineReference(call))) {
+        const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
+        if (work) await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      }
       return { code: 0, stdout: "ok", stderr: "" };
     },
   };
@@ -477,7 +476,7 @@ it("perfil de hardware entra na identidade e no encode da prévia", async () => 
       calls.push({ command: call.command, args: call.args });
       const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
       if (call.command === "python3" && work) {
-        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        await writeTimelineReference(call);
       }
       return { code: 0, stdout: "ok", stderr: "" };
     },
@@ -518,7 +517,7 @@ it("detecta hardware e encaminha o encoder comprovado para a prévia", async () 
       }
       const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
       if (call.command === "python3" && work) {
-        await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+        await writeTimelineReference(call);
       }
       return { code: 0, stdout: "ok", stderr: "" };
     },
@@ -567,8 +566,7 @@ it("fallback do motor publica cache identificado como software", async () => {
   const assembly = await assemblyWithMedia(dir);
   const exec: Executor = {
     async run(call) {
-      const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-      await copyFile(join(FIXTURES, "clip.mp4"), join(work, "reference.mp4"));
+      await writeTimelineReference(call);
       return {
         code: 0,
         stdout: `ok\n${JSON.stringify({ data: {

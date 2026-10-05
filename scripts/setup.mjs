@@ -81,6 +81,9 @@ export async function installEngine(root, { pin = PIN, remote = join(root, 'scri
  * Instala o motor. Se ele já existe e só está modificado, preserva e o
  * setup segue (Python, modelos, credencial). `--keep-engine` também
  * preserva clone em outra revisão; clone inválido continua fatal.
+ *
+ * @param {string} root
+ * @param {{ keepEngine?: boolean, pin?: string, remote?: string }} [options]
  */
 export async function installEngineOrKeep(root, { keepEngine = false, ...opts } = {}) {
   try {
@@ -138,6 +141,31 @@ export async function findNpmCli(nodeExe = process.execPath) {
   return null;
 }
 
+/** Mínimo de vite 8 e oxlint; o mesmo número de `engines` e do doctor. */
+export const NODE_MIN = '22.12';
+
+/** Mensagem de pré-requisito quando o Node é anterior ao mínimo; null quando serve. */
+export function nodeMissing(version = process.versions.node) {
+  const [major, minor] = version.split('.').map(Number);
+  const [minMajor, minMinor] = NODE_MIN.split('.').map(Number);
+  return major > minMajor || (major === minMajor && minor >= minMinor) ? null : `Node >=${NODE_MIN}: https://nodejs.org/`;
+}
+
+/**
+ * Dependências Python do motor com as versões travadas em
+ * scripts/engine/requirements.lock.txt: o requirements.txt do motor só dá
+ * faixas, e cada setup instalava o que o índice tivesse no dia. O
+ * scenedetect entra sem dependências para reaproveitar o OpenCV headless.
+ */
+export async function installEnginePython(root, python, execute = run) {
+  const lock = join(root, 'scripts/engine/requirements.lock.txt');
+  step('Instalando as dependências Python do motor (versões travadas)');
+  await execute('uv', ['pip', 'install', '--python', python,
+    '-r', join(root, 'work/video-agent-kit-plugin/requirements.txt'), '-c', lock], root);
+  step('Instalando scenedetect');
+  await execute('uv', ['pip', 'install', '--python', python, '--no-deps', 'scenedetect>=0.6', '-c', lock], root);
+}
+
 export async function prepareModels(root, execute = run) {
   step('Baixando e verificando modelos locais de fala (Whisper small, VAD e alinhamento PT-BR)');
   await execute('uv', ['run', '--no-sync', 'python', 'transcribe.py', '--prepare-models'], join(root, 'services/speech'));
@@ -148,8 +176,8 @@ export async function prepareModels(root, execute = run) {
 export async function setup(root, { keepEngine = false } = {}) {
   step('Verificando pré-requisitos');
   const missing = [];
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major < 22 || (major === 22 && minor < 6)) missing.push('Node >=22.6: https://nodejs.org/');
+  const node = nodeMissing();
+  if (node) missing.push(node);
   for (const [bin, link] of [
     ['git', 'https://git-scm.com/'], ['uv', 'https://docs.astral.sh/uv/'],
     ['ffmpeg', 'https://ffmpeg.org/'], ['ffprobe', 'https://ffmpeg.org/'],
@@ -202,11 +230,7 @@ export async function setup(root, { keepEngine = false } = {}) {
     throw new Error(`venv existente sem Python válido em ${venv}; nenhuma alteração feita — remova a pasta manualmente para recriá-la`);
   }
 
-  step('Instalando as dependências Python do motor');
-  await run('uv', ['pip', 'install', '--python', python, '-r', join(root, 'work/video-agent-kit-plugin/requirements.txt')], root);
-
-  step('Instalando scenedetect');
-  await run('uv', ['pip', 'install', '--python', python, '--no-deps', 'scenedetect>=0.6'], root);
+  await installEnginePython(root, python);
 
   process.env.DECUPA_ENGINE_PYTHON = python;
 

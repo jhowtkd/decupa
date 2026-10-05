@@ -23,3 +23,18 @@ describe("originAllowed", () => {
     expect(originAllowed("null", 7788)).toBe(false);
   });
 });
+
+describe("hostAllowed", () => {
+  it("só aceita 127.0.0.1 e localhost nesta porta", async () => {
+    // Import dinâmico: no código anterior o export não existe e o arquivo
+    // de teste ainda carrega os casos de Origin.
+    const { hostAllowed } = await import("./origin.ts");
+    expect(hostAllowed).toEqual(expect.any(Function));
+    expect(hostAllowed("127.0.0.1:7788", 7788)).toBe(true);
+    expect(hostAllowed("localhost:7788", 7788)).toBe(true);
+    expect(hostAllowed("LocalHost:7788", 7788)).toBe(true);
+    expect(hostAllowed("127.0.0.1:9", 7788)).toBe(false);
+    expect(hostAllowed("attacker.example:7788", 7788)).toBe(false);
+    expect(hostAllowed(undefined, 7788)).toBe(false);
+  });
+});

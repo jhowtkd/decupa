@@ -100,6 +100,8 @@ button.quiet:hover:not(:disabled) { background: var(--tint); color: var(--ink); 
 button.danger { background: var(--red-tint); color: var(--red); }
 button.icon { width: 32px; height: 32px; padding: 0; background: transparent; color: var(--muted); }
 button.icon:hover:not(:disabled) { background: var(--tint); color: var(--ink); }
+#undo.has-label { width: auto; gap: 6px; padding: 0 12px 0 8px; }
+#undo .undo-what { font-weight: 500; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
 button.small { height: 30px; padding: 0 12px; font-size: 12px; }
 button.big { height: 44px; padding: 0 22px; font-size: 14px; }
 button:disabled { opacity: .45; cursor: default; }
@@ -173,6 +175,8 @@ body.is-empty #texto > .measure { max-width: none; flex: 1; display: flex; }
 }
 .project-menu summary::-webkit-details-marker { display: none; }
 .project-menu[open] summary, .project-menu summary:hover { background: var(--tint); color: var(--ink); }
+.project-dir { margin: 4px 0 0; padding: 8px 12px 4px; border-top: 1px solid rgb(255 255 255 / .08); color: var(--muted); font: 500 12px var(--sans-ui); }
+.project-dir .mono { display: block; margin-top: 4px; width: max-content; max-width: min(420px, 70vw); color: var(--ink); overflow-wrap: anywhere; user-select: all; }
 #stages {
   display: flex; align-items: center; gap: 2px; padding: 4px;
   border-radius: var(--radius-pill); background: var(--card); box-shadow: inset 0 0 0 1px var(--hairline);

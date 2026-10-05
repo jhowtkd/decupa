@@ -8,6 +8,7 @@ import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrig
 import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
+import { singleFlight } from "./sequencia.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -196,7 +197,7 @@ export function mountStage({ state, api, player }) {
       : prep && ["interrupted", "attention"].includes(prep.status) ? "Veja o material com falha no rail e retome a preparação. A transcrição concluída continua no texto."
       : "Confira o briefing e clique em Montar vídeo. Para assistir a uma fonte, escolha Original ou sua miniatura.";
     document.getElementById("importFromStage").hidden = hasMedia;
-    setDisabled(document.getElementById("refreshPreview"), !project.scenes.length);
+    setDisabled(document.getElementById("refreshPreview"), !project.scenes.length || refreshPreview.busy());
     paintReview(project);
     if (original) return;
     if (!project.scenes.length) { previewPlayer.hidden = true; empty.hidden = false; return; }
@@ -246,28 +247,27 @@ export function mountStage({ state, api, player }) {
       note(true, chip("sem prévia"));
     }
     paintReview(project);
-    // Atualizar prévia renderiza no servidor: bloqueia o segundo clique.
+    // Atualizar prévia renderiza no servidor: trava no clique até a resposta.
+    const refresh = document.getElementById("refreshPreview");
+    const refreshing = refreshPreview.busy();
+    refresh.textContent = refreshing ? "Atualizando prévia…" : "Atualizar prévia";
+    refresh.setAttribute("aria-busy", String(refreshing));
     setDisabled(
-      document.getElementById("refreshPreview"),
-      project.scenes.length === 0
+      refresh,
+      refreshing
+      || project.scenes.length === 0
       || (current && project.previewArtifact?.revision === project.revision)
       || backgroundBusy(project, state.get("operation"), player),
     );
   }
 
-  document.getElementById("refreshPreview").onclick = () => api.call("/project/preview", {
-    method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
-    label: "Renderizando prévia…",
-  }).then(({ res }) => {
-    if (!res.ok) {
-      // Preview obsoleto (409) ou erro real: reconcilia com o servidor e
-      // retoma a revisão atual sem loop (R2). O bootstrap (page.js) escuta
-      // este evento e reage com scheduleAutoPreview direto (sem filtro).
-      void api.call("/project").then(() => {
-        document.dispatchEvent(new CustomEvent("decupa:schedule-preview"));
-      });
-    }
+  const refreshPreview = refreshPreviewAction({
+    state, api,
+    // O bootstrap (page.js) escuta este evento e reage com scheduleAutoPreview direto (sem filtro).
+    onStale: () => document.dispatchEvent(new CustomEvent("decupa:schedule-preview")),
+    onChange: () => renderPreview(state.get("project")),
   });
+  document.getElementById("refreshPreview").onclick = () => refreshPreview();
   document.getElementById("approveFinal").onclick = () => {
     // O front nunca mente: só parte com canApprove e envia a revisão
     // assistida de verdade do state (o back-end rejeita divergência).
@@ -337,6 +337,74 @@ function backgroundBusy(project, operation, player) {
   return false;
 }
 
+/**
+ * "Atualizar prévia" manual: um render por vez, travado desde o clique
+ * (`onChange(busy)` repinta o botão). Prévia obsoleta (409) ou erro real
+ * reconcilia com o servidor e chama `onStale` para retomar a revisão atual
+ * sem loop (R2).
+ * @param {{ state: any, api: any, onStale: () => void, onChange?: (busy: boolean) => void }} deps
+ */
+export function refreshPreviewAction({ state, api, onStale, onChange }) {
+  return singleFlight(() => {
+    const p = state.get("project");
+    if (!p) return undefined;
+    return api.call("/project/preview", {
+      method: "POST", body: JSON.stringify({ baseRevision: p.revision }),
+      label: "Renderizando prévia…",
+    }).then(({ res }) => {
+      if (!res.ok) return api.call("/project").then(onStale);
+      return undefined;
+    }).catch(() => {});
+  }, onChange);
+}
+
+/** Aviso quando "Pedir ajuste à IA" é enviado sem texto. */
+export const EMPTY_ADJUST_MESSAGE = "Escreva o ajuste que você quer antes de enviar.";
+
+/**
+ * "Pedir ajuste à IA": pedido vazio não sai (aviso na tela, sem chamada);
+ * com texto, um pedido pago por vez. `onChange(busy)` pinta o botão; o
+ * erro já aparece no status pelo api.call.
+ * @param {{ state: any, api: any, readRequest: () => string, onChange?: (busy: boolean) => void }} deps
+ */
+export function adjustAction({ state, api, readRequest, onChange }) {
+  return singleFlight(() => {
+    const p = state.get("project");
+    if (!p) return undefined;
+    const request = readRequest();
+    if (!request.trim()) {
+      api.notifyError(EMPTY_ADJUST_MESSAGE);
+      return undefined;
+    }
+    return api.call("/project/adjust", {
+      method: "POST",
+      body: JSON.stringify({
+        baseRevision: p.revision,
+        request,
+        modelOptIn: true, visualOptIn: true,
+      }),
+      label: "Ajustando montagem…",
+    }).catch(() => {});
+  }, onChange);
+}
+
+/** Botão de ajuste (puro): em voo trava com o rótulo de andamento; fora dele, trabalho de fundo ou falta de cena travam. */
+export function adjustButtonView(inflight, background, hasScenes) {
+  if (inflight) return { disabled: true, label: "Ajustando montagem…", busy: true };
+  return { disabled: !!background || !hasScenes, label: "Aplicar ajuste com IA", busy: false };
+}
+
+/**
+ * Diálogo de ritmo (puro). Abre sozinho só para proposta da revisão atual
+ * que a pessoa ainda não fechou; proposta de revisão velha fica marcada e
+ * não se aplica.
+ */
+export function rhythmDialogView(project, proposal, dismissedId) {
+  if (!project || !proposal) return { show: false, stale: false, autoOpen: false };
+  const stale = proposal.baseRevision !== project.revision;
+  return { show: true, stale, autoOpen: !stale && proposal.id !== dismissedId };
+}
+
 /** Pendências do monitor (puro): correções não alinhadas, lacunas e animações a fazer. */
 export function pendingItems(project) {
   if (!project) return [];
@@ -381,22 +449,45 @@ export function mountContexto({ state, api, player }) {
     +'<div class="row"><button id="applySupport" type="submit">Aplicar apoio</button><button id="removeSupport" type="button">Remover apoio</button></div>';
   scenePanel.appendChild(supportForm);
   const field=id=>supportForm.querySelector("#"+id);
+  // O formulário só é repopulado quando a cena ou o apoio escolhido mudam (ou
+  // quando nada foi mexido ainda): o projeto que chega durante a edição não
+  // reverte os campos, e "Aplicar" envia o que a pessoa digitou.
+  const supportEdit = { key: null, touched: false, groups: null, candidates: null };
+  for (const id of ["supportCandidate","supportStart","supportDuration"]) {
+    field(id).addEventListener("input",()=>{supportEdit.touched=true;});
+    field(id).addEventListener("change",()=>{supportEdit.touched=true;});
+  }
   function renderSupport(project,scene) {
     supportForm.hidden=!scene;
-    if(!scene) return;
+    if(!scene) { supportEdit.key=null; return; }
     const fps=project.assembly.fps.num/project.assembly.fps.den;
     const groups=supportGroups(project,scene);
     const selected=state.get("selectedSupport");
     const group=selected===""?null:groups.find(g=>g.id===selected)||groups[0];
-    field("supportGroup").replaceChildren(new Option("Adicionar apoio", ""),...groups.map((g,i)=>new Option(`Apoio ${i+1} · ${(g.offsetFrames/fps).toFixed(2)} s`,g.id)));
-    field("supportGroup").value=group?.id||"";
     const candidates=state.get("brollCandidates")||[];
-    field("supportCandidate").replaceChildren(...candidates.map(c=>new Option(`${project.assembly.sources.find(s=>s.id===c.sourceId)?.name||c.sourceId} · ${c.start.toFixed(2)} s · ${c.description}`,c.id)));
-    const current=candidates.find(c=>group && c.sourceId===group.sourceId && Math.round(c.start*fps)===group.sourceStart);
-    if(current) field("supportCandidate").value=current.id;
-    field("supportStart").value=String(group?group.offsetFrames/fps:1);
-    const candidate=current||candidates[0];
-    field("supportDuration").value=String(group?group.durationFrames/fps:candidate?Math.min(3,candidate.end-candidate.start):1);
+    const key=scene.id+"\0"+(group?.id??"");
+    const fresh=key!==supportEdit.key||(!supportEdit.touched&&candidates!==supportEdit.candidates);
+    const groupsSig=JSON.stringify(groups.map(g=>[g.id,g.offsetFrames]));
+    if(fresh||groupsSig!==supportEdit.groups) {
+      field("supportGroup").replaceChildren(new Option("Adicionar apoio", ""),...groups.map((g,i)=>new Option(`Apoio ${i+1} · ${(g.offsetFrames/fps).toFixed(2)} s`,g.id)));
+      field("supportGroup").value=group?.id||"";
+      supportEdit.groups=groupsSig;
+    }
+    if(fresh||candidates!==supportEdit.candidates) {
+      const kept=field("supportCandidate").value;
+      field("supportCandidate").replaceChildren(...candidates.map(c=>new Option(`${project.assembly.sources.find(s=>s.id===c.sourceId)?.name||c.sourceId} · ${c.start.toFixed(2)} s · ${c.description}`,c.id)));
+      if(!fresh&&candidates.some(c=>c.id===kept)) field("supportCandidate").value=kept;
+      supportEdit.candidates=candidates;
+    }
+    if(fresh) {
+      const current=candidates.find(c=>group && c.sourceId===group.sourceId && Math.round(c.start*fps)===group.sourceStart);
+      if(current) field("supportCandidate").value=current.id;
+      field("supportStart").value=String(group?group.offsetFrames/fps:1);
+      const candidate=current||candidates[0];
+      field("supportDuration").value=String(group?group.durationFrames/fps:candidate?Math.min(3,candidate.end-candidate.start):1);
+      supportEdit.key=key;
+      supportEdit.touched=false;
+    }
     field("supportReason").textContent=project.proposal?.decisionReport?.supports?.find(s=>s.sceneId===scene.id)?.reason||"A voz continua tocando; o áudio do apoio fica mudo.";
     updateSupportDetail();
     field("applySupport").disabled=!candidates.length||backgroundBusy(project,state.get("operation"),player);
@@ -416,7 +507,8 @@ export function mountContexto({ state, api, player }) {
       const entries=remove?[]:candidateEntries(c,Math.round(Number(field("supportStart").value)*fps),Math.round(Number(field("supportDuration").value)*fps));
       const support=replaceSupportGroup(p,scene,field("supportGroup").value,entries);
       const result=await api.call("/project/edit",{method:"POST",body:JSON.stringify({baseRevision:p.revision,action:{type:"set-support",sceneId:scene.id,support}}),label:remove?"Removendo apoio…":"Aplicando apoio…"});
-      if(result.res.ok) state.set("selectedSupport",entries[0]?entries[0].visualId+":"+entries[0].offsetFrames:null);
+      // Salvo: o formulário volta a espelhar o servidor.
+      if(result.res.ok) { supportEdit.key=null; state.set("selectedSupport",entries[0]?entries[0].visualId+":"+entries[0].offsetFrames:null); }
     } catch(error) {api.notifyError(error.message||String(error));}
   }
   supportForm.onsubmit=event=>{event.preventDefault();void saveSupport(false);};
@@ -496,6 +588,7 @@ export function mountContexto({ state, api, player }) {
     + '<p id="rhythmSummary"></p>'
     + '<ul id="rhythmPauses" class="plain"></ul>'
     + '<p class="muted" id="rhythmUnaligned"></p>'
+    + '<p class="warn" id="rhythmStale" hidden>Esta comparação é de uma versão anterior da montagem. Escolha o perfil de novo para comparar a versão atual.</p>'
     + '<div class="row"><label>Antes <video id="rhythmAntes" controls width="240" muted></video></label>'
     + '<label>Depois <video id="rhythmDepois" controls width="240" muted></video></label></div>'
     + '<div class="row"><button type="button" class="primary" id="acceptRhythm">Aplicar ritmo</button>'
@@ -503,6 +596,8 @@ export function mountContexto({ state, api, player }) {
     + '<button type="button" id="closeRhythm">Fechar</button></div>';
   document.body.appendChild(rhythmDialog);
 
+  // Fechar (botão ou Esc) dispensa esta proposta: o poll seguinte não reabre.
+  let dismissedRhythm = null;
   function paintRhythm() {
     const p = state.get("project");
     const proposal = state.get("rhythmProposal");
@@ -531,7 +626,8 @@ export function mountContexto({ state, api, player }) {
         choices.appendChild(button);
       }
     }
-    if (!proposal) { if (rhythmDialog.open) rhythmDialog.close(); return; }
+    const view = rhythmDialogView(p, proposal, dismissedRhythm);
+    if (!view.show) { if (rhythmDialog.open) rhythmDialog.close(); return; }
     const profile = profiles[proposal.profileId];
     document.getElementById("rhythmProfileDesc").textContent = profile
       ? `${profile.name}: ${profile.description}` : proposal.profileId;
@@ -553,11 +649,19 @@ export function mountContexto({ state, api, player }) {
       : "";
     for (const which of ["antes", "depois"]) {
       const el = document.getElementById(which === "antes" ? "rhythmAntes" : "rhythmDepois");
-      el.src = proposal.sample ? `/project/rhythm-sample/${proposal.id}/${which}` : "";
+      const src = proposal.sample ? `/project/rhythm-sample/${proposal.id}/${which}` : "";
+      // Mesmo src de novo recarregaria a amostra no meio da escuta.
+      if ((el.getAttribute("src") || "") !== src) el.src = src;
       el.style.visibility = proposal.sample ? "visible" : "hidden";
     }
-    if (!rhythmDialog.open) rhythmDialog.showModal();
+    document.getElementById("rhythmStale").hidden = !view.stale;
+    document.getElementById("acceptRhythm").disabled = view.stale;
+    if (view.autoOpen && !rhythmDialog.open) rhythmDialog.showModal();
   }
+  rhythmDialog.addEventListener("close", () => {
+    const proposal = state.get("rhythmProposal");
+    if (proposal) dismissedRhythm = proposal.id;
+  });
   state.subscribe("rhythmProposal", paintRhythm);
   state.subscribe("project", paintRhythm);
   document.getElementById("closeRhythm").onclick = () => rhythmDialog.close();
@@ -762,26 +866,32 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("cancelPrep").hidden = !(
       preparing || (operation && operation.stage === "preparing")
     );
-    // Ajustar dispara trabalho longo no servidor: evita o segundo clique
-    // parecer travado (o servidor cancelaria o anterior).
-    const bg = backgroundBusy(project, operation, player);
-    setDisabled(document.getElementById("adjust"), bg || !project.scenes.length);
+    paintAdjust(project);
     renderDelivery(project);
+  }
+
+  // Ajustar dispara trabalho longo no servidor: evita o segundo clique
+  // parecer travado (o servidor cancelaria o anterior).
+  function paintAdjust(project) {
+    const button = document.getElementById("adjust");
+    const view = adjustButtonView(requestAdjust.busy(),
+      backgroundBusy(project, state.get("operation"), player), project.scenes.length > 0);
+    setDisabled(button, view.disabled);
+    button.setAttribute("aria-label", view.label);
+    button.title = view.label;
+    button.setAttribute("aria-busy", String(view.busy));
   }
 
   document.getElementById("cancelPrep").onclick = () => api.call(
     "/project/cancel",
     { method: "POST", body: "{}", label: "Cancelando…" },
   );
-  document.getElementById("adjust").onclick = () => api.call("/project/adjust", {
-    method: "POST",
-    body: JSON.stringify({
-      baseRevision: state.get("project").revision,
-      request: document.getElementById("request").value,
-      modelOptIn: true, visualOptIn: true,
-    }),
-    label: "Ajustando montagem…",
+  const requestAdjust = adjustAction({
+    state, api,
+    readRequest: () => document.getElementById("request").value,
+    onChange: () => { if (state.get("project")) paintAdjust(state.get("project")); },
   });
+  document.getElementById("adjust").onclick = () => requestAdjust();
   document.getElementById("exportTimeline").onclick = async () => {
     const project = state.get("project");
     exportUi.status = "running";

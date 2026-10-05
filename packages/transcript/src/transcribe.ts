@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,6 +18,36 @@ const SPEECH_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../../services/speech",
 );
+
+/**
+ * Pastas de áudio temporário ainda em uso. O `finally` de quem cria cobre
+ * sucesso e erro, mas o shutdown do CLI chama process.exit com a extração ou
+ * o sidecar rodando e nunca chega lá: o `exit` apaga o que sobrou. Um WAV de
+ * uma hora passa de 100 MB.
+ */
+const liveAudioDirs = new Set<string>();
+let exitCleanup = false;
+
+async function tempAudioDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  liveAudioDirs.add(dir);
+  if (!exitCleanup) {
+    exitCleanup = true;
+    process.on("exit", () => {
+      for (const live of liveAudioDirs) {
+        // Saindo: exceção aqui trocaria o código de saída (EBUSY no Windows,
+        // com um ffmpeg ainda segurando o WAV).
+        try { rmSync(live, { recursive: true, force: true }); } catch { /* melhor esforço */ }
+      }
+    });
+  }
+  return dir;
+}
+
+async function removeAudioDir(dir: string): Promise<void> {
+  liveAudioDirs.delete(dir);
+  await rm(dir, { recursive: true, force: true });
+}
 
 interface SidecarOutput {
   language: string;
@@ -62,7 +93,13 @@ export type SpeechWorkerRequest = {
   model?: string;
   computeType?: string;
   signal?: AbortSignal;
+  /** Progresso do WhisperX em texto curto ("transcrevendo 42%"). */
+  onProgress?: (line: string) => void;
 };
+
+/** Padrões de `transcribe`, exportados para quem monta a chave da tarefa. */
+export const DEFAULT_LANGUAGE = "pt";
+export const DEFAULT_MODEL = "small";
 
 export type TranscribeDeps = {
   extract?: (opts: { input: string; output: string }) => Promise<void>;
@@ -83,29 +120,36 @@ export async function transcribe(
     model?: string;
     computeType?: string;
     signal?: AbortSignal;
+    /** Progresso do worker residente, repassado a quem mostra andamento. */
+    onProgress?: (line: string) => void;
+    /** Chave da tarefa no coordenador. Padrão: o caminho. Um task "completed"
+     *  com a mesma chave devolve a transcrição antiga, então quem troca o
+     *  conteúdo no mesmo caminho precisa de uma chave que mude junto. */
+    taskId?: string;
   },
   deps: TranscribeDeps = {},
 ): Promise<Transcript> {
-  const language = opts.language ?? "pt";
-  const model = opts.model ?? "small";
+  const language = opts.language ?? DEFAULT_LANGUAGE;
+  const model = opts.model ?? DEFAULT_MODEL;
   const extract = deps.extract ?? extractAudio;
-  const dir = await mkdtemp(join(tmpdir(), "decupa-asr-"));
+  const dir = await tempAudioDir("decupa-asr-");
   const wav = join(dir, "audio.wav");
 
   try {
     if (opts.signal?.aborted) throw new Error(`tarefa cancelada: ${opts.input}`);
     await extract({ input: opts.input, output: wav });
     const parsed = await runSpeechSidecar({
-      taskId: opts.input,
+      taskId: opts.taskId ?? opts.input,
       wav,
       language,
       model,
       computeType: opts.computeType,
       signal: opts.signal,
+      ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
     }, deps);
     return { language: parsed.language, tokens: toTokens(parsed.words), unaligned: parsed.unaligned };
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await removeAudioDir(dir);
   }
 }
 
@@ -171,8 +215,29 @@ export interface AlignTextDeps {
   runSidecar: (args: string[]) => Promise<string>;
 }
 
+/**
+ * O venv da fala bate com o uv.lock? `uv run --no-sync` não instala nada e,
+ * sem o venv, cria um `.venv` vazio no repositório antes de falhar num
+ * ModuleNotFoundError. `sync --check` compara sem criar nem alterar nada.
+ * Sem cache de propósito: custa ~100 ms, e transcrever ou alinhar leva
+ * segundos.
+ */
+async function assertSpeechEnvSynced(): Promise<void> {
+  try {
+    await run("uv", ["sync", "--locked", "--check", "--offline"], { cwd: SPEECH_DIR });
+  } catch (error) {
+    // `uv` fora do PATH é outro problema, e o erro original já o diz.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
+    throw new Error(
+      `o ambiente Python de fala está ausente ou incompleto em ${join(SPEECH_DIR, ".venv")}. ` +
+      "Execute primeiro: node scripts/setup.mjs",
+    );
+  }
+}
+
 async function defaultRunSidecar(args: string[]): Promise<string> {
-  const { stdout } = await run("uv", ["run", "python", "transcribe.py", ...args], {
+  await assertSpeechEnvSynced();
+  const { stdout } = await run("uv", ["run", "--no-sync", "python", "transcribe.py", ...args], {
     cwd: SPEECH_DIR,
     maxBuffer: 256 * 1024 * 1024,
   });
@@ -204,7 +269,7 @@ export async function alignText(
     || !(startSeconds >= 0 && startSeconds < endSeconds)) {
     throw new Error("intervalo inválido para alinhamento");
   }
-  const dir = await mkdtemp(join(tmpdir(), "decupa-align-"));
+  const dir = await tempAudioDir("decupa-align-");
   try {
     const wav = join(dir, "clip.wav");
     await deps.extract({
@@ -232,6 +297,6 @@ export async function alignText(
     }));
     return { language: parsed.language, tokens: toTokens(shifted), unaligned: [] };
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await removeAudioDir(dir);
   }
 }

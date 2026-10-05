@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { createFileCoordinator } from "@decupa/coordinator";
+import { CancelledError } from "@decupa/queue";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { collectSink, createTracer } from "@decupa/trace";
 import {
@@ -17,8 +19,10 @@ import {
   probeFps,
   runIngest,
   runPlan,
+  runRender,
   runTriage,
   SpawnExecutor,
+  transcriptTaskId,
   visualProxyArgs,
   type ExecCall,
   type Executor,
@@ -138,9 +142,16 @@ describe("runIngest", () => {
     // Sem diretório por job, dois vídeos no mesmo cwd se sobrescrevem.
     const exec = new FakeExecutor();
     await runIngest(job, exec, () => {});
-    for (const call of exec.calls) {
+    // `uv sync --check` confere o venv do sidecar: não é chamada ao motor e
+    // não tem diretório de job.
+    for (const call of exec.calls.filter((c) => !c.args.includes("sync"))) {
       expect(call.env?.CLAUDE_PROJECT_DIR).toBe("/work/j1");
     }
+    // Sem isso o filtro acima esconderia um sync que sumiu ou que apontou
+    // para o venv errado: o da visão é o único que o ingest confere.
+    const syncs = exec.calls.filter((c) => c.args.includes("sync"));
+    expect(syncs.length).toBeGreaterThan(0);
+    for (const call of syncs) expect(call.cwd).toMatch(/services[\\/]vision$/);
   });
 
   it("estoura com a saída do motor quando uma etapa falha", async () => {
@@ -181,6 +192,14 @@ describe("runIngest", () => {
     expect(vis!.args).toContain("4");
     const proxy = exec.calls.find((c) => c.command === "ffmpeg" && c.args.includes("fps=4,scale='min(540,iw)':'min(960,ih)':force_original_aspect_ratio=decrease"));
     expect(proxy).toBeDefined();
+  });
+
+  it("chama visual_index.py com uv run --no-sync", async () => {
+    // Sem --no-sync, uv cria um .venv vazio quando o sidecar não está sincronizado.
+    const exec = new FakeExecutor();
+    await runIngest(job, exec, () => {});
+    const vis = exec.calls.find((call) => call.args.includes("visual_index.py"));
+    expect(vis?.args.slice(0, 4)).toEqual(["run", "--no-sync", "python", "visual_index.py"]);
   });
 
   it("invoca o condense-prep com o Node do processo na raiz do repo, não no cwd de quem chamou", async () => {
@@ -300,6 +319,11 @@ describe("runIngest", () => {
   it("dois arquivos no serviço residente compartilham o worker e não spawnam transcribe.py", async () => {
     const dirA = await mkdtemp(join(tmpdir(), "decupa-ingest-a-"));
     const dirB = await mkdtemp(join(tmpdir(), "decupa-ingest-b-"));
+    // Arquivos de verdade: a chave da tarefa sai do stat do conteúdo.
+    const camA = join(dirA, "cam-a.mp4");
+    const camB = join(dirB, "cam-b.mp4");
+    await writeFile(camA, "A");
+    await writeFile(camB, "BB");
     const workerCalls: string[] = [];
     const speech = {
       worker: async (req: { taskId: string; language: string }) => {
@@ -315,10 +339,13 @@ describe("runIngest", () => {
     };
     const exec = new FakeExecutor();
     await Promise.all([
-      runIngest({ id: "a", videoPath: "/vid/cam-a.mp4", workDir: dirA }, exec, () => {}, undefined, createTracer(), speech),
-      runIngest({ id: "b", videoPath: "/vid/cam-b.mp4", workDir: dirB }, exec, () => {}, undefined, createTracer(), speech),
+      runIngest({ id: "a", videoPath: camA, workDir: dirA }, exec, () => {}, undefined, createTracer(), speech),
+      runIngest({ id: "b", videoPath: camB, workDir: dirB }, exec, () => {}, undefined, createTracer(), speech),
     ]);
-    expect(workerCalls.sort()).toEqual(["/vid/cam-a.mp4", "/vid/cam-b.mp4"]);
+    expect(workerCalls.sort()).toEqual([
+      transcriptTaskId(camA, await stat(camA)),
+      transcriptTaskId(camB, await stat(camB)),
+    ].sort());
     expect(exec.calls.some((c) => c.args.includes("condense-prep"))).toBe(false);
     expect(exec.calls.some((c) => c.args.includes("transcribe.py"))).toBe(false);
     expect(JSON.parse(await readFile(join(dirA, "transcript.json"), "utf8")).segments[0].words[0].text).toBe("oi");
@@ -451,14 +478,17 @@ describe("runTriage", () => {
   });
 });
 
+/** Saída JSON do ffprobe com as duas taxas que o probeFps pede. */
+const rates = (r: string, avg = r) => JSON.stringify({ streams: [{ r_frame_rate: r, avg_frame_rate: avg }] });
+
 describe("probeFps", () => {
   it("lê o frame rate como fração", async () => {
-    expect(await probeFps(job, new FakeExecutor({ stdout: "30/1\n" }))).toBe(30);
+    expect(await probeFps(job, new FakeExecutor({ stdout: rates("30/1") }))).toBe(30);
   });
 
   it("recusa fracionário com instrução do que fazer", async () => {
     // 29,97 vira deriva crescente no timecode; ninguém percebe até o fim.
-    const exec = new FakeExecutor({ stdout: "30000/1001\n" });
+    const exec = new FakeExecutor({ stdout: rates("30000/1001") });
     await expect(probeFps(job, exec)).rejects.toThrow(/29\.97/);
   });
 
@@ -610,12 +640,12 @@ describe("probeFps orienta para OTIO (ICE3-04)", () => {
   it("fracionário não-EDL sugere OTIO", async () => {
     // 24000/1001 ≈ 23,98: o EDL não gera, mas o OTIO aceita qualquer taxa
     // racional — o erro precisa nomear essa saída.
-    const exec = new FakeExecutor({ stdout: "24000/1001\n" });
+    const exec = new FakeExecutor({ stdout: rates("24000/1001") });
     await expect(probeFps(job, exec)).rejects.toThrow(/otio/i);
   });
 
   it("29.97 com allowDropFrame continua passando", async () => {
-    const exec = new FakeExecutor({ stdout: "30000/1001\n" });
+    const exec = new FakeExecutor({ stdout: rates("30000/1001") });
     await expect(probeFps(job, exec, { allowDropFrame: true })).resolves.toBeCloseTo(29.97, 2);
   });
 });
@@ -652,4 +682,266 @@ describe("ensureAudioProxy", () => {
     const leftovers = (await readdir(dir)).filter((n) => n.startsWith("playback"));
     expect(leftovers).toEqual([]);
   }, 60_000);
+});
+
+const palavra = { text: "oi", startMs: 0, endMs: 80, confidence: 1, sentenceIndex: 0 };
+
+/** Worker de mentira: o ingest não pode depender de WhisperX nestes casos. */
+function fala(worker: (req: { taskId: string; onProgress?: (line: string) => void }) => Promise<{
+  language: string;
+  words: (typeof palavra)[];
+  unaligned: string[];
+}>) {
+  return {
+    worker,
+    extract: async () => {},
+    detectSilence: async () => [],
+    coordinator: undefined as ReturnType<typeof createFileCoordinator> | undefined,
+  };
+}
+
+/** ffmpeg que deixa um arquivo no último argumento e sai com erro. */
+function ffmpegMorto(): { exec: Executor; vezes: () => number } {
+  let vezes = 0;
+  const exec: Executor = {
+    async run(call) {
+      if (call.command === "ffmpeg") {
+        vezes += 1;
+        const destino = call.args.at(-1);
+        if (destino) await writeFile(destino, "parcial");
+        return { code: 1, stdout: "", stderr: "encode interrompido" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { exec, vezes: () => vezes };
+}
+
+describe("derivados atômicos", () => {
+  it("proxy visual que falha no meio não fica no destino e a próxima ingestão gera de novo", async () => {
+    // O ffmpeg antigo escrevia direto em visual-proxy.mp4: o pedaço era reusado.
+    const dir = await mkdtemp(join(tmpdir(), "decupa-proxy-visual-"));
+    const { exec, vezes } = ffmpegMorto();
+    const alvo = { id: "j1", videoPath: "/vid/aula.mp4", workDir: dir };
+    const primeira = await runIngest(alvo, exec, () => {}, undefined, undefined, undefined, undefined, { hwDecode: false });
+    expect(primeira.warning).toMatch(/visão/);
+    await expect(access(join(dir, "visual-proxy.mp4"))).rejects.toThrow();
+    await runIngest(alvo, exec, () => {}, undefined, undefined, undefined, undefined, { hwDecode: false });
+    expect(vezes()).toBe(2);
+    expect((await readdir(dir)).filter((nome) => nome.includes("partial"))).toEqual([]);
+  });
+
+  it("proxy de triagem que falha no meio não é reusado na tentativa seguinte", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-proxy-triagem-"));
+    const { exec, vezes } = ffmpegMorto();
+    const alvo = { ...job, workDir: dir };
+    await expect(makeTriageProxy(alvo, exec)).rejects.toThrow(/proxy de triagem/);
+    await expect(makeTriageProxy(alvo, exec)).rejects.toThrow(/proxy de triagem/);
+    expect(vezes()).toBe(2);
+    await expect(access(join(dir, "triage-proxy.mp4"))).rejects.toThrow();
+    expect((await readdir(dir)).filter((nome) => nome.includes("partial"))).toEqual([]);
+  });
+});
+
+describe("cancelamento do ingest", () => {
+  it("signal abortado depois da transcrição não chama o índice nem o visual", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-abort-fala-"));
+    const video = join(dir, "aula.mp4");
+    await writeFile(video, "video");
+    const ac = new AbortController();
+    const exec = new FakeExecutor();
+    let erro: unknown = "seguiu";
+    try {
+      await runIngest(
+        { id: "j1", videoPath: video, workDir: dir },
+        exec,
+        () => {},
+        undefined,
+        undefined,
+        fala(async () => {
+          ac.abort();
+          return { language: "pt", words: [palavra], unaligned: [] };
+        }),
+        ac.signal,
+      );
+    } catch (error) {
+      erro = error;
+    }
+    const seguiu = exec.calls.filter((call) => call.command === "ffmpeg" || call.args[1] === "index");
+    expect(seguiu).toEqual([]);
+    expect(erro).toBeInstanceOf(CancelledError);
+  });
+
+  it("ffmpeg abortado com hwDecode não é relançado em software", async () => {
+    // Relançar em software desfazia o cancelar e seguia por minutos.
+    const dir = await mkdtemp(join(tmpdir(), "decupa-abort-hw-"));
+    await writeFile(join(dir, "transcript.json"), JSON.stringify({
+      segments: [{ text: "oi", words: [{ text: "oi", start: 0, end: 1 }] }],
+    }), "utf8");
+    const ac = new AbortController();
+    let ffmpeg = 0;
+    const exec: Executor = {
+      async run(call) {
+        if (call.command === "ffmpeg") {
+          ffmpeg += 1;
+          ac.abort();
+          return { code: 1, stdout: "", stderr: "killed" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    let erro: unknown = "seguiu";
+    try {
+      await runIngest(
+        { id: "j1", videoPath: "/vid/aula.mp4", workDir: dir, signal: ac.signal },
+        exec,
+        () => {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { hwDecode: true },
+      );
+    } catch (error) {
+      erro = error;
+    }
+    expect(ffmpeg).toBe(1);
+    // O span "visual" reembrulha o erro: o que sai tem o nome de cancelamento,
+    // e a causa é o CancelledError de @decupa/queue.
+    expect(erro).toMatchObject({ name: "CancelledError" });
+    expect((erro as { cause?: unknown }).cause).toBeInstanceOf(CancelledError);
+  });
+
+  it("todo exec.run do ingest, do plano, do proxy, do fps e do render recebe o signal", async () => {
+    const ac = new AbortController();
+    const dir = await mkdtemp(join(tmpdir(), "decupa-signal-"));
+    const comSignal = { ...job, workDir: dir, signal: ac.signal };
+    const ingest = new FakeExecutor();
+    // O sinal entra uma vez só. Passar o mesmo nos dois lugares faz o
+    // pipeline compor um AbortSignal.any, que não é o signal original.
+    await runIngest(
+      { ...job, workDir: dir },
+      ingest,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      ac.signal,
+      { hwDecode: false },
+    );
+    expect(ingest.calls.length).toBeGreaterThan(0);
+    for (const call of ingest.calls) expect(call.signal).toBe(ac.signal);
+
+    const plano = new FakeExecutor();
+    await runPlan(comSignal, "u001", plano);
+    expect(plano.calls[0]?.signal).toBe(ac.signal);
+
+    const proxy = new FakeExecutor();
+    await makeTriageProxy(comSignal, proxy);
+    expect(proxy.calls[0]?.signal).toBe(ac.signal);
+
+    const fpsCalls: ExecCall[] = [];
+    const fps: Executor = {
+      async run(call) {
+        fpsCalls.push(call);
+        const json = call.args.includes("json") || call.args.some((arg) => arg.includes("avg_frame_rate"));
+        return { code: 0, stdout: json ? rates("30/1") : "30/1\n", stderr: "" };
+      },
+    };
+    expect(await probeFps(comSignal, fps)).toBe(30);
+    expect(fpsCalls[0]?.signal).toBe(ac.signal);
+
+    const render = new FakeExecutor();
+    await runRender(comSignal, join(dir, "corte.mp4"), render);
+    expect(render.calls[0]?.signal).toBe(ac.signal);
+  });
+
+  it("repassa o progresso do worker residente para onLine", async () => {
+    // onLine é o que o servidor manda para setProgress.
+    const dir = await mkdtemp(join(tmpdir(), "decupa-progresso-"));
+    const video = join(dir, "aula.mp4");
+    await writeFile(video, "video");
+    const linhas: string[] = [];
+    await runIngest(
+      { id: "j1", videoPath: video, workDir: dir },
+      new FakeExecutor(),
+      () => {},
+      (linha) => linhas.push(linha),
+      undefined,
+      fala(async (req) => {
+        req.onProgress?.("transcrevendo 42%");
+        return { language: "pt", words: [palavra], unaligned: [] };
+      }),
+      undefined,
+      { visual: false },
+    );
+    expect(linhas).toContain("transcrevendo 42%");
+  });
+});
+
+describe("transcrição vazia", () => {
+  it("limpeza com fala vazia não grava cache e a próxima abertura transcreve de novo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-sem-fala-"));
+    const video = join(dir, "aula.mp4");
+    await writeFile(video, "video");
+    const coordinator = createFileCoordinator(join(dir, "coord"), { limit: 1, pollMs: 5 });
+    let chamadas = 0;
+    const speech = fala(async () => {
+      chamadas += 1;
+      return { language: "pt", words: [], unaligned: [] };
+    });
+    speech.coordinator = coordinator;
+    const rodar = () => runIngest(
+      { id: "j1", videoPath: video, workDir: dir },
+      new FakeExecutor(),
+      () => {},
+      undefined,
+      undefined,
+      speech,
+      undefined,
+      { requireSpeech: true, visual: false },
+    );
+    await expect(rodar()).rejects.toThrow(/não encontrou fala/);
+    await expect(access(join(dir, "transcript.json"))).rejects.toThrow();
+    await expect(rodar()).rejects.toThrow(/não encontrou fala/);
+    expect(chamadas).toBe(2);
+  });
+
+  it("montagem aceita fonte sem fala e grava o índice vazio", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-sem-fala-montagem-"));
+    const video = join(dir, "apoio.mp4");
+    await writeFile(video, "video");
+    let chamadas = 0;
+    await runIngest(
+      { id: "j1", videoPath: video, workDir: dir },
+      new FakeExecutor(),
+      () => {},
+      undefined,
+      undefined,
+      fala(async () => {
+        chamadas += 1;
+        return { language: "pt", words: [], unaligned: [] };
+      }),
+      undefined,
+      { visual: false },
+    );
+    expect(chamadas).toBe(1);
+    const indice = JSON.parse(await readFile(join(dir, "out", "speech_index.json"), "utf8")) as { units: unknown[] };
+    expect(indice.units).toEqual([]);
+  });
+});
+
+describe("keep-list e frame rate", () => {
+  it("recusa faixa que não é unidade antes de chamar o motor", async () => {
+    // `--drop-fillers` no keep-list ia parar como argumento do condense.py.
+    const exec = new FakeExecutor();
+    await expect(runPlan(job, "--drop-fillers u001", exec)).rejects.toThrow(/faixa inválida/);
+    expect(exec.calls).toHaveLength(0);
+  });
+
+  it("r_frame_rate absurdo cai para a taxa média", async () => {
+    // Celular em VFR devolve 90000/1; o EDL não pode usar essa taxa.
+    const exec = new FakeExecutor({ stdout: rates("90000/1", "30/1") });
+    expect(await probeFps(job, exec)).toBe(30);
+  });
 });

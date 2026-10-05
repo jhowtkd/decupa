@@ -1,4 +1,5 @@
 import {spawn} from "node:child_process";
+import {createServer} from "node:net";
 import {once} from "node:events";
 import {expect,it} from "vitest";
 import {mkdtemp,copyFile,readFile,writeFile} from "node:fs/promises";
@@ -6,14 +7,24 @@ import {tmpdir} from "node:os";import {join} from "node:path";
 import {createHash} from "node:crypto";
 import {hashFile} from "@decupa/media";
 import {FIXTURES} from "../../../../../tests/fixtures/global-setup.ts";
+import {referenceForAssembly} from "../../../../../tests/fixtures/timeline-reference.ts";
 import {blankProject} from "./routes.ts";
+import {fixtureAssembly} from "./fixture.ts";
 import {createProject,saveProject} from "./store.ts";
 import {deliverApproved,readDelivery} from "./delivery.ts";
 import type {ExecCall} from "../pipeline.ts";
 async function setup(){
  const dir=await mkdtemp(join(tmpdir(),"resolve-delivery-"));const p=blankProject("p");
- await copyFile(join(FIXTURES,"clip.mp4"),join(dir,"preview.mp4"));
- p.previewRevision=0;p.finalApprovedRevision=0;p.previewArtifact={revision:0,relativePath:"preview.mp4",sha256:await hashFile(join(dir,"preview.mp4")),assemblySha256:createHash("sha256").update(JSON.stringify(p.assembly)).digest("hex")};
+ const media=join(dir,"fala.mp4");
+ await copyFile(join(FIXTURES,"clip.mp4"),media);
+ const sample=fixtureAssembly().sources[0]!;
+ p.assembly.sources=[{...sample,id:"a",path:media,sha256:await hashFile(media),name:"fala.mp4",durationSeconds:3}];
+ const clip={id:"v1",sceneId:"s1",sourceId:"a",sourceStartSeconds:0,startFrame:0,durationFrames:75};
+ p.assembly.tracks[0]!.clips=[{...clip,id:"v1"}];
+ p.assembly.tracks[2]!.clips=[{...clip,id:"a1"}];
+ const preview=join(dir,"preview.mp4");
+ await copyFile(await referenceForAssembly(p.assembly),preview);
+ p.previewRevision=0;p.finalApprovedRevision=0;p.previewArtifact={revision:0,relativePath:"preview.mp4",sha256:await hashFile(preview),assemblySha256:createHash("sha256").update(JSON.stringify(p.assembly)).digest("hex")};
  await createProject(dir,p);return {dir,p};
 }
 it("não chama ponte sem aprovação",async()=>{
@@ -67,4 +78,28 @@ it("falha antes de criar projeto permite repetir sem nova cópia",async()=>{
  const {dir,p}=await setup();let calls=0;const exec={run:async()=>{calls++;return {code:1,stdout:JSON.stringify({ok:false,error:"API indisponível"}),stderr:""};}};
  for(let i=0;i<2;i++)await expect(deliverApproved(p,dir,exec,new AbortController().signal)).rejects.toThrow(/API indisponível/);
  expect(calls).toBe(2);expect(await readDelivery(dir,0)).toMatchObject({created:false,status:"error",stage:"connecting"});
+});
+
+it("entrega que não responde é interrompida, solta a porta e não volta a running", async () => {
+  const { dir, p } = await setup();
+  let releaseLate!: () => void;
+  const late = new Promise<void>((resolve) => { releaseLate = resolve; });
+  const exec = { run: async (call: ExecCall) => {
+    const request = JSON.parse(await readFile(call.args[call.args.indexOf("--request") + 1]!, "utf8")) as { projectName: string };
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    call.onLine?.(JSON.stringify({ stage: "created" }));
+    releaseLate();
+    return { code: 0, stdout: JSON.stringify({ ok: true, projectName: request.projectName, verified: true }), stderr: "" };
+  } };
+  const started = Date.now();
+  await expect(deliverApproved(p, dir, exec, new AbortController().signal, { timeoutMs: 100 })).rejects.toThrow(/interrompida/);
+  expect(Date.now() - started).toBeLessThan(1500);
+  expect((await readDelivery(dir, 0))?.status).toBe("error");
+  await new Promise<void>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 47789, exclusive: true }, () => server.close(() => resolve()));
+  });
+  await late;
+  expect((await readDelivery(dir, 0))?.status).toBe("error");
 });

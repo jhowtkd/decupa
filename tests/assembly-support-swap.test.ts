@@ -95,9 +95,8 @@ it("troca de apoio: candidatos com evidência, aplicação, desfazer (#65)", asy
   for (const target of [speech, apoio, extra]) {
     await copyFile(join(FIXTURES, "clip.mp4"), target);
   }
-  // describe por chamada: fala (vídeo de fala) → apoio → extra.
+  // describe por chamada: apoio → extra (fonte de fala não é descrita no analyze).
   const spansByCall: { id: string; start: number; end: number; text: string; confidence?: string; tags?: string[] }[][] = [
-    [],
     [{ id: "v0", start: 0, end: 1, text: "apoio antigo", confidence: "observed", tags: [] }],
     [
       { id: "v1", start: 0, end: 1, text: "candidato um", confidence: "observed", tags: [] },
@@ -197,8 +196,8 @@ it("sem candidato adequado a montagem é preservada e a lacuna explicada (#65)",
   await copyFile(join(FIXTURES, "clip.mp4"), speech);
   await copyFile(join(FIXTURES, "clip.mp4"), apoio);
   let describeCalls = 0;
+  // Só o apoio é descrito: a fonte de fala não passa pelo describe no analyze.
   const spansByCall: { id: string; start: number; end: number; text: string; confidence?: string; tags?: string[] }[][] = [
-    [],
     [{ id: "v0", start: 0, end: 1, text: "único trecho", confidence: "observed", tags: [] }],
   ];
   const app = await startApp({

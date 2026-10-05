@@ -227,13 +227,18 @@ async function saveAnalysis(
 
 function spansFromIndex(source: Source, raw: unknown): Span[] {
   const index = parseSpeechIndex(raw);
-  return index.units.map((unit) => ({
-    id: `${source.id}:${unit.id}`,
-    sourceId: source.id,
-    start: unit.start,
-    end: unit.end,
-    text: unit.text,
-  }));
+  // Como nas palavras: o fim da fala pode vir alguns ms além da duração
+  // arredondada da fonte e é limitado a ela; unidade que começa no fim ou
+  // depois dele não tem mídia e sai do catálogo.
+  return index.units
+    .filter((unit) => unit.start < source.durationSeconds)
+    .map((unit) => ({
+      id: `${source.id}:${unit.id}`,
+      sourceId: source.id,
+      start: unit.start,
+      end: Math.min(unit.end, source.durationSeconds),
+      text: unit.text,
+    }));
 }
 
 async function buildAnalysis(
