@@ -1,4 +1,5 @@
 import type { Recipe } from "../templates/types.ts";
+import type { FillerCategory } from "@decupa/triage";
 export type Rate = { num: number; den: number };
 
 /**
@@ -123,6 +124,15 @@ export type EditAction =
 /** Intervalo semiaberto em segundos: [start, end). */
 export type SourceRange = { start: number; end: number };
 
+/** O delta inclui pausas fundidas: restaurar a palavra não basta. */
+export type FillerCut = {
+  /** Hash local das palavras e vizinhos; ausente somente em camadas legadas. */
+  generation?: string;
+  wordIds: string[]; wordTexts: string[];
+  category: FillerCategory; rule: string; origin: "auto" | "user";
+  effective: SourceRange[];
+};
+
 /**
  * Palavra com identidade estável e vínculo com a fonte. O id é posicional e
  * determinístico (`${sourceId}:${sha256}:w${índice}`); correções de grafia
@@ -150,6 +160,7 @@ export type SpeechTake = SourceRange & {
    * acumula remoções irreversíveis.
    */
   rhythm?: { profile: string; removed: SourceRange[] };
+  fillers?: { cuts: FillerCut[] };
 };
 
 /** Correção de grafia: overlay de texto que não move a seleção de mídia. */
@@ -228,6 +239,7 @@ export type PreviewArtifact = {
 };
 
 export type Project = {
+  fillerExceptions?: { wordId: string; text: string }[];
   template?: Recipe | null;
   /** Relatório da receita aceita — acompanha template; persiste até a próxima proposta de template. */
   templateReport?: TemplateReport;

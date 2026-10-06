@@ -38,7 +38,7 @@ export const FILLER_MIN_GAP_SECONDS: Readonly<Record<FillerFlow, number>> = {
 
 export const FILLER_MECHANIC_VERSION: Readonly<Record<FillerFlow, string>> = {
   // T2 incrementa esta versão sempre que mudar snap, clamp ou merge dos cortes.
-  montagem: "montagem:1",
+  montagem: "montagem:2",
   // Seleção lexical atual do motor. T3 substitui pelo hash do trecho
   // drop_filler_spans do local-engine.patch, com teste de vínculo ao trecho.
   limpeza: "limpeza:lexical-hard+stutter@b17559e",

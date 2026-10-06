@@ -1,3 +1,7 @@
+import { autoFillerTargets, type FillerSnaps } from "./fillers.ts";
+import { planFillerSnaps } from "./filler-snaps.ts";
+import { assemblyFillerSnapshot, type FillerObserveDeps } from "./filler-observe.ts";
+import { commitFillerChange, parseFillerTargets } from "./filler-routes.ts";
 import { publishAtomic } from "@decupa/cache";
 import { loadRecipe } from "../templates/store.ts";
 import { deliverApproved, readDelivery } from "./delivery.ts";
@@ -34,7 +38,7 @@ import { renderAssembly } from "./render.ts";
 import { buildTemplateReport } from "./template-report.ts";
 import { peaksPath } from "./waveform.ts";
 import {
-  applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
+  applyEdit, applyFillerEdit, applyHistorySnapshot, applyProposalWithFillers, proposalProject, approveFinal, recordPreview,
 } from "./revisions.ts";
 import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
@@ -69,7 +73,7 @@ export type AssemblyOperation = {
   error?: string;
 } | null;
 
-export type AssemblyDeps = {
+export type AssemblyDeps = FillerObserveDeps & {
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -418,6 +422,7 @@ function addSource(project: Project, source: Source): Project {
 
 export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let operation: AssemblyOperation = null;
+  let fillerSnaps: FillerSnaps = {};
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
@@ -439,6 +444,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
   function snapshot() {
     return { operation };
+  }
+
+  async function sendSnapshot(res: ServerResponse, body: Record<string, unknown>, status?: number, includeStale = false): Promise<void> {
+    if (body.project) {
+      const snapshot = await assemblyFillerSnapshot(dir, body.project as Project, deps, fillerSnaps, includeStale);
+      fillerSnaps = snapshot.snaps;
+      body = { ...body, fillerReport: snapshot.report };
+    }
+    sendJson(res, body, status);
   }
 
   function abortOperations(): void {
@@ -605,9 +619,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (!url.pathname.startsWith("/project") && !url.pathname.startsWith("/editor/")) return false;
     const parts = url.pathname.split("/").filter(Boolean);
 
+    const requestController = new AbortController();
+    const abortRequest = () => requestController.abort();
+    // Depois do corpo, IncomingMessage.close é normal; a resposta sinaliza a desconexão.
+    req.once?.("aborted", abortRequest);
+    if (req.aborted) abortRequest();
+    const closeResponse = () => { if (!res.writableEnded) abortRequest(); };
+    res.once?.("close", closeResponse);
+    const requestSignal = () => requestController.signal;
     try {
       if (req.method !== "GET" && !originAllowed(req.headers.origin, deps.port())) {
-        sendJson(res, { error: "origem não permitida" }, 403);
+        await sendSnapshot(res, { error: "origem não permitida" }, 403);
         return true;
       }
 
@@ -681,7 +703,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const listed=brollCandidates(project),index=brollIndex(project,listed);
         const candidates=listed.map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps),index)}));
-        sendJson(res, {
+        await sendSnapshot(res, {
           project, undoRevision,
           templateProposal:await readTemplateProposal(),
           speechProposal: await readSpeechProposal(),
@@ -745,7 +767,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         // Cache corrompido equivale a ausente (best-effort).
         try {
           const raw = await readFile(peaksPath(dir, source.sha256), "utf8");
-          sendJson(res, JSON.parse(raw));
+          await sendSnapshot(res, JSON.parse(raw));
         } catch {
           res.writeHead(204);
           res.end();
@@ -754,7 +776,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if (parts[1] === "resolve-status" && req.method === "GET") {
-        const project=await loadProject(dir); sendJson(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+        const project=await loadProject(dir); await sendSnapshot(res,{delivery:await readDelivery(dir,project.revision)}); return true;
       }
       if (parts[1] === "resolve-drp" && req.method === "GET") {
         const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
@@ -794,7 +816,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         livePreviews.clear();
         if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
-        sendJson(res, { ok: true, ...snapshot() });
+        await sendSnapshot(res, { ok: true, ...snapshot() });
         return true;
       }
 
@@ -857,7 +879,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const known = before.assembly.sources.find((item) => item.sha256 === sha256);
         if (known) {
           await cleanup();
-          sendJson(res, { project: await loadProject(dir), source: known, reused: true });
+          await sendSnapshot(res, { project: await loadProject(dir), source: known, reused: true });
           return true;
         }
         const ext = /\.([A-Za-z0-9]{1,5})$/.exec(name)?.[1] ?? "bin";
@@ -883,7 +905,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         // caminho canônico para nunca devolver 200 sem source (V8).
         const canonical = await realpath(stored).catch(() => stored);
         const source = project.assembly.sources.find((item) => item.path === canonical);
-        sendJson(res, { project, source });
+        await sendSnapshot(res, { project, source });
         return true;
       }
 
@@ -893,7 +915,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const baseRevision = requireRevision(body);
         const picked = await pickFiles();
         if ("cancelled" in picked) {
-          sendJson(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
+          await sendSnapshot(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
           return true;
         }
         const sources: Source[] = [];
@@ -907,7 +929,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return withCanvasPolicy(next);
         });
         const project = await loadProject(dir);
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -922,7 +944,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           ...project,
           input: { kind, text: body.text as string, targetSeconds },
         }));
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -959,7 +981,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             canvasManual: true,
           });
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -993,7 +1015,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           });
           if (pending.length) project = await analyzeSources(project, pending, false);
         }
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1014,7 +1036,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           );
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1058,7 +1080,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           });
         });
         operation = { stage: "idle" };
-        sendJson(res, { project: await loadProject(dir), ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 
@@ -1068,7 +1090,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const sourceId = String(body.sourceId ?? "");
         const picked = await pickFiles();
         if ("cancelled" in picked) {
-          sendJson(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
+          await sendSnapshot(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
           return true;
         }
         const chosen = picked.paths[0];
@@ -1090,7 +1112,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             },
           };
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1106,7 +1128,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(402, PAID_BLOCKED);
         }
         const analyzed = await analyzeSources(project, sourceIds, wantVisual);
-        sendJson(res, { project: analyzed, ...snapshot() });
+        await sendSnapshot(res, { project: analyzed, ...snapshot() });
         return true;
       }
 
@@ -1141,7 +1163,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
+          { ...deps },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(() => {
           releaseHold();
@@ -1161,7 +1183,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             }
           },
         );
-        sendJson(res, { project: await loadProject(dir), ...snapshot() }, 202);
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() }, 202);
         return true;
       }
 
@@ -1188,7 +1210,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});
           if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
           await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
-          sendJson(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
+          await sendSnapshot(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
         }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}
         return true;
       }
@@ -1196,10 +1218,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const expected=requireRevision(body);const proposal=await readTemplateProposal();
         if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
         let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
-        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return recordUndo(p,applyProposal(p,proposal),"Aplicar template");});
+        if(parts[1]==="template-accept") {
+          const proposed = proposalProject(project, proposal);
+          const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, proposal.changedSceneIds), { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() });
+          fillerSnaps = { ...fillerSnaps, ...snaps };
+          project = await commitFillerChange(dir, expected, p => applyProposalWithFillers(p, proposal, snaps), "Aplicar template");
+        }
         // Preserve a newer candidate if another generation finished concurrently.
         if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
-        sendJson(res,{project,templateProposal:null,...snapshot()});return true;
+        await sendSnapshot(res,{project,templateProposal:null,...snapshot()});return true;
       }
       if (parts[1] === "propose" && req.method === "POST") {
         const baseRevision = requireRevision(body);
@@ -1220,7 +1247,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           operation = { stage: "ready" };
           return { ...project, proposal };
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1255,7 +1282,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             loaded, { sourceId, speechId }, request, deps.proposeSend, signal,
           );
           if (!stillCurrent(gen)) {
-            sendJson(res, { project: await loadProject(dir), ...snapshot() });
+            await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
             return true;
           }
           // A proposta espera o modelo fora da trava de mutação: se a revisão
@@ -1264,12 +1291,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           const latest = await loadProject(dir);
           if (latest.revision !== proposal.baseRevision) {
             operation = { stage: "ready" };
-            sendJson(res, { project: latest, speechProposal: null, ...snapshot() });
+            await sendSnapshot(res, { project: latest, speechProposal: null, ...snapshot() });
             return true;
           }
           await publishAtomic(speechProposalPath, `${JSON.stringify(proposal)}\n`);
           operation = { stage: "ready" };
-          sendJson(res, {
+          await sendSnapshot(res, {
             project: latest, speechProposal: proposal, ...snapshot(),
           });
         } catch (err) {
@@ -1297,7 +1324,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return recordUndo(loaded, applySpeechProposal(loaded, proposal), "Ajuste de fala");
         });
         await unlink(speechProposalPath).catch(() => {});
-        sendJson(res, { project, speechProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project, speechProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1311,7 +1338,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente");
         }
         await unlink(speechProposalPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1334,7 +1361,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(400, err instanceof Error ? err.message : String(err));
         }
         await publishAtomic(supportSwapPath, `${JSON.stringify(proposal)}\n`);
-        sendJson(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
         return true;
       }
 
@@ -1360,7 +1387,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw err;
         }
         await unlink(supportSwapPath).catch(() => {});
-        sendJson(res, { project, supportSwap: null, ...snapshot() });
+        await sendSnapshot(res, { project, supportSwap: null, ...snapshot() });
         return true;
       }
 
@@ -1372,7 +1399,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente ou desatualizada");
         }
         await unlink(supportSwapPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
         return true;
       }
 
@@ -1392,7 +1419,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(400, err instanceof Error ? err.message : String(err));
         }
         await publishAtomic(rhythmProposalPath, `${JSON.stringify(proposal)}\n`);
-        sendJson(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
+        await sendSnapshot(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
         return true;
       }
 
@@ -1425,7 +1452,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return recordUndo(loaded, applyRhythmProposal(loaded, proposal), "Ritmo do corte");
         });
         await unlink(rhythmProposalPath).catch(() => {});
-        sendJson(res, { project, rhythmProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project, rhythmProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1438,21 +1465,38 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente");
         }
         await unlink(rhythmProposalPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
         return true;
       }
 
       if (parts[1] === "apply" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const proposalId = String(body.proposalId ?? "");
-        const project = await mutate(baseRevision, async (project) => {
-          if (!project.proposal || project.proposal.id !== proposalId) {
-            throw new HttpError(409, "proposta ausente ou desatualizada");
-          }
-          await writeHistorySnapshot(dir, project);
-          return recordUndo(project, applyProposal(project, project.proposal), "Aplicar proposta");
-        });
-        sendJson(res, { project, ...snapshot() });
+        const before = await loadProject(dir);
+        if (before.revision !== baseRevision || !before.proposal || before.proposal.id !== proposalId) throw new HttpError(409, "proposta ausente ou desatualizada");
+        const proposed = proposalProject(before, before.proposal);
+        const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, before.proposal.changedSceneIds), { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() });
+        fillerSnaps = { ...fillerSnaps, ...snaps };
+        const project = await commitFillerChange(dir, baseRevision, current => {
+          if (!current.proposal || current.proposal.id !== proposalId) throw new HttpError(409, "proposta ausente ou desatualizada");
+          return applyProposalWithFillers(current, current.proposal, snaps);
+        }, "Aplicar proposta");
+        await sendSnapshot(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if ((parts[1] === "fillers-cut" || parts[1] === "fillers-restore") && req.method === "POST") {
+        const revision = requireRevision(body), before = await loadProject(dir);
+        if (before.revision !== revision) throw new HttpError(409, "revisão desatualizada");
+        let targets;
+        try { targets = parseFillerTargets(body.targets, before); }
+        catch (error) { throw new HttpError(400, error instanceof Error ? error.message : String(error)); }
+        const mode = parts[1] === "fillers-cut" ? "cut" : "restore";
+        const snaps = mode === "cut" ? await planFillerSnaps(before, targets, { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() }) : {};
+        fillerSnaps = { ...fillerSnaps, ...snaps };
+        const project = await commitFillerChange(dir, revision, p => applyFillerEdit(p, targets, snaps, mode),
+          mode === "cut" ? "Cortar cacoetes" : "Restaurar cacoetes");
+        await sendSnapshot(res, { project, ...snapshot() }, undefined, true);
         return true;
       }
 
@@ -1495,10 +1539,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (correctionId) {
           // Alinhamento continua em background; o pending permite retomada.
           void alignCorrectionJob(dir, correctionId, project.revision);
-          sendJson(res, { project, ...snapshot() }, 202);
+          await sendSnapshot(res, { project, ...snapshot() }, 202);
           return true;
         }
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1536,7 +1580,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));
         }
-        sendJson(res, { project: await loadProject(dir), ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 
@@ -1566,7 +1610,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
               sha256: await hashFile(reference),
             });
           });
-          sendJson(res, { project, ...snapshot() });
+          await sendSnapshot(res, { project, ...snapshot() });
         } finally {
           settle();
         }
@@ -1587,7 +1631,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(/assistida/.test(message) ? 400 : 409, message);
           }
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1596,7 +1640,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
         try {
           const delivery=await deliverApproved(project,dir,deps.exec,new AbortController().signal,{exportDrp:parts[1]==="export-drp",newCopy:body.newCopy===true});
-          sendJson(res,{project:await loadProject(dir),delivery});
+          await sendSnapshot(res,{project:await loadProject(dir),delivery});
         } catch(error) {throw new HttpError(409,error instanceof Error?error.message:String(error));}
         return true;
       }
@@ -1608,7 +1652,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           const dest = await exportApproved(loaded, dir);
-          sendJson(res, {
+          await sendSnapshot(res, {
             project: loaded, path: dest,
             verificacao: await readVerification(dir, loaded.revision),
             ...snapshot(),
@@ -1638,7 +1682,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           return loaded;
         });
-        sendJson(res, {
+        await sendSnapshot(res, {
           project,
           verificacao: await readVerification(dir, project.revision),
           ...snapshot(),
@@ -1648,11 +1692,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       return false;
     } catch (err) {
+      if (err instanceof Error && err.message === "revisão desatualizada") {
+        await sendSnapshot(res, { error: err.message }, 409); return true;
+      }
       if (err instanceof HttpError) {
-        sendJson(res, { error: err.message }, err.status);
+        await sendSnapshot(res, { error: err.message }, err.status);
         return true;
       }
       throw err;
+    } finally {
+      req.off?.("aborted", abortRequest);
+      res.off?.("close", closeResponse);
     }
   }
 

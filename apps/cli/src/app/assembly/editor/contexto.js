@@ -1,3 +1,4 @@
+import { mountFillerContext, mountFillerReview } from "./cacoetes.js";
 // Região de contexto (Task 5): player da prévia, estado das correções de
 // texto e pedido em linguagem natural. Cada render assina o estado e porta
 // o bloco original do page.js monolítico, mantendo o comentário de
@@ -60,6 +61,7 @@ export function mountStage({ state, api, player }) {
     + '<div class="review-actions"><button type="button" id="refreshPreview" class="quiet small">Atualizar prévia</button>'
     + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
   stage.append(screen, note, meta, review);
+  mountFillerReview({ state }, review);
   document.getElementById("importFromStage").onclick = () => document.getElementById("filePicker").click();
   document.getElementById("montageView").onclick = () => {
     previewPlayer.removeAttribute("data-source");
@@ -580,6 +582,7 @@ export function mountContexto({ state, api, player }) {
   rhythm.innerHTML = '<summary><span class="ttl">Ritmo</span></summary>'
     + '<p class="muted" id="rhythmCurrent"></p><div class="row" id="rhythmChoices"></div>';
   root.replaceChildren(pending, scenePanel, rhythm, briefingActions);
+  mountFillerContext({ state, api, player }, root);
 
   const rhythmDialog = document.createElement("dialog");
   rhythmDialog.id = "rhythmDialog";

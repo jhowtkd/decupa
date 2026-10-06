@@ -193,8 +193,8 @@ describe("portão — escuta por célula e versão da mecânica", () => {
   });
 
   it("nova mecânica obriga novo ensaio", () => {
-    expect(fillerGoldGate(tenHeard(), cell, "montagem:2").reasons).toContain("rode o ensaio de novo para esta célula");
-    expect(() => assertFillerGoldGate(tenHeard(), { montagem: new Set(["tag_final"]), limpeza: new Set() }, { montagem: "montagem:2", limpeza: "outro" }))
+    expect(fillerGoldGate(tenHeard(), cell, `${FILLER_MECHANIC_VERSION.montagem}:next`).reasons).toContain("rode o ensaio de novo para esta célula");
+    expect(() => assertFillerGoldGate(tenHeard(), { montagem: new Set(["tag_final"]), limpeza: new Set() }, { montagem: `${FILLER_MECHANIC_VERSION.montagem}:next`, limpeza: "outro" }))
       .toThrow("rode o ensaio de novo para esta célula");
   });
 

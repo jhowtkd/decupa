@@ -1,3 +1,4 @@
+import { pruneFillerExceptions, validateFillerCuts } from "./filler-store.ts";
 import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
 import { validateAnimationNotes } from "./handoff.ts";
 import { validateDecisionReport } from "./assembly-decisions.ts";
@@ -204,7 +205,7 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
         sourceRange(entry, `take ${id}.rhythm.removed[${i}]`, source.durationSeconds)),
     };
   }
-  return {
+  const take: SpeechTake = {
     id,
     sourceId,
     speechId,
@@ -214,6 +215,8 @@ export function validateSpeechTake(value: unknown, sources: Map<string, Source>)
     protected: value.protected as SpeechTake["protected"],
     ...(rhythm ? { rhythm } : {}),
   };
+  const fillers = validateFillerCuts(value.fillers, take);
+  return { ...take, ...(fillers ? { fillers } : {}) };
 }
 
 export function validateTextCorrection(value: unknown, sources: Map<string, Source>): TextCorrection {
@@ -450,7 +453,7 @@ function validateV2(value: Record<string, unknown>): Project {
   const undo = readUndoStack(value.undo);
   const preparedRevision = Number.isSafeInteger(value.preparedRevision) && (value.preparedRevision as number) >= 0
     ? value.preparedRevision as number : undefined;
-  return {
+  const project: Project = {
     ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
     ...(value.templateReport!==undefined?{templateReport:validateTemplateReport(value.templateReport,approvedSnapshot(value.template))}:{}),
     version: 2,
@@ -476,6 +479,7 @@ function validateV2(value: Record<string, unknown>): Project {
     ...(undo !== undefined ? { undo } : {}),
     ...(preparedRevision !== undefined ? { preparedRevision } : {}),
   };
+  return { ...project, ...(value.fillerExceptions === undefined ? {} : { fillerExceptions: pruneFillerExceptions(project, value.fillerExceptions) }) };
 }
 
 /**
@@ -757,6 +761,7 @@ export function backupPath(dir: string): string {
 
 /** Conteúdo editorial restaurável pelo undo — sem consentimentos nem aprovações. */
 export type EditorialSnapshot = {
+  fillerExceptions?: Project["fillerExceptions"];
   template?: Project["template"];
   /** Relatório da receita aceita — desfazer restaura junto do template. */
   templateReport?: Project["templateReport"];
@@ -779,6 +784,7 @@ function historyPath(dir: string, revision: number): string {
  */
 export async function writeHistorySnapshot(dir: string, project: Project): Promise<void> {
   const snapshot: EditorialSnapshot = {
+    fillerExceptions: project.fillerExceptions ?? [],
     revision: project.revision,
     input: project.input,
     scenes: project.scenes,

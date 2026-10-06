@@ -535,8 +535,11 @@ it("prepare com opt-in devolve 202 e interrompe sem fala em projeto vazio", asyn
     }
   }
   expect(status).toBe("interrupted");
-  const finished = await (await fetch(`${base}/project`)).json() as { operation: { stage: string; error: string } };
-  expect(finished.operation).toMatchObject({ stage: "error", error: "sem fala transcrita nas fontes incluídas" });
+  // O terminal em disco pode aparecer antes de a operação em memória terminar.
+  await vi.waitFor(async () => {
+    const finished = await (await fetch(`${base}/project`)).json() as { operation: { stage: string; error: string } };
+    expect(finished.operation).toMatchObject({ stage: "error", error: "sem fala transcrita nas fontes incluídas" });
+  });
 });
 
 it("grava análise por arquivo e conserva a primeira se a segunda falha", async () => {

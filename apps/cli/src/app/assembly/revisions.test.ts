@@ -1,3 +1,7 @@
+import { applyFillerEdit, applyProposalWithFillers } from "./revisions.ts";
+import { fillerProject, fixedFillerSnaps } from "./filler-test-helper.ts";
+import { fillerReport } from "./fillers.ts";
+import { retainedRanges } from "./words.ts";
 import { expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import {
@@ -204,4 +208,31 @@ it.each(["id","excluded","audio-only","overlap","negative","zero","long","uncert
   const before=JSON.stringify(p);
   expect(()=>applyEdit(p,{type:"set-support",sceneId:"s1",support})).toThrow();
   expect(JSON.stringify(p)).toBe(before);
+});
+
+it("proposta e cacoete compilam áudio/texto com uma única revisão", () => {
+  const p = fillerProject(), proposal: Proposal = { id: "new", baseRevision: 1, changedSceneIds: ["s1"], explanation: "tema", scenes: p.scenes };
+  const next = applyProposalWithFillers(p, proposal, fixedFillerSnaps(p));
+  expect(next.revision).toBe(2); expect(next.assembly.revision).toBe(2);
+  expect(next.previewRevision).toBeNull(); expect(next.finalApprovedRevision).toBeNull();
+  const retained = retainedRanges(next.scenes[0]!.takes[0]!);
+  const audio = next.assembly.tracks.find(t => t.kind === "Audio")!.clips;
+  expect(audio.map(c => c.sourceStartSeconds)).toEqual(retained.map(r => Math.floor(r.start * 25) / 25));
+  expect(audio.reduce((n, c) => n + c.durationFrames, 0)).toBe(31);
+  const stale = structuredClone(p); stale.analyses[0]!.words[1]!.start = 0.61;
+  expect(applyProposalWithFillers(stale, proposal, fixedFillerSnaps(p)).scenes[0]!.takes[0]!.removed).toEqual([]);
+});
+
+it("cortar/restaurar em lote e fotos de undo/redo devolvem a camada e exceções", () => {
+  const p = fillerProject(), target = fillerReport(p).occurrences[0]!;
+  const cut = applyFillerEdit(p, [target], fixedFillerSnaps(p), "cut");
+  const restored = applyFillerEdit(cut, [target], {}, "restore");
+  expect(cut.revision).toBe(2); expect(restored.revision).toBe(3);
+  expect(restored.fillerExceptions).toEqual([{ wordId: "w2", text: "hã" }]);
+  const snap = (source: Project) => ({ revision: source.revision, input: source.input, scenes: source.scenes,
+    corrections: source.corrections, proposal: source.proposal, fillerExceptions: source.fillerExceptions });
+  const undo = applyHistorySnapshot(restored, snap(cut));
+  expect(undo.fillerExceptions).toEqual([]); expect(undo.scenes[0]!.takes[0]!.fillers!.cuts).toHaveLength(1);
+  const redo = applyHistorySnapshot(undo, snap(restored));
+  expect(redo.fillerExceptions).toEqual(restored.fillerExceptions); expect(redo.scenes[0]!.takes[0]!.removed).toEqual([]);
 });
