@@ -54,6 +54,50 @@ it("trocar Muse por Luna reutiliza ASR e recalcula visual/regras pelo transporte
  await analyzeRecipe(r,lunarDeps,new AbortController().signal);expect(speechCalls).toBe(1);expect(calls).toHaveLength(6);
 });
 
+function deferredTA(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return {promise,resolve};}
+
+it("texto da Montagem no Sol pelo caminho real (deps.resolveAnalysis): operação em voo conserva o Muse, a próxima usa o Sol, e voltar reaproveita o cache sem nenhuma chamada nova",async()=>{
+ const {dir,r}=await setup();const calls:{url:string;model:string}[]=[];
+ // visualProvider:"text" isola o texto: a visão fica no Muse e outro teste
+ // (acima, "trocar Muse por Luna...") já cobre o Luna como padrão.
+ const stored0={preset:"custom" as const,apiKey:"meta-fake",model:"muse-spark-1.3-contributor",baseUrl:"https://api.meta.ai/v1/chat/completions",visualProvider:"text" as const};
+ let current:import("@decupa/triage").Credentials=stored0;
+ const fetchImpl=(async(url,init)=>{const body=JSON.parse(String(init?.body));calls.push({url:String(url),model:body.model});const images=body.messages[0].content.some((p:{type:string})=>p.type==="image_url");return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{content:JSON.stringify(images?{spans:[{id:"v",start:0,end:r.source.durationSeconds,text:"cena",confidence:"observed",tags:[]}]}:{rules:[]})}}]}));}) as typeof fetch;
+ const exec={run:async(call:import("../pipeline.ts").ExecCall)=>{const pattern=call.args.at(-1)!;for(let i=0;i<3;i++)await writeFile(pattern.replace("%03d",String(i).padStart(3,"0")),"fake frame");return {code:0,stdout:"",stderr:""};}};
+ // resolveAnalysis é o mesmo objeto que operationResolver/resolveAppTransports
+ // entregam em produção: lê `current` fresco a cada chamada, via loadStored.
+ const {resolveAnalysis}=resolveAppTransports({env:{},fetchImpl,loadStored:async()=>current});
+ const entered=deferredTA(),release=deferredTA();let blockOnce=true;
+ const transcribe=async():Promise<import("../assembly/types.ts").Span[]>=>{if(blockOnce){blockOnce=false;entered.resolve();await release.promise;}return [];};
+ const base={workDir:dir,exec,allowModel:true,allowVisual:true,persist:async()=>{},resolveAnalysis,
+  send:async()=>{throw Error("resolveAnalysis deveria ter substituído send antes de qualquer chamada");},modelKey:"nunca-usado",transcribe};
+ const cold=analyzeRecipe(r,base,new AbortController().signal);
+ await entered.promise;
+ // Troca para o Sol enquanto a primeira operação está bloqueada em "audio",
+ // depois que resolveAnalysis() já capturou o Muse (a troca é posterior à
+ // captura, dentro da mesma chamada de analyzeRecipe).
+ current={...stored0,openaiApiKey:"sol-fake",assemblyTextProvider:"openai"};
+ release.resolve();
+ const first=await cold;
+ expect(first.analysis.status).toBe("ready");
+ expect(calls.map(c=>c.model)).toEqual([stored0.model,stored0.model]); // visão + regras, ambas no Muse com que a operação começou.
+
+ // Próxima operação (nova chamada): resolveAnalysis relê `current`, já no Sol.
+ const second=await analyzeRecipe(r,{...base,transcribe:async()=>{throw Error("ASR não deve rodar de novo: a fala já está em cache, inalterada pela troca de texto");}},new AbortController().signal);
+ expect(second.analysis.status).toBe("ready");
+ expect(calls.map(c=>c.model)).toEqual([stored0.model,stored0.model,"gpt-6.1-sol"]); // só as regras recalculam; a visão reaproveita o cache (mesma chave).
+ expect(calls.at(-1)!.url).toBe("https://api.openai.com/v1/chat/completions");
+
+ // Volta ao provedor de texto: mesma identidade do começo, cache real (zero
+ // chamadas novas) — não é um recálculo do valor esperado pela função atual,
+ // é a contagem de rede permanecer igual.
+ current=stored0;
+ const callsBeforeReturn=calls.length;
+ const third=await analyzeRecipe(r,{...base,transcribe:async()=>{throw Error("ASR não deve rodar: nada mudou em relação ao cache original");}},new AbortController().signal);
+ expect(third.analysis.status).toBe("ready");
+ expect(calls).toHaveLength(callsBeforeReturn);
+});
+
 it("templates migram recipe-v1 sem chamadas no padrão e reaproveitam só a fala no Luna",async()=>{
  const {dir,r}=await setup();let calls=0;
  const stored={preset:"custom" as const,apiKey:"fake",model:"muse-spark-1.3-contributor",baseUrl:"https://api.meta.ai/v1/chat/completions"};

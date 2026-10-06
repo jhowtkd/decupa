@@ -17,7 +17,7 @@ export class ProviderHttpError extends Error {
 
 export class OpenAiTotalTimeoutError extends Error {
   readonly retryHandled = true;
-  constructor() { super("visão: tempo total de tentativas esgotado"); }
+  constructor(message = "visão: tempo total de tentativas esgotado") { super(message); }
 }
 
 /** Erros podem ir ao projeto e à UI: nem a chave mascarada deve sair do transporte. */

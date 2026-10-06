@@ -2,14 +2,44 @@ export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
 
 export const OPENAI_VISUAL_MODEL = "gpt-6-luna";
 export const OPENAI_VISUAL_BASE = "https://api.openai.com/v1/chat/completions";
+export const OPENAI_ASSEMBLY_TEXT_MODEL = "gpt-6.1-sol";
+export const OPENAI_ASSEMBLY_TEXT_EFFORT = "medium";
+export const OPENAI_ASSEMBLY_TEXT_BASE = OPENAI_VISUAL_BASE;
+export const OPENAI_ASSEMBLY_TEXT_TIMEOUT_MS = 300_000;
+// Comporta 120/240/480 s, a compatibilidade JSON e as retentativas do texto atual.
+export const OPENAI_ASSEMBLY_TEXT_TOTAL_TIMEOUT_MS = 1_800_000;
 
 export type VisualProvider = "openai" | "text";
+export type AssemblyTextProvider = "openai" | "text";
 export type VisualSelection = {
   provider: VisualProvider;
   source: "environment" | "credentials" | "user" | "project" | "default" | "fallback";
   notice: string | null;
 };
 export const VISUAL_FALLBACK_NOTICE = "A análise de imagem está usando o provedor de texto. Configure a chave do GPT-6 Luna, mais rápido →";
+export type AssemblyTextSelection = VisualSelection & { configured: boolean };
+export const ASSEMBLY_TEXT_FALLBACK_NOTICE = "O texto da Montagem está usando o provedor de texto: falta a chave OpenAI para o GPT-6.1 Sol. Configure →";
+
+/** Sol exige escolha explícita; ter a chave do Luna não autoriza texto na OpenAI. */
+export function resolveAssemblyTextProvider(
+  env: Record<string, string | undefined> = process.env,
+  stored?: { openaiApiKey?: string; assemblyTextProvider?: AssemblyTextProvider;
+    assemblyTextProviderSource?: "user" | "project" } | null,
+): AssemblyTextSelection {
+  const value = env.DECUPA_ASSEMBLY_TEXT_PROVIDER;
+  if (value !== undefined && value !== "" && value !== "openai" && value !== "text") {
+    throw new Error('DECUPA_ASSEMBLY_TEXT_PROVIDER aceita somente "openai" ou "text".');
+  }
+  const configured = Boolean(env.OPENAI_API_KEY?.trim() || stored?.openaiApiKey?.trim());
+  // Um projeto recebido não autoriza enviar texto nem cobrar na conta do usuário.
+  const saved = stored?.assemblyTextProviderSource === "project" && stored.assemblyTextProvider === "openai" ? undefined : stored?.assemblyTextProvider;
+  const provider = value || saved || "text";
+  const source = value ? "environment" : saved ? stored?.assemblyTextProviderSource ?? "credentials" : "default";
+  if (!value && provider === "openai" && !configured) {
+    return { provider: "text", source: "fallback", configured, notice: ASSEMBLY_TEXT_FALLBACK_NOTICE };
+  }
+  return { provider, source, configured, notice: null };
+}
 
 /** Só a visão usa esta escolha; texto e Jev conservam suas próprias chaves. */
 export function resolveVisualProvider(

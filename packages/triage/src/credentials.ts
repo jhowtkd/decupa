@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import type { Provider, StoredProvider, VisualProvider } from "./provider.ts";
+import type { AssemblyTextProvider, Provider, StoredProvider, VisualProvider } from "./provider.ts";
 
 export type Credentials = StoredProvider & {
   apiKey?: string;
@@ -12,6 +12,7 @@ export type Credentials = StoredProvider & {
   typesafe?: boolean;
   openaiApiKey?: string;
   visualProvider?: VisualProvider;
+  assemblyTextProvider?: AssemblyTextProvider;
 };
 
 const FILE = "credentials";
@@ -76,6 +77,7 @@ export async function readCredentials(dir: string): Promise<Credentials | null> 
   if (typeof rec.typesafe === "boolean") out.typesafe = rec.typesafe;
   if (typeof rec.openaiApiKey === "string" && rec.openaiApiKey.trim()) out.openaiApiKey = rec.openaiApiKey.trim();
   if (rec.visualProvider === "openai" || rec.visualProvider === "text") out.visualProvider = rec.visualProvider;
+  if (rec.assemblyTextProvider === "openai" || rec.assemblyTextProvider === "text") out.assemblyTextProvider = rec.assemblyTextProvider;
   return out;
 }
 
@@ -96,6 +98,8 @@ export async function writeCredentials(dir: string, creds: Credentials,
   if (openaiApiKey) body.openaiApiKey = openaiApiKey;
   const visualProvider = creds.visualProvider ?? previous?.visualProvider;
   if (visualProvider) body.visualProvider = visualProvider;
+  const assemblyTextProvider = creds.assemblyTextProvider ?? previous?.assemblyTextProvider;
+  if (assemblyTextProvider) body.assemblyTextProvider = assemblyTextProvider;
   if (process.platform === "win32") {
     // Cria somente arquivo vazio; restringe antes de truncar/gravar uma chave.
     const empty = await open(path, "a");

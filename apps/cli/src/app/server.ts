@@ -4,7 +4,7 @@ import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
-import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveVisualProvider } from "@decupa/triage";
+import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
@@ -274,6 +274,7 @@ async function startCleanupApp(opts: {
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider;
   const visualEnv = { ...(opts.env ?? process.env) };
+  resolveAssemblyTextProvider(visualEnv); // Campo inválido falha na subida, antes de qualquer envio.
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
@@ -426,7 +427,7 @@ async function startCleanupApp(opts: {
         return;
       }
 
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, onJevDisabled: () => {
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, includeAssemblyTextNotice: false, onJevDisabled: () => {
         // A revogação vale mesmo se decision.json não puder ser relido.
         cleanup.cancelNotes(); return cleanup.refreshNotes();
       } })) return;
@@ -438,7 +439,7 @@ async function startCleanupApp(opts: {
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored()).notice));
+        res.end(withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice));
         return;
       }
 
@@ -779,7 +780,8 @@ async function startAssemblyApp(opts: {
   const stored = await loadStored();
   const transports = resolveAppTransports({ ...opts, stored, loadStored });
   const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
-    describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir) });
+    describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir),
+    proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || opts.allowPaidModel || opts.providerConfigDir) });
   const { decision } = await resolveOperationDeps();
   opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
   const exec = opts.executor ?? new SpawnExecutor();

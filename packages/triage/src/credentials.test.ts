@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdtemp, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -39,6 +39,30 @@ describe("credentials", () => {
     const path = await writeCredentials(dir, { preset: "gemini", apiKey: "text" });
     await expectPrivate(path);
     expect(await readCredentials(dir)).toEqual({ preset: "gemini", apiKey: "text", openaiApiKey: "luna", visualProvider: "text", typesafeApiKey: "jev", typesafe: false });
+  });
+
+  it("grava e conserva assemblyTextProvider ao regravar outro campo; arquivo antigo sem o campo continua válido", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-cred-assembly-text-"));
+    await writeCredentials(dir, { preset: "custom", apiKey: "muse", model: "muse", baseUrl: "https://meta.example/v1", openaiApiKey: "luna", assemblyTextProvider: "openai" });
+    expect(await readCredentials(dir)).toMatchObject({ assemblyTextProvider: "openai" });
+    await writeCredentials(dir, { preset: "gemini", apiKey: "nova" });
+    expect(await readCredentials(dir)).toEqual({ preset: "gemini", apiKey: "nova", openaiApiKey: "luna", assemblyTextProvider: "openai" });
+    const path = credentialsPath(dir);
+    await writeFile(path, JSON.stringify({ preset: "gemini", apiKey: "sem-campo-novo" }));
+    await chmod(path, 0o600);
+    expect(await readCredentials(dir)).toEqual({ preset: "gemini", apiKey: "sem-campo-novo" });
+    const after = await writeCredentials(dir, { preset: "gemini", apiKey: "sem-campo-novo", typesafe: true });
+    await expectPrivate(after);
+    expect(await readCredentials(dir)).not.toHaveProperty("assemblyTextProvider");
+  });
+
+  it("recusa valor fora de openai/text e não grava o inválido", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-cred-assembly-text-invalid-"));
+    const path = credentialsPath(dir);
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(path, JSON.stringify({ preset: "zai", apiKey: "k", assemblyTextProvider: "sol-direto" }));
+    await chmod(path, 0o600);
+    expect(await readCredentials(dir)).not.toHaveProperty("assemblyTextProvider");
   });
   it("grava e lê sem logar a chave", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-cred-"));

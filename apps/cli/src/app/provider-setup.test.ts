@@ -31,6 +31,25 @@ it("primeira abertura vazia não salva consentimento nem ativa uma chave que apa
   expect(await readCredentials(dir)).not.toHaveProperty("typesafe");
 });
 
+it("validateProvider ignora assemblyTextProvider: primeira configuração não tem como ativar o Sol", () => {
+  const withAssemblyText = { preset: "gemini", apiKey: "text", openaiApiKey: "luna-fake-key-123456789", visualProvider: "openai", assemblyTextProvider: "openai" };
+  expect(validateProvider(withAssemblyText)).not.toHaveProperty("assemblyTextProvider");
+  expect(validateProvider({ preset: "gemini", apiKey: "text", assemblyTextProvider: "openai" })).toEqual({ preset: "gemini", apiKey: "text" });
+});
+
+it("primeira abertura (POST /provider) ignora assemblyTextProvider mesmo enviado pela tela antiga/manual: fica no padrão sem a opção", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "first-no-assembly-text-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await startApp({ projectDir: join(dir, "project"), providerConfigDir: dir, env: {}, port: 0 }); cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  const html = await (await fetch(base)).text();
+  expect(html).not.toContain("Texto da Montagem"); expect(html).not.toContain("GPT-6.1 Sol");
+  const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text-secret", openaiApiKey: "luna-fake-key-123456789", visualProvider: "openai", assemblyTextProvider: "openai" }) });
+  expect(saved.status).toBe(200);
+  expect(await readCredentials(dir)).not.toHaveProperty("assemblyTextProvider");
+  const state = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(state.assemblyText).toMatchObject({ provider: "text", source: "default", notice: null });
+});
+
 it("primeira configuração apara só as pontas das chaves opcionais", () => {
   const fields = { preset: "zai", apiKey: "text", openaiApiKey: " \nluna-fake-key-123456789\r\n", typesafeApiKey: "\njev-fake-key-1234567890 " };
   expect(validateProvider(fields)).toMatchObject({ openaiApiKey: "luna-fake-key-123456789", typesafeApiKey: "jev-fake-key-1234567890", typesafe: true });

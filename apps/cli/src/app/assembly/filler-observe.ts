@@ -20,7 +20,7 @@ export type FillerObserveDeps = {
   fillerFetchImpl?: typeof fetch;
   fillerConfigKey?: string;
   resolveOperationDeps?: () => Promise<{ decision: AssemblyDecisionContext; fillerEnv: Record<string, string | undefined>;
-    fillerConfigKey?: string; describeClient?: VisualClient }>;
+    fillerConfigKey?: string; describeClient?: VisualClient; proposeSend?: VisualClient["send"] }>;
 };
 
 type Envelope = { generation: string; notes: FillerNote[]; eligible: number; excess: number };

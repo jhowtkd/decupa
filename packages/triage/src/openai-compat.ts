@@ -1,4 +1,5 @@
 import { DEFAULT_MAX_TOKENS, type PayloadProfile } from "./payload-profile.ts";
+import { OPENAI_ASSEMBLY_TEXT_EFFORT, OPENAI_ASSEMBLY_TEXT_TIMEOUT_MS, OPENAI_ASSEMBLY_TEXT_TOTAL_TIMEOUT_MS } from "./provider.ts";
 import { OpenAiTotalTimeoutError, openAiRetryable, ProviderHttpError, redactOpenAiError, retryAfterMs, waitOpenAiRetry } from "./openai-retry.ts";
 const MAX_TOKENS_CEILING = 64_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -98,7 +99,7 @@ export class OpenAiCompatClient {
     this.model = opts.model;
     this.maxTokens = Math.max(1, opts.maxTokens ?? DEFAULT_MAX_TOKENS);
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.timeoutMs = opts.timeoutMs ?? (opts.profile === "openai-reasoning-medium" ? OPENAI_ASSEMBLY_TEXT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
     this.retries = opts.retries ?? 1;
     this.who = opts.who ?? "o provedor";
     this.jsonObject = opts.jsonObject !== false;
@@ -110,7 +111,7 @@ export class OpenAiCompatClient {
   }
 
   async send(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
-    if (this.profile === "openai-reasoning-none") return this.sendOpenAi(content, signal, onAttempt);
+    if (this.profile !== "default") return this.sendOpenAi(content, signal, onAttempt);
     let retriesLeft = this.retries;
     for (;;) {
       try {
@@ -133,25 +134,37 @@ export class OpenAiCompatClient {
   }
 
   private async sendOpenAi(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
-    // Três tentativas no máximo, incluindo a inicial; o teto inclui espera e leitura do corpo.
-    const budgetMs = 240_000;
+    // Até três tentativas HTTP; crescer o orçamento não consome retentativa.
+    // O teto total inclui a espera entre tentativas e a leitura do corpo.
+    const medium = this.profile === "openai-reasoning-medium";
+    const budgetMs = medium ? OPENAI_ASSEMBLY_TEXT_TOTAL_TIMEOUT_MS : 240_000;
     const deadline = Date.now() + budgetMs;
     const total = AbortSignal.timeout(budgetMs);
     const combined = signal ? AbortSignal.any([signal, total]) : total;
     const retries = Math.min(2, Math.max(0, this.retries));
     try {
-      for (let attempt = 0; ; attempt += 1) {
+      for (let attempt = 0; ;) {
         combined.throwIfAborted();
         try { return await this.once(content, combined, onAttempt); }
         catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
+          if (!combined.aborted && medium && isBudgetExhausted(error) && this.maxTokens < MAX_TOKENS_CEILING) {
+            this.maxTokens = Math.min(this.maxTokens * 2, MAX_TOKENS_CEILING);
+            continue;
+          }
           if (combined.aborted || !openAiRetryable(error) || attempt >= retries) throw error;
           await waitOpenAiRetry(error, attempt, deadline - Date.now(), combined);
+          attempt += 1;
         }
       }
     } catch (error) {
       // Cancelamento do usuário conserva AbortError; o teto total explica a causa.
-      if (total.aborted && !signal?.aborted) throw new OpenAiTotalTimeoutError();
+      if (total.aborted && !signal?.aborted) throw new OpenAiTotalTimeoutError(medium ? "texto da Montagem: tempo total de tentativas esgotado" : undefined);
+      // DOMException tem message somente de leitura; cancelamento conserva a identidade.
+      if (medium && error instanceof Error && error.name !== "AbortError" && error.name !== "TimeoutError") {
+        const message = redactOpenAiError(error.message, this.apiKey);
+        if (message !== error.message) throw new Error(message);
+      }
       throw error;
     }
   }
@@ -162,7 +175,8 @@ export class OpenAiCompatClient {
    * Com 120 s fixos, a chamada de 64k estourava antes de poder terminar.
    */
   private timeoutForBudget(): number {
-    return Math.round(this.timeoutMs * Math.max(1, this.maxTokens / DEFAULT_MAX_TOKENS));
+    const timeout = Math.round(this.timeoutMs * Math.max(1, this.maxTokens / DEFAULT_MAX_TOKENS));
+    return this.profile === "openai-reasoning-medium" ? Math.min(timeout, OPENAI_ASSEMBLY_TEXT_TOTAL_TIMEOUT_MS) : timeout;
   }
 
   private async once(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
@@ -183,6 +197,12 @@ export class OpenAiCompatClient {
       payload.max_completion_tokens = this.maxTokens;
       payload.store = false;
     }
+    if (this.profile === "openai-reasoning-medium") {
+      delete payload.max_tokens;
+      payload.reasoning_effort = OPENAI_ASSEMBLY_TEXT_EFFORT;
+      payload.max_completion_tokens = this.maxTokens;
+      payload.store = false;
+    }
     // GLM-5.3 defaults to maximum reasoning, too slow for interactive text edits
     // and for the cleanup triage, which sends the whole video: at maximum it ate
     // the token ceiling and the timeout. Image analysis and other models keep
@@ -193,7 +213,7 @@ export class OpenAiCompatClient {
     const textOnly = kinds.every((kind) => kind === "text");
     const withVideo = kinds.includes("video_url") && kinds.every((kind) => kind === "text" || kind === "video_url");
     if (this.profile === "default" && this.model.toLowerCase() === "glm-5.3-flash" && (textOnly || withVideo)) payload.reasoning_effort = "low";
-    if (this.jsonObject || this.profile === "openai-reasoning-none") payload.response_format = { type: "json_object" };
+    if (this.jsonObject || this.profile !== "default") payload.response_format = { type: "json_object" };
     let res: Response;
     try {
       onAttempt?.();
@@ -218,12 +238,12 @@ export class OpenAiCompatClient {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      if (this.profile === "openai-reasoning-none") {
+      if (this.profile !== "default") {
         throw new ProviderHttpError(res.status, undefined, retryAfterMs(res.headers.get("retry-after")), redactOpenAiError(`HTTP ${res.status} de ${this.who}, corpo não-JSON: ${raw}`, this.apiKey));
       }
       throw new Error(`HTTP ${res.status} de ${this.who}, corpo não-JSON: ${raw.slice(0, 200)}`);
     }
-    if (this.profile === "openai-reasoning-none" && (!res.ok || (parsed as { error?: unknown })?.error)) {
+    if (this.profile !== "default" && (!res.ok || (parsed as { error?: unknown })?.error)) {
       const error = (parsed as { error?: { code?: string; message?: string } })?.error;
       throw new ProviderHttpError(res.status, error?.code, retryAfterMs(res.headers.get("retry-after")),
         redactOpenAiError(`HTTP ${res.status} de ${this.who} (${error?.code ?? "sem código"}): ${error?.message ?? raw}`, this.apiKey));

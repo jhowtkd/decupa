@@ -13,6 +13,7 @@ export default defineConfig({
       ZAI_API_KEY: "",
       OPENAI_API_KEY: "",
       DECUPA_VISUAL_PROVIDER: "",
+      DECUPA_ASSEMBLY_TEXT_PROVIDER: "",
       GEMINI_API_KEY: "",
       MINIMAX_API_KEY: "",
       DECUPA_API_KEY: "",

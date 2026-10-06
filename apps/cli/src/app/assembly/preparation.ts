@@ -512,7 +512,7 @@ export async function runPreparation(
         checkAlive();
         let proposal;
         try {
-          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend!, decision: operationDeps.decision, onDecision: async (note) => {
+          proposal = await proposeScenes(current, req.request, signal, { send: operationDeps.proposeSend!, decision: operationDeps.decision, onDecision: async (note) => {
             checkAlive();
             await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
           } });

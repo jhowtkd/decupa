@@ -1,5 +1,5 @@
 import {
-  analysisClientOptions, OpenAiCompatClient, createVisualClient, payloadProfileKey, resolveVisualProvider,
+  assemblyTextClientOptions, OpenAiCompatClient, createVisualClient, payloadProfileKey, resolveAssemblyTextProvider, resolveVisualProvider,
   type Credentials, type VisualSelection,
 } from "@decupa/triage";
 import type { VisualClient } from "./assembly/model.ts";
@@ -23,15 +23,16 @@ function visualSnapshot(opts: TransportOptions, env: Record<string, string | und
 export function resolveAppTransports(opts: TransportOptions) {
   const env = { ...(opts.env ?? process.env) };
   const visualProvider = resolveVisualProvider(env, opts.stored); // Valor inválido falha na subida, mesmo antes de autorizar envio.
+  const assemblyTextProvider = resolveAssemblyTextProvider(env, opts.stored);
   let textKey = "unconfigured";
   let legacyModelKey: string | undefined;
   let textSend: VisualClient["send"];
   try {
-    const resolved = analysisClientOptions({ stored: opts.stored, env, fetchImpl: opts.fetchImpl });
+    const resolved = assemblyTextClientOptions({ stored: opts.stored, env, selection: assemblyTextProvider, fetchImpl: opts.fetchImpl });
     const text = new OpenAiCompatClient(resolved);
     textKey = JSON.stringify([resolved.model, sanitizeProviderKey(resolved.baseUrl), payloadProfileKey({ ...resolved, inputMode: "text" })]);
     // recipe-v1 usava este objeto e esta ordem de campos na chave do diretório.
-    legacyModelKey = JSON.stringify({ model: resolved.model, providerKey: resolved.baseUrl });
+    if (resolved.profile !== "openai-reasoning-medium") legacyModelKey = JSON.stringify({ model: resolved.model, providerKey: resolved.baseUrl });
     textSend = (content, signal) => text.send(content, signal);
   } catch (error) {
     let text: OpenAiCompatClient | undefined;
@@ -41,7 +42,7 @@ export function resolveAppTransports(opts: TransportOptions) {
       if (!text) {
         const stored = await opts.loadStored?.();
         if (!stored) throw error;
-        text = new OpenAiCompatClient(analysisClientOptions({ stored, env, fetchImpl: opts.fetchImpl }));
+        text = new OpenAiCompatClient(assemblyTextClientOptions({ stored, env, fetchImpl: opts.fetchImpl }));
       }
       return text.send(content, signal);
     };

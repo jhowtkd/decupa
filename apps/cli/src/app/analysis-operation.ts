@@ -10,6 +10,7 @@ import type { VisualClient } from "./assembly/model.ts";
 export function operationResolver(opts: {
   dir: string; loadStored: () => Promise<Credentials | null>; env: Record<string, string | undefined>;
   fetchImpl?: typeof fetch; describeClient?: VisualClient; enableVisual: boolean;
+  proposeSend?: VisualClient["send"]; enableText?: boolean;
 }) {
   const readDecision = mtimeCached(async path => {
     try { return JSON.parse(await readFile(path, "utf8")) as unknown; }
@@ -24,6 +25,7 @@ export function operationResolver(opts: {
     // Só uma impressão privada para distinguir tentativas com chaves diferentes.
     const fillerConfigKey = createHash("sha256").update(JSON.stringify([env.TYPESAFE_API_KEY, env.DECUPA_TYPESAFE, decision.model, decision.mode])).digest("hex");
     return { decision, fillerEnv: env, fillerConfigKey,
+      ...(opts.proposeSend || opts.enableText ? { proposeSend: opts.proposeSend ?? transports.textSend } : {}),
       describeClient: opts.enableVisual ? transports.visualClient : undefined };
   };
 }

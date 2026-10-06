@@ -1,9 +1,9 @@
 import type { Credentials } from "./credentials.ts";
 import { OpenAiCompatClient, type OpenAiCompatOptions } from "./openai-compat.ts";
-import { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, presetConfig, resolveProvider, resolveVisualProvider } from "./provider.ts";
+import { OPENAI_ASSEMBLY_TEXT_BASE, OPENAI_ASSEMBLY_TEXT_MODEL, OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, presetConfig, resolveAssemblyTextProvider, resolveProvider, resolveVisualProvider } from "./provider.ts";
 import { payloadProfileKey, type PayloadProfile } from "./payload-profile.ts";
 import { ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL } from "./provider.ts";
-import type { VisualSelection } from "./provider.ts";
+import type { AssemblyTextSelection, VisualSelection } from "./provider.ts";
 
 export type AnalysisClientOptions = {
   model?: string;
@@ -91,6 +91,18 @@ export function createAnalysisClient(opts: AnalysisClientOptions = {}): OpenAiCo
   return new OpenAiCompatClient(analysisClientOptions(opts));
 }
 
+/** Só o texto da Montagem usa Sol; o cliente geral, inclusive video_url, é intacto. */
+export function assemblyTextClientOptions(opts: AnalysisClientOptions & { selection?: AssemblyTextSelection } = {}): OpenAiCompatOptions {
+  const env = opts.env ?? process.env;
+  const selection = opts.selection ?? resolveAssemblyTextProvider(env, opts.stored);
+  if (selection.provider === "text") return analysisClientOptions(opts);
+  const apiKey = env.OPENAI_API_KEY?.trim() || opts.stored?.openaiApiKey;
+  if (!apiKey) throw new Error("OPENAI_API_KEY não está setada: o texto da Montagem no GPT-6.1 Sol não roda. Configure em /provider/keys.");
+  return { apiKey, baseUrl: OPENAI_ASSEMBLY_TEXT_BASE, model: OPENAI_ASSEMBLY_TEXT_MODEL,
+    profile: "openai-reasoning-medium", who: "a OpenAI", maxTokens: opts.maxTokens,
+    fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, retries: opts.retries };
+}
+
 export type VisualClientOptions = AnalysisClientOptions & { profile?: PayloadProfile; selection?: VisualSelection };
 
 export function visualClientOptions(opts: VisualClientOptions = {}): OpenAiCompatOptions {
@@ -111,8 +123,9 @@ export function visualClientOptions(opts: VisualClientOptions = {}): OpenAiCompa
 export function createVisualClient(opts: VisualClientOptions = {}) {
   const resolved = visualClientOptions(opts);
   const client = new OpenAiCompatClient(resolved);
+  const profile = resolved.profile === "openai-reasoning-none" ? "openai-reasoning-none" as const : "default" as const;
   return {
-    model: resolved.model, providerKey: resolved.baseUrl, profileKey: payloadProfileKey(resolved), payloadProfile: resolved.profile ?? "default",
+    model: resolved.model, providerKey: resolved.baseUrl, profileKey: payloadProfileKey(resolved), payloadProfile: profile,
     send: (content: unknown[], signal?: AbortSignal, onAttempt?: () => void) => client.send(content, signal, onAttempt),
     usage: () => client.usage(),
   };

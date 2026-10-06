@@ -275,6 +275,41 @@ describe("runTriage", () => {
     expect(out.keepList).toBe("u002");
   });
 
+  it("a triagem (video_url) continua no Muse mesmo com DECUPA_ASSEMBLY_TEXT_PROVIDER=openai e chave OpenAI presentes", async () => {
+    // Sem `model` injetado: runTriage monta o ZaiTriageModel de verdade (via
+    // triageIdentity → ZaiClient → analysisClientOptions), o mesmo caminho
+    // de produção. assemblyTextClientOptions/resolveAssemblyTextProvider não
+    // são importados nem chamados por esse caminho — ver packages/triage/src/
+    // zai-client.ts, que só conhece analysisClientOptions.
+    const { dir, indexPath, videoPath } = await fixture();
+    const stored = { preset: "custom" as const, apiKey: "muse-secret", model: "muse-spark-1.3-contributor", baseUrl: "https://api.meta.ai/v1/chat/completions" };
+    const calls: { url: string; auth: string | null; model: string; kinds: string[] }[] = [];
+    const fetchImpl = (async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const kinds = (body.messages?.[0]?.content ?? []).map((part: { type: string }) => part.type);
+      calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), model: body.model, kinds });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ claims: [], candidates: [] }) } }] }));
+    }) as typeof fetch;
+    const out = await runTriage({
+      indexPath, videoPath, outDir: dir, stored, routeMode: "off",
+      env: { DECUPA_ASSEMBLY_TEXT_PROVIDER: "openai", OPENAI_API_KEY: "sol-should-not-be-used" },
+      fetchImpl,
+    });
+    expect(out.keepList).toBe("u001-u005"); // claims/candidates vazios: nada é descartado pelo modelo.
+    expect(calls.length).toBeGreaterThan(0);
+    // Toda chamada de triagem foi para o Muse, com a chave do Muse, levando
+    // vídeo — e nenhuma foi para a OpenAI, mesmo com DECUPA_ASSEMBLY_TEXT_PROVIDER
+    // ligado e uma chave OpenAI disponível no ambiente.
+    for (const call of calls) {
+      expect(call.url).toBe(stored.baseUrl);
+      expect(call.auth).toBe(`Bearer ${stored.apiKey}`);
+      expect(call.model).toBe(stored.model);
+      expect(call.kinds).toContain("video_url");
+    }
+    expect(calls.some((c) => c.url.includes("api.openai.com"))).toBe(false);
+    expect(calls.some((c) => c.model === "gpt-6.1-sol")).toBe(false);
+  });
+
   it("--route hybrid força a rota mesmo com decision.json inválido", async () => {
     const dir = await mkdtemp(join(tmpdir(), "triage-route-force-"));
     await mkdir(join(dir, ".decupa"), { recursive: true });

@@ -11,6 +11,13 @@ import { triageIdentity, type TriageOptions } from "../triage.ts";
 const close: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const fn of close.splice(0).reverse()) await fn(); });
 
+it("Limpeza falha na subida com DECUPA_ASSEMBLY_TEXT_PROVIDER inválido, antes de qualquer plano", async () => {
+  const f = await cleanupFixture(true, { ambiguous: true }); await f.app.close();
+  close.push(() => rm(f.dir, { recursive: true, force: true }));
+  await expect(startApp({ ...f.options, env: { VE_PLUGIN_ROOT: f.options.env.VE_PLUGIN_ROOT, DECUPA_ASSEMBLY_TEXT_PROVIDER: "sol-direto" } }))
+    .rejects.toThrow(/DECUPA_ASSEMBLY_TEXT_PROVIDER/);
+});
+
 it("Não usar o Jev cancela notas da Limpeza sem publicar a resposta tardia ou refazer o plano", async () => {
   const f = await cleanupFixture(true, { ambiguous: true }); await f.app.close();
   close.push(() => rm(f.dir, { recursive: true, force: true }));

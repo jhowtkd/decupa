@@ -72,6 +72,88 @@ it.each(["montagem", "limpeza"])("%s configura as chaves sem eco, com merge, ali
   expect((await readFile(credentialsPath(user), "utf8"))).not.toMatch(/openaiApiKey|typesafeApiKey/);
 });
 
+it.each(["montagem", "limpeza"])("%s: texto da Montagem pela tela — GET expõe modelo/esforço, POST exige chave, remoção preserva a escolha", async mode => {
+  const user = await folder(), projectDir = await folder();
+  await writeCredentials(user, muse);
+  await writeCredentials(projectDir, { ...muse, visualProvider: "text" }); // sem openaiApiKey em dir algum
+  const app = await startApp({ ...(mode === "montagem" ? { projectDir } : { input: join(FIXTURES, "clip.mp4"), workDir: projectDir, autoStart: false }), port: 0, providerConfigDir: user, env: {} });
+  cleanup.push(() => app.close()); const base = `http://127.0.0.1:${app.port}`;
+  const post = (body: unknown) => fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const html = await (await fetch(base + "/provider/keys", { headers: { accept: "text/html" } })).text();
+  expect(html).toContain("Texto da Montagem"); expect(html).toContain("GPT-6.1 Sol");
+  const before = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(before.assemblyText).toMatchObject({ provider: "text", model: "muse", notice: null });
+  const missingKey = await post({ section: "visual", assemblyTextProvider: "openai" });
+  expect(missingKey.status).toBe(400); expect(await missingKey.json()).toEqual({ error: "Não foi possível salvar. Confira os campos e as permissões locais." });
+  expect(await readCredentials(user)).not.toHaveProperty("assemblyTextProvider");
+  const withKey = await post({ section: "visual", openaiApiKey: "user-luna-fake-key-123456", visualProvider: "openai", assemblyTextProvider: "openai" });
+  expect(withKey.status).toBe(200);
+  const active = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(active.assemblyText).toMatchObject({ provider: "openai", model: "gpt-6.1-sol", effort: "medium", source: "user", configured: true, notice: null });
+  expect(JSON.stringify(active)).not.toContain("user-luna-fake-key-123456");
+  const removed = await post({ section: "visual", removeKey: true });
+  expect(removed.status).toBe(200);
+  const fallback = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(fallback.assemblyText).toMatchObject({ provider: "text", source: "fallback", configured: false });
+  expect(fallback.assemblyText.notice).toMatch(/Sol/);
+  expect(await readCredentials(user)).toMatchObject({ assemblyTextProvider: "openai" });
+  // A escolha conservada é no-op: mudar só a imagem continua possível sem chave.
+  expect((await post({ section: "visual", openaiApiKey: "", visualProvider: "text", assemblyTextProvider: "openai" })).status).toBe(200);
+  expect(await readCredentials(user)).toMatchObject({ visualProvider: "text", assemblyTextProvider: "openai" });
+  expect((await post({ section: "visual", assemblyTextProvider: "text" })).status).toBe(200);
+  expect((await post({ section: "visual", assemblyTextProvider: "openai" })).status).toBe(400);
+});
+
+it("texto da Montagem: a chave do ambiente autoriza o Sol mesmo sem nenhuma chave salva nas credenciais", async () => {
+  const user = await folder(), projectDir = await folder();
+  await writeCredentials(user, muse);
+  const app = await startApp({ projectDir, port: 0, providerConfigDir: user, env: { OPENAI_API_KEY: "env-sol-fake" } });
+  cleanup.push(() => app.close()); const base = `http://127.0.0.1:${app.port}`;
+  const post = (body: unknown) => fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  expect((await post({ section: "visual", assemblyTextProvider: "openai" })).status).toBe(200);
+  const state = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(state.assemblyText).toMatchObject({ provider: "openai", source: "user", configured: true, notice: null });
+});
+
+it.each(["montagem", "limpeza"])("%s mostra somente avisos pertinentes, mantendo o Sol na seção de chaves", async mode => {
+  const user = await folder(), projectDir = await folder();
+  await writeCredentials(user, { ...muse, visualProvider: "text", typesafe: false, assemblyTextProvider: "openai" });
+  const app = await startApp({ ...(mode === "montagem" ? { projectDir } : { input: join(FIXTURES, "clip.mp4"), workDir: projectDir, autoStart: false }),
+    port: 0, providerConfigDir: user, env: {} }); cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  const banner = async () => (await (await fetch(base)).text()).match(/<aside id="visual-provider-notice"[^>]*>[\s\S]*?<\/aside>/)![0];
+  const html = await banner();
+  expect(html.includes("GPT-6.1 Sol")).toBe(mode === "montagem");
+  expect(html.includes(" hidden")).toBe(mode === "limpeza");
+  const state = await (await fetch(base + "/provider/keys")).json() as ReturnType<typeof keyProviderState>;
+  // O polling do banner lê notice; a página de chaves lê assemblyText.notice.
+  expect(Boolean(state.notice?.includes("GPT-6.1 Sol"))).toBe(mode === "montagem");
+  expect(state.assemblyText.notice).toContain("GPT-6.1 Sol");
+  const changed = await fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ section: "visual", visualProvider: "openai" }) });
+  expect(changed.status).toBe(200);
+  expect(await banner()).toContain("GPT-6 Luna"); // O aviso da visão permanece nas duas telas.
+});
+
+it("projeto recebido não liga Sol com a chave do usuário: a proposta continua no Muse", async () => {
+  const user = await folder(), projectDir = await folder();
+  await writeCredentials(user, { ...muse, openaiApiKey: "user-sol-key-1234567890", typesafe: false });
+  await writeCredentials(projectDir, { ...muse, apiKey: "project-muse-secret", visualProvider: "text", assemblyTextProvider: "openai" });
+  await sourceProject(projectDir);
+  const calls: { url: string; auth: string | null; model: string }[] = [];
+  const fetchImpl = (async (url, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), model: body.model });
+    return completion({ changedSceneIds: ["s"], scenes: [{ id: "s", selections: [{ speechId: "a:u1" }, { speechId: "a:u2" }], support: [], gaps: [] }], cutCandidates: [], explanation: "teste" });
+  }) as typeof fetch;
+  const app = await startApp({ projectDir, providerConfigDir: user, env: {}, port: 0, executor: executor(), fetchImpl, allowPaidModel: true }); cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  const state = await (await fetch(base + "/provider/keys")).json() as ReturnType<typeof keyProviderState>;
+  expect(state.assemblyText).toMatchObject({ provider: "text", source: "default", notice: null });
+  expect((await fetch(base + "/project/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceIds: ["a"], visual: false }) })).status).toBe(200);
+  const current = await (await fetch(base + "/project")).json() as { project: { revision: number } };
+  expect((await fetch(base + "/project/propose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: current.project.revision, request: "organize" }) })).status).toBe(200);
+  expect(calls).toEqual([{ url: muse.baseUrl, auth: "Bearer project-muse-secret", model: muse.model }]);
+});
+
 it("validação das duas chaves aceita limites/pontas e rejeita espaços internos/controles sem eco ou escrita", async () => {
   const { user, post } = await boot();
   for (const section of ["visual", "jev"] as const) {
@@ -258,4 +340,34 @@ it("salvar Jev muda a próxima proposta e desligar conserva uma proposta já em 
   expect((await propose()).status).toBe(200); expect(jevKeys).toEqual(["Bearer old-user", "Bearer new-user-fake-jev-123456"]);
   expect((await post("/provider/keys", { section: "jev", typesafe: false })).status).toBe(200);
   expect((await propose()).status).toBe(200); expect(jevKeys).toHaveLength(2);
+});
+
+it("ponta a ponta: ligar o Sol pela tela faz a proposta da Montagem chamá-lo; em andamento conserva o Muse; voltar reaproveita os modelos", async () => {
+  const user = await folder(), projectDir = await folder();
+  await writeCredentials(user, muse);
+  await sourceProject(projectDir);
+  const entered = deferred(), release = deferred(); let block = true;
+  const calls: { url: string; model: string }[] = [];
+  const fetchImpl = (async (url, init) => {
+    const body = JSON.parse(String(init?.body));
+    calls.push({ url: String(url), model: body.model });
+    if (block) { block = false; entered.resolve(); await release.promise; }
+    return completion({ changedSceneIds: ["s"], scenes: [{ id: "s", selections: [{ speechId: "a:u1" }, { speechId: "a:u2" }], support: [], gaps: [] }], cutCandidates: [], explanation: "teste" });
+  }) as typeof fetch;
+  const app = await startApp({ projectDir, providerConfigDir: user, env: {}, port: 0, executor: executor(), fetchImpl, allowPaidModel: true }); cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  const post = (route: string, body: unknown) => fetch(base + route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  expect((await post("/project/analyze", { sourceIds: ["a"], visual: false })).status).toBe(200);
+  const propose = async () => { const current = await (await fetch(base + "/project")).json() as { project: { revision: number } }; return post("/project/propose", { baseRevision: current.project.revision, request: "organize" }); };
+  const active = propose(); await entered.promise;
+  expect((await post("/provider/keys", { section: "visual", openaiApiKey: "sol-fake-key-1234567890", visualProvider: "text", assemblyTextProvider: "openai" })).status).toBe(200);
+  release.resolve(); expect((await active).status).toBe(200);
+  // A proposta em voo terminou com o transporte (Muse) com que começou.
+  expect(calls).toEqual([{ url: muse.baseUrl, model: muse.model }]);
+  expect((await propose()).status).toBe(200);
+  expect(calls.at(-1)).toEqual({ url: "https://api.openai.com/v1/chat/completions", model: "gpt-6.1-sol" });
+  expect((await post("/provider/keys", { section: "visual", assemblyTextProvider: "text" })).status).toBe(200);
+  expect((await propose()).status).toBe(200);
+  expect(calls.at(-1)).toEqual({ url: muse.baseUrl, model: muse.model });
+  expect(calls).toHaveLength(3);
 });

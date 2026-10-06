@@ -54,6 +54,63 @@ it("página de chaves salva cada seção sem reenviar a outra chave", async () =
   expect(bodies.slice(2)).toEqual([{ section: "visual", removeKey: true }, { section: "jev", removeKey: true }]);
 });
 
+it("select do texto da Montagem reflete o estado e envia a escolha junto da visão", async () => {
+  const html = await readFile(new URL("./provider-keys.html", import.meta.url), "utf8"), document = documentStub();
+  const bodies: any[] = [];
+  const state = keyProviderState({}, { preset: "zai", openaiApiKey: "hidden", assemblyTextProvider: "openai" });
+  const fetch = async (_url: string, opts?: RequestInit) => { if (opts?.method === "POST") bodies.push(JSON.parse(String(opts.body))); return new Response(JSON.stringify(state)); };
+  new Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]!).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(document.getElementById("assemblyText").value).toBe("openai");
+  expect(document.getElementById("assemblyTextState").textContent).toContain("GPT-6.1 Sol");
+  document.getElementById("assemblyText").value = "text";
+  document.getElementById("openaiKey").value = "luna-new";
+  await document.getElementById("visual").onsubmit({ preventDefault() {}, target: document.getElementById("visual") });
+  expect(bodies).toEqual([{ section: "visual", openaiApiKey: "luna-new", visualProvider: "openai", assemblyTextProvider: "text" }]);
+});
+
+it("select do texto da Montagem cai para o rótulo 'provedor de texto' quando a chave da OpenAI falta", async () => {
+  const html = await readFile(new URL("./provider-keys.html", import.meta.url), "utf8"), document = documentStub();
+  const state = keyProviderState({}, { preset: "zai", assemblyTextProvider: "openai" });
+  const fetch = async () => new Response(JSON.stringify(state));
+  new Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]!).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(document.getElementById("assemblyText").value).toBe("openai");
+  expect(document.getElementById("assemblyTextState").textContent).toContain("falta a chave OpenAI");
+});
+
+it("escolher Sol, remover a chave e salvar só a visão omite a escolha conservada", async () => {
+  const html = await readFile(new URL("./provider-keys.html", import.meta.url), "utf8"), document = documentStub();
+  let stored: import("@decupa/triage").Credentials = { preset: "zai", typesafe: false };
+  const bodies: any[] = [];
+  const fetch = async (_url: string, opts?: RequestInit) => {
+    if (opts?.method === "POST") {
+      const body = JSON.parse(String(opts.body)); bodies.push(body);
+      if (body.removeKey) delete stored.openaiApiKey;
+      else {
+        stored = { ...stored, visualProvider: body.visualProvider };
+        if (body.openaiApiKey) stored.openaiApiKey = body.openaiApiKey;
+        if (body.assemblyTextProvider) stored.assemblyTextProvider = body.assemblyTextProvider;
+      }
+    }
+    return new Response(JSON.stringify(keyProviderState({}, stored)));
+  };
+  new Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]!).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  const submit = () => document.getElementById("visual").onsubmit({ preventDefault() {}, target: document.getElementById("visual") });
+  document.getElementById("assemblyText").value = "openai";
+  document.getElementById("openaiKey").value = "fake-key-1234567890123";
+  await submit(); expect(bodies[0]).toHaveProperty("assemblyTextProvider", "openai");
+  await document.getElementById("removeVisual").onclick();
+  expect(document.getElementById("assemblyText").value).toBe("openai");
+  expect(document.getElementById("assemblyTextState").textContent).toContain("falta a chave OpenAI");
+  document.getElementById("textImages").checked = true;
+  await submit();
+  expect(bodies[2]).toEqual({ section: "visual", openaiApiKey: "", visualProvider: "text" });
+  expect(stored).toMatchObject({ visualProvider: "text", assemblyTextProvider: "openai" });
+  expect(document.getElementById("message").textContent).toContain("Configuração salva");
+});
+
 it("banner atualiza o aviso e some após a configuração", async () => {
   let height = 96;
   const setProperty = vi.fn(), link = { textContent: "" }, banner = { hidden: false, querySelector: () => link, getBoundingClientRect: () => ({ height }) };

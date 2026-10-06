@@ -8,7 +8,7 @@ import { validateTextProvider } from "./provider-validation.ts";
 export function validateProvider(value: unknown): Credentials {
   const creds = validateTextProvider(value);
   const v = value as Record<string, unknown>;
-  if (v.visualProvider !== undefined || v.openaiApiKey !== undefined) Object.assign(creds, validateVisualProvider({ ...v, visualProvider: v.visualProvider ?? "openai" }));
+  if (v.visualProvider !== undefined || v.openaiApiKey !== undefined) Object.assign(creds, validateVisualProvider({ openaiApiKey: v.openaiApiKey, visualProvider: v.visualProvider ?? "openai" }));
   if (v.typesafe !== undefined || v.typesafeApiKey !== undefined) {
     const jev = validateJevProvider({ ...v, typesafe: v.typesafe ?? true });
     if (jev.typesafeApiKey) creds.typesafeApiKey = jev.typesafeApiKey;

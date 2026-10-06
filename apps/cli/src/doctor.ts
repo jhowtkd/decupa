@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { analysisClientOptions, payloadProfileKey, readAnalysisCredentials, readCredentials, resolveProvider, resolveTypeSafe, resolveVisualProvider, visualClientOptions } from "@decupa/triage";
+import { analysisClientOptions, OPENAI_ASSEMBLY_TEXT_EFFORT, OPENAI_ASSEMBLY_TEXT_MODEL, payloadProfileKey, readAnalysisCredentials, readCredentials, resolveAssemblyTextProvider, resolveProvider, resolveTypeSafe, resolveVisualProvider, visualClientOptions } from "@decupa/triage";
 import { DEFAULT_ENGINE, enginePatchError, SPEECH_SCRIPT, SpawnExecutor } from "./app/pipeline.ts";
 import { enginePython } from "./runtime.ts";
 
@@ -158,6 +158,14 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
     }
 
     let visualDetail = "";
+    try {
+      const text = resolveAssemblyTextProvider(env, stored);
+      const detail = text.provider === "openai" ? `openai · ${OPENAI_ASSEMBLY_TEXT_MODEL} · ${OPENAI_ASSEMBLY_TEXT_EFFORT}` : "provedor de texto (padrão)";
+      lines.push({ ok: text.provider !== "openai" || text.configured, name: "texto da Montagem",
+        detail: `${detail} · origem: ${origins[text.source]}${text.notice ? " · " + text.notice : text.provider === "openai" && !text.configured ? " · chave OpenAI ausente" : ""}` });
+    } catch (error) {
+      lines.push({ ok: false, name: "texto da Montagem", detail: error instanceof Error ? error.message : String(error) });
+    }
     try {
       const visual = resolveVisualProvider(env, stored);
       const source = origins[visual.source];

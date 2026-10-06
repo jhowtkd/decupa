@@ -33,6 +33,30 @@ it("doctor informa origem do usuário e sobreposição visual sem exibir chaves"
  *  de quem roda a suíte não pode decidir o resultado. */
 const emptyHome = () => mkdtemp(join(tmpdir(), "doctor-home-"));
 
+it("doctor mostra o texto da Montagem: padrão sem a opção, Sol ativo com origem, e falha de valor inválido", async () => {
+  const home = await emptyHome();
+  const off = await runDoctor({ run: fakeRun, home, env: {} });
+  expect(off.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: true, detail: expect.stringContaining("provedor de texto (padrão)") });
+
+  const userWithSol = await emptyHome();
+  await writeCredentials(userWithSol, { preset: "zai", apiKey: "text", openaiApiKey: "user-sol", assemblyTextProvider: "openai" });
+  const active = await runDoctor({ run: fakeRun, home: userWithSol, env: {} });
+  expect(active.find(l => l.name === "texto da Montagem")).toMatchObject({
+    ok: true, detail: expect.stringContaining("openai · gpt-6.1-sol · medium"),
+  });
+  expect(active.find(l => l.name === "texto da Montagem")?.detail).toContain("origem: usuário (tela)");
+  expect(JSON.stringify(active)).not.toContain("user-sol");
+
+  const noKey = await emptyHome();
+  await writeCredentials(noKey, { preset: "zai", apiKey: "text", assemblyTextProvider: "openai" });
+  const fallback = await runDoctor({ run: fakeRun, home: noKey, env: {} });
+  expect(fallback.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: true, detail: expect.stringContaining("provedor de texto (padrão)") });
+  expect(fallback.find(l => l.name === "texto da Montagem")?.detail).toContain("falta a chave OpenAI");
+
+  const invalid = await runDoctor({ run: fakeRun, home: await emptyHome(), env: { DECUPA_ASSEMBLY_TEXT_PROVIDER: "sol-direto" } });
+  expect(invalid.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: false, detail: expect.stringContaining("DECUPA_ASSEMBLY_TEXT_PROVIDER") });
+});
+
 it("doctor mostra Jev desligado com flag true, igual ao estado da tela e ao cliente", async () => {
   const home = await emptyHome(), projectDir = await emptyHome();
   await writeCredentials(home, { preset: "zai", apiKey: "text", typesafe: true, typesafeApiKey: "stored-key" });

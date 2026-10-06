@@ -1210,7 +1210,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:visualClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
             project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
           }
-          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:operationDeps.decision,template});
+          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:operationDeps.proposeSend!,decision:operationDeps.decision,template});
           if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
           await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
           await sendSnapshot(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
@@ -1245,7 +1245,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           const { gen, signal } = begin("proposing");
           const operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
           const proposal = await proposeScenes(project, request, signal, {
-            send: deps.proposeSend, decision: operationDeps.decision,
+            send: operationDeps.proposeSend!, decision: operationDeps.decision,
           });
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };
@@ -1282,8 +1282,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         speechProposalInFlight = true;
         const { gen, signal } = begin("proposing");
         try {
+          const operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
           const proposal = await proposeSpeechAdjustment(
-            loaded, { sourceId, speechId }, request, deps.proposeSend, signal,
+            loaded, { sourceId, speechId }, request, operationDeps.proposeSend!, signal,
           );
           if (!stillCurrent(gen)) {
             await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
