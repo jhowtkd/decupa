@@ -15,6 +15,7 @@ import { runTriage as runTriageLibrary } from "../triage.ts";
 import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
 import { parseSourceTimecode, sourceMediaStartSeconds } from "./assembly/timecode.ts";
+import type { FillerSpan } from "../condense/fillers.ts";
 
 export interface ExecResult {
   code: number;
@@ -601,6 +602,7 @@ export async function runPlan(
   keepList: string,
   exec: Executor,
   tracer: Tracer = createTracer(),
+  fillers?: { spans: FillerSpan[]; generation: number; supported: boolean; engine?: string },
 ): Promise<void> {
   const invalid = keepListError(keepList);
   if (invalid) throw new Error(invalid);
@@ -608,15 +610,21 @@ export async function runPlan(
   if (ranges.length === 0) {
     throw new Error("keep-list vazio: nada sobraria no corte");
   }
+  const dropArgs = ["--drop-fillers", "hard"];
+  if (fillers?.supported) {
+    const path = join(job.workDir, `fillers-spans-${fillers.generation}.json`);
+    await writeFile(path, `${JSON.stringify(fillers.spans)}\n`, "utf8");
+    dropArgs.splice(0, dropArgs.length, "--drop-filler-spans", path);
+  }
   await tracer.run("planning", async () => {
     await must(exec, {
       command: "python3",
       args: [
         CONDENSE, "plan", job.videoPath,
         "--keep", ...ranges,
-        "--drop-fillers", "hard",
+        ...dropArgs,
       ],
-      env: envFor(job),
+      env: { ...envFor(job), ...(fillers?.engine ? { VE_PLUGIN_ROOT: fillers.engine } : {}) },
       signal: job.signal,
     }, "o plano");
   });
@@ -684,6 +692,12 @@ export async function runTriage(
     ...(job.signal ? { signal: job.signal } : {}),
   });
   return result.keepList;
+}
+
+/** Só detecção: a migração e a exigência do patch pertencem ao setup do T3b. */
+export async function engineSupportsFillerSpans(engine: string): Promise<boolean> {
+  const source = await readFile(join(engine, "mcp", "ve_tools", "condense.py"), "utf8").catch(() => null);
+  return source !== null && /["']drop_filler_spans["']/.test(source);
 }
 
 const TERMINAL_PUNCT_RE = /_TERMINAL_PUNCT\s*=\s*"([^"]*)"/;

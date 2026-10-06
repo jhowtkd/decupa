@@ -248,6 +248,7 @@
     <div id="strip" class="strip" role="slider" tabindex="0" aria-label="Posição na fonte" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></div>
     <div id="strip-ruler" class="strip-ruler mono"></div>
   </section>
+  <section id="fillers" class="sub" aria-label="Cacoetes" hidden></section>
   <section id="triage" class="sub" aria-label="Triagem" hidden>
     <div class="triage-head"><h2 id="triage-title">Prévia da triagem</h2><span id="triage-stats" class="pill mono"></span></div>
     <h3 class="ttl">Vai cair</h3><ul id="triage-drop" class="plain triage-list"></ul>
@@ -292,6 +293,20 @@ function stripModel(units, keptMap, total) {
 
 // keepList vem do módulo testado; não reimplementar — faixa errada corta sem erro.
 import { expandKeepList, keepListFrom } from "/keeplist.js";
+import { renderFillerCard, renderFillerCuts } from "/fillers-ui.js";
+import { reviewGeneration } from "/review-generation.js";
+const generations = reviewGeneration();
+let fillerNotes = [], keepTicket = null, pollTimer = null;
+async function changeFillers(patch) {
+  const ticket = generations.submit();
+  queuePoll(1000);
+  try {
+    const response = await fetch(`/jobs/${jobId}/fillers`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.error) throw Error(result.error ?? `Erro ${response.status}`);
+    if (generations.accept(result.review, ticket)) readyFrom({ review: result.review });
+  } catch (error) { if (generations.fail(ticket) && review) readyFrom({ review }); toast(error.message, true); }
+}
 
 const keepList = () =>
   keepListFrom(review.units.filter((u) => kept.get(u.id)).map((u) => u.id));
@@ -583,13 +598,11 @@ function seekMonitor(seconds) {
 function renderSide() {
   el("side-meta").textContent = clock(review.sourceSeconds) + " · transcrita";
   const cuts = el("side-cuts");
-  cuts.replaceChildren(...review.joins.map((join, i) => sideLink(
-    "Corte " + (i + 1) + " · −" + secs(join.removedSeconds),
-    clock(join.sourceOut),
-    () => { document.getElementById("corte-" + (i + 1))?.scrollIntoView({ block: "center" }); seekMonitor(join.sourceOut - JOIN_PAD); },
-    (join.flags ?? []).length > 0,
-  )));
-  if (!review.joins.length) { const li = document.createElement("li"); li.className = "side-empty"; li.textContent = "Nenhum corte ainda"; cuts.append(li); }
+  renderFillerCuts(cuts, review, sideLink, (join, i) => {
+    document.getElementById("corte-" + (i + 1))?.scrollIntoView({ block: "center" });
+    seekMonitor(join.sourceOut - JOIN_PAD);
+  });
+  renderFillerCard(el("fillers"), review, fillerNotes, changeFillers, playRanges);
   const flagged = review.units.filter((u) => kept.get(u.id) && (u.flags ?? []).some((f) => f.message));
   const flags = el("side-flags");
   flags.replaceChildren(...flagged.map((u) => sideLink(
@@ -655,9 +668,14 @@ el("strip").addEventListener("keydown", (ev) => {
 // Falha de rede, ou erro sem corpo JSON (ex.: 502), vira aviso, nunca exceção muda.
 function schedule() {
   clearTimeout(timer);
+  queuePoll(1000);
+  if (keepTicket !== null) generations.fail(keepTicket);
+  const list = keepList(), ticket = generations.submit();
+  keepTicket = ticket;
   timer = setTimeout(async () => {
-    const list = keepList();
+    keepTicket = null;
     if (!list) {
+      generations.fail(ticket);
       toast("Pelo menos um trecho precisa permanecer", true);
       return;
     }
@@ -668,14 +686,21 @@ function schedule() {
       });
       const r = await res.json().catch(() => ({}));
       if (!res.ok || r.error) {
+        if (generations.fail(ticket) && review) readyFrom({ review });
         toast(r.error ?? `Erro ${res.status}`, true);
         return;
       }
-      if (r.review) { review = r.review; render(); }
+      if (r.review && generations.accept(r.review, ticket)) { review = r.review; render(); }
     } catch (err) {
+      if (generations.fail(ticket) && review) readyFrom({ review });
       toast("Não deu para salvar a seleção: " + ((err && err.message) || err) + ". Confira o terminal do decupa.", true);
     }
   }, 250);
+}
+
+function queuePoll(delay) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(() => { pollTimer = null; void poll(); }, delay);
 }
 
 function readyFrom(j) {
@@ -695,7 +720,7 @@ async function poll() {
     j = await api("");
   } catch (err) {
     el("aviso").textContent = "Sem resposta do decupa (" + ((err && err.message) || err) + "). Tentando de novo…";
-    setTimeout(poll, 3000);
+    queuePoll(3000);
     return;
   }
   if (j.error && !j.stage) {
@@ -719,12 +744,16 @@ async function poll() {
     renderMessage("Cancelado", "O processamento parou. Feche a aba ou rode de novo pela linha de comando.");
     return;
   }
-  if (j.stage === "ready" && j.review) {
-    readyFrom(j);
+  const notesChanged = j.fillerNotes && JSON.stringify(j.fillerNotes) !== JSON.stringify(fillerNotes);
+  if (notesChanged) fillerNotes = j.fillerNotes;
+  if (j.review && (!review || j.review.generation > review.generation) && generations.accept(j.review)) readyFrom(j);
+  if (j.stage === "ready" && review) {
+    if (notesChanged) renderFillerCard(el("fillers"), review, fillerNotes, changeFillers, playRanges);
+    if (j.fillerNotesPending || j.planning) queuePoll(1000);
     return;
   }
-  renderProcessing(j.stage, j.progress);
-  setTimeout(poll, 1000);
+  if (!review) renderProcessing(j.stage, j.progress);
+  queuePoll(1000);
 }
 
 el("cancelar").onclick = async () => {

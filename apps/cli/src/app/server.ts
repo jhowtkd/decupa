@@ -19,17 +19,18 @@ import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
+import { createCleanupPlanning, FillerRequestError } from "../condense/cleanup-planning.ts";
 import {
   assertSidecarSynced, audioProxyPath, ensureAudioProxy, indexPath, keepListError, planPath, preflight, probeFps,
-  probeSourceStartSeconds, runIngest, runPlan, runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath,
+  probeSourceStartSeconds, runIngest, runRender, runTriage, SPEECH_SCRIPT, SpawnExecutor, transcriptPath,
   visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
 import { triageIdentity } from "../triage.ts";
 import { parseSourceTimecode } from "./assembly/timecode.ts";
-import { buildReview, type ReviewUnitFlag } from "./review.ts";
+import type { ReviewUnitFlag } from "./review.ts";
 import { buildSrt, type SrtWord } from "./srt.ts";
 import { editorialStats } from "./stats.ts";
-import { claimWorkDir, cleanupWorkDir, initialKeepList, readKeepList, sourceMismatch, writeKeepList } from "./session.ts";
+import { claimWorkDir, cleanupWorkDir, sourceMismatch } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
@@ -253,6 +254,7 @@ async function startCleanupApp(opts: {
   executor?: Executor;
   autoStart?: boolean;
   workDir?: string;
+  fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
   speech?: IngestSpeech;
   triageFn?: (opts: {
@@ -291,55 +293,10 @@ async function startCleanupApp(opts: {
   const traces = collectSink();
   const tracer = createTracer(traces);
 
-  // Fila de um: `condense_plan` grava sempre no mesmo condense_plan.json, e o
-  // debounce de 250 ms não impede que um segundo re-plano comece com o
-  // primeiro ainda rodando. Dois processos escrevendo o mesmo arquivo fazem o
-  // último a gravar vencer — e o review devolvido pode ser o do keep-list
-  // antigo, que é exatamente o aviso mentiroso que o debounce existia para
-  // evitar.
-  let planning: Promise<void> = Promise.resolve();
-  let pendingKeepList: string | null = null;
-
-  async function replan(keepList: string): Promise<void> {
-    pendingKeepList = keepList;
-    const mine = planning.then(async () => {
-      // Se outro pedido chegou enquanto este esperava, aquele é o atual:
-      // rodar este seria gastar processo para produzir um plano obsoleto.
-      if (pendingKeepList !== keepList) return;
-      try {
-        store.setStage(job.id, "planning");
-        await runPlan(pipelineJob, keepList, exec, tracer);
-        const review = buildReview(
-          await readJson(planPath(pipelineJob)),
-          await readJson(indexPath(pipelineJob)),
-          await maybeVisual(pipelineJob),
-          await maybeInspectFlags(workDir),
-        );
-        store.setReview(job.id, review, keepList);
-        // Falhar aqui não pode derrubar o corte que já está na tela: o review
-        // é o produto, a sessão em disco é conveniência. Mas também não some
-        // em silêncio — vai pelo mesmo canal de aviso que o ingest usa.
-        await writeKeepList(workDir, keepList).catch(() => {
-          store.setWarning(job.id, "não consegui gravar keep.txt; esta sessão não será retomada");
-        });
-      } catch (error) {
-        // GET /jobs/:id é o poll da página. Sem review ainda (primeiro plano
-        // do ingest), fail é o certo. Com review, error é irreversível e o
-        // poll nunca voltaria a pintar o corte — volta a ready. O POST
-        // ainda estoura 500 com a mensagem do motor.
-        const current = store.get(job.id);
-        if (current?.review) store.setStage(job.id, "ready");
-        else store.fail(job.id, error instanceof Error ? error.message : String(error));
-        throw error;
-      }
-    });
-    planning = mine.catch(() => {});
-    await mine;
-    // Keep supersedido não pode responder antes do vencedor gravar o review:
-    // a página faz `if (r.review) { review = r.review; render(); }` e um
-    // `{review: undefined}` rebobinaria a tela para o corte antigo.
-    if (pendingKeepList !== keepList) await planning;
-  }
+  const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
+    env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir,
+    visual: () => maybeVisual(pipelineJob), flags: () => maybeInspectFlags(workDir) });
+  const replan = cleanup.replan;
 
   // Proxy só de áudio para os botões "ouvir": gerado em paralelo ao ingest,
   // a página passa a usá-lo quando o poll avisa (`audio: true`).
@@ -361,9 +318,8 @@ async function startCleanupApp(opts: {
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
-      const index = await readJson(indexPath(pipelineJob)) as { units: { id: string }[] };
-      const saved = await readKeepList(workDir);
-      await replan(initialKeepList(saved, index.units.map((u) => u.id)));
+      // A recuperação do par acontece antes de escolher o keep-list retomado.
+      await replan();
     } catch (error) {
       // `fail` não sobrescreve `cancelled`: matar o processo faz a etapa
       // falhar, e esse erro não é notícia para quem pediu para parar.
@@ -473,11 +429,11 @@ async function startCleanupApp(opts: {
         return;
       }
 
-      if (url.pathname === "/keeplist.js") {
+      if (["/keeplist.js", "/fillers-ui.js", "/review-generation.js"].includes(url.pathname)) {
         // O mesmo arquivo que o teste importa. Servir verbatim é o que garante
         // que a página e o servidor concordam sobre o que é uma faixa.
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
-        res.end(await readFile(join(HERE, "keeplist.js"), "utf8"));
+        res.end(await readFile(join(HERE, basename(url.pathname)), "utf8"));
         return;
       }
 
@@ -512,9 +468,11 @@ async function startCleanupApp(opts: {
 
         if (parts.length === 2 && req.method === "GET") {
           sendJson(res, {
-            stage: current.stage, error: current.error, warning: current.warning,
+            stage: current.stage, error: current.error, warning: [current.warning, current.fillerWarning].filter(Boolean).join("; ") || undefined,
+            fillerWarning: current.fillerWarning, fillerNotesPending: current.fillerNotesPending ?? false, planning: cleanup.planning(),
             progress: current.progress,
             keepList: current.keepList, review: current.review,
+            generation: current.review?.generation ?? 0, desiredGeneration: cleanup.generation(), fillerNotes: current.fillerNotes,
             source: basename(input),
             audio: audioReady,
           });
@@ -541,6 +499,17 @@ async function startCleanupApp(opts: {
           const invalid = keepListError(body.keepList);
           if (invalid) { sendJson(res, { error: invalid }, 400); return; }
           await replan(body.keepList);
+          sendJson(res, { review: store.get(current.id)!.review });
+          return;
+        }
+
+        if (parts[2] === "fillers" && req.method === "POST") {
+          const body = await readBody(req);
+          try { await cleanup.fillers(body); }
+          catch (error) {
+            if (error instanceof FillerRequestError) { sendJson(res, { error: error.message }, error.status); return; }
+            throw error;
+          }
           sendJson(res, { review: store.get(current.id)!.review });
           return;
         }
@@ -746,9 +715,11 @@ async function startCleanupApp(opts: {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos recebem o sinal.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      store.cancel(job.id);
+      const notesClosed = cleanup.close();
       const speechClosed = closeSpeech();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, speechClosed, closed]);
+      await Promise.all([killed, speechClosed, closed, notesClosed]);
     },
     killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };

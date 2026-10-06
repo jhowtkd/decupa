@@ -6,6 +6,8 @@
  * do índice pode mudar sem quebrar nada aqui.
  */
 
+export interface IndexWord { text: string; start: number; end: number }
+
 export interface IndexUnit {
   id: string;
   index: number;
@@ -15,6 +17,8 @@ export interface IndexUnit {
   text: string;
   hasTerminalPunct: boolean;
   isQuestion: boolean;
+  words?: IndexWord[];
+  opensWithConnective?: string | null;
   /** Unidade anterior que o motor marcou como quase-duplicata, ou null. */
   nearDuplicateOf: string | null;
   /** Score SequenceMatcher do motor (0–1), ou null se o campo não veio. */
@@ -40,6 +44,7 @@ export interface TrimCandidate {
 }
 
 export interface SpeechIndex {
+  transcriptSha256?: string | null;
   units: IndexUnit[];
   topicRuns: TopicRun[];
   trimCandidates: TrimCandidate[];
@@ -76,6 +81,10 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
       text: String(u.text ?? ""),
       hasTerminalPunct: Boolean(u.has_terminal_punct),
       isQuestion: Boolean(u.is_question),
+      words: Array.isArray(u.words) ? u.words.map((w: Record<string, unknown>) => ({
+        text: String(w.text ?? ""), start: num(w.start, "words.start"), end: num(w.end, "words.end"),
+      })) : [],
+      opensWithConnective: u.opens_with_connective == null ? null : String(u.opens_with_connective),
       nearDuplicateOf: u.near_duplicate_of == null || u.near_duplicate_of === ""
         ? null
         : String(u.near_duplicate_of),
@@ -104,6 +113,7 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
 
   const budget = (root.budget ?? {}) as Record<string, unknown>;
   return {
+    transcriptSha256: root.transcript_sha256 == null ? null : String(root.transcript_sha256),
     units,
     topicRuns,
     trimCandidates,
@@ -114,10 +124,18 @@ export function parseSpeechIndex(raw: unknown): SpeechIndex {
 
 function parseDisfluency(raw: unknown): IndexUnit["disfluency"] {
   const d = (raw ?? {}) as Record<string, unknown>;
+  const spans = (value: unknown, kind: string): unknown[] => Array.isArray(value) ? value.map(span => {
+    // Índices antigos traziam só a palavra; spans novos nunca podem levar NaN ao motor.
+    if (!span || typeof span !== "object") return span;
+    const s = span as Record<string, unknown>;
+    return { ...s, start: num(s.start, `disfluency.${kind}.start`), end: num(s.end, `disfluency.${kind}.end`),
+      ...(s.char_start === undefined ? {} : { char_start: num(s.char_start, `disfluency.${kind}.char_start`) }),
+      ...(s.char_end === undefined ? {} : { char_end: num(s.char_end, `disfluency.${kind}.char_end`) }) };
+  }) : [];
   return {
-    hard: Array.isArray(d.hard) ? d.hard : [],
-    soft: Array.isArray(d.soft) ? d.soft : [],
-    stutter: Array.isArray(d.stutter) ? d.stutter : [],
+    hard: spans(d.hard, "hard"),
+    soft: spans(d.soft, "soft"),
+    stutter: spans(d.stutter, "stutter"),
   };
 }
 

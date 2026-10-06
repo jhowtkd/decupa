@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { JobStore } from "./jobs.ts";
 
-const review = { units: [], joins: [], outputSeconds: 0, sourceSeconds: 0 };
+const review = { generation: 0, fillers: { groups: [], totalSeconds: 0, skipped: [], warnings: [], supported: false, count: 0 }, units: [], joins: [], outputSeconds: 0, sourceSeconds: 0 };
 
 describe("JobStore", () => {
   it("cria o job em `queued` com id próprio", () => {
