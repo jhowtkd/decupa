@@ -1,12 +1,12 @@
 export type TokenId = string;
 
-/** Palavra alinhada. Tempo sempre em ms inteiro. */
+/** Palavra com tempo em ms inteiro; confiança nula indica tempo estimado. */
 export interface TranscriptToken {
   id: TokenId;
   text: string;
   startMs: number;
   endMs: number;
-  confidence: number;
+  confidence: number | null;
   sentenceIndex: number;
   /** Corte refinado por snap acústico, quando calculado; leitores ignoram. */
   cutStartMs?: number;
@@ -25,6 +25,6 @@ export interface RawWord {
   text: string;
   startMs: number;
   endMs: number;
-  confidence: number;
+  confidence: number | null;
   sentenceIndex: number;
 }

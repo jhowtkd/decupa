@@ -81,3 +81,23 @@ export {
   parseVisualIndex,
   sampleLooksBadAtJoin,
 } from "./visual.ts";
+
+export {
+  classifyFillers, FILLER_AUTO_CATEGORIES, FILLER_CATEGORIES, FILLER_MECHANIC_VERSION, FILLER_MIN_GAP_SECONDS,
+  FILLER_ANSWERS_PT, FILLER_TAGS_PT, FILLERS_AMBIGUOUS_PT, FILLERS_HARD_PT, FILLERS_UNIT_ONLY_PT,
+  isFillerAligned, normalizeFillerText, opensWithFillerAnswer,
+} from "./fillers.ts";
+export type { FillerCandidate, FillerCategory, FillerFlow, FillerToken } from "./fillers.ts";
+export {
+  createFillerObserveClient, fillerNoteKey, FILLER_JEV_BATCH_SIZE, FILLER_JEV_MAX_PER_GENERATION,
+  FILLER_JEV_QUESTION_VERSION, matchingFillerNote, publishFillerNotes, scoreAmbiguous,
+} from "./fillers-observe.ts";
+export type { FillerNote, FillerObserveClient, FillerObserveItem, FillerObserveResult } from "./fillers-observe.ts";
+export {
+  assertFillerGoldGate, evaluateFillerGold, fillerGoldGate, FILLER_NEGATIVE_CATEGORIES,
+  isFillerCompatibilityCell, measureFillerGold, parseFillerGold,
+} from "./filler-gold.ts";
+export type {
+  FillerGold, FillerGoldCell, FillerGoldEvaluation, FillerGoldGate, FillerGoldItem,
+  FillerGoldMetrics, FillerNegativeCategory,
+} from "./filler-gold.ts";

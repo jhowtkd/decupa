@@ -27,6 +27,29 @@ def load_worker(whisper: Mock):
 
 
 class ResidentWorkerTest(unittest.TestCase):
+    def test_estimated_word_keeps_text_and_time_with_null_confidence(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": [{"words": [
+            {"word": " eu ", "start": 0.1, "end": 0.3, "score": 0.9},
+            {"word": "hã", "start": 0.4, "end": 0.5},
+            {"word": "é", "start": 0.6, "end": 0.7, "score": None},
+            {"word": "legado", "start": 0.8, "end": 0.9, "score": 0.0},
+            {"word": "sem tempo"},
+        ]}]}
+        worker = load_worker(whisper).SpeechWorker()
+        result = worker.transcribe(task_id="estimated", wav="fake.wav")
+        self.assertEqual([word["text"] for word in result["words"]], ["eu", "hã", "é", "legado"])
+        self.assertEqual([word["confidence"] for word in result["words"]], [0.9, None, None, 0.0])
+        self.assertEqual(result["words"][1], {"text": "hã", "startMs": 400, "endMs": 500,
+                                                "confidence": None, "sentenceIndex": 0})
+        self.assertEqual(result["unaligned"], ["sem tempo"])
+        self.assertIsNone(json.loads(json.dumps(result))["words"][1]["confidence"])
+
     def test_whisperx_logger_does_not_write_to_stdout_after_import(self):
         whisper = Mock()
         logger = logging.getLogger("whisperx")
