@@ -13,9 +13,13 @@ export type { Provider, StoredProvider } from "./provider.ts";
 export type { Credentials } from "./credentials.ts";
 
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
-export { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, PRESETS, presetConfig, resolveProvider, resolveVisualProvider } from "./provider.ts";
+export { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, PRESETS, presetConfig, resolveProvider, resolveVisualProvider, VISUAL_FALLBACK_NOTICE } from "./provider.ts";
+export type { VisualProvider, VisualSelection } from "./provider.ts";
 export { readCredentials, writeCredentials, credentialsPath } from "./credentials.ts";
-export { companyCredentialsFromEnv, envWithStoredTypeSafe, installCompanyCredentials } from "./company-credentials.ts";
+export { readAnalysisCredentials, createCredentialsReader } from "./analysis-credentials.ts";
+export { mtimeCached } from "./config-cache.ts";
+export type { AnalysisCredentials } from "./analysis-credentials.ts";
+export { companyCredentialsFromEnv, envWithStoredTypeSafe, installCompanyCredentials, resolveTypeSafe } from "./company-credentials.ts";
 export { analysisClientOptions, assertStoredEndpoint, createAnalysisClient, createVisualClient, visualClientOptions } from "./analysis-client.ts";
 export { payloadProfile, payloadProfileKey } from "./payload-profile.ts";
 export { isJsonFormatRejected, OpenAiCompatClient } from "./openai-compat.ts";

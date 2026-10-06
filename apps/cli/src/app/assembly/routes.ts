@@ -514,6 +514,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   // Classificar como fala antecipa somente a transcrição local. A montagem
   // completa a cobertura por imagens pelo percurso de preparação existente.
   async function analyzeSources(project: Project, sourceIds: string[], wantVisual: boolean): Promise<Project> {
+    const visualClient = wantVisual ? (await deps.resolveOperationDeps?.())?.describeClient ?? deps.describeClient : deps.describeClient;
     const { gen, signal } = begin("analyzing");
     let done = 0;
     for (const sourceId of sourceIds) {
@@ -527,10 +528,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       };
       try {
         const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
-        if (wantVisual && source.role !== "speech" && deps.describeClient && source.hasVideo && !signal.aborted) {
+        if (wantVisual && source.role !== "speech" && visualClient && source.hasVideo && !signal.aborted) {
           try {
             analysis.visual = await describeSource(source, dir, signal, {
-              client: deps.describeClient,
+              client: visualClient,
               exec: deps.exec,
             });
             analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
@@ -1198,16 +1199,18 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if(!project.assembly.sources.some(s=>s.included))throw new HttpError(409,"Importe os materiais do projeto primeiro.");
         const {gen,signal}=begin("proposing");
         try {
+          const operationDeps={...deps,...await deps.resolveOperationDeps?.()};
+          const visualClient=operationDeps.describeClient;
           for(const source of project.assembly.sources.filter(s=>s.included)) {
             if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
             operation={stage:"analyzing",sourceId:source.id};
             if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
             const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
             if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
-            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:visualClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
             project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
           }
-          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});
+          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:operationDeps.decision,template});
           if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
           await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
           await sendSnapshot(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
@@ -1240,8 +1243,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(402, PAID_BLOCKED);
           }
           const { gen, signal } = begin("proposing");
+          const operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
           const proposal = await proposeScenes(project, request, signal, {
-            send: deps.proposeSend, decision: deps.decision,
+            send: deps.proposeSend, decision: operationDeps.decision,
           });
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };

@@ -33,6 +33,13 @@ $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.Security
 }
 
 describe("credentials", () => {
+  it("conserva visão e Jev, inclusive o desligamento, ao regravar o texto", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-cred-keys-"));
+    await writeCredentials(dir, { preset: "custom", apiKey: "muse", model: "muse", baseUrl: "https://meta.example/v1", openaiApiKey: "luna", visualProvider: "text", typesafeApiKey: "jev", typesafe: false });
+    const path = await writeCredentials(dir, { preset: "gemini", apiKey: "text" });
+    await expectPrivate(path);
+    expect(await readCredentials(dir)).toEqual({ preset: "gemini", apiKey: "text", openaiApiKey: "luna", visualProvider: "text", typesafeApiKey: "jev", typesafe: false });
+  });
   it("grava e lê sem logar a chave", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-cred-"));
     const path = await writeCredentials(dir, {

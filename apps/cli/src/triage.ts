@@ -22,7 +22,7 @@ import {
   PROMPT_VERSION,
   readCache,
   renderReport,
-  readCredentials,
+  readAnalysisCredentials,
   envWithStoredTypeSafe,
   resolveProvider,
   decideWithTypeSafe,
@@ -40,6 +40,7 @@ import {
   type RouteMode,
   type StructureClaim,
   type TriageModel,
+  type Credentials,
   type TypeSafeDecideClient,
   type Verdict,
   type VisualUnitFlags,
@@ -62,6 +63,9 @@ export interface TriageOptions {
   provider?: string;
   /** Pasta com `.decupa/credentials`, se houver. */
   projectDir?: string;
+  credentialsDir?: string;
+  /** Snapshot da operação do app, capturado antes de gerar o proxy. */
+  stored?: Credentials | null;
   /** Teto de tokens por chamada; default 16000. O thinking do GLM consome
    *  antes da resposta — chamadas com unitsBlock grande podem precisar de mais. */
   maxTokens?: number;
@@ -270,9 +274,8 @@ export async function defaultTranscode(src: string, dst: string): Promise<void> 
  * Provedor, modelo e endpoint que a triagem vai usar, resolvidos como em
  * `runTriage`. É a parte da chave de cache que não vem dos arquivos.
  */
-export async function triageIdentity(opts: Pick<TriageOptions, "provider" | "projectDir" | "modelName" | "env">) {
-  const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null)
-    ?? await readCredentials(homedir()).catch(() => null);
+export async function triageIdentity(opts: Pick<TriageOptions, "provider" | "projectDir" | "credentialsDir" | "modelName" | "env" | "stored">) {
+  const stored = opts.stored !== undefined ? opts.stored : await readAnalysisCredentials(opts.projectDir ?? process.cwd(), opts.credentialsDir ?? homedir());
   const env = opts.env ?? process.env;
   const provider = resolveProvider(opts.provider, env, stored);
   const cfg = presetConfig(provider, env, stored);

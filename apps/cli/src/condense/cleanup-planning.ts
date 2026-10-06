@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import {
-  createFillerObserveClient, envWithStoredTypeSafe, readCredentials,
+  createCredentialsReader, createFillerObserveClient, envWithStoredTypeSafe, mtimeCached, readAnalysisCredentials,
 } from "@decupa/triage";
 import type { Tracer } from "@decupa/trace";
 import { createAssemblyDecisionContext } from "../app/assembly/assembly-decisions.ts";
@@ -31,8 +32,11 @@ export class FillerRequestError extends Error {
 /** Conecta a fila completa à Limpeza; os clientes e o estado da Montagem ficam fora dela. */
 export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; tracer: Tracer; store: JobStore;
   env: Record<string, string | undefined>; fetchImpl?: typeof fetch; providerConfigDir?: string;
+  loadStored?: () => ReturnType<typeof readAnalysisCredentials>;
   visual: () => Promise<unknown>; flags: () => Promise<Record<string, ReviewUnitFlag[]> | undefined> }) {
   const { job, store } = opts;
+  const projectDir = process.cwd();
+  const readCredentials = createCredentialsReader(), readDecision = mtimeCached(optional);
   let loaded: Promise<void> | null = null, queue: CleanupPlanQueue | null = null;
   let catalog: FillerCatalog, supported = false;
   const warnings = new Map<string, string>();
@@ -42,7 +46,26 @@ export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; 
   };
   const failedWarning = "a última mudança não foi aplicada; o corte anterior continua valendo";
   let notes: ReturnType<typeof cleanupFillerNotes> | null = null;
+  let noteIds = new Set<string>();
   const signal = job.signal ?? new AbortController().signal;
+  const noteContext = async () => {
+    const stored = await (opts.loadStored?.() ?? readAnalysisCredentials(projectDir, opts.providerConfigDir ?? homedir(), readCredentials));
+    const env = envWithStoredTypeSafe(opts.env, stored);
+    const decision = createAssemblyDecisionContext(await readDecision(join(projectDir, ".decupa", "decision.json")), env, opts.fetchImpl);
+    const client = decision.client ? createFillerObserveClient({ apiKey: env.TYPESAFE_API_KEY!, model: decision.model, fetchImpl: opts.fetchImpl }) : undefined;
+    const key = createHash("sha256").update(JSON.stringify([env.TYPESAFE_API_KEY, env.DECUPA_TYPESAFE, decision.mode, decision.model])).digest("hex");
+    return { model: decision.model, client, key };
+  };
+  const refreshNotes = async (): Promise<void> => {
+    if (!notes) return;
+    try {
+      const config = await noteContext();
+      // Desligar revoga a nota em voo; trocar a chave conserva seu snapshot.
+      if (!config.client && store.get(job.id)?.fillerNotesPending) notes.cancel();
+      else if (store.get(job.id)?.fillerNotesPending) return;
+      notes.update(ambiguousItems(catalog, noteIds), ambiguousItems(catalog, new Set(catalog.candidates.map(c => c.unitId)), true), config);
+    } catch { warn("notes", "configuração de decisão inválida: notas de cacoetes indisponíveis"); }
+  };
   const load = (): Promise<void> => loaded ??= (async () => {
     await recoverFillerSession(job.workDir);
     const rawIndex = await json(indexPath(job)) as { units: { id: string }[]; transcript_sha256?: string };
@@ -61,13 +84,9 @@ export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; 
     try { savedRaw = await optional(join(job.workDir, "fillers.json")); }
     catch (error) { if (!(error instanceof SyntaxError)) throw error; catalog.warnings.push("decisões de cacoetes inválidas descartadas"); }
     const capable = await engineSupportsFillerSpans(opts.env.VE_PLUGIN_ROOT ?? DEFAULT_ENGINE);
-    const stored = await readCredentials(job.workDir).catch(() => null)
-      ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null);
-    const env = envWithStoredTypeSafe(opts.env, stored);
-    let decision: ReturnType<typeof createAssemblyDecisionContext> | undefined;
+    let decision: Awaited<ReturnType<typeof noteContext>> | undefined;
     try {
-      const config = await optional(join(job.workDir, ".decupa", "decision.json"));
-      decision = createAssemblyDecisionContext(config, env, opts.fetchImpl);
+      decision = await noteContext();
     } catch { unavailable("configuração de decisão inválida: cacoetes por palavra indisponíveis"); }
     supported = capable && !catalog.legacyReason;
     const saved = catalog.legacyReason ? { decisions: emptyDecisions(), warnings: [] } : validateSavedFillers(savedRaw, catalog);
@@ -75,8 +94,7 @@ export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; 
     // Cartão oculto precisa do banner; com grupos, o aviso legado fica só no cartão.
     warn("catalog", catalog.warnings.filter(w => !catalog.candidates.length || w !== catalog.legacyReason).join("; "));
     if (decision && !catalog.legacyReason) {
-      const client = decision.client ? createFillerObserveClient({ apiKey: env.TYPESAFE_API_KEY!, model: decision.model, fetchImpl: opts.fetchImpl }) : undefined;
-      notes = cleanupFillerNotes({ workDir: job.workDir, model: decision.model, client, signal,
+      notes = cleanupFillerNotes({ workDir: job.workDir, model: decision.model, signal,
         publish: result => store.setFillerNotes(job.id, result), warn: message => warn("notes", message),
         pending: value => store.setFillerNotesPending(job.id, value) });
     }
@@ -111,7 +129,8 @@ export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; 
         }
         store.setReview(job.id, review, state.keepList);
         warn("plan", "");
-        notes?.update(ambiguousItems(catalog, ids), ambiguousItems(catalog, new Set(rawIndex.units.map(u => u.id)), true));
+        noteIds = ids;
+        await refreshNotes();
       } catch (error) {
         await restorePlan();
         if (current()) {
@@ -136,6 +155,8 @@ export function createCleanupPlanning(opts: { job: PipelineJob; exec: Executor; 
     },
     generation: (): number => queue?.desired.generation ?? 0,
     planning: (): boolean => queue?.planning ?? false,
+    refreshNotes,
+    cancelNotes: (): void => { notes?.cancel(); },
     close: async (): Promise<void> => { await notes?.close(); },
   };
 }

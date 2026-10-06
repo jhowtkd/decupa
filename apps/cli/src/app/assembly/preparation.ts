@@ -201,6 +201,7 @@ export async function runPreparation(
     const imageJobs: Promise<void>[] = [];
     let imagesDone: Promise<void> | undefined;
     let imageFinished = true;
+    let operationDeps = deps;
     const checkAlive = (): void => {
       if (signal.aborted) throw new CancelledExit();
       if (!control.isCurrent()) throw new ObsoleteExit();
@@ -224,7 +225,11 @@ export async function runPreparation(
             : p);
         const terminal = await loadProject(dir);
         if (terminal.preparation?.id === id && (status === "ready" || status === "attention")) {
-          void observeAssemblyFillers(dir, terminal, deps).catch(() => undefined);
+          // Desligar revoga também notas que a preparação ainda não despachou.
+          const active = await deps.resolveOperationDeps?.().catch(() => null);
+          if (!deps.resolveOperationDeps || active?.decision.client) {
+            void observeAssemblyFillers(dir, terminal, { ...operationDeps, resolveOperationDeps: undefined }).catch(() => undefined);
+          }
         }
         return terminal;
       } catch {
@@ -234,6 +239,8 @@ export async function runPreparation(
 
     let current: Project;
     try {
+      operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
+      const visualClient = operationDeps.describeClient;
       const included = opened.assembly.sources.filter((source) => source.included);
       const claim: Preparation = {
         id,
@@ -417,11 +424,11 @@ export async function runPreparation(
             await markSource(source.id, { visual: "ready" });
             continue;
           }
-          if (!deps.describeClient) continue;
+          if (!visualClient) continue;
           await markSource(source.id, { visual: "running", error: undefined });
           try {
             const spans = await describeSource(source, dir, signal, {
-              client: deps.describeClient,
+              client: visualClient,
               exec: deps.exec,
               isCurrent: control.isCurrent,
             });
@@ -505,7 +512,7 @@ export async function runPreparation(
         checkAlive();
         let proposal;
         try {
-          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend!, decision: deps.decision, onDecision: async (note) => {
+          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend!, decision: operationDeps.decision, onDecision: async (note) => {
             checkAlive();
             await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
           } });

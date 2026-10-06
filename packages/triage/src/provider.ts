@@ -3,17 +3,29 @@ export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
 export const OPENAI_VISUAL_MODEL = "gpt-6-luna";
 export const OPENAI_VISUAL_BASE = "https://api.openai.com/v1/chat/completions";
 
-/** A chave sozinha nunca ativa outro provedor; só os fotogramas optam pelo Luna. */
-export function resolveVisualProvider(env: Record<string, string | undefined> = process.env) {
+export type VisualProvider = "openai" | "text";
+export type VisualSelection = {
+  provider: VisualProvider;
+  source: "environment" | "credentials" | "user" | "project" | "default" | "fallback";
+  notice: string | null;
+};
+export const VISUAL_FALLBACK_NOTICE = "A análise de imagem está usando o provedor de texto. Configure a chave do GPT-6 Luna, mais rápido →";
+
+/** Só a visão usa esta escolha; texto e Jev conservam suas próprias chaves. */
+export function resolveVisualProvider(
+  env: Record<string, string | undefined> = process.env,
+  stored?: { openaiApiKey?: string; visualProvider?: VisualProvider;
+    openaiApiKeySource?: "user" | "project"; visualProviderSource?: "user" | "project" } | null,
+): VisualSelection {
   const value = env.DECUPA_VISUAL_PROVIDER;
-  if (value === undefined || value === "") return null;
-  if (value !== "openai") {
-    throw new Error('DECUPA_VISUAL_PROVIDER aceita somente "openai"; remova a variável para usar o provedor geral.');
+  if (value !== undefined && value !== "" && value !== "openai" && value !== "text") {
+    throw new Error('DECUPA_VISUAL_PROVIDER aceita somente "openai" ou "text".');
   }
-  return {
-    baseUrl: OPENAI_VISUAL_BASE, model: OPENAI_VISUAL_MODEL,
-    envKey: "OPENAI_API_KEY", profile: "openai-reasoning-none" as const,
-  };
+  if (value) return { provider: value, source: "environment", notice: null };
+  if (stored?.visualProvider === "text") return { provider: "text", source: stored.visualProviderSource ?? "credentials", notice: null };
+  if (env.OPENAI_API_KEY?.trim()) return { provider: "openai", source: "environment", notice: null };
+  if (stored?.openaiApiKey?.trim()) return { provider: "openai", source: stored.visualProviderSource ?? stored.openaiApiKeySource ?? "credentials", notice: null };
+  return { provider: "text", source: "fallback", notice: VISUAL_FALLBACK_NOTICE };
 }
 
 /**

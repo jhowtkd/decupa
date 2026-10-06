@@ -676,6 +676,7 @@ export async function runTriage(
     projectDir?: string;
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
+  config: Pick<import("../triage.ts").TriageOptions, "env" | "fetchImpl" | "credentialsDir" | "stored"> = {},
 ): Promise<string> {
   // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
   // de gerar não pode ficar escondido dentro da biblioteca que o teste
@@ -683,6 +684,7 @@ export async function runTriage(
   // proxy próprio (ensureLightVideo, que passa o nosso direto).
   const proxy = await makeTriageProxy(job, exec);
   const result = await triageFn({
+    ...config,
     indexPath: indexPath(job),
     videoPath: proxy,
     outDir: join(job.workDir, "out"),

@@ -2,14 +2,19 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, vi } from "vitest";
 import type { FillerSpan } from "../condense/fillers.ts";
 import { startApp } from "./server.ts";
 import { sourceManifestPath } from "./session.ts";
 import type { Executor, ExecCall } from "./pipeline.ts";
+afterEach(() => { vi.restoreAllMocks(); });
 
 export async function cleanupFixture(supported = true, extra?: { fetchImpl?: typeof fetch; decision?: object; ambiguous?: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), "decupa-fillers-")), video = join(dir, "video.mp4"), engine = join(dir, "engine");
   await writeFile(video, "fake video");
+  const configDir = join(dir, "project-config"); await mkdir(configDir);
+  // A configuração da Limpeza é a do cwd; a sessão e o diário ficam no workDir.
+  vi.spyOn(process, "cwd").mockReturnValue(configDir);
   const source = await stat(video);
   await writeFile(sourceManifestPath(dir), JSON.stringify({ path: video, size: source.size, mtimeMs: source.mtimeMs }));
   await mkdir(join(dir, "out")); await mkdir(join(engine, "mcp", "ve_tools"), { recursive: true });
@@ -23,7 +28,7 @@ export async function cleanupFixture(supported = true, extra?: { fetchImpl?: typ
   await writeFile(join(dir, "transcript.json"), transcript);
   await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({ units, transcript_sha256: createHash("sha256").update(transcript).digest("hex") }));
   await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({ source_duration: 3, output_duration: 3, clips: [{ unit_ids: ["u001", "u002"], start: 0, end: 3 }], joins: [] }));
-  if (extra?.decision) { await mkdir(join(dir, ".decupa")); await writeFile(join(dir, ".decupa", "decision.json"), JSON.stringify(extra.decision)); }
+  if (extra?.decision) { await mkdir(join(configDir, ".decupa")); await writeFile(join(configDir, ".decupa", "decision.json"), JSON.stringify(extra.decision)); }
   const calls: ExecCall[] = [], spans: FillerSpan[][] = [];
   let beforePlan: (() => Promise<void>) | undefined, fail = false;
   const exec: Executor = { run: async call => {
@@ -49,5 +54,5 @@ export async function cleanupFixture(supported = true, extra?: { fetchImpl?: typ
     env: { VE_PLUGIN_ROOT: engine, ...(extra?.fetchImpl ? { DECUPA_TYPESAFE: "1", TYPESAFE_API_KEY: "fake" } : {}) }, fetchImpl: extra?.fetchImpl };
   const app = await startApp(options), base = `http://127.0.0.1:${app.port}/jobs/${app.jobId}`;
   const post = (route: string, body: object) => fetch(base + route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  return { dir, app, base, post, calls, spans, options, setBeforePlan: (fn?: () => Promise<void>) => { beforePlan = fn; }, setFail: (value: boolean) => { fail = value; } };
+  return { dir, configDir, app, base, post, calls, spans, options, setBeforePlan: (fn?: () => Promise<void>) => { beforePlan = fn; }, setFail: (value: boolean) => { fail = value; } };
 }

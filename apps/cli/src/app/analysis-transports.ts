@@ -1,18 +1,28 @@
 import {
   analysisClientOptions, OpenAiCompatClient, createVisualClient, payloadProfileKey, resolveVisualProvider,
-  type Credentials,
+  type Credentials, type VisualSelection,
 } from "@decupa/triage";
 import type { VisualClient } from "./assembly/model.ts";
 import { sanitizeProviderKey } from "./assembly/visual-identity.ts";
 
-/** Só resolve configuração, sem rede. O erro de chave fica no transporte da tarefa. */
-export function resolveAppTransports(opts: {
+type TransportOptions = {
   stored?: Credentials | null; env?: Record<string, string | undefined>; fetchImpl?: typeof fetch;
   proposeSend?: VisualClient["send"]; describeClient?: VisualClient;
   loadStored?: () => Promise<Credentials | null>;
-}) {
+};
+
+function visualSnapshot(opts: TransportOptions, env: Record<string, string | undefined>) {
+  const selection = resolveVisualProvider(env, opts.stored);
+  let visualClient: VisualClient;
+  try { visualClient = createVisualClient({ stored: opts.stored, env, selection, fetchImpl: opts.fetchImpl }); }
+  catch (error) { visualClient = { send: async () => { throw error; } }; }
+  return { selection, visualClient: opts.describeClient ?? visualClient, legacyVisualCompatible: selection.provider === "text" };
+}
+
+/** Só resolve configuração, sem rede. O erro de chave fica no transporte da tarefa. */
+export function resolveAppTransports(opts: TransportOptions) {
   const env = { ...(opts.env ?? process.env) };
-  const visualProvider = resolveVisualProvider(env); // Valor inválido falha na subida, mesmo antes de autorizar envio.
+  const visualProvider = resolveVisualProvider(env, opts.stored); // Valor inválido falha na subida, mesmo antes de autorizar envio.
   let textKey = "unconfigured";
   let legacyModelKey: string | undefined;
   let textSend: VisualClient["send"];
@@ -42,7 +52,7 @@ export function resolveAppTransports(opts: {
     let configured: VisualClient | undefined;
     visualClient = { send: async (content, signal, onAttempt) => {
       // Luna nunca cai para a credencial geral, inclusive após o formulário.
-      if (resolveVisualProvider(env)) throw error;
+      if (visualProvider.provider === "openai") throw error;
       if (!configured) {
         const stored = await opts.loadStored?.();
         if (!stored) throw error;
@@ -52,5 +62,16 @@ export function resolveAppTransports(opts: {
       return configured.send(content, signal, onAttempt);
     } };
   }
-  return { textSend: opts.proposeSend ?? textSend, textKey, legacyModelKey, legacyVisualCompatible: visualProvider === null, visualClient: opts.describeClient ?? visualClient };
+  // A análise captura este objeto uma vez, antes de extrair frames ou ler cache.
+  // A próxima análise relê somente o arquivo; uma em curso conserva seu cliente.
+  const load = async () => opts.loadStored ? await opts.loadStored() : opts.stored;
+  const resolveVisual = async () => visualSnapshot({ ...opts, stored: await load() }, env);
+  const resolveAnalysis = async (): Promise<{ selection: VisualSelection; visualClient: VisualClient; legacyVisualCompatible: boolean;
+    send: VisualClient["send"]; modelKey: string; legacyModelKey?: string }> => {
+    const stored = await load();
+    const visual = visualSnapshot({ ...opts, stored }, env);
+    const text = resolveAppTransports({ ...opts, stored, env, loadStored: undefined });
+    return { ...visual, send: text.textSend, modelKey: text.textKey, legacyModelKey: text.legacyModelKey };
+  };
+  return { textSend: opts.proposeSend ?? textSend, textKey, legacyModelKey, legacyVisualCompatible: visualProvider.provider === "text", visualClient: opts.describeClient ?? visualClient, resolveVisual, resolveAnalysis };
 }

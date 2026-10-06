@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import { afterEach, expect, vi } from "vitest";
 
 // A ausência de chave não é isolamento: uma regressão ainda poderia enviar mídia.
@@ -27,6 +27,16 @@ const guard = networkGuard(globalThis.fetch);
 globalThis.fetch = guard.fetch;
 afterEach(guard.assertClear);
 const realHome = homedir();
+
+// O cache verifica metadados antes de ler: a barreira cobre também esse acesso.
+vi.mock("../packages/triage/src/config-cache.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../packages/triage/src/config-cache.ts")>();
+  return { ...original, mtimeCached: <T>(load: (path: string) => Promise<T>) => {
+    const cached = original.mtimeCached(load);
+    return Object.assign((path: string) => [realHome, homedir()].some(dir => resolve(path).startsWith(resolve(dir, ".decupa") + sep))
+      ? Promise.resolve(null as T) : cached(path), { invalidate: cached.invalidate });
+  } };
+});
 
 // A suíte inteira usa credenciais de fixture, nunca as do usuário da máquina.
 vi.mock("../packages/triage/src/credentials.ts", async (importOriginal) => {

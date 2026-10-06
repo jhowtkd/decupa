@@ -7,7 +7,8 @@ import { compileScenes } from "./scenes.ts";
 import { runPreparation } from "./preparation.ts";
 import { createProject, loadProject, readHistorySnapshot, saveProject } from "./store.ts";
 import { readAssemblyFillerNotes } from "./filler-observe.ts";
-import type { FillerObserveClient } from "@decupa/triage";
+import { readAnalysisCredentials, writeCredentials, type FillerObserveClient } from "@decupa/triage";
+import { operationResolver } from "../analysis-operation.ts";
 
 const rendering = vi.hoisted(() => ({ fail: false }));
 
@@ -39,6 +40,28 @@ it("preparação aplica automático com callback síncrono, uma revisão e prepa
   expect(done.revision).toBe(2); expect(done.preparedRevision).toBe(2); expect(done.assembly.revision).toBe(2);
   expect(done.scenes[0]!.takes[0]!.fillers!.cuts[0]!.origin).toBe("auto"); expect(pcmCalls).toBe(1);
   expect((await readHistorySnapshot(dir, 1)).scenes[0]!.takes[0]!.removed).toEqual([]);
+});
+
+it("desligar durante uma preparação impede as notas que ela ainda não despachou", async () => {
+  const { dir, p } = await seed("é"), user = await mkdtemp(join(tmpdir(), "prep-keys-"));
+  await writeCredentials(user, { preset: "zai", apiKey: "text", typesafeApiKey: "old-jev", typesafe: true });
+  const calls: string[] = [];
+  const fetchImpl = (async (_url, init) => {
+    calls.push(new Headers(init?.headers).get("authorization")!);
+    const body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ model: body.model, answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0.8 }])) }));
+  }) as typeof fetch;
+  const resolveOperationDeps = operationResolver({ dir, loadStored: () => readAnalysisCredentials(dir, user), env: {}, fetchImpl, enableVisual: false });
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(r => { entered = r; }), gate = new Promise<void>(r => { release = r; });
+  const run = runPreparation(dir, p.revision, { mode: "prepare", request: "tema", modelOptIn: true, visualOptIn: false },
+    { exec: fillerPcmExec(), fillerFetchImpl: fetchImpl, resolveOperationDeps, proposeSend: async () => { entered(); await gate; return proposal; } },
+    { signal: new AbortController().signal, isCurrent: () => true });
+  await started; await writeCredentials(user, { preset: "zai", apiKey: "text", typesafe: false }); release();
+  expect((await run).preparation?.status).toBe("ready");
+  expect(await readAssemblyFillerNotes(dir)).toBeNull();
+  expect(calls).toEqual([]);
+  expect((await resolveOperationDeps()).decision.client).toBeUndefined();
 });
 
 it("preparação obsoleta depois do PCM não aplica proposta nem cacoete", async () => {

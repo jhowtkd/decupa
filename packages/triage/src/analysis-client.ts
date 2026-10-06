@@ -3,6 +3,7 @@ import { OpenAiCompatClient, type OpenAiCompatOptions } from "./openai-compat.ts
 import { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, presetConfig, resolveProvider, resolveVisualProvider } from "./provider.ts";
 import { payloadProfileKey, type PayloadProfile } from "./payload-profile.ts";
 import { ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL } from "./provider.ts";
+import type { VisualSelection } from "./provider.ts";
 
 export type AnalysisClientOptions = {
   model?: string;
@@ -90,15 +91,15 @@ export function createAnalysisClient(opts: AnalysisClientOptions = {}): OpenAiCo
   return new OpenAiCompatClient(analysisClientOptions(opts));
 }
 
-export type VisualClientOptions = AnalysisClientOptions & { profile?: PayloadProfile };
+export type VisualClientOptions = AnalysisClientOptions & { profile?: PayloadProfile; selection?: VisualSelection };
 
 export function visualClientOptions(opts: VisualClientOptions = {}): OpenAiCompatOptions {
   const env = opts.env ?? process.env;
   // Overrides de teste são explícitos e não herdam a ativação do shell.
   const visual = opts.apiKey || opts.provider !== undefined || opts.profile === "default"
-    ? null : resolveVisualProvider(env);
-  if (!visual && opts.profile !== "openai-reasoning-none") return analysisClientOptions(opts);
-  const apiKey = opts.apiKey ?? env.OPENAI_API_KEY;
+    ? null : opts.selection ?? resolveVisualProvider(env, opts.stored);
+  if (visual?.provider !== "openai" && opts.profile !== "openai-reasoning-none") return analysisClientOptions(opts);
+  const apiKey = opts.apiKey ?? (env.OPENAI_API_KEY?.trim() || opts.stored?.openaiApiKey);
   if (!apiKey) throw new Error("OPENAI_API_KEY não está setada: a visão Luna não roda; o provedor de texto continua disponível.");
   return {
     apiKey, baseUrl: opts.baseUrl ?? OPENAI_VISUAL_BASE, model: opts.model ?? OPENAI_VISUAL_MODEL,

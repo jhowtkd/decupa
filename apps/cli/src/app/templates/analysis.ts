@@ -21,6 +21,7 @@ export type RecipeAnalysisDeps={
  visualClient?:VisualClient;
  legacyModelKey?:string;
  legacyVisualCompatible?:boolean;
+ resolveAnalysis?:()=>Promise<Pick<RecipeAnalysisDeps,"send"|"modelKey"|"legacyModelKey"|"visualClient"|"legacyVisualCompatible">>;
  transcribe?:(source:Source,signal:AbortSignal)=>Promise<Span[]>;
  describe?:(source:Source,signal:AbortSignal)=>Promise<VisualSpan[]>;
 };
@@ -34,6 +35,7 @@ export async function analyzeRecipe(recipe:Recipe,deps:RecipeAnalysisDeps,signal
  let next=validateRecipe({...structuredClone(recipe),status:"draft",analysis:{status:"running",stage:"media",pid:process.pid}});
  async function stage(value:string){signal.throwIfAborted();next.analysis={status:"running",stage:value,pid:process.pid};await deps.persist(structuredClone(next));}
  try{
+  if(deps.resolveAnalysis)deps={...deps,...await deps.resolveAnalysis()};
   await stage("media");
   if(await hashFile(next.source.path)!==next.source.sha256)throw Error("identidade da referência diferente; religue o vídeo original");
   const info=await probe(next.source.path);

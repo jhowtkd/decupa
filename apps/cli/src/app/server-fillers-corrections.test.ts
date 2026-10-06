@@ -44,8 +44,8 @@ it("falha transitória ao carregar índice permite nova tentativa na mesma sess�
 it.each(["JSON de decisão", "configuração de decisão", "parse estrito do índice"])("%s inválido conserva plano/review legados com aviso", async kind => {
   const f = await boot({ ambiguous: true, fetchImpl: success() });
   if (kind.includes("decisão")) {
-    await mkdir(join(f.dir, ".decupa"), { recursive: true });
-    await writeFile(join(f.dir, ".decupa", "decision.json"), kind.startsWith("JSON") ? "{" : JSON.stringify({ mode: "inexistente" }));
+    await mkdir(join(f.configDir, ".decupa"), { recursive: true });
+    await writeFile(join(f.configDir, ".decupa", "decision.json"), kind.startsWith("JSON") ? "{" : JSON.stringify({ mode: "inexistente" }));
   } else {
     const path = join(f.dir, "out", "speech_index.json"), index = JSON.parse(await readFile(path, "utf8"));
     index.units[0].words[1].start = "inválido"; await writeFile(path, JSON.stringify(index));
@@ -139,12 +139,12 @@ it.each(["JSON de decisão", "configuração de decisão", "índice"])("fallback
   await reviewOf(await f.post("/fillers", { kept: [{ candidateId: c.id, wordIds: c.wordIds }] }));
   const file = join(f.dir, "fillers.json"), saved = await readFile(file, "utf8"), beforeStat = await stat(file, { bigint: true });
   const indexFile = join(f.dir, "out", "speech_index.json"), originalIndex = await readFile(indexFile, "utf8");
-  const decisionFile = join(f.dir, ".decupa", "decision.json");
+  const decisionFile = join(f.configDir, ".decupa", "decision.json");
   await f.app.close();
   if (kind === "índice") {
     const index = JSON.parse(originalIndex); index.units[0].words[1].start = "inválido"; await writeFile(indexFile, JSON.stringify(index));
   } else {
-    await mkdir(join(f.dir, ".decupa"), { recursive: true });
+    await mkdir(join(f.configDir, ".decupa"), { recursive: true });
     await writeFile(decisionFile, kind === "JSON de decisão" ? "{" : JSON.stringify({ mode: "inexistente" }));
   }
   const restart = async () => {

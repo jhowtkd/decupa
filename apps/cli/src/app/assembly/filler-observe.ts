@@ -7,6 +7,7 @@ import {
   type FillerNote, type FillerObserveClient,
 } from "@decupa/triage";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
+import type { VisualClient } from "./model.ts";
 import { loadProject } from "./store.ts";
 import type { Project } from "./types.ts";
 import { cachedFillerReport } from "./filler-cache.ts";
@@ -17,13 +18,23 @@ export type FillerObserveDeps = {
   fillerObserveClient?: FillerObserveClient;
   fillerEnv?: Record<string, string | undefined>;
   fillerFetchImpl?: typeof fetch;
+  fillerConfigKey?: string;
+  resolveOperationDeps?: () => Promise<{ decision: AssemblyDecisionContext; fillerEnv: Record<string, string | undefined>;
+    fillerConfigKey?: string; describeClient?: VisualClient }>;
 };
 
 type Envelope = { generation: string; notes: FillerNote[]; eligible: number; excess: number };
-type Job = { generation: string; controller: AbortController; pending: boolean };
+type Job = { generation: string; controller: AbortController; pending: boolean; configKey?: string };
 const jobs = new Map<string, Job>();
 const publications = new Map<string, Promise<void>>();
 const starts = new Map<string, Promise<void>>();
+const revocations = new Map<string, number>();
+
+/** Revoga só notas; propostas já iniciadas conservam seu snapshot. */
+export function cancelAssemblyFillerNotes(dir: string): void {
+  revocations.set(dir, (revocations.get(dir) ?? 0) + 1);
+  jobs.get(dir)?.controller.abort(); jobs.delete(dir);
+}
 
 function observeConfig(deps: FillerObserveDeps) {
   const env = deps.fillerEnv ?? process.env;
@@ -57,31 +68,38 @@ function generationItems(report: AssemblyFillerReport, model: string) {
 
 /** Dispara sem bloquear prévia/escritor. Falha e excedente ficam fechados na geração. */
 export async function observeAssemblyFillers(dir: string, project: Project, deps: FillerObserveDeps): Promise<void> {
+  const revocation = revocations.get(dir) ?? 0;
+  if (deps.resolveOperationDeps) deps = { ...deps, ...await deps.resolveOperationDeps(), resolveOperationDeps: undefined };
   const start = (starts.get(dir) ?? Promise.resolve()).catch(() => undefined).then(async () => {
     // Um GET antigo não volta a geração para trás enquanto outro publica análise.
     const latest = await loadProject(dir).catch(() => project);
-    await startObserve(dir, latest, deps);
+    if ((revocations.get(dir) ?? 0) !== revocation) return;
+    await startObserve(dir, latest, deps, revocation);
   });
   starts.set(dir, start);
   await start;
   if (starts.get(dir) === start) starts.delete(dir);
 }
 
-async function startObserve(dir: string, project: Project, deps: FillerObserveDeps): Promise<void> {
+async function startObserve(dir: string, project: Project, deps: FillerObserveDeps, revocation: number): Promise<void> {
   const { client, model } = observeConfig(deps);
   if (!model || !client || !project.scenes.length || project.preparation?.status === "running") {
     jobs.get(dir)?.controller.abort(); jobs.delete(dir); return;
   }
   const { generation, items } = generationItems(cachedFillerReport(dir, project).report, model);
   const current = jobs.get(dir);
-  if (current?.generation === generation) return;
+  // Uma chave trocada não interrompe a nota já despachada desta geração.
+  if (current?.pending && current.generation === generation) return;
+  if (current?.generation === generation && current.configKey === deps.fillerConfigKey) return;
   current?.controller.abort();
   const cached = await readAssemblyFillerNotes(dir);
+  if ((revocations.get(dir) ?? 0) !== revocation) return;
   // Outro snapshot pode ter ganhado enquanto a leitura estava em voo.
   const concurrent = jobs.get(dir);
   if (concurrent !== current && concurrent?.generation === generation) return;
   concurrent?.controller.abort();
-  const job: Job = { generation, controller: new AbortController(), pending: cached?.generation !== generation && items.length > 0 };
+  const complete = cached?.generation === generation && (current?.configKey === deps.fillerConfigKey || cached.notes.every(n => n.score !== null && !n.decisionFailure));
+  const job: Job = { generation, controller: new AbortController(), pending: !complete && items.length > 0, configKey: deps.fillerConfigKey };
   jobs.set(dir, job);
   if (!job.pending) return;
   void (async () => {
@@ -104,6 +122,7 @@ async function startObserve(dir: string, project: Project, deps: FillerObserveDe
 
 /** A classificação fica no cache; publicação de notas só muda a decoração. */
 export async function assemblyFillerSnapshot(dir: string, project: Project, deps: FillerObserveDeps, snaps: FillerSnaps = {}, includeStale = false) {
+  if (deps.resolveOperationDeps) deps = { ...deps, ...await deps.resolveOperationDeps(), resolveOperationDeps: undefined };
   const base = cachedFillerReport(dir, project);
   await observeAssemblyFillers(dir, project, deps);
   const model = deps.decision?.model, envelope = await readAssemblyFillerNotes(dir);

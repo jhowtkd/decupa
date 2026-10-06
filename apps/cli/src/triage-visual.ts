@@ -1,4 +1,4 @@
-import { createVisualClient, payloadProfileKey, resolveVisualProvider, type Credentials, type TriageModel, type ZaiUsage } from "@decupa/triage";
+import { createVisualClient, OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, payloadProfileKey, resolveVisualProvider, type Credentials, type TriageModel, type ZaiUsage } from "@decupa/triage";
 import { ProviderHttpError } from "../../../packages/triage/src/openai-retry.ts";
 
 /** Inspect tem sua própria identidade; structure e density mantêm o cache de texto. */
@@ -6,15 +6,15 @@ export function triageVisual(opts: {
   env: Record<string, string | undefined>; stored: Credentials | null; provider: string;
   modelName: string; providerId: string; maxTokens?: number; fetchImpl?: typeof fetch; model?: TriageModel;
 }): { modelName: string; providerId: string; client?: { send(content: unknown[], signal?: AbortSignal): Promise<string>; usage?(): ZaiUsage } } {
-  const resolved = resolveVisualProvider(opts.env);
+  const resolved = resolveVisualProvider(opts.env, opts.stored);
   // Sem ativar Luna, inclusive com orçamento customizado, vale a identidade anterior.
-  if (!resolved) return { modelName: opts.modelName, providerId: opts.providerId, client: undefined };
+  if (resolved.provider === "text") return { modelName: opts.modelName, providerId: opts.providerId, client: undefined };
   const identity = {
-    modelName: resolved.model,
-    providerId: `openai|${resolved.model}|${resolved.baseUrl}|${payloadProfileKey({ profile: resolved.profile, maxTokens: opts.maxTokens })}`,
+    modelName: OPENAI_VISUAL_MODEL,
+    providerId: `openai|${OPENAI_VISUAL_MODEL}|${OPENAI_VISUAL_BASE}|${payloadProfileKey({ profile: "openai-reasoning-none", maxTokens: opts.maxTokens })}`,
   };
   if (opts.model) return { ...identity, client: undefined };
-  try { return { ...identity, client: createVisualClient({ env: opts.env, stored: opts.stored, maxTokens: opts.maxTokens, fetchImpl: opts.fetchImpl }) }; }
+  try { return { ...identity, client: createVisualClient({ env: opts.env, stored: opts.stored, selection: resolved, maxTokens: opts.maxTokens, fetchImpl: opts.fetchImpl }) }; }
   catch (error) {
     // Chave visual ausente não impede os passes textuais; inspect vira revisão, sem fallback.
     return { ...identity, client: { send: async () => { throw error; } } };

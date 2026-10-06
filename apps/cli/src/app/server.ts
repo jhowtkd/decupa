@@ -4,9 +4,12 @@ import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
-import { envWithStoredTypeSafe, installCompanyCredentials, readCredentials, resolveVisualProvider } from "@decupa/triage";
+import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveVisualProvider } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
+import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
+import { operationResolver } from "./analysis-operation.ts";
+import { cancelAssemblyFillerNotes } from "./assembly/filler-observe.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,7 +36,6 @@ import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, sourceMismatch } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
-import { createAssemblyDecisionContext } from "./assembly/assembly-decisions.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -271,6 +273,10 @@ async function startCleanupApp(opts: {
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider;
+  const visualEnv = { ...(opts.env ?? process.env) };
+  const visualDir = opts.providerConfigDir ?? homedir();
+  const readStored = createCredentialsReader();
+  const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
   const page = await readFile(join(HERE, "page.html"), "utf8");
 
   const workDir = opts.workDir ?? cleanupWorkDir(input);
@@ -294,7 +300,7 @@ async function startCleanupApp(opts: {
   const tracer = createTracer(traces);
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
-    env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir,
+    env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored,
     visual: () => maybeVisual(pipelineJob), flags: () => maybeInspectFlags(workDir) });
   const replan = cleanup.replan;
 
@@ -332,7 +338,10 @@ async function startCleanupApp(opts: {
    * O proxy é gerado aqui dentro: só uma triagem por vez chega nele.
    */
   async function triageReply(): Promise<Record<string, unknown>> {
-    const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn);
+    const stored = await loadStored();
+    const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn, {
+      env: visualEnv, fetchImpl: opts.fetchImpl, credentialsDir: visualDir, stored,
+    });
     const report = await readFile(join(workDir, "out", "triage.md"), "utf8")
       .catch(() => "");
     // Preferir campos estruturados (drop / reviewFlags) em vez de
@@ -383,7 +392,7 @@ async function startCleanupApp(opts: {
     const index = await stat(indexPath(pipelineJob)).catch(() => null);
     let providerId: string;
     try {
-      providerId = (await triageIdentity({ provider, projectDir: process.cwd() })).providerId;
+      providerId = (await triageIdentity({ provider, projectDir: process.cwd(), credentialsDir: visualDir, env: visualEnv })).providerId;
     } catch (error) {
       providerId = `sem provedor: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -417,7 +426,11 @@ async function startCleanupApp(opts: {
         return;
       }
 
-      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir)) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, onJevDisabled: () => {
+        // A revogação vale mesmo se decision.json não puder ser relido.
+        cleanup.cancelNotes(); return cleanup.refreshNotes();
+      } })) return;
+      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (opts.autoStart !== false && !initialIngestStarted) {
         initialIngestStarted = true;
         void ingest();
@@ -425,7 +438,7 @@ async function startCleanupApp(opts: {
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(page.replace("window.__JOB__", JSON.stringify(job.id)));
+        res.end(withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored()).notice));
         return;
       }
 
@@ -463,10 +476,12 @@ async function startCleanupApp(opts: {
       }
 
       if (parts[0] === "jobs" && parts[1]) {
-        const current = store.get(parts[1]);
+        let current = store.get(parts[1]);
         if (!current) { sendJson(res, { error: "job não existe" }, 404); return; }
 
         if (parts.length === 2 && req.method === "GET") {
+          await cleanup.refreshNotes();
+          current = store.get(parts[1])!;
           sendJson(res, {
             stage: current.stage, error: current.error, warning: [current.warning, current.fillerWarning].filter(Boolean).join("; ") || undefined,
             fillerWarning: current.fillerWarning, fillerNotesPending: current.fillerNotesPending ?? false, planning: cleanup.planning(),
@@ -757,16 +772,15 @@ async function startAssemblyApp(opts: {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
   const dir = resolve(opts.projectDir);
-  const stored = await readCredentials(dir).catch(() => null)
-    ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null);
-  const transports = resolveAppTransports({ ...opts, stored, loadStored: async () =>
-    await readCredentials(dir).catch(() => null)
-      ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null),
-  });
-  let decisionConfig: unknown = null;
-  try { decisionConfig = JSON.parse(await readFile(join(dir, ".decupa", "decision.json"), "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const decision = createAssemblyDecisionContext(decisionConfig, envWithStoredTypeSafe(opts.env ?? process.env, stored), opts.fetchImpl);
+  const visualEnv = { ...(opts.env ?? process.env) };
+  const visualDir = opts.providerConfigDir ?? homedir();
+  const readStored = createCredentialsReader();
+  const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
+  const stored = await loadStored();
+  const transports = resolveAppTransports({ ...opts, stored, loadStored });
+  const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
+    describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir) });
+  const { decision } = await resolveOperationDeps();
   opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
   const exec = opts.executor ?? new SpawnExecutor();
   const { speech, closeSpeech } = attachResidentSpeech({
@@ -785,6 +799,7 @@ async function startAssemblyApp(opts: {
     port:()=>boundPort,selectFn:opts.selectFn,exec,speech,
     send:transports.textSend,visualClient:transports.visualClient,
     modelKey:transports.textKey,legacyModelKey:transports.legacyModelKey,legacyVisualCompatible:transports.legacyVisualCompatible,
+    resolveAnalysis:transports.resolveAnalysis,
     allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
   const runtime = createAssemblyRuntime(dir, {
@@ -797,6 +812,8 @@ async function startAssemblyApp(opts: {
     allowPaidVisual,
     proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
     describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
+    resolveOperationDeps,
+    fillerFetchImpl: opts.fetchImpl,
     speech,
   });
   const project = await runtime.ensureProject(opts.inputs);
@@ -810,7 +827,8 @@ async function startAssemblyApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
-      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir)) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
+      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (url.pathname === "/project/new" && req.method === "POST") {
         const nextDir = await mkdtemp(join(dirname(dir), "projeto-"));
         const next = await startAssemblyApp({
@@ -827,7 +845,7 @@ async function startAssemblyApp(opts: {
 
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(withProjectDir(page, dir));
+        res.end(withVisualNotice(withProjectDir(page, dir), keyProviderState(visualEnv, await loadStored()).notice));
         return;
       }
       if (url.pathname === "/page.css") {

@@ -13,10 +13,11 @@ export function cleanupFillerNotes(opts: { workDir: string; model: string; clien
   let task: Promise<void> = Promise.resolve();
   let saved: unknown[] | null = null;
   const cache = new Map<string, FillerNote>();
-  const update = (items: FillerObserveItem[], catalog = items): void => {
-    const itemKeys = items.map(item => fillerNoteKey(item, opts.model));
-    const catalogKeys = new Set(catalog.map(item => fillerNoteKey(item, opts.model)));
-    const nextKey = JSON.stringify([itemKeys, [...catalogKeys].sort()]);
+  const update = (items: FillerObserveItem[], catalog = items, config?: { model: string; client?: FillerObserveClient; key: string }): void => {
+    const model = config?.model ?? opts.model, client = config ? config.client : opts.client;
+    const itemKeys = items.map(item => fillerNoteKey(item, model));
+    const catalogKeys = new Set(catalog.map(item => fillerNoteKey(item, model)));
+    const nextKey = JSON.stringify([config?.key, itemKeys, [...catalogKeys].sort()]);
     if (key === nextKey) return;
     key = nextKey; controller?.abort(); controller = new AbortController();
     const current = controller, signal = AbortSignal.any([opts.signal, current.signal]);
@@ -24,7 +25,7 @@ export function cleanupFillerNotes(opts: { workDir: string; model: string; clien
     for (const cachedKey of cache.keys()) if (!catalogKeys.has(cachedKey)) cache.delete(cachedKey);
     opts.publish(itemKeys.flatMap(k => cache.has(k) ? [cache.get(k)!] : []));
     // Sem configuração não existe tentativa. Uma sessão nova poderá pontuar normalmente.
-    if (!opts.client) { opts.pending?.(false); return; }
+    if (!client) { opts.pending?.(false); return; }
     opts.pending?.(items.some((_, i) => !cache.has(itemKeys[i]!)));
     // A escrita da tarefa antiga termina antes da nova: uma nota cancelada não vence o rename.
     task = task.catch(() => {}).then(async () => {
@@ -39,12 +40,12 @@ export function cleanupFillerNotes(opts: { workDir: string; model: string; clien
       const previous = saved ?? [];
       for (const cachedKey of cache.keys()) if (!catalogKeys.has(cachedKey)) cache.delete(cachedKey);
       for (const item of catalog) {
-        const note = previous.map(raw => matchingFillerNote(raw, item, opts.model)).find(n => n?.score !== null && n?.score !== undefined && !n.decisionFailure);
+        const note = previous.map(raw => matchingFillerNote(raw, item, model)).find(n => n?.score !== null && n?.score !== undefined && !n.decisionFailure);
         if (note) cache.set(note.key, note);
       }
       const missing = items.filter((_, i) => !cache.has(itemKeys[i]!));
       opts.publish(itemKeys.flatMap(k => cache.has(k) ? [cache.get(k)!] : []));
-      const result = missing.length ? await scoreAmbiguous(opts.client, missing, { signal, model: opts.model }) : { notes: [], excess: 0 };
+      const result = missing.length ? await scoreAmbiguous(client, missing, { signal, model }) : { notes: [], excess: 0 };
       signal.throwIfAborted();
       for (const note of result.notes) if (note.score !== null && !note.decisionFailure) cache.set(note.key, note);
       // Falhas são apenas a observação desta tentativa: nunca viram cache durável.
@@ -59,5 +60,6 @@ export function cleanupFillerNotes(opts: { workDir: string; model: string; clien
     }).catch(error => { if (!signal.aborted) opts.warn(`não consegui publicar notas de cacoetes: ${error instanceof Error ? error.message : String(error)}`); })
       .finally(() => { if (current === controller) opts.pending?.(false); });
   };
-  return { update, close: () => { controller?.abort(); return task; } };
+  const cancel = () => { controller?.abort(); controller = null; key = null; opts.pending?.(false); };
+  return { update, cancel, close: () => { cancel(); return task; } };
 }

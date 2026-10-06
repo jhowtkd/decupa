@@ -20,6 +20,25 @@ it("falha fica registrada, sem retry por poll ou reinício da geração", async 
   expect(p.scenes[0]!.takes[0]!.removed).toEqual([]);
 });
 
+it("configurar a chave depois ativa notas; trocar chave ruim permite nova tentativa", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "observe-keys-")), p = fillerProject("é");
+  let apiKey: string | undefined; const keys: string[] = [];
+  const fetchImpl = (async (_url, init) => {
+    keys.push(new Headers(init?.headers).get("authorization")!);
+    if (apiKey === "bad") return new Response("{}", { status: 401 });
+    const body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ model: body.model, answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0.8 }])) }));
+  }) as typeof fetch;
+  const deps = { fillerFetchImpl: fetchImpl, resolveOperationDeps: async () => ({ decision,
+    fillerEnv: apiKey ? { DECUPA_TYPESAFE: "1", TYPESAFE_API_KEY: apiKey } : {}, fillerConfigKey: apiKey ?? "missing" }) };
+  await assemblyFillerReport(dir, p, deps); expect(keys).toEqual([]);
+  apiKey = "bad"; await assemblyFillerReport(dir, p, deps);
+  await vi.waitFor(async () => expect((await readAssemblyFillerNotes(dir))?.notes[0]?.score).toBeNull());
+  apiKey = "good"; await assemblyFillerReport(dir, p, deps);
+  await vi.waitFor(async () => expect((await readAssemblyFillerNotes(dir))?.notes[0]?.score).toBe(0.8));
+  expect(keys).toEqual(["Bearer bad", "Bearer good"]);
+});
+
 it("geração nova aborta e descarta resposta antiga que ignora cancelamento", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fillers-late-")), old = fillerProject("é"), next = fillerProject("tá");
   let release!: () => void, oldSignal: AbortSignal | undefined;

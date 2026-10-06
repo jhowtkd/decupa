@@ -36,16 +36,17 @@ it("lacuna visual inclusive cauda fracionária impede aprovação e pode ser rea
 it("trocar Muse por Luna reutiliza ASR e recalcula visual/regras pelo transporte de cada etapa",async()=>{
  const {dir,r}=await setup();let speechCalls=0;const calls:{url:string;images:boolean}[]=[];
  const stored={preset:"custom" as const,apiKey:"meta-fake",model:"muse-spark-1.3-contributor",baseUrl:"https://api.meta.ai/v1/chat/completions"};
+ let current:import("@decupa/triage").Credentials=stored;
  const fetchImpl=(async(url,init)=>{const body=JSON.parse(String(init?.body));const images=body.messages[0].content.some((p:{type:string})=>p.type==="image_url");calls.push({url:String(url),images});const value=images?{spans:[{id:"v",start:0,end:r.source.durationSeconds,text:String(url),confidence:"observed",tags:[]}]}:{rules:[]};return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{content:JSON.stringify(value)}}]}));}) as typeof fetch;
  const exec={run:async(call:import("../pipeline.ts").ExecCall)=>{const pattern=call.args.at(-1)!;for(let i=0;i<3;i++)await writeFile(pattern.replace("%03d",String(i).padStart(3,"0")),"fake frame");return {code:0,stdout:"",stderr:""};}};
  const deps={workDir:dir,exec,allowModel:true,allowVisual:true,persist:async()=>{},transcribe:async()=>{speechCalls++;return [];}};
- const initial=resolveAppTransports({stored,env:{},fetchImpl});
- const initialDeps={...deps,send:initial.textSend,modelKey:initial.textKey,visualClient:initial.visualClient};
+ const initial=resolveAppTransports({stored,env:{},fetchImpl,loadStored:async()=>current});
+ const initialDeps={...deps,send:initial.textSend,modelKey:initial.textKey,visualClient:initial.visualClient,resolveAnalysis:initial.resolveAnalysis};
  await analyzeRecipe(r,initialDeps,new AbortController().signal);await analyzeRecipe(r,initialDeps,new AbortController().signal);
- const lunar=resolveAppTransports({stored,env:{DECUPA_VISUAL_PROVIDER:"openai",OPENAI_API_KEY:"fake"},fetchImpl});
- await analyzeRecipe(r,{...deps,send:lunar.textSend,modelKey:lunar.textKey,visualClient:lunar.visualClient},new AbortController().signal);
+ current={...stored,openaiApiKey:"new-ui-key"};
+ await analyzeRecipe(r,initialDeps,new AbortController().signal);
  expect(speechCalls).toBe(1);expect(calls).toEqual([{url:stored.baseUrl,images:true},{url:stored.baseUrl,images:false},{url:"https://api.openai.com/v1/chat/completions",images:true},{url:stored.baseUrl,images:false}]);
- const lunarDeps={...deps,send:lunar.textSend,modelKey:lunar.textKey,visualClient:lunar.visualClient};
+ const lunarDeps=initialDeps;
  const folders=(await readdir(dir,{withFileTypes:true})).filter(item=>item.isDirectory());
  for(const folder of folders){const path=join(dir,folder.name,"speech.json");if(await readFile(path,"utf8").catch(()=>null)!==null)await writeFile(path,JSON.stringify([{id:"s",sourceId:r.id,start:0,end:1,text:"entrada nova"}]));}
  await analyzeRecipe(r,lunarDeps,new AbortController().signal);expect(speechCalls).toBe(1);expect(calls).toHaveLength(5);expect(calls.at(-1)).toEqual({url:stored.baseUrl,images:false});
