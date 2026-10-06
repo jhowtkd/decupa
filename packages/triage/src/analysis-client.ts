@@ -1,6 +1,7 @@
 import type { Credentials } from "./credentials.ts";
 import { OpenAiCompatClient, type OpenAiCompatOptions } from "./openai-compat.ts";
-import { presetConfig, resolveProvider } from "./provider.ts";
+import { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, presetConfig, resolveProvider, resolveVisualProvider } from "./provider.ts";
+import { payloadProfileKey, type PayloadProfile } from "./payload-profile.ts";
 import { ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL } from "./provider.ts";
 
 export type AnalysisClientOptions = {
@@ -87,4 +88,31 @@ export function analysisClientOptions(opts: AnalysisClientOptions = {}): OpenAiC
 
 export function createAnalysisClient(opts: AnalysisClientOptions = {}): OpenAiCompatClient {
   return new OpenAiCompatClient(analysisClientOptions(opts));
+}
+
+export type VisualClientOptions = AnalysisClientOptions & { profile?: PayloadProfile };
+
+export function visualClientOptions(opts: VisualClientOptions = {}): OpenAiCompatOptions {
+  const env = opts.env ?? process.env;
+  // Overrides de teste são explícitos e não herdam a ativação do shell.
+  const visual = opts.apiKey || opts.provider !== undefined || opts.profile === "default"
+    ? null : resolveVisualProvider(env);
+  if (!visual && opts.profile !== "openai-reasoning-none") return analysisClientOptions(opts);
+  const apiKey = opts.apiKey ?? env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY não está setada: a visão Luna não roda; o provedor de texto continua disponível.");
+  return {
+    apiKey, baseUrl: opts.baseUrl ?? OPENAI_VISUAL_BASE, model: opts.model ?? OPENAI_VISUAL_MODEL,
+    profile: "openai-reasoning-none", who: "a OpenAI", maxTokens: opts.maxTokens,
+    fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, retries: opts.retries,
+  };
+}
+
+export function createVisualClient(opts: VisualClientOptions = {}) {
+  const resolved = visualClientOptions(opts);
+  const client = new OpenAiCompatClient(resolved);
+  return {
+    model: resolved.model, providerKey: resolved.baseUrl, profileKey: payloadProfileKey(resolved), payloadProfile: resolved.profile ?? "default",
+    send: (content: unknown[], signal?: AbortSignal, onAttempt?: () => void) => client.send(content, signal, onAttempt),
+    usage: () => client.usage(),
+  };
 }

@@ -46,6 +46,7 @@ import {
   type ZaiUsage,
 } from "@decupa/triage";
 import { bootProjectDecision } from "./app/assembly/decision-boot.ts";
+import { inspectFailure, triageVisual } from "./triage-visual.ts";
 import { sharedVisualPools, type VisualPools } from "./app/assembly/visual-pool.ts";
 import { prepareTriageWindows, windowedTriageModel, type CutWindow } from "./triage-windows.ts";
 
@@ -269,22 +270,25 @@ export async function defaultTranscode(src: string, dst: string): Promise<void> 
  * Provedor, modelo e endpoint que a triagem vai usar, resolvidos como em
  * `runTriage`. É a parte da chave de cache que não vem dos arquivos.
  */
-export async function triageIdentity(opts: Pick<TriageOptions, "provider" | "projectDir" | "modelName">) {
+export async function triageIdentity(opts: Pick<TriageOptions, "provider" | "projectDir" | "modelName" | "env">) {
   const stored = await readCredentials(opts.projectDir ?? process.cwd()).catch(() => null)
     ?? await readCredentials(homedir()).catch(() => null);
-  const provider = resolveProvider(opts.provider, process.env, stored);
-  const cfg = presetConfig(provider, process.env, stored);
+  const env = opts.env ?? process.env;
+  const provider = resolveProvider(opts.provider, env, stored);
+  const cfg = presetConfig(provider, env, stored);
   const modelName = opts.modelName ?? cfg.model;
   return { stored, provider, cfg, modelName, providerId: providerIdentity({ provider, model: modelName, baseUrl: cfg.baseUrl }) };
 }
 
 export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
   const { stored, provider, modelName, providerId } = await triageIdentity(opts);
+  const vision = triageVisual({ ...opts, stored, provider, modelName, providerId, env: opts.env ?? process.env });
   const model = opts.model ?? new ZaiTriageModel({
     provider,
     stored,
     model: modelName,
     maxTokens: opts.maxTokens,
+    env: opts.env, fetchImpl: opts.fetchImpl, visualClient: vision.client, signal: opts.signal,
   });
   const videoPath = await ensureLightVideo(opts.videoPath, opts.outDir);
   const index = parseSpeechIndex(JSON.parse(await readFile(opts.indexPath, "utf8")));
@@ -389,16 +393,21 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
         spawn: opts.spawn,
       }));
 
+    let permanentFailure: string | undefined;
     for (const u of visual) {
       if (!u.ambiguous || dropped.has(u.id)) continue;
       const unit = byId.get(u.id);
       if (!unit) continue;
       const inspectKey = cacheKey({
-        ...shas, promptVersion: PROMPT_VERSION, model: modelName, providerId,
+        ...shas, promptVersion: PROMPT_VERSION, model: vision.modelName, providerId: vision.providerId,
         pass: "inspect", unitId: u.id,
       });
       let verdict = await readCache<InspectVerdict>(cacheDir, inspectKey);
       if (verdict === null) {
+        if (permanentFailure) {
+          inspectFlags.push({ unitId: u.id, code: "looks_away", source: "visual", message: permanentFailure });
+          continue;
+        }
         const frames = await extract(unit);
         if (frames.length === 0) {
           inspectFlags.push({
@@ -413,12 +422,13 @@ export async function runTriage(opts: TriageOptions): Promise<TriageResult> {
           verdict = await pools.request(() => model.inspect({ unitId: u.id, frames }), {
             signal: opts.signal,
           });
-        } catch {
+        } catch (error) {
+          if (opts.signal?.aborted) throw error;
+          const failure = inspectFailure(error);
+          if (failure.permanent) permanentFailure = failure.message;
           inspectFlags.push({
-            unitId: u.id,
-            code: "looks_away",
-            source: "visual",
-            message: "inspect: resposta inválida, para revisão",
+            unitId: u.id, code: "looks_away", source: "visual",
+            message: failure.message,
           });
           continue;
         }

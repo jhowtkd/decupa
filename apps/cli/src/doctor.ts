@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { analysisClientOptions, readCredentials, resolveProvider } from "@decupa/triage";
+import { analysisClientOptions, payloadProfileKey, readCredentials, resolveProvider, resolveVisualProvider, visualClientOptions } from "@decupa/triage";
 import { DEFAULT_ENGINE, enginePatchError, SPEECH_SCRIPT, SpawnExecutor } from "./app/pipeline.ts";
 import { enginePython } from "./runtime.ts";
 
@@ -140,6 +140,8 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
       analysisClientOptions({ stored, env });
       const where = stored?.preset === provider && stored.apiKey ? "~/.decupa/credentials" : "ambiente";
       lines.push({ ok: true, name: "chave de análise", detail: `setada (provedor ${provider}, ${where})` });
+      const text = analysisClientOptions({ stored, env });
+      lines.push({ ok: true, name: "provedor de texto", detail: `${provider} · ${text.model} · origem: ${where} · chave presente` });
     } catch (error) {
       lines.push({
         ok: false, name: "chave de análise",
@@ -148,6 +150,17 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
           + "(ou configure_provider para gravar a credencial em .decupa/) — sem ela a triagem não roda; "
           + "ou monte o keep-list na mão (SKILL)",
       });
+    }
+
+    try {
+      const visual = resolveVisualProvider(env);
+      if (visual && !env[visual.envKey]) throw new Error(`openai · ${visual.model} · perfil: ${visual.profile} · origem: DECUPA_VISUAL_PROVIDER (ambiente) · chave ausente: OPENAI_API_KEY`);
+      const cfg = visualClientOptions({ stored, env });
+      lines.push({ ok: true, name: "provedor de visão", detail:
+        `${visual ? "openai" : "geral"} · ${cfg.model} · perfil: ${cfg.profile ?? "default"} (${payloadProfileKey(cfg).slice(0, 12)}) · origem: ${visual ? "DECUPA_VISUAL_PROVIDER (ambiente)" : "provedor de texto"} · chave presente` });
+    } catch (error) {
+      lines.push({ ok: false, name: "provedor de visão", detail: error instanceof Error ? error.message : String(error),
+        fix: "para Luna, use DECUPA_VISUAL_PROVIDER=openai + OPENAI_API_KEY e reinicie; sem a variável, a visão segue o texto" });
     }
 
     // Reportar, não testar: chamada de rede em doctor quebraria a promessa de

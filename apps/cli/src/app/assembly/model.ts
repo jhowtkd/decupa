@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { analysisClientOptions, createAnalysisClient, readCredentials } from "@decupa/triage";
+import { createVisualClient, readCredentials } from "@decupa/triage";
 import type { Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import type { Source, VisualSpan } from "./types.ts";
@@ -11,6 +11,8 @@ import { mergeAdjacent, validateVisual, visualWindows } from "./visual.ts";
 import { extractVisualFrames } from "./frames.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import type { VisualFrame, VisualWindow } from "./frames.ts";
+import { sanitizeProviderKey, visualIdentityKey } from "./visual-identity.ts";
+export { sanitizeProviderKey } from "./visual-identity.ts";
 
 export const VISUAL_PROMPT = `Você recebe frames JPEG timestampados (amostrados a 1 fps), não um vídeo contínuo.
 Cada frame é rotulado como FRAME fonte=0s local=0s: fonte é o segundo absoluto da fonte e local é o segundo deste trecho.
@@ -61,6 +63,7 @@ export type VisualMetric = {
   phase: "extract" | "request" | "total";
   outcome: "ok" | "error" | "cancelled" | "cache-hit";
   elapsedMs: number; queueMs: number; frames: number; attempt: number;
+  httpAttempts?: number;
 };
 
 export type VisualProfile = "baseline" | "compact";
@@ -71,13 +74,15 @@ export type VisualProfile = "baseline" | "compact";
  * respondeu, reaproveitar seria servir análise de outra configuração.
  */
 export type VisualClient = {
-  send(content: unknown[], signal?: AbortSignal): Promise<string>;
+  send(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string>;
   model?: string;
   providerKey?: string;
+  profileKey?: string;
+  payloadProfile?: "default" | "openai-reasoning-none";
 };
 
 export type DescribeDeps = {
-  client: VisualClient;
+  client?: VisualClient;
   exec?: Executor;
   ffmpegLimit?: number;
   networkLimit?: number;
@@ -87,47 +92,6 @@ export type DescribeDeps = {
   now?: () => number;
   profile?: VisualProfile;
 };
-
-/**
- * Normaliza baseURL (ou chave pronta) para identidade de cache: sem
- * credenciais, query ou fragmento. Idempotente para entradas já limpas.
- */
-export function sanitizeProviderKey(value: string): string {
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return value.split("?")[0]!.split("#")[0]!;
-  }
-}
-
-type VisualConfigIdentity = { model: string; providerKey: string };
-
-function clientConfigIdentity(client: VisualClient): VisualConfigIdentity | null {
-  if (!client.model || !client.providerKey) return null;
-  return { model: client.model, providerKey: sanitizeProviderKey(client.providerKey) };
-}
-
-function transportConfigIdentity(opts: ReturnType<typeof analysisClientOptions>): VisualConfigIdentity {
-  return { model: opts.model, providerKey: sanitizeProviderKey(opts.baseUrl) };
-}
-
-function visualIdentityKey(config: VisualConfigIdentity, profile: VisualProfile): string {
-  const identity = {
-    version: "visual-v4",
-    providerKey: config.providerKey,
-    model: config.model,
-    profile,
-    promptVersion: VISUAL_PROMPT_VERSION,
-    sampleFps: 1,
-    frameMaxSize: 480,
-  };
-  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
-}
 
 /**
  * Fatia spans compactos em células de até 1s, sem estender o fim fracionário
@@ -340,17 +304,14 @@ export async function describeSource(
 ): Promise<VisualSpan[]> {
   if (!source.hasVideo) return [];
   if (source.durationSeconds <= 0) throw new Error(`fonte ${source.id} sem duração para descrever`);
-  const stored = await readCredentials(dir).catch(() => null);
-  const client = deps?.client ?? createAnalysisClient({ stored });
+  const stored = deps?.client ? null : await readCredentials(dir).catch(() => null);
+  const client = deps?.client ?? createVisualClient({ stored });
   const exec = deps?.exec ?? new SpawnExecutor();
   const profile = deps?.profile ?? "baseline";
-  // Cliente padrão: identidade resolvida das mesmas entradas do transporte
-  // (segunda resolução pura, sem rede); não se reaproveita o objeto para
-  // não arrastar `who`/provedor e mudar as mensagens de erro do transporte.
-  const configIdentity = deps?.client
-    ? clientConfigIdentity(deps.client)
-    : transportConfigIdentity(analysisClientOptions({ stored }));
-  const identityKey = configIdentity ? visualIdentityKey(configIdentity, profile) : null;
+  // Transporte e identidade vêm do mesmo cliente; trocar a chave não altera o perfil.
+  const configIdentity = client.model && client.providerKey
+    ? { model: client.model, providerKey: sanitizeProviderKey(client.providerKey) } : null;
+  const identityKey = visualIdentityKey(client, profile, VISUAL_PROMPT_VERSION);
   const baseCacheDir = analysisCacheDir(dir, source.sha256);
   // Hash no diretório: separa configurações e invalida caches antigos sem
   // migração; sem identidade, só rascunho efêmero (removido no finally).
@@ -386,6 +347,7 @@ export async function describeSource(
     const windowStart = now();
     let frameCount = 0;
     let attempts = 0;
+    let httpAttempts = 0;
     let outcome: VisualMetric["outcome"] = "ok";
     const emit = (partial: Pick<VisualMetric, "phase" | "outcome" | "elapsedMs" | "queueMs" | "attempt">): void => {
       const onMetric = deps?.onMetric;
@@ -396,6 +358,7 @@ export async function describeSource(
           windowStart: window.start,
           windowEnd: window.end,
           frames: frameCount,
+          httpAttempts,
           ...partial,
         });
       } catch {
@@ -445,7 +408,7 @@ export async function describeSource(
         const text = await pool.request(async () => {
           const started = now();
           try {
-            const response = await client.send(content, requestSignal);
+            const response = await client.send(content, requestSignal, () => { httpAttempts += 1; });
             emit({
               phase: "request", outcome: "ok",
               elapsedMs: now() - started, queueMs: started - queued, attempt,

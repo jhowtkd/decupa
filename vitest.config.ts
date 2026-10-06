@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globalSetup: ["./tests/fixtures/global-setup.ts"],
+    setupFiles: ["./tests/no-external-network.ts"],
     testTimeout: 60_000,
     hookTimeout: 180_000,
     // Nenhum teste alcança chave real: a mesma lista que o CI zera, mais o que
@@ -11,6 +12,7 @@ export default defineConfig({
     env: {
       ZAI_API_KEY: "",
       OPENAI_API_KEY: "",
+      DECUPA_VISUAL_PROVIDER: "",
       GEMINI_API_KEY: "",
       MINIMAX_API_KEY: "",
       DECUPA_API_KEY: "",

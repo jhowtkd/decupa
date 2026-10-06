@@ -179,6 +179,40 @@ it.each(["baseline", "compact"] as const)("braço %s via describeSource não esc
   expect(await hashProjectJson(dir)).toBe(before);
 });
 
+it("proof conta retries HTTP dentro do reparo JSON e separa execução fria/quente", async () => {
+  const dir = await pilotProject(); let calls = 0;
+  for (const id of ["fala", "apoio"]) await writeFile(join(dir, `${id}.mp4`), id);
+  const fetchImpl = (async () => {
+    calls++;
+    if (calls === 1 || calls === 3) return new Response("{}", { status: 503, headers: { "Retry-After": "0" } });
+    const content = calls === 2 ? "invalid JSON" : fullCover("observação");
+    return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }));
+  }) as typeof fetch;
+  const hooks = { log: () => {}, exec: frameExec, fetchImpl, env: { DECUPA_VISUAL_PROVIDER: "openai", OPENAI_API_KEY: "fake" } };
+  const coldOut = join(dir, "cold.json"), warmOut = join(dir, "warm.json");
+  await main(["--project", dir, "--out", coldOut, "--arm", "baseline", "--allow-paid"], hooks);
+  const cold = JSON.parse(await readFile(coldOut, "utf8"));
+  expect(cold.httpAttempts).toBe(5); expect(cold.sends).toBe(3);
+  expect(cold.windowMetrics.filter((event: { phase: string }) => event.phase === "total").map((event: { httpAttempts: number }) => event.httpAttempts)).toEqual([4, 1]);
+  expect(cold.provenance).toMatchObject({ model: "gpt-6-luna", profile: { effort: "none" }, cacheState: "cold", cacheHits: 0, requests: 5 });
+  expect(cold.provenance.corpus.every((source: { verified: boolean }) => source.verified)).toBe(true);
+  expect(cold.provenance.commit).toMatch(/^[0-9a-f]{40}$/); expect(cold.provenance.promptHash).toMatch(/^[0-9a-f]{64}$/);
+  expect(typeof cold.provenance.dirty).toBe("boolean");
+  expect(cold.wallMs).toBeGreaterThan(0); expect(JSON.stringify(cold.provenance)).not.toContain('"fake"');
+  await main(["--project", dir, "--out", warmOut, "--arm", "baseline", "--allow-paid"], hooks);
+  const warm = JSON.parse(await readFile(warmOut, "utf8"));
+  expect(warm.provenance).toMatchObject({ cacheState: "warm", cacheHits: 2, requests: 0 }); expect(calls).toBe(5);
+});
+
+it("proof recusa corpus alterado antes de enviar ao transporte", async () => {
+  const dir = await pilotProject(); await writeFile(join(dir, "fala.mp4"), "changed");
+  let calls = 0;
+  await expect(main(["--project", dir, "--out", join(dir, "out.json"), "--arm", "baseline", "--allow-paid"], {
+    exec: frameExec, log: () => {}, client: { send: async () => { calls++; return fullCover("fake"); } },
+  })).rejects.toThrow(/mudou desde a importação/);
+  expect(calls).toBe(0);
+});
+
 it("low-effort sem suporte confirmado marca não executado, sem chamadas", async () => {
   const dir = await pilotProject();
   const before = await hashProjectJson(dir);

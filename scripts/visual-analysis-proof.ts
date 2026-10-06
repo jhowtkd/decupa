@@ -9,8 +9,8 @@
  *
  * Braços: baseline e compact via describeSource (cache da cópia, frio na
  * primeira repetição); sparse e two-pass orquestrados aqui (sem cache de
- * produção, sem salvar análise); low-effort marca não executado até que o
- * suporte a reasoning_effort seja confirmado na documentação oficial.
+ * produção, sem salvar análise); low-effort é um braço legado indisponível
+ * para o provedor geral. Muse × Luna-none usam baseline e ambientes distintos.
  * Concorrência de produção preservada: extração 2, rede 2.
  */
 import { createHash } from "node:crypto";
@@ -18,7 +18,10 @@ import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { analysisClientOptions, createAnalysisClient } from "../packages/triage/src/analysis-client.ts";
+import { createVisualClient, visualClientOptions } from "../packages/triage/src/analysis-client.ts";
+import { payloadProfile } from "../packages/triage/src/payload-profile.ts";
+import { sanitizeProviderKey } from "../apps/cli/src/app/assembly/visual-identity.ts";
+import { corpusProvenance, countImages, emptyCounters, estimateCalls, hashValue, measureWindow, proofGitState, recordMetric, round2, sumMetrics, type Counters } from "./visual-proof-metrics.ts";
 import { readCredentials } from "../packages/triage/src/credentials.ts";
 import { SpawnExecutor, type Executor } from "../apps/cli/src/app/pipeline.ts";
 import { loadProject } from "../apps/cli/src/app/assembly/store.ts";
@@ -58,6 +61,7 @@ export type ProofHooks = {
   /** Cliente injetado (testes): dispensa credenciais e transporte real. */
   client?: VisualClient;
   exec?: Executor;
+  env?: Record<string, string | undefined>;
 };
 
 type ProofConfig = { project: string; out: string; arm: ProofArm; allowPaid: boolean };
@@ -102,54 +106,10 @@ async function inventory(projectDir: string): Promise<{ entries: InventoryEntry[
   return { entries, totalSeconds };
 }
 
-function estimateCalls(arm: ProofArm, windows: number): string {
-  if (arm === "two-pass") return `${windows}–${2 * windows} chamadas de API em 2 passadas`;
-  return `~${windows} chamadas de API (até ${2 * windows} com reparo)`;
-}
-
-type Counters = {
-  sends: number;
-  framesSent: number;
-  httpAttempts: number;
-  passes: number[];
-  extractMs: number;
-  requestMs: number;
-  queueMs: number;
-  totalMs: number;
-  cacheHitWindows: number;
-};
-
-function emptyCounters(): Counters {
-  return {
-    sends: 0, framesSent: 0, httpAttempts: 0, passes: [],
-    extractMs: 0, requestMs: 0, queueMs: 0, totalMs: 0, cacheHitWindows: 0,
-  };
-}
-
-function countImages(content: unknown[]): number {
-  return content.filter((part) => (part as { type?: string }).type === "image_url").length;
-}
-
-function sumMetrics(counters: Counters, events: VisualMetric[]): void {
-  for (const event of events) {
-    if (event.phase === "extract") counters.extractMs += event.elapsedMs;
-    if (event.phase === "request") {
-      counters.requestMs += event.elapsedMs;
-      counters.queueMs += event.queueMs;
-    }
-    if (event.phase === "total") {
-      counters.totalMs += event.elapsedMs;
-      if (event.outcome === "cache-hit") counters.cacheHitWindows += 1;
-    }
-  }
-}
-
-const round2 = (value: number): number => Math.round(value * 100) / 100;
-
 type ArmContext = {
   exec: Executor;
   pools: ReturnType<typeof createVisualPools>;
-  send: (content: unknown[], signal: AbortSignal) => Promise<string>;
+  send: VisualClient["send"];
   counters: Counters;
   signal: AbortSignal;
   scratchDir: string;
@@ -217,11 +177,13 @@ async function requestSampledWindow(
   const sampled = sampling === "sparse" ? sampleFrames(frames, 3) : frames;
   const prompt = sampling === "sparse" ? VISUAL_PROMPT_SPARSE : undefined;
   const queued = performance.now();
+  let httpAttempts = 0;
   const text = await ctx.pools.request(async () => {
     const started = performance.now();
-    const response = await ctx.send(frameMessage(sampled, window, "compact", prompt), ctx.signal);
-    ctx.counters.requestMs += performance.now() - started;
-    ctx.counters.queueMs += started - queued;
+    const response = await ctx.send(frameMessage(sampled, window, "compact", prompt), ctx.signal, () => { httpAttempts += 1; });
+    recordMetric(ctx.counters, { sourceId: source.id, windowStart: window.start, windowEnd: window.end,
+      phase: "request", outcome: "ok", elapsedMs: performance.now() - started, queueMs: started - queued,
+      frames: sampled.length, attempt: 1, httpAttempts });
     return response;
   }, { signal: ctx.signal });
   const parsed = parseLocalSpans(text, source, window, "compact");
@@ -239,10 +201,11 @@ async function extractCounted(
   const frames = await ctx.pools.encode(async () => {
     started = performance.now();
     const extracted = await extractVisualFrames(source, window, ctx.exec, { signal: ctx.signal });
-    ctx.counters.extractMs += performance.now() - started;
+    recordMetric(ctx.counters, { sourceId: source.id, windowStart: window.start, windowEnd: window.end,
+      phase: "extract", outcome: "ok", elapsedMs: performance.now() - started, queueMs: started - queued,
+      frames: extracted.length, attempt: 0 });
     return extracted;
   }, { signal: ctx.signal });
-  ctx.counters.queueMs += started - queued;
   return frames;
 }
 
@@ -263,11 +226,11 @@ async function runSparse(
   for (const entry of entries) {
     const collected: VisualSpan[][] = [];
     const sampling = entry.source.role === "speech" ? "sparse" : "dense";
-    await ctx.pools.mapWindows(entry.windows, async (window) => {
+    await ctx.pools.mapWindows(entry.windows, (window) => measureWindow(ctx.counters, entry.source.id, window, async () => {
       const frames = await extractCounted(entry.source, window, ctx);
       frameCache.set(windowKey(entry.source, window), frames);
       collected.push(await requestSampledWindow(frames, entry.source, window, ctx, sampling));
-    }, { signal: ctx.signal });
+    }), { signal: ctx.signal });
     spans.push(...collected.flat().sort((a, b) => a.start - b.start || a.end - b.end));
   }
   return { spans, frameCache };
@@ -288,11 +251,11 @@ async function runTwoPass(entries: InventoryEntry[], ctx: ArmContext): Promise<V
   for (const entry of entries) {
     const collected: { window: VisualWindow; spans: VisualSpan[] }[] = [];
     const sampling = entry.source.role === "speech" ? "sparse" : "dense";
-    await ctx.pools.mapWindows(entry.windows, async (window) => {
+    await ctx.pools.mapWindows(entry.windows, (window) => measureWindow(ctx.counters, entry.source.id, window, async () => {
       const frames = await extractCounted(entry.source, window, ctx);
       frameCache.set(windowKey(entry.source, window), frames);
       collected.push({ window, spans: await requestSampledWindow(frames, entry.source, window, ctx, sampling) });
-    }, { signal: ctx.signal });
+    }), { signal: ctx.signal });
     for (const item of collected) {
       const key = windowKey(entry.source, item.window);
       overview.set(key, item.spans);
@@ -307,7 +270,7 @@ async function runTwoPass(entries: InventoryEntry[], ctx: ArmContext): Promise<V
     const located = locate.get(key);
     if (!located) continue;
     const frames = frameCache.get(key) ?? [];
-    detail.set(key, await requestSampledWindow(frames, located.source, located.window, ctx, "dense"));
+    detail.set(key, await measureWindow(ctx.counters, located.source.id, located.window, () => requestSampledWindow(frames, located.source, located.window, ctx, "dense")));
   }
   ctx.counters.passes.push(ctx.counters.sends - detailStart);
   for (const entry of entries) {
@@ -378,7 +341,7 @@ export async function main(argv: string[], hooks: ProofHooks = {}): Promise<numb
     const report = {
       arm: config.arm,
       status: "not-run",
-      reason: "reasoning_effort sem suporte confirmado: o transporte não expõe o parâmetro; confirmar na documentação oficial do modelo durante o piloto. Sem trocar modelo ou endpoint.",
+      reason: "braço legado low-effort indisponível para o provedor geral. Para comparar Muse com reasoning_effort:none do Luna, execute baseline em cópias isoladas com DECUPA_VISUAL_PROVIDER=openai no braço Luna.",
       project: config.project,
       sends: 0,
       framesSent: 0,
@@ -391,6 +354,7 @@ export async function main(argv: string[], hooks: ProofHooks = {}): Promise<numb
     return 0;
   }
 
+  const corpus = await corpusProvenance(entries.map(entry => entry.source), Boolean(hooks.client || hooks.exec));
   const counters = emptyCounters();
   const fetchImpl = hooks.fetchImpl ?? fetch;
   const countingFetch = (async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -398,22 +362,23 @@ export async function main(argv: string[], hooks: ProofHooks = {}): Promise<numb
     return fetchImpl(url, init);
   }) as typeof fetch;
   let client: VisualClient;
+  let sanitizedProfile: unknown = null;
   let usage: (() => unknown) | null = null;
   if (hooks.client) {
     client = hooks.client;
   } else {
     const stored = await readCredentials(config.project).catch(() => null);
-    const transport = createAnalysisClient({ stored, fetchImpl: countingFetch });
-    const meta = analysisClientOptions({ stored });
-    client = { model: meta.model, providerKey: meta.baseUrl, send: (content, signal) => transport.send(content, signal) };
-    usage = () => transport.usage();
+    const meta = visualClientOptions({ stored, env: hooks.env, fetchImpl: countingFetch });
+    client = createVisualClient({ ...meta, profile: meta.profile ?? "default" });
+    sanitizedProfile = payloadProfile(meta);
+    usage = () => (client as ReturnType<typeof createVisualClient>).usage();
   }
   const countingClient: VisualClient = {
     ...client,
-    send: async (content, signal) => {
+    send: async (content, signal, onAttempt) => {
       counters.sends += 1;
       counters.framesSent += countImages(content);
-      return client.send(content, signal);
+      return client.send(content, signal, onAttempt);
     },
   };
   const exec = hooks.exec ?? new SpawnExecutor();
@@ -424,7 +389,7 @@ export async function main(argv: string[], hooks: ProofHooks = {}): Promise<numb
   try {
     const ctx: ArmContext = {
       exec, pools,
-      send: (content, signal) => countingClient.send(content, signal),
+      send: (content, signal, onAttempt) => countingClient.send(content, signal, onAttempt),
       counters, signal: controller.signal, scratchDir,
     };
     let spans: VisualSpan[];
@@ -452,6 +417,16 @@ export async function main(argv: string[], hooks: ProofHooks = {}): Promise<numb
         windows: entry.windows.length,
       })),
       wallMs: round2(performance.now() - wallStart),
+      windowMetrics: counters.windowMetrics,
+      provenance: {
+        ...await proofGitState(), profile: sanitizedProfile, profileKey: client.profileKey ?? null,
+        model: client.model ?? null, endpoint: client.providerKey ? sanitizeProviderKey(client.providerKey) : null,
+        corpusHash: hashValue(corpus), corpus,
+        promptHash: hashValue(entries.map((entry) => frameMessage([], entry.windows[0]!, config.arm === "baseline" ? "baseline" : "compact", config.arm === "sparse" || config.arm === "two-pass" ? VISUAL_PROMPT_SPARSE : undefined)[0])),
+        cacheState: counters.cacheHitWindows > 0 ? "warm" : "cold",
+        cacheHits: counters.cacheHitWindows, requests: counters.httpAttempts, sends: counters.sends,
+        concurrency: { ffmpeg: 2, network: 2 }, recordedAt: new Date().toISOString(),
+      },
       httpAttempts: counters.httpAttempts,
       usage: usage ? usage() : null,
       framesSent: counters.framesSent,

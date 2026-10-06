@@ -17,6 +17,19 @@ const fakeRun = async (command: string, _args: string[]): Promise<{ code: number
  *  de quem roda a suíte não pode decidir o resultado. */
 const emptyHome = () => mkdtemp(join(tmpdir(), "doctor-home-"));
 
+it("doctor mostra texto e Luna efetivos, sem enviar requisições", async () => {
+  const lines = await runDoctor({ run: fakeRun, home: await emptyHome(), env: {
+    DECUPA_API_KEY: "meta-fake", DECUPA_MODEL: "muse-spark-1.3-contributor", DECUPA_BASE_URL: "https://api.meta.ai/v1/chat/completions",
+    DECUPA_VISUAL_PROVIDER: "openai", OPENAI_API_KEY: "openai-fake",
+  } });
+  expect(lines.find(l => l.name === "provedor de texto")).toMatchObject({ ok: true, detail: expect.stringContaining("muse-spark") });
+  expect(lines.find(l => l.name === "provedor de visão")).toMatchObject({ ok: true, detail: expect.stringContaining("gpt-6-luna") });
+  expect(renderDoctor(lines)).not.toMatch(/meta-fake|openai-fake/);
+  const missing = await runDoctor({ run: fakeRun, home: await emptyHome(), env: { ZAI_API_KEY: "text-fake", DECUPA_VISUAL_PROVIDER: "openai" } });
+  expect(missing.find(l => l.name === "provedor de texto")?.ok).toBe(true);
+  expect(missing.find(l => l.name === "provedor de visão")).toMatchObject({ ok: false, detail: expect.stringContaining("OPENAI_API_KEY") });
+});
+
 /**
  * Motor mínimo num tmpdir: só o que o doctor abre — `condense.py` para a
  * checagem de existência e `condense_lang.py` com (ou sem) o patch PT-BR.

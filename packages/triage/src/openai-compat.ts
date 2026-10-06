@@ -1,4 +1,5 @@
-const DEFAULT_MAX_TOKENS = 16000;
+import { DEFAULT_MAX_TOKENS, type PayloadProfile } from "./payload-profile.ts";
+import { OpenAiTotalTimeoutError, openAiRetryable, ProviderHttpError, redactOpenAiError, retryAfterMs, waitOpenAiRetry } from "./openai-retry.ts";
 const MAX_TOKENS_CEILING = 64_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -68,6 +69,7 @@ export interface OpenAiCompatOptions {
   retries?: number;
   who?: string;
   jsonObject?: boolean;
+  profile?: PayloadProfile;
 }
 
 export class OpenAiCompatClient {
@@ -80,6 +82,7 @@ export class OpenAiCompatClient {
   private readonly retries: number;
   private readonly who: string;
   private jsonObject: boolean;
+  private readonly profile: PayloadProfile;
   private readonly usageTotals: ZaiUsage = {
     calls: 0, promptTokens: 0, completionTokens: 0, reasoningChars: 0,
   };
@@ -99,17 +102,19 @@ export class OpenAiCompatClient {
     this.retries = opts.retries ?? 1;
     this.who = opts.who ?? "o provedor";
     this.jsonObject = opts.jsonObject !== false;
+    this.profile = opts.profile ?? "default";
   }
 
   usage(): ZaiUsage {
     return { ...this.usageTotals };
   }
 
-  async send(content: unknown[], signal?: AbortSignal): Promise<string> {
+  async send(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
+    if (this.profile === "openai-reasoning-none") return this.sendOpenAi(content, signal, onAttempt);
     let retriesLeft = this.retries;
     for (;;) {
       try {
-        return await this.once(content, signal);
+        return await this.once(content, signal, onAttempt);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         if (error.name === "AbortError" || signal?.aborted) throw error;
@@ -127,6 +132,30 @@ export class OpenAiCompatClient {
     }
   }
 
+  private async sendOpenAi(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
+    // Três tentativas no máximo, incluindo a inicial; o teto inclui espera e leitura do corpo.
+    const budgetMs = 240_000;
+    const deadline = Date.now() + budgetMs;
+    const total = AbortSignal.timeout(budgetMs);
+    const combined = signal ? AbortSignal.any([signal, total]) : total;
+    const retries = Math.min(2, Math.max(0, this.retries));
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        combined.throwIfAborted();
+        try { return await this.once(content, combined, onAttempt); }
+        catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          if (combined.aborted || !openAiRetryable(error) || attempt >= retries) throw error;
+          await waitOpenAiRetry(error, attempt, deadline - Date.now(), combined);
+        }
+      }
+    } catch (error) {
+      // Cancelamento do usuário conserva AbortError; o teto total explica a causa.
+      if (total.aborted && !signal?.aborted) throw new OpenAiTotalTimeoutError();
+      throw error;
+    }
+  }
+
   /**
    * O timeout cresce com o teto de tokens: o padrão vale para 16k, e dobrar
    * o teto quando o raciocínio come a resposta (até 64k) dobra a espera.
@@ -136,7 +165,7 @@ export class OpenAiCompatClient {
     return Math.round(this.timeoutMs * Math.max(1, this.maxTokens / DEFAULT_MAX_TOKENS));
   }
 
-  private async once(content: unknown[], signal?: AbortSignal): Promise<string> {
+  private async once(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string> {
     const timeoutMs = this.timeoutForBudget();
     const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
@@ -145,6 +174,15 @@ export class OpenAiCompatClient {
       messages: [{ role: "user", content }],
       max_tokens: this.maxTokens,
     };
+    if (this.profile === "openai-reasoning-none") {
+      // O contrato é explícito; não inferimos capabilities pelo nome do modelo.
+      payload.messages = [{ role: "user", content: content.map((part: any) => part?.type === "image_url"
+        ? { ...part, image_url: { ...part.image_url, detail: "auto" } } : part) }];
+      delete payload.max_tokens;
+      payload.reasoning_effort = "none";
+      payload.max_completion_tokens = this.maxTokens;
+      payload.store = false;
+    }
     // GLM-5.3 defaults to maximum reasoning, too slow for interactive text edits
     // and for the cleanup triage, which sends the whole video: at maximum it ate
     // the token ceiling and the timeout. Image analysis and other models keep
@@ -154,10 +192,11 @@ export class OpenAiCompatClient {
       : part !== null && typeof part === "object" && "type" in part ? String(part.type) : "other");
     const textOnly = kinds.every((kind) => kind === "text");
     const withVideo = kinds.includes("video_url") && kinds.every((kind) => kind === "text" || kind === "video_url");
-    if (this.model.toLowerCase() === "glm-5.3-flash" && (textOnly || withVideo)) payload.reasoning_effort = "low";
-    if (this.jsonObject) payload.response_format = { type: "json_object" };
+    if (this.profile === "default" && this.model.toLowerCase() === "glm-5.3-flash" && (textOnly || withVideo)) payload.reasoning_effort = "low";
+    if (this.jsonObject || this.profile === "openai-reasoning-none") payload.response_format = { type: "json_object" };
     let res: Response;
     try {
+      onAttempt?.();
       res = await this.fetchImpl(this.baseUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
@@ -179,7 +218,15 @@ export class OpenAiCompatClient {
     try {
       parsed = JSON.parse(raw);
     } catch {
+      if (this.profile === "openai-reasoning-none") {
+        throw new ProviderHttpError(res.status, undefined, retryAfterMs(res.headers.get("retry-after")), redactOpenAiError(`HTTP ${res.status} de ${this.who}, corpo não-JSON: ${raw}`, this.apiKey));
+      }
       throw new Error(`HTTP ${res.status} de ${this.who}, corpo não-JSON: ${raw.slice(0, 200)}`);
+    }
+    if (this.profile === "openai-reasoning-none" && (!res.ok || (parsed as { error?: unknown })?.error)) {
+      const error = (parsed as { error?: { code?: string; message?: string } })?.error;
+      throw new ProviderHttpError(res.status, error?.code, retryAfterMs(res.headers.get("retry-after")),
+        redactOpenAiError(`HTTP ${res.status} de ${this.who} (${error?.code ?? "sem código"}): ${error?.message ?? raw}`, this.apiKey));
     }
     if (!res.ok && !(parsed as { error?: unknown })?.error) {
       throw new Error(`HTTP ${res.status} de ${this.who}: ${raw.slice(0, 200)}`);

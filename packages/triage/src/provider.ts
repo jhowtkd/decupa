@@ -1,5 +1,21 @@
 export const ZAI_DEFAULT_MODEL = "glm-5.3-flash";
 
+export const OPENAI_VISUAL_MODEL = "gpt-6-luna";
+export const OPENAI_VISUAL_BASE = "https://api.openai.com/v1/chat/completions";
+
+/** A chave sozinha nunca ativa outro provedor; só os fotogramas optam pelo Luna. */
+export function resolveVisualProvider(env: Record<string, string | undefined> = process.env) {
+  const value = env.DECUPA_VISUAL_PROVIDER;
+  if (value === undefined || value === "") return null;
+  if (value !== "openai") {
+    throw new Error('DECUPA_VISUAL_PROVIDER aceita somente "openai"; remova a variável para usar o provedor geral.');
+  }
+  return {
+    baseUrl: OPENAI_VISUAL_BASE, model: OPENAI_VISUAL_MODEL,
+    envKey: "OPENAI_API_KEY", profile: "openai-reasoning-none" as const,
+  };
+}
+
 /**
  * A Z.ai serve dois endpoints quase idênticos que cobram de formas diferentes:
  * `/api/paas/v4` é pay-as-you-go e precisa de crédito pré-carregado, enquanto

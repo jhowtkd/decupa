@@ -13,10 +13,11 @@ export type { Provider, StoredProvider } from "./provider.ts";
 export type { Credentials } from "./credentials.ts";
 
 export { acceptedDropIds, verifyClaims } from "./claims.ts";
-export { PRESETS, presetConfig, resolveProvider } from "./provider.ts";
+export { OPENAI_VISUAL_BASE, OPENAI_VISUAL_MODEL, PRESETS, presetConfig, resolveProvider, resolveVisualProvider } from "./provider.ts";
 export { readCredentials, writeCredentials, credentialsPath } from "./credentials.ts";
 export { companyCredentialsFromEnv, envWithStoredTypeSafe, installCompanyCredentials } from "./company-credentials.ts";
-export { analysisClientOptions, assertStoredEndpoint, createAnalysisClient } from "./analysis-client.ts";
+export { analysisClientOptions, assertStoredEndpoint, createAnalysisClient, createVisualClient, visualClientOptions } from "./analysis-client.ts";
+export { payloadProfile, payloadProfileKey } from "./payload-profile.ts";
 export { isJsonFormatRejected, OpenAiCompatClient } from "./openai-compat.ts";
 export { applyDensityBudget, DENSITY_INSTRUCTIONS } from "./density.ts";
 export { base64Bytes, MAX_VIDEO_PAYLOAD_BYTES, parseDensityCandidates, parseInspectVerdict, parseStructureClaims, readChoice, ZAI_DEFAULT_BASE, ZAI_DEFAULT_MODEL, ZaiClient, ZaiTriageModel } from "./zai.ts";

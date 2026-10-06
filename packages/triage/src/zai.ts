@@ -8,6 +8,7 @@ import type {
 } from "./model.ts";
 import { INSPECT_INSTRUCTIONS, STRUCTURE_INSTRUCTIONS } from "./prompt.ts";
 import { ZaiClient } from "./zai-client.ts";
+import type { ZaiUsage } from "./zai-client.ts";
 
 export {
   isRetryable,
@@ -118,11 +119,18 @@ export function base64Bytes(bytes: number): number {
 
 export class ZaiTriageModel implements TriageModel {
   private readonly client: ZaiClient;
+  private readonly inspectClient: { send(content: unknown[], signal?: AbortSignal): Promise<string>; usage?: () => ZaiUsage };
+  private readonly inspectSignal?: AbortSignal;
   /** Por caminho: com janelas, cada trecho é um vídeo diferente. */
   private video: { path: string; dataUrl: string } | null = null;
 
-  constructor(opts: ConstructorParameters<typeof ZaiClient>[0] = {}) {
+  constructor(opts: ConstructorParameters<typeof ZaiClient>[0] & {
+    visualClient?: { send(content: unknown[], signal?: AbortSignal): Promise<string>; usage?: () => ZaiUsage };
+    signal?: AbortSignal;
+  } = {}) {
     this.client = new ZaiClient(opts);
+    this.inspectClient = opts.visualClient ?? this.client;
+    this.inspectSignal = opts.signal;
   }
 
   private async videoDataUrl(path: string): Promise<string> {
@@ -153,7 +161,10 @@ export class ZaiTriageModel implements TriageModel {
   }
 
   usage() {
-    return this.client.usage();
+    const text = this.client.usage();
+    if (this.inspectClient === this.client || !this.inspectClient.usage) return text;
+    const visual = this.inspectClient.usage();
+    return Object.fromEntries(Object.entries(text).map(([key, value]) => [key, value + visual[key as keyof ZaiUsage]])) as unknown as ZaiUsage;
   }
 
   async structure(req: StructureRequest): Promise<StructureClaim[]> {
@@ -181,10 +192,10 @@ export class ZaiTriageModel implements TriageModel {
         image_url: { url: `data:image/jpeg;base64,${bytes.toString("base64")}` },
       });
     }
-    const text = await this.client.send([
+    const text = await this.inspectClient.send([
       ...images,
       { type: "text", text: `${INSPECT_INSTRUCTIONS}\n\n${INSPECT_SHAPE}\n\n---\n\nunidade: ${req.unitId}` },
-    ]);
+    ], this.inspectSignal);
     return parseInspectVerdict(text, req.unitId);
   }
 }

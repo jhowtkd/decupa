@@ -126,7 +126,6 @@ Salvar valida os campos e o endpoint HTTPS, sem chamada remota: não comprova va
 
 Credenciais específicas do projeto têm precedência sobre a configuração do usuário. Configurar a primeira abertura não sobrescreve essas credenciais.
 
-
 O código oferece presets `zai`, `gemini`, `minimax` e `custom`. Isso não comprova acesso, saldo ou suporte visual de cada modelo. Para custom, são necessários endpoint compatível com chat/completions e nome do modelo.
 
 As variáveis reconhecidas são `ZAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY` e `DECUPA_API_KEY`; custom também usa `DECUPA_BASE_URL` e `DECUPA_MODEL`. Evite várias chaves no mesmo processo: a resolução automática prioriza Z.ai, Gemini, MiniMax e custom, nessa ordem.
@@ -136,6 +135,12 @@ Alternativa: `.decupa/credentials` na pasta do projeto, com JSON contendo `prese
 Em montagem, use a pasta passada em `--project`. Em limpeza, confirme a pasta calculada pelo servidor para aquele arquivo; não presuma que é a raiz do repositório. `configure_provider` precisa receber `projectDir` explicitamente e substitui o conteúdo salvo: não o use com campos incompletos para atualizar uma chave existente.
 
 **Limite do doctor:** ele consulta as chaves do ambiente, não lê a credencial salva no projeto. Pode reportar ausência de chave mesmo com arquivo válido; não duplique o segredo para deixar o diagnóstico verde. Também não testa a API e pode mostrar uma nota Z.ai mesmo usando outro preset. `doctor --local` dispensa a chave e prova só a prontidão local (imports de fala/visão nos venvs dos sidecars e Python do motor). Não executar chamada paga para validar instalação sem autorização específica.
+
+### Visão opcional no GPT-6 Luna
+
+Defina `DECUPA_VISUAL_PROVIDER=openai` e `OPENAI_API_KEY` no ambiente do processo antes de abrir `node scripts/start.mjs`. Encerre e reinicie o app após trocar essas variáveis. Só fotogramas da Montagem, referências de templates e `inspect` da Limpeza vão para `gpt-6-luna`, com `reasoning_effort:none`; texto, Jev e ASR mantêm sua configuração. A chave OpenAI sozinha não ativa a visão; sem a variável, a visão segue o provedor geral e reaproveita os caches anteriores. Sem chave OpenAI, a tarefa visual falha sem usar a chave do texto. Um valor de provedor desconhecido impede a subida.
+
+O modelo e o endpoint OpenAI são fixos. Os caches visuais separam os perfis, e os templates reaproveitam fala ao trocar a visão, recalculando as regras dependentes. `pnpm decupa doctor` informa texto e visão sem rede. Os controles de autorização de processamento continuam necessários; configurar as variáveis não dispara chamadas. O piloto de velocidade exige autorização própria e amostras de até 60 s em cópias isoladas.
 
 ## 8. MCP: opcional e com bloqueio conhecido
 

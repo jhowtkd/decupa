@@ -4,7 +4,8 @@ import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
-import { analysisClientOptions, envWithStoredTypeSafe, installCompanyCredentials, readCredentials } from "@decupa/triage";
+import { envWithStoredTypeSafe, installCompanyCredentials, readCredentials, resolveVisualProvider } from "@decupa/triage";
+import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
 import { createReadStream } from "node:fs";
 import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
@@ -203,6 +204,7 @@ export async function startApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
+  resolveVisualProvider(opts.env ?? process.env);
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
   }
@@ -752,19 +754,6 @@ async function startCleanupApp(opts: {
   };
 }
 
-function lazyPaidSend(projectDir: string, configDir?: string): (content: unknown[], signal?: AbortSignal) => Promise<string> {
-  let client: { send(content: unknown[], signal?: AbortSignal): Promise<string> } | undefined;
-  return async (content, signal) => {
-    if (!client) {
-      const { createAnalysisClient, readCredentials } = await import("@decupa/triage");
-      const stored = await readCredentials(projectDir).catch(() => null)
-        ?? (configDir ? await readCredentials(configDir).catch(() => null) : null);
-      client = createAnalysisClient({ stored });
-    }
-    return client.send(content, signal);
-  };
-}
-
 /**
  * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
  * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
@@ -799,17 +788,10 @@ async function startAssemblyApp(opts: {
   const dir = resolve(opts.projectDir);
   const stored = await readCredentials(dir).catch(() => null)
     ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null);
-  // Identidade do cliente visual resolvida sem rede, das mesmas entradas do
-  // transporte: o cache visual isola por configuração efetiva. Resolvida na
-  // subida; troca de provedor no meio da sessão exige reinício (a primeira
-  // chamada paga falharia sem chave, como antes).
-  let visualIdentity: Pick<VisualClient, "model" | "providerKey"> = {};
-  try {
-    const resolved = analysisClientOptions({ stored, env: opts.env ?? process.env });
-    visualIdentity = { model: resolved.model, providerKey: resolved.baseUrl };
-  } catch {
-    // Sem chave: sem identidade, sem cache persistente.
-  }
+  const transports = resolveAppTransports({ ...opts, stored, loadStored: async () =>
+    await readCredentials(dir).catch(() => null)
+      ?? (opts.providerConfigDir ? await readCredentials(opts.providerConfigDir).catch(() => null) : null),
+  });
   let decisionConfig: unknown = null;
   try { decisionConfig = JSON.parse(await readFile(join(dir, ".decupa", "decision.json"), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -830,8 +812,9 @@ async function startAssemblyApp(opts: {
   const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
   const templates=createTemplateRuntime(templatesRoot,{
     port:()=>boundPort,selectFn:opts.selectFn,exec,speech,
-    send:opts.proposeSend??opts.describeClient?.send??lazyPaidSend(dir,opts.providerConfigDir),
-    modelKey:JSON.stringify(visualIdentity),allowModel:allowPaidModel,allowVisual:allowPaidVisual,
+    send:transports.textSend,visualClient:transports.visualClient,
+    modelKey:transports.textKey,legacyModelKey:transports.legacyModelKey,legacyVisualCompatible:transports.legacyVisualCompatible,
+    allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
   const runtime = createAssemblyRuntime(dir, {
     templatesRoot,
@@ -841,8 +824,8 @@ async function startAssemblyApp(opts: {
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
-    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? lazyPaidSend(dir, opts.providerConfigDir) : undefined),
-    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? { send: lazyPaidSend(dir, opts.providerConfigDir), ...visualIdentity } : undefined),
+    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
+    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
     speech,
   });
   const project = await runtime.ensureProject(opts.inputs);
