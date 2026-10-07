@@ -178,7 +178,7 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
       }
     } catch (error) {
       lines.push({ ok: false, name: "provedor de visão", detail: `${visualDetail ? visualDetail + " · " : ""}${error instanceof Error ? error.message : String(error)}`,
-        fix: "configure a chave Luna em /provider/keys ou OPENAI_API_KEY; para escolher o texto, use a tela ou DECUPA_VISUAL_PROVIDER=text" });
+        fix: "configure a chave Luna em /settings#openai ou OPENAI_API_KEY; para escolher o texto, use a tela ou DECUPA_VISUAL_PROVIDER=text" });
     }
 
     // Reportar, não testar: chamada de rede em doctor quebraria a promessa de

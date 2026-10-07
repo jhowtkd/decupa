@@ -38,9 +38,11 @@ async function boot(mode = "montagem", extra: Record<string, unknown> = {}) {
 it.each(["montagem", "limpeza"])("%s configura as chaves sem eco, com merge, alias e limite", async mode => {
   const { user, base, post } = await boot(mode);
   const alias = await fetch(base + "/provider/visual", { redirect: "manual" });
-  expect(alias.status).toBe(307); expect(alias.headers.get("location")).toBe("/provider/keys");
+  expect(alias.status).toBe(307); expect(alias.headers.get("location")).toBe("/settings");
+  const keysAlias = await fetch(base + "/provider/keys", { headers: { accept: "text/html" }, redirect: "manual" });
+  expect(keysAlias.status).toBe(307); expect(keysAlias.headers.get("location")).toBe("/settings");
   const html = await (await fetch(base + "/provider/keys", { headers: { accept: "text/html" } })).text();
-  expect(html).toContain("Chaves de IA"); expect(html).toContain("Chave da TypeSafe"); expect(html).toContain("Não usar o Jev");
+  expect(html).toContain("Configurações"); expect(html).toContain("Chave da TypeSafe"); expect(html).toContain("Não usar o Jev");
   expect(html).not.toMatch(/muse-secret|old-jev|project-luna|project-jev/);
   const saves = await Promise.all([post({ section: "visual", visualProvider: "openai", openaiApiKey: "user-luna-fake-key-123456" }), post({ section: "jev", typesafeApiKey: "user-jev-fake-key-123456", typesafe: true })]);
   expect(saves.map(s => s.status)).toEqual([200, 200]);

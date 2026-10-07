@@ -97,7 +97,7 @@ export function assemblyTextClientOptions(opts: AnalysisClientOptions & { select
   const selection = opts.selection ?? resolveAssemblyTextProvider(env, opts.stored);
   if (selection.provider === "text") return analysisClientOptions(opts);
   const apiKey = env.OPENAI_API_KEY?.trim() || opts.stored?.openaiApiKey;
-  if (!apiKey) throw new Error("OPENAI_API_KEY não está setada: o texto da Montagem no GPT-6.1 Sol não roda. Configure em /provider/keys.");
+  if (!apiKey) throw new Error("OPENAI_API_KEY não está setada: o texto da Montagem no GPT-6.1 Sol não roda. Configure em /settings#openai.");
   return { apiKey, baseUrl: OPENAI_ASSEMBLY_TEXT_BASE, model: OPENAI_ASSEMBLY_TEXT_MODEL,
     profile: "openai-reasoning-medium", who: "a OpenAI", maxTokens: opts.maxTokens,
     fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, retries: opts.retries };

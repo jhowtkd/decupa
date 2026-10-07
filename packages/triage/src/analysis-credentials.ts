@@ -2,6 +2,7 @@ import { dirname } from "node:path";
 import { credentialsPath, readCredentials, type Credentials } from "./credentials.ts";
 import { mtimeCached } from "./config-cache.ts";
 export type AnalysisCredentials = Credentials & {
+  textProviderSource?: "user" | "project";
   openaiApiKeySource?: "user" | "project";
   visualProviderSource?: "user" | "project";
   assemblyTextProviderSource?: "user" | "project";
@@ -17,6 +18,7 @@ export async function readAnalysisCredentials(dir: string, userDir: string,
   const text = project ?? user;
   if (!text) return null;
   const out: AnalysisCredentials = { ...text };
+  out.textProviderSource = project && dir !== userDir ? "project" : "user";
   // A tela configura visão/Jev deste computador sem mudar o provedor de texto.
   const openaiApiKey = user?.openaiApiKey ?? project?.openaiApiKey;
   const visualProvider = user?.visualProvider ?? project?.visualProvider;

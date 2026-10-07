@@ -6,9 +6,10 @@ export async function refreshVisualNotice() {
   const banner = document.getElementById("visual-provider-notice");
   if (!banner) return;
   try {
-    const response = await fetch("/provider/keys", { headers: { accept: "application/json" } });
+    const response = await fetch("/settings/state", { headers: { accept: "application/json" } });
     if (!response.ok) return;
     const state = await response.json();
+    banner.querySelector("a").href = `/settings#${state.visual.notice || state.assemblyText?.notice && state.notice?.includes("Sol") ? "openai" : "jev"}`;
     banner.querySelector("a").textContent = state.notice ?? "";
     banner.hidden = !state.notice;
     stackToast(banner);

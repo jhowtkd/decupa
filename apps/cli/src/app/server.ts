@@ -427,7 +427,7 @@ async function startCleanupApp(opts: {
         return;
       }
 
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, includeAssemblyTextNotice: false, onJevDisabled: () => {
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => {
         // A revogação vale mesmo se decision.json não puder ser relido.
         cleanup.cancelNotes(); return cleanup.refreshNotes();
       } })) return;
@@ -829,7 +829,7 @@ async function startAssemblyApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (url.pathname === "/project/new" && req.method === "POST") {
         const nextDir = await mkdtemp(join(dirname(dir), "projeto-"));

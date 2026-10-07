@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurações · Decupa</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/settings/tokens.css">
+<style>
+*{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.5 var(--sans-ui)}
+header,main{max-width:1040px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+header strong{font-size:18px}a{color:var(--accent)}nav{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}
+h1{font-size:28px;line-height:1.2;margin:0 0 12px}h2{font-size:20px;margin:0}p{color:var(--muted);margin:12px 0}
+section{padding:28px;margin:24px 0;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-card);scroll-margin-top:16px}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}label{display:block;margin:16px 0 8px}
+input:not([type=checkbox]),select{display:block;width:100%;font:inherit;padding:12px;background:var(--panel2);color:var(--ink);border:1px solid var(--line-strong);border-radius:6px}
+input[type=checkbox]{margin-right:8px;accent-color:var(--accent)}button{font:inherit;padding:10px 16px;border:1px solid var(--line-strong);border-radius:6px;background:var(--panel2);color:var(--ink);cursor:pointer}
+button[type=submit]{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600}
+.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}button:disabled{opacity:.5;cursor:default}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}[hidden]{display:none!important}
+.message{min-height:1.5em;color:var(--ink)}.state{padding:12px 16px;background:var(--panel2);border-radius:6px}
+small{display:block;color:var(--muted)}@media(max-width:600px){header,main{padding:16px}section{padding:20px}.fields{grid-template-columns:1fr}}
+</style></head><body>
+<header><a href="/">← Voltar ao Decupa</a><strong>decupa / configurações</strong><a href="/settings" aria-label="Configurações" title="Configurações">⚙</a></header>
+<main><h1>Configurações</h1><p>As chaves ficam protegidas no arquivo de credenciais deste usuário, neste computador. Elas nunca são mostradas aqui.</p>
+<nav aria-label="Seções das configurações"><a href="#text">Provedor de texto</a><a href="#openai">OpenAI</a><a href="#jev">Jev</a></nav>
+<section id="text" aria-labelledby="textTitle"><h2 id="textTitle">Provedor de texto</h2>
+<p>Faz a triagem da Limpeza e, quando o Sol está desligado, o texto da Montagem.</p>
+<p id="textState" class="state" role="status"></p><p id="textNotice"></p>
+<form id="textForm"><label for="preset">Provedor</label><select id="preset" required><option value="zai">Z.ai</option><option value="gemini">Gemini</option><option value="minimax">MiniMax</option><option value="custom">Personalizado (compatível com OpenAI)</option></select>
+<div class="fields"><div><label for="model">Modelo</label><input id="model" autocomplete="off" placeholder="Padrão do provedor"></div><div><label for="endpoint">Endpoint completo (HTTPS)</label><input id="endpoint" type="url" autocomplete="off" placeholder="Padrão do provedor"></div></div>
+<label for="textKey">Chave de API</label><input id="textKey" type="password" autocomplete="off" spellcheck="false">
+<p>Em branco, mantém a chave local. Trocar o provedor ou o endpoint exige uma chave nova no mesmo envio. Para Personalizado, informe modelo e endpoint HTTPS.</p>
+<div class="actions"><button type="submit">Salvar provedor de texto</button><button id="testText" type="button" disabled aria-describedby="textTestHelp">Testar chave</button></div>
+<p id="textTestHelp">Este provedor não oferece teste sem custo</p><p id="textMessage" class="message" role="status" aria-live="polite"></p></form></section>
+<section id="openai" aria-labelledby="openaiTitle"><h2 id="openaiTitle">OpenAI · Luna e Sol</h2>
+<p>O GPT-6 Luna é o padrão para imagens quando há chave. Sem ela, o provedor de texto faz a análise de imagem.</p>
+<p>Uso cobrado pela OpenAI. Imagens enviam fotogramas, com <code>store: false</code>. O texto só vai à OpenAI quando você escolhe o Sol abaixo.</p>
+<p id="state" class="state" role="status"></p>
+<form id="visual"><label for="openaiKey">Chave da OpenAI</label><input id="openaiKey" type="password" autocomplete="off" spellcheck="false">
+<p>Deixe em branco para manter a chave salva. Uma chave definida no ambiente tem prioridade.</p>
+<label><input id="textImages" type="checkbox">Usar o provedor de texto também para imagens</label>
+<label for="assemblyText">Texto da Montagem</label><select id="assemblyText"><option value="text">Provedor de texto (padrão)</option><option value="openai">OpenAI GPT-6.1 Sol, raciocínio médio</option></select>
+<p>Escolher Sol envia o texto das falas e o plano à OpenAI, com <code>store: false</code> e cobrança nessa conta. A triagem da Limpeza e o Jev seguem seus provedores.</p>
+<p id="assemblyTextState" class="state" role="status"></p>
+<div class="actions"><button type="submit">Salvar configuração OpenAI</button><button id="removeVisual" type="button">Remover chave</button><button id="testVisual" type="button">Testar chave</button></div>
+<p>O teste consulta o acesso ao Luna e ao Sol, sem geração ou conteúdo do projeto. Não verifica saldo nem grava a chave.</p><p id="visualTestSource"></p>
+<p id="message" class="message" role="status" aria-live="polite"></p></form></section>
+<section id="jev" aria-labelledby="jevTitle"><h2 id="jevTitle">Jev · TypeSafe</h2>
+<p>Decide cortes de take inteiro, escolhe apoio visual, participa da triagem da Limpeza e dá notas aos cacoetes ambíguos. Uso cobrado na conta da TypeSafe.</p>
+<p id="jevState" class="state" role="status"></p><form id="jevForm"><label for="jevKey">Chave da TypeSafe</label><input id="jevKey" type="password" autocomplete="off" spellcheck="false">
+<p>Em branco, mantém a chave salva. O modo de decisão continua sendo o configurado no projeto.</p><label><input id="noJev" type="checkbox">Não usar o Jev</label>
+<div class="actions"><button type="submit">Salvar decisões automáticas</button><button id="removeJev" type="button">Remover chave</button><button id="testJev" type="button" disabled aria-describedby="jevTestHelp">Testar chave</button></div>
+<p id="jevTestHelp">Este provedor não oferece teste sem custo</p><p id="jevMessage" class="message" role="status" aria-live="polite"></p></form></section>
+<p>Salvar não chama a IA. A mudança vale na próxima operação; uma operação em andamento conserva sua configuração. Processamento pago continua dependendo da autorização de cada operação.</p>
+</main>
+<script>
+const el=id=>document.getElementById(id);
+const originLabel=source=>({environment:'ambiente',user:'configuração deste computador',project:'configuração do projeto',credentials:'credenciais',default:'padrão',fallback:'alternativa sem chave',input:'chave digitada'}[source]||source);
+let assemblyTextLoaded='text',textLoaded=null;
+async function showState(){
+ const response=await fetch('/settings/state',{headers:{accept:'application/json'}});if(!response.ok)throw Error('Não foi possível ler a configuração.');const body=await response.json();
+ const state=body.visual;el('textImages').checked=state.provider==='text'&&!state.notice;
+ el('state').textContent='Origem: '+originLabel(state.source)+'. '+(state.notice||(state.provider==='openai'?(state.configured?'GPT-6 Luna configurado.':'A chave OpenAI está ausente.'):'Provedor de texto escolhido para imagens.'));
+ const text=body.assemblyText;assemblyTextLoaded=text.notice?'openai':text.provider;el('assemblyText').value=assemblyTextLoaded;
+ el('assemblyTextState').textContent='Origem: '+originLabel(text.source)+'. '+(text.notice||(text.provider==='openai'?(text.configured?'GPT-6.1 Sol, raciocínio médio configurado.':'A chave OpenAI está ausente.'):'Provedor de texto (padrão).'));
+ el('noJev').checked=!body.jev.enabled&&!body.jev.notice;
+ el('jevState').textContent='Origem: '+originLabel(body.jev.source)+'. '+(body.jev.notice||(body.jev.enabled?'Jev configurado.':'Jev desligado por escolha.'));
+ if(body.text){textLoaded=body.text.saved||body.text;el('preset').value=textLoaded.preset;el('model').value=textLoaded.model||'';el('endpoint').value=textLoaded.baseUrl||'';
+ el('textState').textContent=(body.text.configured?'Configurado':'Não configurado')+' · '+body.text.preset+' · '+(body.text.model||'sem modelo')+' · '+(body.text.host||'sem endpoint')+' · Origem: '+originLabel(body.text.source)+'.';el('textNotice').textContent=body.text.notice||'';textRequirements();}
+}
+const canonicalEndpoint=value=>{try{return new URL(value).href;}catch{return value;}};
+function textRequirements(){const preset=el('preset').value,custom=preset==='custom';el('model').required=custom;el('endpoint').required=custom;
+ const endpoint=el('endpoint').value.trim()||(preset===textLoaded?.preset?textLoaded.defaultBaseUrl||'':'');
+ el('textKey').required=!!textLoaded&&(preset!==textLoaded.preset||canonicalEndpoint(endpoint)!==canonicalEndpoint(textLoaded.baseUrl||''));}
+el('preset').onchange=()=>{const restored=el('preset').value===textLoaded?.preset;el('model').value=restored?textLoaded.model||'':'';el('endpoint').value=restored?textLoaded.baseUrl||'':'';textRequirements();};el('endpoint').oninput=textRequirements;
+function changedTextFields(){const fields={};for(const [id,key] of [['preset','preset'],['model','model'],['endpoint','baseUrl']]){
+ const value=el(id).value.trim(),loaded=textLoaded?.[key]||'';if(key==='baseUrl'?canonicalEndpoint(value)!==canonicalEndpoint(loaded):value!==loaded)fields[key]=value;}
+ if(el('textKey').value.trim())fields.apiKey=el('textKey').value;return fields;}
+async function saveSection(section,button,fields){
+ button.disabled=true;const message=el(section==='text'?'textMessage':section==='visual'?'message':'jevMessage');message.textContent='';
+ try{const response=await fetch('/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({section,...fields})});const body=await response.json();if(!response.ok)throw Error(body.error);
+ el(section==='text'?'textKey':section==='visual'?'openaiKey':'jevKey').value='';await showState();message.textContent=fields.removeKey?'Chave removida deste computador. Confira a origem efetiva acima.':'Configuração salva. Vale na próxima operação quando este computador é a origem efetiva.';
+ }catch(error){message.textContent=error.message||'Não foi possível conectar ao Decupa.';}finally{button.disabled=false;}
+}
+el('textForm').onsubmit=event=>{event.preventDefault();return saveSection('text',event.target.querySelector('button'),changedTextFields());};
+// A escolha conservada do Sol não é reenviada depois de remover a chave.
+for(const section of ['visual','jev']){
+ el(section==='jev'?'jevForm':section).onsubmit=event=>{event.preventDefault();const fields=section==='visual'?{openaiApiKey:el('openaiKey').value,visualProvider:el('textImages').checked?'text':'openai',...(el('assemblyText').value!==assemblyTextLoaded?{assemblyTextProvider:el('assemblyText').value}:{})}:{typesafeApiKey:el('jevKey').value,typesafe:!el('noJev').checked};return saveSection(section,event.target.querySelector('button'),fields);};
+ const remove=el(section==='visual'?'removeVisual':'removeJev');remove.onclick=()=>saveSection(section,remove,{removeKey:true});
+}
+el('testVisual').onclick=async()=>{const button=el('testVisual');button.disabled=true;el('message').textContent='Consultando acesso aos modelos…';
+ try{const response=await fetch('/settings/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({section:'visual',...(el('openaiKey').value.trim()?{key:el('openaiKey').value}:{})})});const body=await response.json();if(!response.ok)throw Error(body.error);el('message').textContent=body.message;el('visualTestSource').textContent='Teste com origem: '+originLabel(body.source)+'.';}
+ catch{el('message').textContent='Não foi possível conectar';}finally{button.disabled=false;}
+};
+showState().catch(error=>{el('message').textContent=error.message;});
+</script></body></html>

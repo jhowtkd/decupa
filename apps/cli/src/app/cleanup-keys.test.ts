@@ -103,7 +103,9 @@ it("Limpeza resolve triagem, notas e banner pelo cwd/usuário, ignorando configu
   await vi.waitFor(async () => { const state = await (await fetch(job)).json() as any; expect(state.fillerNotes?.[0]).toMatchObject({ score: 0.8, model: "from-cwd" }); });
   expect((await post(`/jobs/${app.jobId}/triage`, {})).status).toBe(200);
   const state = await (await fetch(base + "/provider/keys")).json() as ReturnType<typeof keyProviderState>;
-  expect(state).toEqual(triageStates[0]); expect(textKeys).toEqual(["cwd-text"]);
+  // GET /provider/keys agora devolve também text/keyTests (tela de configurações);
+  // keyProviderState() sozinho não os inclui, então a comparação é por subconjunto.
+  expect(state).toMatchObject(triageStates[0]!); expect(textKeys).toEqual(["cwd-text"]);
   expect(state.visual).toMatchObject({ provider: "openai", source: "user", configured: true });
   expect(state.jev).toMatchObject({ enabled: true, source: "user" });
   expect(await (await fetch(base)).text()).toContain('id="visual-provider-notice" role="status" hidden');
