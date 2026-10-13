@@ -32,13 +32,16 @@ it("declara fps e canvas da montagem para o diálogo de importação", () => {
   expect(davinciImportSettings(a).timelineResolutionWidth).toBe("320");
 });
 
-it("preserva espaço, acentos e # no nome do arquivo", () => {
+it("emite caminho puro com espaço, acentos e # para o relink do Resolve", () => {
   const a = fixtureAssembly();
   a.sources[0]!.path = "/tmp/decupa-fixture/fala da aula #1 áudio.mp4";
   const doc = JSON.parse(buildOtio(validateAssembly(a)));
   const url = doc.tracks.children[0].children[0].media_reference.target_url as string;
-  expect(url).toContain("fala%20da%20aula%20%231%20");
-  expect(decodeURIComponent(url)).toContain("fala da aula #1 áudio.mp4");
+  // O Resolve não decodifica file:// percentual durante o relink: o caminho
+  // precisa chegar literal, sem esquema nem %20/%23.
+  expect(url).toBe("/tmp/decupa-fixture/fala da aula #1 áudio.mp4");
+  expect(url.startsWith("file://")).toBe(false);
+  expect(url).not.toContain("%20");
 });
 
 it("distingue dois arquivos com o mesmo basename", () => {

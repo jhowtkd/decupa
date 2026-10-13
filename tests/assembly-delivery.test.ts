@@ -1,7 +1,6 @@
 import { copyFile, mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { hashFile } from "../packages/media/src/hash.ts";
 import { startApp } from "../apps/cli/src/app/server.ts";
@@ -183,13 +182,22 @@ it("entrega após aprovação: checklist completo e export concluído com saída
   expect(await hashFile(join(dir, "exports", String(ready.revision), "reference.mp4")))
     .toBe(ready.previewArtifact!.sha256);
   expect(manifest.reference).toBe(ready.previewArtifact!.sha256);
-  // OTIO referencia os originais, nunca derivados.
+  // OTIO referencia os originais por caminho puro, nunca derivados.
   const otioText = await readFile(join(dir, "exports", String(ready.revision), "timeline.otio"), "utf8");
-  const urls = [...otioText.matchAll(/"target_url":"([^"]+)"/g)].map((m) => m[1]!);
+  const urls: string[] = [];
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) { for (const item of value) collect(item); return; }
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "target_url" && typeof item === "string") urls.push(item);
+      else collect(item);
+    }
+  };
+  collect(JSON.parse(otioText));
   expect(urls.length).toBeGreaterThan(0);
   const originals = new Set<string>();
   for (const source of ready.assembly.sources) {
-    originals.add(pathToFileURL(await realpath(source.path)).href);
+    originals.add(await realpath(source.path));
   }
   for (const url of urls) {
     expect(originals.has(url)).toBe(true);

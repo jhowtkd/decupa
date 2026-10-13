@@ -277,6 +277,12 @@ export async function exportApproved(project: Project, dir: string): Promise<str
   try {
     const snapshot = structuredClone(project.assembly);
     const aliases: { relativePath: string; sourcePath: string; sha256: string }[] = [];
+    // A mídia religável fica no mesmo diretório do timeline.otio: é lá que
+    // o Resolve procura o basename. Estes nomes já pertencem à entrega.
+    const usedExportNames = new Set([
+      "timeline.otio", "reference.mp4", "manifest.json", "handoff.json",
+      "handoff.md", "importar-no-resolve.txt", "verificacao.json",
+    ]);
     for (const [index, source] of snapshot.sources.entries()) {
       const resolved = await realpath(source.path);
       if (!isAbsolute(resolved)) {
@@ -289,7 +295,13 @@ export async function exportApproved(project: Project, dir: string): Promise<str
           || source.name === "." || source.name === "..") {
           throw new Error(`nome original inválido na fonte ${source.id}`);
         }
-        const relativePath = join("media", String(index), source.name);
+        let relativePath = source.name;
+        let suffix = 1;
+        // macOS/Windows tratam Take.mp4 e take.mp4 como o mesmo arquivo.
+        while (usedExportNames.has(relativePath.toLowerCase())) {
+          relativePath = `${index}-${suffix++}-${source.name}`;
+        }
+        usedExportNames.add(relativePath.toLowerCase());
         aliases.push({ relativePath, sourcePath: resolved, sha256: source.sha256 });
         source.path = join(dest, relativePath);
       }

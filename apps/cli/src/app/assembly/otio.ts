@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import { sourceMediaStartSeconds } from "./timecode.ts";
 import type { Assembly, Clip, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
@@ -67,7 +66,9 @@ function externalReference(source: Source, assembly: Assembly, fps: number) {
   return {
     OTIO_SCHEMA: "ExternalReference.1",
     name: source.name,
-    target_url: pathToFileURL(source.path).href,
+    // O importador do Resolve não decodifica URL file:// percentual ao
+    // religar a mídia; ele espera o caminho absoluto literal no disco.
+    target_url: source.path,
     // Mesma rate do source_range do clipe: rates mistos no mesmo arquivo
     // (timeline vs fonte) deslocam in-point em importadores C++.
     available_range: range(mediaStart, mediaAvailableDuration(source, fps), fps),

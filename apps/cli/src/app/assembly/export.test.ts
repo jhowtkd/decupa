@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
@@ -152,9 +151,11 @@ it("exporta a mídia importada com nome original e timecode real", async () => {
   const { readFile, unlink } = await import("node:fs/promises");
   const doc = JSON.parse(await readFile(join(dest, "timeline.otio"), "utf8"));
   const clip = doc.tracks.children[0].children[0];
-  const alias = join(dest, "media", "0", source.name);
+  // A mídia religável mora ao lado do timeline.otio (não em media/<n>):
+  // é nesse diretório que o Resolve procura o basename ao importar.
+  const alias = join(dest, source.name);
   expect(clip.media_reference.name).toBe(source.name);
-  expect(fileURLToPath(clip.media_reference.target_url)).toBe(alias);
+  expect(clip.media_reference.target_url).toBe(alias);
   expect(clip.media_reference.available_range.start_time.value).toBe(90000);
   expect(clip.source_range.start_time.value).toBe(90013);
   expect(await hashFile(alias)).toBe(source.sha256);
@@ -163,6 +164,32 @@ it("exporta a mídia importada com nome original e timecode real", async () => {
   await unlink(alias);
   await expect(exportApproved(project, dir)).resolves.toBe(dest);
   expect(await hashFile(alias)).toBe(source.sha256);
+});
+
+it("desambigua duas mídias homônimas no diretório do OTIO", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 13);
+  project.assembly.sources[0]!.name = "take.mp4";
+  project.assembly.sources[1]!.name = "TAKE.mp4";
+  project.previewArtifact!.assemblySha256 = createHash("sha256")
+    .update(JSON.stringify(project.assembly)).digest("hex");
+  await createProject(dir, project);
+
+  const dest = await exportApproved(project, dir);
+  const { readFile } = await import("node:fs/promises");
+  const doc = JSON.parse(await readFile(join(dest, "timeline.otio"), "utf8"));
+  const urls = new Set<string>();
+  for (const track of doc.tracks.children) {
+    for (const child of track.children) {
+      if (child.media_reference?.target_url) urls.add(child.media_reference.target_url);
+    }
+  }
+  expect(urls).toEqual(new Set([
+    join(dest, "take.mp4"),
+    join(dest, "1-1-TAKE.mp4"),
+  ]));
+  expect(await hashFile(join(dest, "take.mp4"))).toBe(project.assembly.sources[0]!.sha256);
+  expect(await hashFile(join(dest, "1-1-TAKE.mp4"))).toBe(project.assembly.sources[1]!.sha256);
 });
 
 it("copia exatamente o mp4 assistido sem renderizar", async () => {
