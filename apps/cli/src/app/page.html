@@ -268,7 +268,7 @@ let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = nu
 // para o arquivo nunca trocar no meio de uma leitura por faixa.
 let audioSrc = null;
 
-const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then((r) => r.json());
+const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
 const STEPS = [["queued","Na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
@@ -725,6 +725,13 @@ async function poll() {
     queuePoll(3000);
     return;
   }
+  if (j._status === 428) {
+    el("aviso").textContent = j.error || "Sem chave de IA — o corte local segue funcionando.";
+    const banner = document.getElementById("visual-provider-notice");
+    if (banner?.textContent?.trim()) banner.removeAttribute("hidden");
+    queuePoll(3000);
+    return;
+  }
   if (j.error && !j.stage) {
     renderMessage("Não deu para acompanhar o processamento", j.error);
     el("cancelar").disabled = true;
@@ -829,8 +836,18 @@ el("triar").onclick = async () => {
     const r = await api("/triage", { method: "POST" });
     if (r.error) {
       toast(r.error, true);
+      // Sem-chave (428 estrito): reusa o aviso existente, sem faixa nova (C8); o corte local segue intacto.
+      const semChave = r._status === 428;
+      if (semChave) {
+        btn.title = r.error;
+        const banner = document.getElementById("visual-provider-notice");
+        if (banner?.textContent?.trim()) banner.removeAttribute("hidden");
+        lastTriage = { drop: [{ title: "Sem chave de IA", detail: String(r.error || "") + " — o texto e o corte local continuam funcionando; configure em Configurações para sugerir cortes." }], look: [] };
+        el("triage-stats").textContent = "sem chave — corte local liberado";
+        renderTriage(false);
+        return;
+      }
       if (/chave|API_KEY|não está setada/i.test(r.error)) {
-        btn.hidden = true;
         btn.title = r.error;
       }
       return;

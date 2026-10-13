@@ -138,7 +138,15 @@ async function call(path, opts = {}) {
         state.set("operation", latest.body.operation || null);
       }
     }
-    if (!res.ok) {
+    if (res.status === 428) {
+      // Sem-chave (fluxo sem-chave R3.2): #status informativo, sem tom de erro bloqueante;
+      // reusa #visual-provider-notice existente, sem faixa nova (C8). Edição local segue.
+      ui.error = null;
+      ui.errorFromPoll = false;
+      ui.notice = (body.error || "Sem chave de IA") + " — edição local segue funcionando.";
+      const banner = document.getElementById("visual-provider-notice");
+      if (banner?.textContent?.trim()) banner.removeAttribute("hidden");
+    } else if (!res.ok) {
       ui.error = body.error || ("erro " + res.status);
       ui.errorFromPoll = !action;
     } else if (action || ui.errorFromPoll) {
