@@ -138,6 +138,9 @@ export type IngestSpeech = {
   detectSilence?: typeof detectSilence;
 };
 
+/** Teto do stderr retido por chamada (chars ≈ bytes em log ASCII). */
+export const STDERR_TAIL_LIMIT = 2 * 1024 * 1024;
+
 export class SpawnExecutor implements Executor {
   /** Processos vivos, para que `cancel` cumpra o que promete. Sem isto o
    *  cancelamento só trocaria um enum e o WhisperX seguiria até o fim. */
@@ -189,7 +192,14 @@ export class SpawnExecutor implements Executor {
         return tail;
       };
       child.stdout?.on("data", (d) => { stdout += String(d); outRest = feed(String(d), outRest); });
-      child.stderr?.on("data", (d) => { stderr += String(d); errRest = feed(String(d), errRest); });
+      child.stderr?.on("data", (d) => {
+        stderr += String(d);
+        // Teto tail-keep SÓ no stderr: ffmpeg/WhisperX logam minutos aqui, e
+        // o motivo do erro está no fim (padrão render.ts). stdout NÃO tem
+        // teto: ele vira o visual_index.json que o render lê de volta.
+        if (stderr.length > STDERR_TAIL_LIMIT) stderr = "…" + stderr.slice(-STDERR_TAIL_LIMIT);
+        errRest = feed(String(d), errRest);
+      });
       // ENOENT e afins viram code !== 0: o preflight mapeia para a mensagem
       // de PATH, em vez de rejeitar a Promise e cair como erro genérico.
       child.on("error", (err) => {

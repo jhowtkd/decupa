@@ -1,7 +1,10 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // O spread preserva os defaults (node_modules etc.): exclude próprio
+    // SUBSTITUI o da vitest, não soma. work/ guarda snapshots históricos.
+    exclude: [...configDefaults.exclude, "work/**"],
     globalSetup: ["./tests/fixtures/global-setup.ts"],
     setupFiles: ["./tests/no-external-network.ts"],
     testTimeout: 60_000,
