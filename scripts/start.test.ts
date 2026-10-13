@@ -68,13 +68,14 @@ function matarGrupo(child: ChildProcess | null): void {
   try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* já saiu */ } }
 }
 
-async function esperar428(port: number, child: ChildProcess, saida: string[]): Promise<void> {
+async function esperarServidor(port: number, child: ChildProcess, saida: string[]): Promise<void> {
   const limite = Date.now() + 12_000;
   while (Date.now() < limite) {
     if (child.exitCode !== null) break;
     try {
+      // R3.1 sem-chave: sem chave o app abre direto (200), sem barreira 428.
       const res = await fetch(`http://127.0.0.1:${port}/project`, { signal: AbortSignal.timeout(1_000) });
-      if (res.status === 428) return;
+      if (res.status === 200) return;
     } catch { /* ainda subindo */ }
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -175,7 +176,7 @@ async function encerraNoSinal(sinal: "SIGINT" | "SIGHUP" | "SIGTERM"): Promise<v
   child.stdout!.on("data", (d) => saida.push(String(d)));
   child.stderr!.on("data", (d) => saida.push(String(d)));
   try {
-    await esperar428(port, child, saida);
+    await esperarServidor(port, child, saida);
     const saiu = new Promise<number | null>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`não encerrou; saída:\n${saida.join("")}`)), 8_000);
       child.once("exit", (code) => { clearTimeout(timer); resolve(code); });

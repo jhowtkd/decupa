@@ -208,10 +208,12 @@ it.each(["montagem", "limpeza"])("%s exige texto antes das chaves e não persist
       const response = await fetch(base + "/provider/keys"); expect(response.status).toBe(200);
       expect((await response.json() as ReturnType<typeof keyProviderState>).visual).toMatchObject({ provider: "openai", source: "environment", configured: true });
     } else {
-      for (const method of ["GET", "POST"]) {
-        const response = await fetch(base + "/provider/keys", { method, ...(method === "POST" ? { headers: { "content-type": "application/json" }, body: '{"section":"jev","typesafe":false}' } : {}) });
-        expect(response.status).toBe(428); expect(await response.json()).toEqual({ error: "Configure o provedor de texto primeiro" });
-      }
+      // R3.1 sem-chave: a leitura abre (200, sem eco); só a escrita/teste
+      // de chave exige o texto (428).
+      const read = await fetch(base + "/provider/keys");
+      expect(read.status).toBe(200); expect(await read.text()).not.toContain("environment-secret-key-12345");
+      const response = await fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: '{"section":"jev","typesafe":false}' });
+      expect(response.status).toBe(428); expect(await response.json()).toEqual({ error: "Configure o provedor de texto primeiro" });
     }
     expect(await readFile(credentialsPath(user), "utf8").catch(() => null)).toBe(before);
     await app.close();

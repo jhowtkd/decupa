@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { analysisClientOptions, OPENAI_ASSEMBLY_TEXT_EFFORT, OPENAI_ASSEMBLY_TEXT_MODEL, payloadProfile, readCredentials, resolveAssemblyTextProvider, resolveVisualProvider, resolveTypeSafe, type Credentials } from "@decupa/triage";
+import { analysisClientOptions, OPENAI_ASSEMBLY_TEXT_EFFORT, OPENAI_ASSEMBLY_TEXT_MODEL, payloadProfile, readCredentials, resolveAssemblyTextProvider, resolveVisualProvider, resolveTypeSafe, writeCredentials, type Credentials } from "@decupa/triage";
 import { readProviderBody } from "./provider-body.ts";
 import { optionalProviderKey, validateTextProvider } from "./provider-validation.ts";
 import { saveProviderFields } from "./provider-store.ts";
@@ -90,21 +90,55 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
   };
-  let user: Credentials;
+  let user: Credentials | null;
   try { user = validateTextProvider(await (opts.loadUser?.() ?? readCredentials(opts.dir))); }
-  catch {
-    if (path === "/settings" && req.method === "GET") {
-      res.writeHead(307, { location: "/", "cache-control": "no-store" }); res.end();
-    } else json(428, { error: "Configure o provedor de texto primeiro" });
-    return true;
-  }
+  catch { user = null; }
   const state = async () => {
-    if (req.method === "POST") user = validateTextProvider(await (opts.loadUser?.() ?? readCredentials(opts.dir)));
+    if (req.method === "POST") {
+      try { user = validateTextProvider(await (opts.loadUser?.() ?? readCredentials(opts.dir))); }
+      catch { user = null; }
+    }
     const stored = await opts.loadStored();
     return { ...keyProviderState(opts.env, stored, opts.includeAssemblyTextNotice),
       text: { ...textProviderState(opts.env, stored), saved: textProviderState({}, user) },
       keyTests: { text: { available: false, message: NO_FREE_KEY_TEST }, jev: { available: false, message: NO_FREE_KEY_TEST } } };
   };
+  if (!user) {
+    // R3.1 sem-chave: leitura liberada (tela + estado com configured:false,
+    // sem 428 e sem crash). Escrita e teste de chave continuam exigindo o
+    // texto — exceto o first-save do próprio texto em POST /settings, que
+    // quebra a circularidade (saveProviderFields exige credencial prévia).
+    if (req.method === "GET" && (path === "/settings" || path === "/settings/state" || path === "/provider/keys")) {
+      if (path === "/settings") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" });
+        res.end(await readFile(new URL("./settings.html", import.meta.url), "utf8"));
+      } else json(200, await state());
+      return true;
+    }
+    if (req.method === "POST" && path === "/settings") {
+      let firstBody: Record<string, unknown>;
+      try {
+        const parsed = await readProviderBody(req);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Configuração inválida.");
+        firstBody = parsed as Record<string, unknown>;
+      } catch { json(400, { error: "Não foi possível salvar. Confira os campos e as permissões locais." }); return true; }
+      if (firstBody.section !== "text") { json(428, { error: "Configure o provedor de texto primeiro" }); return true; }
+      const incomingKey = typeof firstBody.apiKey === "string" ? firstBody.apiKey.trim() : "";
+      // Sem credencial prévia não há chave antiga para reaproveitar: o
+      // first-save sempre exige a chave nova (placeholder nunca é gravado).
+      if (!incomingKey) { json(400, { error: "Informe a chave do novo provedor" }); return true; }
+      try {
+        const fields = textProviderFields(firstBody, { preset: "zai", apiKey: "primeira-configuracao-pendente" } as Credentials);
+        await writeCredentials(opts.dir, fields);
+        opts.invalidateStored(opts.dir);
+        user = validateTextProvider(await (opts.loadUser?.() ?? readCredentials(opts.dir)));
+        json(200, await state());
+      } catch (error) { json(400, { error: error instanceof SettingsInputError ? error.message : "Não foi possível salvar. Confira os campos e as permissões locais." }); }
+      return true;
+    }
+    json(428, { error: "Configure o provedor de texto primeiro" });
+    return true;
+  }
   // As rotas novas são exclusivas da tela; a API antiga conserva os clientes locais.
   if (path.startsWith("/settings") && req.method !== "GET" && !req.headers.origin) {
     json(403, { error: "origem não permitida" }); return true;

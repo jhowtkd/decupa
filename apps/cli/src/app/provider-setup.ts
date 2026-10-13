@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readCredentials, writeCredentials, type Credentials } from "@decupa/triage";
 import { validateJevProvider, validateVisualProvider } from "./provider-visual.ts";
@@ -19,7 +18,10 @@ export function validateProvider(value: unknown): Credentials {
   return creds;
 }
 
-/** Barreira da primeira abertura. Nunca devolve a chave nem chama o provedor. */
+/** Primeira configuração (POST /provider). Nunca devolve a chave nem chama o provedor.
+ *  R3.1 sem-chave: a barreira cega que devolvia 428 para todo o resto saiu —
+ *  sem chave o app abre e o uso local segue; o 428 agora é por rota de IA
+ *  (triagem/modelo) e a leitura de /settings não exige mais chave. */
 export async function providerSetup(req: IncomingMessage, res: ServerResponse, dir: string,
   read: typeof readCredentials = readCredentials): Promise<boolean> {
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -27,24 +29,17 @@ export async function providerSetup(req: IncomingMessage, res: ServerResponse, d
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
   };
+  if (path !== "/provider" || req.method !== "POST") return false;
+  // Primeira configuração apenas: não sobrescreve uma chave existente.
   let configured = false;
   try { validateTextProvider(await read(dir)); configured = true; } catch { /* Primeira abertura ou configuração incompleta. */ }
-  if (path === "/provider" && req.method === "POST") {
-    // Primeira configuração apenas: não sobrescreve uma chave existente.
-    if (configured) { json(409, { error: "Provedor já configurado neste computador." }); return true; }
-    try {
-      const creds = validateProvider(await readProviderBody(req));
-      await writeCredentials(dir, creds);
-      json(200, { configured: true });
-    } catch {
-      json(400, { error: "Não foi possível salvar. Confira provedor, chave, modelo, endpoint HTTPS e permissões locais." });
-    }
-    return true;
+  if (configured) { json(409, { error: "Provedor já configurado neste computador." }); return true; }
+  try {
+    const creds = validateProvider(await readProviderBody(req));
+    await writeCredentials(dir, creds);
+    json(200, { configured: true });
+  } catch {
+    json(400, { error: "Não foi possível salvar. Confira provedor, chave, modelo, endpoint HTTPS e permissões locais." });
   }
-  if (configured) return false;
-  if (path === "/" && req.method === "GET") {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" });
-    res.end(await readFile(new URL("./provider-setup.html", import.meta.url), "utf8"));
-  } else json(428, { error: "Configure o provedor de IA na primeira abertura do Decupa." });
   return true;
 }

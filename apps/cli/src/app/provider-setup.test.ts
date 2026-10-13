@@ -41,8 +41,10 @@ it("primeira abertura (POST /provider) ignora assemblyTextProvider mesmo enviado
   const dir = await mkdtemp(join(tmpdir(), "first-no-assembly-text-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const app = await startApp({ projectDir: join(dir, "project"), providerConfigDir: dir, env: {}, port: 0 }); cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
+  // R3.1 sem-chave: a primeira abertura serve o app (sem barreira 428 nem
+  // formulário de setup na raiz); a chave entra depois, na triagem ou em /settings.
   const html = await (await fetch(base)).text();
-  expect(html).not.toContain("Texto da Montagem"); expect(html).not.toContain("GPT-6.1 Sol");
+  expect(html).toContain("visual-provider-notice"); expect(html).not.toContain("Configure a IA do Decupa");
   const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text-secret", openaiApiKey: "luna-fake-key-123456789", visualProvider: "openai", assemblyTextProvider: "openai" }) });
   expect(saved.status).toBe(200);
   expect(await readCredentials(dir)).not.toHaveProperty("assemblyTextProvider");
@@ -63,8 +65,10 @@ it.each([
 ] as const)("primeira abertura aceita as duas seções opcionais %j", async (fields, provider, notice, configured) => {
   const dir = await mkdtemp(join(tmpdir(), "first-keys-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const app = await startApp({ projectDir: join(dir, "project"), providerConfigDir: dir, env: {}, port: 0 }); cleanup.push(() => app.close());
+  // R3.1 sem-chave: sem chave o app abre (faixa de aviso, sem 428); o
+  // first-save continua no POST /provider, com as duas seções opcionais.
   const base = `http://127.0.0.1:${app.port}`, html = await (await fetch(base)).text();
-  expect(html).toContain("Análise de imagem"); expect(html).toContain("Chave da TypeSafe"); expect(html).toContain("Não usar o Jev");
+  expect(html).toContain("visual-provider-notice"); expect(html).not.toContain("Configure a IA do Decupa");
   const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text-secret", ...fields }) });
   expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("secret");
   const state = await (await fetch(base + "/provider/keys")).json() as ReturnType<typeof keyProviderState>;
@@ -80,8 +84,12 @@ it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reu
   const app = await startApp({ ...options, port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
-  expect(await (await fetch(base)).text()).toContain("Configure a IA do Decupa");
-  expect((await fetch(base + "/project")).status).toBe(428);
+  // R3.1 sem-chave: o app abre sem chave (uso local liberado); a forma de
+  // configurar continua igual (POST /provider) e vale para o próximo projeto.
+  const root = await (await fetch(base)).text();
+  expect(root).toContain("visual-provider-notice"); expect(root).not.toContain("Configure a IA do Decupa");
+  if (mode === "montagem") expect((await fetch(base + "/project")).status).toBe(200);
+  else expect((await fetch(base + `/jobs/${app.jobId}`)).status).toBe(200);
   const post = (body: unknown, origin = base) => fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
   expect((await post({ preset: "gemini", apiKey: "" })).status).toBe(400);
   expect((await post({ preset: "gemini", apiKey: "test-secret" }, "https://evil.example")).status).toBe(403);
@@ -118,7 +126,9 @@ it("onboarding com Z.ai lista a opção e conclui a configuração", async () =>
   const app = await startApp({ projectDir: join(dir, "project"), port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
-  expect(await (await fetch(base)).text()).toContain('<option value="zai">Z.ai</option>');
+  // R3.1 sem-chave: a raiz serve o app, não mais o formulário de setup.
+  const root = await (await fetch(base)).text();
+  expect(root).toContain("visual-provider-notice"); expect(root).not.toContain("Configure a IA do Decupa");
   const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "zai", apiKey: "test-zai-secret" }) });
   expect(saved.status).toBe(200);
   expect(await saved.text()).not.toContain("test-zai-secret");

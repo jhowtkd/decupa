@@ -4,7 +4,7 @@ import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { collectSink, createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
-import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider } from "@decupa/triage";
+import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, analysisClientOptions, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
@@ -531,6 +531,14 @@ async function startCleanupApp(opts: {
         }
 
         if (parts[2] === "triage" && req.method === "POST") {
+          // R3.1 sem-chave: o uso local abre sem chave; só a triagem (IA)
+          // exige o provedor de texto — 428 explícito em vez de 500.
+          // O gate só existe com providerConfigDir (produção), como a
+          // antiga barreira; sem ele (maioria dos testes) nada muda.
+          if (opts.providerConfigDir) {
+            try { analysisClientOptions({ env: visualEnv, stored: await loadStored() }); }
+            catch { sendJson(res, { error: "Configure o provedor de texto primeiro" }, 428); return; }
+          }
           // O proxy de triagem sai da fonte: vídeo trocado com o app aberto
           // misturaria a transcrição antiga com a imagem nova.
           const mismatch = await sourceMismatch(workDir, input);
@@ -778,6 +786,16 @@ async function startAssemblyApp(opts: {
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
   const stored = await loadStored();
+  // R3.1 sem-chave: o 428 das rotas de IA da Montar (prepare/adjust/propose/
+  // speech-proposal/template-proposal) usa o mesmo resolved do transporte —
+  // sem chave configurada, 428 explícito em vez de 500 via lazy-retry.
+  const isTextConfigured = async (): Promise<boolean> => {
+    try {
+      const current = await loadStored();
+      assemblyTextClientOptions({ stored: current, env: visualEnv, selection: resolveAssemblyTextProvider(visualEnv, current) });
+      return true;
+    } catch { return false; }
+  };
   const transports = resolveAppTransports({ ...opts, stored, loadStored });
   const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
     describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir),
@@ -812,6 +830,10 @@ async function startAssemblyApp(opts: {
     selectFn: opts.selectFn,
     allowPaidModel,
     allowPaidVisual,
+    // O gate 428 só existe com providerConfigDir (produção), como a antiga
+    // barreira; sem ele (testes diretos do runtime) o dep fica ausente e o
+    // gate abre — mesma convenção do providerSetup.
+    ...(opts.providerConfigDir ? { isTextConfigured } : {}),
     proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
     describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
     resolveOperationDeps,

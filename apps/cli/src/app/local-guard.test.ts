@@ -87,9 +87,9 @@ it("a montagem e /templates mandam os headers anti-iframe", async () => {
   frameHeaders(templates.headers);
 });
 
-it("o formulário do provedor também recusa Host atacante e nega iframe", async () => {
-  // Dir vazio: sem credencial a primeira abertura é o HTML de configuração.
-  // env {} impede a chave da empresa de pular o formulário.
+it("a primeira abertura sem chave também recusa Host atacante e nega iframe", async () => {
+  // Dir vazio: sem credencial o app abre direto (R3.1 sem-chave, sem 428).
+  // env {} impede a chave da empresa de pular a abertura.
   const home = await mkdtemp(join(tmpdir(), "guard-home-"));
   stops.push(() => rm(home, { recursive: true, force: true }));
   const app = await montagem(home);
@@ -98,7 +98,8 @@ it("o formulário do provedor também recusa Host atacante e nega iframe", async
   expect(blocked.body).toMatch(/host não permitido/);
   const page = await raw(app.port, "/", `127.0.0.1:${app.port}`);
   expect(page.status).toBe(200);
-  expect(page.body).toContain("Configure a IA do Decupa");
+  expect(page.body).toContain("visual-provider-notice");
+  expect(page.body).not.toContain("Configure a IA do Decupa");
   frameHeaders(page.headers);
 });
 

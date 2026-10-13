@@ -84,6 +84,12 @@ export type AssemblyDeps = FillerObserveDeps & {
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
+  /**
+   * R3.1 sem-chave: diz se o provedor de texto está configurado (mesmo
+   * resolved do transporte). Ausente (testes diretos do runtime) = gate
+   * aberto; a produção (server.ts) sempre fornece.
+   */
+  isTextConfigured?: () => Promise<boolean>;
 };
 
 /**
@@ -441,6 +447,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     try{return JSON.parse(await readFile(templateProposalPath,"utf8")) as import("./types.ts").Proposal;}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
   }
   const select = deps.selectFn ?? selectLocalFiles;
+
+  // R3.1 sem-chave: 428 estrito e explícito só nas rotas que invocam IA
+  // (prepare/adjust/propose/speech-proposal/template-proposal). Leitura,
+  // edição local, análise de fala, prévia e entrega passam sem chave.
+  async function requireTextConfigured(): Promise<void> {
+    if (deps.isTextConfigured && !(await deps.isTextConfigured())) {
+      throw new HttpError(428, "Configure o provedor de texto primeiro");
+    }
+  }
 
   function snapshot() {
     return { operation };
@@ -1135,6 +1150,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       if ((parts[1] === "prepare" || parts[1] === "adjust") && req.method === "POST") {
         const mode = parts[1] as "prepare" | "adjust";
+        await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const request = String(body.request ?? "");
         const modelOptIn = body.modelOptIn === true;
@@ -1189,6 +1205,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if (parts[1] === "template-proposal" && req.method === "POST") {
+        await requireTextConfigured();
         const expected=requireRevision(body);let project=await loadProject(dir);
         if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
         if(project.preparation?.status==="running")throw new HttpError(409,"Aguarde ou cancele a preparação atual.");
@@ -1239,6 +1256,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             return { ...project, proposal };
           }
           const request = String(body.request ?? "");
+          await requireTextConfigured();
           if (!deps.allowPaidModel || !deps.proposeSend) {
             throw new HttpError(402, PAID_BLOCKED);
           }
@@ -1269,6 +1287,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
+        await requireTextConfigured();
         // Permissão gravada no projeto conta como opt-in — o gate usa o
         // estado carregado, não só a flag do processo.
         if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {

@@ -62,15 +62,21 @@ it("/provider/keys e /provider/visual redirecionam (307) para /settings, inclusi
   expect(json.status).toBe(200); expect(json.headers.get("content-type")).toContain("application/json");
 });
 
-it("sem provedor de texto configurado NESTE COMPUTADOR, GET /settings manda para a primeira abertura mesmo com o projeto configurado", async () => {
+it("sem provedor de texto NESTE COMPUTADOR, a leitura de /settings abre (estado efetivo do projeto) e o teste de chave segue 428", async () => {
   const user = await folder(), project = await folder();
   await writeCredentials(project, { preset: "custom", apiKey: "project-key", model: "muse", baseUrl: "https://meta.example/v1/chat/completions" });
   const { base } = await boot(user, project);
+  // R3.1 sem-chave: sem 307 e sem 428 na leitura — a tela abre e o estado
+  // mostra o efetivo (projeto) + o salvo local (vazio), sem vazar a chave.
   const page = await fetch(base + "/settings", { redirect: "manual" });
-  expect(page.status).toBe(307); expect(page.headers.get("location")).toBe("/");
+  expect(page.status).toBe(200); expect(await page.text()).toContain('id="text"');
   const api = await fetch(base + "/settings/state");
-  expect(api.status).toBe(428); expect(await api.json()).toEqual({ error: "Configure o provedor de texto primeiro" });
-  // A barreira roda antes de qualquer outra checagem da rota, inclusive Origin e o teste de chave.
+  expect(api.status).toBe(200);
+  const state = await api.json() as any;
+  expect(state.text).toMatchObject({ configured: true, preset: "custom", source: "project" });
+  expect(state.text.saved).toMatchObject({ configured: false });
+  expect(JSON.stringify(state)).not.toContain("project-key");
+  // Testar chave invoca IA: continua 428 sem o texto neste computador.
   const test = await fetch(base + "/settings/test", { method: "POST", headers: { "content-type": "application/json", origin: base }, body: '{"section":"jev"}' });
   expect(test.status).toBe(428); expect(await test.json()).toEqual({ error: "Configure o provedor de texto primeiro" });
 });
