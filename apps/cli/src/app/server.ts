@@ -2,7 +2,7 @@ import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
-import { collectSink, createTracer } from "@decupa/trace";
+import { createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
 import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, analysisClientOptions, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
@@ -297,8 +297,9 @@ async function startCleanupApp(opts: {
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir, signal: store.signal(job.id) };
-  const traces = collectSink();
-  const tracer = createTracer(traces);
+  // Sem sink: o traces nunca foi lido (sink morto); o tracer segue ativo
+  // para as etapas do pipeline, sem coletar eventos em memória.
+  const tracer = createTracer();
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
     env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored,

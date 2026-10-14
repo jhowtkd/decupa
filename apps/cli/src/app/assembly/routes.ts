@@ -1249,6 +1249,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         await sendSnapshot(res,{project,templateProposal:null,...snapshot()});return true;
       }
       if (parts[1] === "propose" && req.method === "POST") {
+        // Proposta local (objeto pronto) é edição local e passa sem chave;
+        // só a geração via modelo exige o texto — 428 antes da mutação/409.
+        if (!(body.proposal && typeof body.proposal === "object")) await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const project = await mutate(baseRevision, async (project) => {
           if (body.proposal && typeof body.proposal === "object") {
@@ -1256,7 +1259,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             return { ...project, proposal };
           }
           const request = String(body.request ?? "");
-          await requireTextConfigured();
           if (!deps.allowPaidModel || !deps.proposeSend) {
             throw new HttpError(402, PAID_BLOCKED);
           }
@@ -1276,6 +1278,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       // Ajuste localizado de fala (#64): proposta só cobre a fala
       // escolhida; aceitar/rejeitar usam o arquivo sidecar e a revisão.
       if (parts[1] === "speech-proposal" && req.method === "POST") {
+        await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const sourceId = String(body.sourceId ?? "");
         const speechId = String(body.speechId ?? "");
@@ -1287,7 +1290,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
-        await requireTextConfigured();
         // Permissão gravada no projeto conta como opt-in — o gate usa o
         // estado carregado, não só a flag do processo.
         if (!deps.proposeSend || !(deps.allowPaidModel || loaded.permissions.model || body.modelOptIn === true)) {
