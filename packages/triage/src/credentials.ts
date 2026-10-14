@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import type { Provider, StoredProvider } from "./provider.ts";
+import type { AssemblyTextProvider, Provider, StoredProvider, VisualProvider } from "./provider.ts";
 
 export type Credentials = StoredProvider & {
   apiKey?: string;
@@ -10,6 +10,9 @@ export type Credentials = StoredProvider & {
   typesafeApiKey?: string;
   /** Equivale a DECUPA_TYPESAFE=1 persistido neste usuário. */
   typesafe?: boolean;
+  openaiApiKey?: string;
+  visualProvider?: VisualProvider;
+  assemblyTextProvider?: AssemblyTextProvider;
 };
 
 const FILE = "credentials";
@@ -71,11 +74,15 @@ export async function readCredentials(dir: string): Promise<Credentials | null> 
   if (typeof rec.typesafeApiKey === "string" && rec.typesafeApiKey.length > 0) {
     out.typesafeApiKey = rec.typesafeApiKey;
   }
-  if (rec.typesafe === true) out.typesafe = true;
+  if (typeof rec.typesafe === "boolean") out.typesafe = rec.typesafe;
+  if (typeof rec.openaiApiKey === "string" && rec.openaiApiKey.trim()) out.openaiApiKey = rec.openaiApiKey.trim();
+  if (rec.visualProvider === "openai" || rec.visualProvider === "text") out.visualProvider = rec.visualProvider;
+  if (rec.assemblyTextProvider === "openai" || rec.assemblyTextProvider === "text") out.assemblyTextProvider = rec.assemblyTextProvider;
   return out;
 }
 
-export async function writeCredentials(dir: string, creds: Credentials): Promise<string> {
+export async function writeCredentials(dir: string, creds: Credentials,
+  opts: { removeKeys?: ("openaiApiKey" | "typesafeApiKey")[] } = {}): Promise<string> {
   const path = credentialsPath(dir);
   await mkdir(join(resolve(dir), ".decupa"), { recursive: true });
   const previous = await readCredentials(dir).catch(() => null);
@@ -83,10 +90,16 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
   if (creds.model) body.model = creds.model;
   if (creds.baseUrl) body.baseUrl = creds.baseUrl;
   if (creds.apiKey) body.apiKey = creds.apiKey;
-  const typesafeApiKey = creds.typesafeApiKey ?? previous?.typesafeApiKey;
+  const typesafeApiKey = opts.removeKeys?.includes("typesafeApiKey") ? undefined : creds.typesafeApiKey ?? previous?.typesafeApiKey;
   if (typesafeApiKey) body.typesafeApiKey = typesafeApiKey;
   const typesafe = creds.typesafe ?? previous?.typesafe;
-  if (typesafe) body.typesafe = true;
+  if (typesafe !== undefined) body.typesafe = typesafe;
+  const openaiApiKey = opts.removeKeys?.includes("openaiApiKey") ? undefined : creds.openaiApiKey ?? previous?.openaiApiKey;
+  if (openaiApiKey) body.openaiApiKey = openaiApiKey;
+  const visualProvider = creds.visualProvider ?? previous?.visualProvider;
+  if (visualProvider) body.visualProvider = visualProvider;
+  const assemblyTextProvider = creds.assemblyTextProvider ?? previous?.assemblyTextProvider;
+  if (assemblyTextProvider) body.assemblyTextProvider = assemblyTextProvider;
   if (process.platform === "win32") {
     // Cria somente arquivo vazio; restringe antes de truncar/gravar uma chave.
     const empty = await open(path, "a");
@@ -95,7 +108,7 @@ export async function writeCredentials(dir: string, creds: Credentials): Promise
       await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", RESTRICT_WINDOWS_FILE], {
         env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path },
         windowsHide: true,
-        timeout: 15_000,
+        timeout: 60_000,
       });
     } catch (cause) {
       throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada", { cause });

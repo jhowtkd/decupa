@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { analysisClientOptions, readCredentials, resolveProvider } from "@decupa/triage";
+import { analysisClientOptions, OPENAI_ASSEMBLY_TEXT_EFFORT, OPENAI_ASSEMBLY_TEXT_MODEL, payloadProfileKey, readAnalysisCredentials, readCredentials, resolveAssemblyTextProvider, resolveProvider, resolveTypeSafe, resolveVisualProvider, visualClientOptions } from "@decupa/triage";
 import { DEFAULT_ENGINE, enginePatchError, SPEECH_SCRIPT, SpawnExecutor } from "./app/pipeline.ts";
 import { enginePython } from "./runtime.ts";
 
@@ -25,6 +25,7 @@ export interface DoctorDeps {
   localOnly?: boolean;
   /** Onde fica `.decupa/credentials` do usuário; os testes não leem o real. */
   home?: string;
+  projectDir?: string;
 }
 
 /** Mínimo de vite 8 e oxlint; o mesmo número de `engines` e do setup. */
@@ -131,15 +132,21 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
   // Provedor/IA só entra no relatório completo: `--local` prova a máquina
   // sem exigir credencial (exit 0 quando apenas o provedor falta).
   if (!deps.localOnly) {
-    // A mesma resolução do app: ~/.decupa/credentials (gravado pelo setup ou
-    // pela primeira abertura) vence o ambiente. Credencial ilegível vale como
-    // ausente, como no servidor.
-    const stored = await readCredentials(deps.home ?? homedir()).catch(() => null);
+    // Texto conserva a precedência existente. Visão/Jev usam ambiente,
+    // usuário e projeto, nessa ordem; arquivo ilegível vale como ausente.
+    const home = deps.home ?? homedir(), projectDir = deps.projectDir ?? process.cwd();
+    const stored = await readAnalysisCredentials(projectDir, home);
+    const projectStored = await readCredentials(projectDir).catch(() => null);
+    const origins = { environment: "ambiente", user: "usuário (tela)", project: "projeto", credentials: "credenciais", default: "padrão", fallback: "alternativa sem chave" };
+    const jev = resolveTypeSafe(env, stored);
+    lines.push({ ok: true, name: "Jev", detail: `${jev.enabled ? "configurado" : "desligado"} · origem: ${origins[jev.source]}${jev.notice ? " · " + jev.notice : ""}` });
     try {
       const provider = resolveProvider(undefined, env, stored);
       analysisClientOptions({ stored, env });
-      const where = stored?.preset === provider && stored.apiKey ? "~/.decupa/credentials" : "ambiente";
+      const where = stored?.preset === provider && stored.apiKey ? projectStored ? "credenciais do projeto" : "~/.decupa/credentials" : "ambiente";
       lines.push({ ok: true, name: "chave de análise", detail: `setada (provedor ${provider}, ${where})` });
+      const text = analysisClientOptions({ stored, env });
+      lines.push({ ok: true, name: "provedor de texto", detail: `${provider} · ${text.model} · origem: ${where} · chave presente` });
     } catch (error) {
       lines.push({
         ok: false, name: "chave de análise",
@@ -148,6 +155,30 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorLine[]> {
           + "(ou configure_provider para gravar a credencial em .decupa/) — sem ela a triagem não roda; "
           + "ou monte o keep-list na mão (SKILL)",
       });
+    }
+
+    let visualDetail = "";
+    try {
+      const text = resolveAssemblyTextProvider(env, stored);
+      const detail = text.provider === "openai" ? `openai · ${OPENAI_ASSEMBLY_TEXT_MODEL} · ${OPENAI_ASSEMBLY_TEXT_EFFORT}` : "provedor de texto (padrão)";
+      lines.push({ ok: text.provider !== "openai" || text.configured, name: "texto da Montagem",
+        detail: `${detail} · origem: ${origins[text.source]}${text.notice ? " · " + text.notice : text.provider === "openai" && !text.configured ? " · chave OpenAI ausente" : ""}` });
+    } catch (error) {
+      lines.push({ ok: false, name: "texto da Montagem", detail: error instanceof Error ? error.message : String(error) });
+    }
+    try {
+      const visual = resolveVisualProvider(env, stored);
+      const source = origins[visual.source];
+      visualDetail = `${visual.provider} · origem: ${source}${visual.notice ? " · " + visual.notice : ""}`;
+      const cfg = visualClientOptions({ stored, env, selection: visual });
+      lines.push({ ok: true, name: "provedor de visão", detail:
+        `${visualDetail} · ${cfg.model} · perfil: ${cfg.profile ?? "default"} (${payloadProfileKey(cfg).slice(0, 12)}) · chave presente` });
+      if (projectStored && (projectStored.visualProvider && stored?.visualProviderSource === "user" || projectStored.openaiApiKey && stored?.openaiApiKeySource === "user")) {
+        lines.push({ ok: true, name: "precedência da visão", detail: "a configuração do usuário sobrepõe os campos de visão do projeto" });
+      }
+    } catch (error) {
+      lines.push({ ok: false, name: "provedor de visão", detail: `${visualDetail ? visualDetail + " · " : ""}${error instanceof Error ? error.message : String(error)}`,
+        fix: "configure a chave Luna em /settings#openai ou OPENAI_API_KEY; para escolher o texto, use a tela ou DECUPA_VISUAL_PROVIDER=text" });
     }
 
     // Reportar, não testar: chamada de rede em doctor quebraria a promessa de

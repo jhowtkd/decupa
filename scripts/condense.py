@@ -15,6 +15,7 @@ produção — ver .mcp.json no próprio repo do motor.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -63,6 +64,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     plan_args: dict = {"video_path": args.video, "keep": args.keep}
     if args.drop_fillers:
         plan_args["drop_fillers"] = args.drop_fillers
+    if args.drop_filler_spans is not None:
+        # A presença de [] é uma decisão explícita de preservar todas as palavras.
+        spans = json.loads(Path(args.drop_filler_spans).read_text(encoding="utf-8"))
+        if not isinstance(spans, list):
+            raise ValueError("drop_filler_spans precisa ser uma lista JSON")
+        plan_args["drop_filler_spans"] = spans
     for flag, key in (
         ("max_gap", "max_gap"),
         ("lead_in", "lead_in"),
@@ -115,6 +122,7 @@ def main() -> int:
     p_plan.add_argument("video")
     p_plan.add_argument("--keep", nargs="+", required=True, help='ex: u001-u003 u005-u022')
     p_plan.add_argument("--drop-fillers", choices=["hard", "aggressive"], default=None)
+    p_plan.add_argument("--drop-filler-spans", default=None, help="arquivo JSON de cortes por palavra (inclusive [])")
     # Ritmo. O default do motor (max_gap 0.45, lead_out 0.22) é pensado para
     # fala corrida; corte de Reels é bem mais seco. Ver o preset no SKILL.md.
     p_plan.add_argument("--max-gap", type=float, default=None,

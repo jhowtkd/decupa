@@ -3,11 +3,14 @@
 Contrato de saída (stdout, JSON):
   {"language": "pt", "words": [
      {"text": "eu", "startMs": 120, "endMs": 260,
-      "confidence": 0.91, "sentenceIndex": 0}, ...],
+      "confidence": 0.91, "sentenceIndex": 0},
+     {"text": "hã", "startMs": 270, "endMs": 310,
+      "confidence": null, "sentenceIndex": 0}, ...],
    "unaligned": ["palavra sem tempo", ...]}
 
 Com --text-file, pula a ASR e alinha o texto dado no áudio recortado.
 Palavras sem tempo nunca ganham tempo inventado: vão para `unaligned`.
+Palavras com tempo estimado pelo alinhador mantêm o texto com `confidence: null`.
 """
 
 from __future__ import annotations
@@ -104,7 +107,8 @@ def main() -> int:
                     "text": word["word"].strip(),
                     "startMs": int(round(word["start"] * 1000)),
                     "endMs": int(round(word["end"] * 1000)),
-                    "confidence": float(word.get("score", 0.0)),
+                    # A interpolação mantém o texto, mas não prova alinhamento.
+                    "confidence": float(word["score"]) if word.get("score") is not None else None,
                     "sentenceIndex": sentence_index,
                 }
             )

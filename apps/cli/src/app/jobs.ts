@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Review } from "./review.ts";
+import type { FillerNote } from "@decupa/triage";
 
 export type Stage =
   | "queued" | "transcribing" | "indexing" | "visual" | "planning"
@@ -17,13 +18,15 @@ export interface Job {
   progress?: string;
   keepList?: string;
   review?: Review;
+  fillerNotes?: FillerNote[];
+  fillerNotesPending?: boolean;
+  fillerWarning?: string;
 }
 
 /**
  * Um job por vez, em memória, sem banco. É app local de um usuário só;
- * persistência e fila seriam complexidade sem cliente. Reiniciar perde o job
- * em andamento, o que é aceitável porque a transcrição fica em cache no
- * diretório de trabalho e re-rodar sai barato.
+ * a fila da Limpeza persiste a seleção no workDir separadamente. Reiniciar
+ * perde o job em andamento, mas reaproveita transcrição e decisões salvas.
  */
 export class JobStore {
   private readonly jobs = new Map<string, Job>();
@@ -70,6 +73,18 @@ export class JobStore {
 
   setKeepList(id: string, keepList: string): void {
     this.mutate(id, { keepList });
+  }
+
+  setFillerNotes(id: string, fillerNotes: FillerNote[]): void {
+    this.mutate(id, { fillerNotes });
+  }
+
+  setFillerNotesPending(id: string, fillerNotesPending: boolean): void {
+    this.mutate(id, { fillerNotesPending });
+  }
+
+  setFillerWarning(id: string, fillerWarning: string): void {
+    this.mutate(id, { fillerWarning });
   }
 
   setWarning(id: string, warning: string): void {

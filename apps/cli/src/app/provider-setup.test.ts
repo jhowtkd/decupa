@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { readCredentials } from "@decupa/triage";
 import { startApp } from "./server.ts";
 import { validateProvider } from "./provider-setup.ts";
+import { keyProviderState } from "./provider-visual.ts";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -17,6 +18,65 @@ it("valida configuração sem chamar o provedor", () => {
   expect(validateProvider({ preset: "zai", apiKey: "x" })).toEqual({ preset: "zai", apiKey: "x" });
 });
 
+it("primeira abertura vazia não salva consentimento nem ativa uma chave que apareça depois", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "first-without-consent-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const options = { projectDir: join(dir, "project"), providerConfigDir: dir, port: 0 };
+  const app = await startApp({ ...options, env: {} }); cleanup.push(() => app.close());
+  const response = await fetch(`http://127.0.0.1:${app.port}/provider`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text", typesafeApiKey: "", typesafe: true }) });
+  expect(response.status).toBe(200); expect(await readCredentials(dir)).not.toHaveProperty("typesafe");
+  await app.close();
+  const next = await startApp({ ...options, env: { TYPESAFE_API_KEY: "new-env-key" } }); cleanup.push(() => next.close());
+  const state = await (await fetch(`http://127.0.0.1:${next.port}/provider/keys`)).json() as ReturnType<typeof keyProviderState>;
+  expect(state.jev).toMatchObject({ configured: true, enabled: false, notice: "Decisões automáticas desligadas: ative o Jev →" });
+  expect(await readCredentials(dir)).not.toHaveProperty("typesafe");
+});
+
+it("validateProvider ignora assemblyTextProvider: primeira configuração não tem como ativar o Sol", () => {
+  const withAssemblyText = { preset: "gemini", apiKey: "text", openaiApiKey: "luna-fake-key-123456789", visualProvider: "openai", assemblyTextProvider: "openai" };
+  expect(validateProvider(withAssemblyText)).not.toHaveProperty("assemblyTextProvider");
+  expect(validateProvider({ preset: "gemini", apiKey: "text", assemblyTextProvider: "openai" })).toEqual({ preset: "gemini", apiKey: "text" });
+});
+
+it("primeira abertura (POST /provider) ignora assemblyTextProvider mesmo enviado pela tela antiga/manual: fica no padrão sem a opção", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "first-no-assembly-text-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await startApp({ projectDir: join(dir, "project"), providerConfigDir: dir, env: {}, port: 0 }); cleanup.push(() => app.close());
+  const base = `http://127.0.0.1:${app.port}`;
+  // R3.1 sem-chave: a primeira abertura serve o app (sem barreira 428 nem
+  // formulário de setup na raiz); a chave entra depois, na triagem ou em /settings.
+  const html = await (await fetch(base)).text();
+  expect(html).toContain("visual-provider-notice"); expect(html).not.toContain("Configure a IA do Decupa");
+  const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text-secret", openaiApiKey: "luna-fake-key-123456789", visualProvider: "openai", assemblyTextProvider: "openai" }) });
+  expect(saved.status).toBe(200);
+  expect(await readCredentials(dir)).not.toHaveProperty("assemblyTextProvider");
+  const state = await (await fetch(base + "/provider/keys")).json() as any;
+  expect(state.assemblyText).toMatchObject({ provider: "text", source: "default", notice: null });
+});
+
+it("primeira configuração apara só as pontas das chaves opcionais", () => {
+  const fields = { preset: "zai", apiKey: "text", openaiApiKey: " \nluna-fake-key-123456789\r\n", typesafeApiKey: "\njev-fake-key-1234567890 " };
+  expect(validateProvider(fields)).toMatchObject({ openaiApiKey: "luna-fake-key-123456789", typesafeApiKey: "jev-fake-key-1234567890", typesafe: true });
+  for (const field of ["openaiApiKey", "typesafeApiKey"]) expect(() => validateProvider({ ...fields, [field]: "fake-key-12345\n678901234" })).toThrow();
+});
+
+it.each([
+  [{ openaiApiKey: "luna-fake-key-123456789", typesafeApiKey: "jev-fake-key-1234567890", typesafe: true, visualProvider: "openai" }, "openai", null, true],
+  [{ visualProvider: "openai", typesafe: true }, "text", "Chaves de IA pendentes: Luna, Jev →", false],
+  [{ visualProvider: "text", typesafe: false }, "text", null, false],
+] as const)("primeira abertura aceita as duas seções opcionais %j", async (fields, provider, notice, configured) => {
+  const dir = await mkdtemp(join(tmpdir(), "first-keys-")); cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await startApp({ projectDir: join(dir, "project"), providerConfigDir: dir, env: {}, port: 0 }); cleanup.push(() => app.close());
+  // R3.1 sem-chave: sem chave o app abre (faixa de aviso, sem 428); o
+  // first-save continua no POST /provider, com as duas seções opcionais.
+  const base = `http://127.0.0.1:${app.port}`, html = await (await fetch(base)).text();
+  expect(html).toContain("visual-provider-notice"); expect(html).not.toContain("Configure a IA do Decupa");
+  const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "gemini", apiKey: "text-secret", ...fields }) });
+  expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("secret");
+  const state = await (await fetch(base + "/provider/keys")).json() as ReturnType<typeof keyProviderState>;
+  expect(state.visual).toMatchObject({ provider, configured }); expect(state.notice).toBe(notice);
+  expect(state.jev.enabled).toBe(configured);
+  expect(await (await fetch(base)).text()).not.toContain("Configure a IA do Decupa");
+});
+
 it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reutiliza em novo projeto", async (mode) => {
   const dir = await mkdtemp(join(tmpdir(), "decupa-onboarding-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -24,8 +84,12 @@ it.each(["montagem", "limpeza"])("%s exige configuração, protege a chave e reu
   const app = await startApp({ ...options, port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
-  expect(await (await fetch(base)).text()).toContain("Configure a IA do Decupa");
-  expect((await fetch(base + "/project")).status).toBe(428);
+  // R3.1 sem-chave: o app abre sem chave (uso local liberado); a forma de
+  // configurar continua igual (POST /provider) e vale para o próximo projeto.
+  const root = await (await fetch(base)).text();
+  expect(root).toContain("visual-provider-notice"); expect(root).not.toContain("Configure a IA do Decupa");
+  if (mode === "montagem") expect((await fetch(base + "/project")).status).toBe(200);
+  else expect((await fetch(base + `/jobs/${app.jobId}`)).status).toBe(200);
   const post = (body: unknown, origin = base) => fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
   expect((await post({ preset: "gemini", apiKey: "" })).status).toBe(400);
   expect((await post({ preset: "gemini", apiKey: "test-secret" }, "https://evil.example")).status).toBe(403);
@@ -62,7 +126,9 @@ it("onboarding com Z.ai lista a opção e conclui a configuração", async () =>
   const app = await startApp({ projectDir: join(dir, "project"), port: 0, providerConfigDir: dir, env: {} });
   cleanup.push(() => app.close());
   const base = `http://127.0.0.1:${app.port}`;
-  expect(await (await fetch(base)).text()).toContain('<option value="zai">Z.ai</option>');
+  // R3.1 sem-chave: a raiz serve o app, não mais o formulário de setup.
+  const root = await (await fetch(base)).text();
+  expect(root).toContain("visual-provider-notice"); expect(root).not.toContain("Configure a IA do Decupa");
   const saved = await fetch(base + "/provider", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ preset: "zai", apiKey: "test-zai-secret" }) });
   expect(saved.status).toBe(200);
   expect(await saved.text()).not.toContain("test-zai-secret");

@@ -22,6 +22,7 @@ import {
   runRender,
   runTriage,
   SpawnExecutor,
+  STDERR_TAIL_LIMIT,
   transcriptTaskId,
   visualProxyArgs,
   type ExecCall,
@@ -525,6 +526,23 @@ describe("SpawnExecutor", () => {
       onLine: (l) => lines.push(l),
     });
     expect(lines).toContain("último pedaço");
+  });
+
+  it("limita o stderr retido ao tail de 2 MiB e não toca no stdout", async () => {
+    expect(STDERR_TAIL_LIMIT).toBe(2 * 1024 * 1024);
+    const exec = new SpawnExecutor();
+    const over = 3 * 1024 * 1024;
+    const result = await exec.run({
+      command: process.execPath,
+      args: ["-e", `process.stderr.write("x".repeat(${over}) + "FIM-ERR");`
+        + ` process.stdout.write("y".repeat(${over}) + "FIM-OUT");`],
+    });
+    expect(result.code).toBe(0);
+    expect(result.stderr.length).toBeLessThanOrEqual(STDERR_TAIL_LIMIT + 1);
+    expect(result.stderr.startsWith("…")).toBe(true);
+    expect(result.stderr.endsWith("FIM-ERR")).toBe(true);
+    expect(result.stdout.length).toBe(over + "FIM-OUT".length);
+    expect(result.stdout.endsWith("FIM-OUT")).toBe(true);
   });
 
   it("abort mata só o subprocesso daquela chamada", async () => {

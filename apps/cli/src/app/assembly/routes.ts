@@ -1,3 +1,7 @@
+import { autoFillerTargets, type FillerSnaps } from "./fillers.ts";
+import { planFillerSnaps } from "./filler-snaps.ts";
+import { assemblyFillerSnapshot, type FillerObserveDeps } from "./filler-observe.ts";
+import { commitFillerChange, parseFillerTargets } from "./filler-routes.ts";
 import { publishAtomic } from "@decupa/cache";
 import { loadRecipe } from "../templates/store.ts";
 import { deliverApproved, readDelivery } from "./delivery.ts";
@@ -34,7 +38,7 @@ import { renderAssembly } from "./render.ts";
 import { buildTemplateReport } from "./template-report.ts";
 import { peaksPath } from "./waveform.ts";
 import {
-  applyEdit, applyHistorySnapshot, applyProposal, approveFinal, recordPreview,
+  applyEdit, applyFillerEdit, applyHistorySnapshot, applyProposalWithFillers, proposalProject, approveFinal, recordPreview,
 } from "./revisions.ts";
 import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
@@ -69,7 +73,7 @@ export type AssemblyOperation = {
   error?: string;
 } | null;
 
-export type AssemblyDeps = {
+export type AssemblyDeps = FillerObserveDeps & {
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -80,6 +84,12 @@ export type AssemblyDeps = {
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
+  /**
+   * R3.1 sem-chave: diz se o provedor de texto está configurado (mesmo
+   * resolved do transporte). Ausente (testes diretos do runtime) = gate
+   * aberto; a produção (server.ts) sempre fornece.
+   */
+  isTextConfigured?: () => Promise<boolean>;
 };
 
 /**
@@ -248,8 +258,9 @@ async function sourceFromFile(path: string, id: string, displayName?: string): P
   };
 }
 
-function nextSourceId(project: Project): string {
-  return `src-${project.assembly.sources.length + 1}`;
+function nextSourceId(): string {
+  // Remoções não podem reutilizar IDs ainda referidos por histórico ou cache.
+  return `src-${randomUUID()}`;
 }
 
 function mediaError(err: unknown): HttpError {
@@ -417,6 +428,7 @@ function addSource(project: Project, source: Source): Project {
 
 export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let operation: AssemblyOperation = null;
+  let fillerSnaps: FillerSnaps = {};
   let opGen = 0;
   let cancelled = false;
   let controller: AbortController | null = null;
@@ -436,8 +448,26 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   }
   const select = deps.selectFn ?? selectLocalFiles;
 
+  // R3.1 sem-chave: 428 estrito e explícito só nas rotas que invocam IA
+  // (prepare/adjust/propose/speech-proposal/template-proposal). Leitura,
+  // edição local, análise de fala, prévia e entrega passam sem chave.
+  async function requireTextConfigured(): Promise<void> {
+    if (deps.isTextConfigured && !(await deps.isTextConfigured())) {
+      throw new HttpError(428, "Configure o provedor de texto primeiro");
+    }
+  }
+
   function snapshot() {
     return { operation };
+  }
+
+  async function sendSnapshot(res: ServerResponse, body: Record<string, unknown>, status?: number, includeStale = false): Promise<void> {
+    if (body.project) {
+      const snapshot = await assemblyFillerSnapshot(dir, body.project as Project, deps, fillerSnaps, includeStale);
+      fillerSnaps = snapshot.snaps;
+      body = { ...body, fillerReport: snapshot.report };
+    }
+    sendJson(res, body, status);
   }
 
   function abortOperations(): void {
@@ -486,13 +516,69 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     let changed = false;
     for (const input of inputs) {
       const before = project.assembly.sources.length;
-      project = addSource(project, await sourceFromFile(input, nextSourceId(project)));
+      project = addSource(project, await sourceFromFile(input, nextSourceId()));
       if (project.assembly.sources.length > before) changed = true;
     }
     if (changed) {
       project = withCanvasPolicy(project);
       await saveProject(dir, expected, project);
     }
+    return loadProject(dir);
+  }
+
+  // Classificar como fala antecipa somente a transcrição local. A montagem
+  // completa a cobertura por imagens pelo percurso de preparação existente.
+  async function analyzeSources(project: Project, sourceIds: string[], wantVisual: boolean): Promise<Project> {
+    const visualClient = wantVisual ? (await deps.resolveOperationDeps?.())?.describeClient ?? deps.describeClient : deps.describeClient;
+    const { gen, signal } = begin("analyzing");
+    let done = 0;
+    for (const sourceId of sourceIds) {
+      if (!stillCurrent(gen)) break;
+      const source = project.assembly.sources.find((item) => item.id === sourceId);
+      if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
+      operation = {
+        stage: "analyzing",
+        sourceId,
+        progress: `${done + 1}/${sourceIds.length}`,
+      };
+      try {
+        const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
+        if (wantVisual && source.role !== "speech" && visualClient && source.hasVideo && !signal.aborted) {
+          try {
+            analysis.visual = await describeSource(source, dir, signal, {
+              client: visualClient,
+              exec: deps.exec,
+            });
+            analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
+          } catch (err) {
+            analysis.status = "partial";
+            analysis.error = err instanceof Error ? err.message : String(err);
+          }
+        }
+        try {
+          await saveProject(dir, project.revision, (current) => {
+            if (current.revision !== project.revision) {
+              throw new HttpError(
+                409,
+                `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
+              );
+            }
+            return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
+          });
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+          throw err;
+        }
+        done += 1;
+      } catch (err) {
+        if (isCancelledError(err) || signal.aborted) break;
+        throw err;
+      }
+      if (!stillCurrent(gen)) break;
+    }
+    if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
     return loadProject(dir);
   }
 
@@ -549,9 +635,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (!url.pathname.startsWith("/project") && !url.pathname.startsWith("/editor/")) return false;
     const parts = url.pathname.split("/").filter(Boolean);
 
+    const requestController = new AbortController();
+    const abortRequest = () => requestController.abort();
+    // Depois do corpo, IncomingMessage.close é normal; a resposta sinaliza a desconexão.
+    req.once?.("aborted", abortRequest);
+    if (req.aborted) abortRequest();
+    const closeResponse = () => { if (!res.writableEnded) abortRequest(); };
+    res.once?.("close", closeResponse);
+    const requestSignal = () => requestController.signal;
     try {
       if (req.method !== "GET" && !originAllowed(req.headers.origin, deps.port())) {
-        sendJson(res, { error: "origem não permitida" }, 403);
+        await sendSnapshot(res, { error: "origem não permitida" }, 403);
         return true;
       }
 
@@ -625,7 +719,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const listed=brollCandidates(project),index=brollIndex(project,listed);
         const candidates=listed.map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps),index)}));
-        sendJson(res, {
+        await sendSnapshot(res, {
           project, undoRevision,
           templateProposal:await readTemplateProposal(),
           speechProposal: await readSpeechProposal(),
@@ -689,7 +783,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         // Cache corrompido equivale a ausente (best-effort).
         try {
           const raw = await readFile(peaksPath(dir, source.sha256), "utf8");
-          sendJson(res, JSON.parse(raw));
+          await sendSnapshot(res, JSON.parse(raw));
         } catch {
           res.writeHead(204);
           res.end();
@@ -698,7 +792,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if (parts[1] === "resolve-status" && req.method === "GET") {
-        const project=await loadProject(dir); sendJson(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+        const project=await loadProject(dir); await sendSnapshot(res,{delivery:await readDelivery(dir,project.revision)}); return true;
       }
       if (parts[1] === "resolve-drp" && req.method === "GET") {
         const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
@@ -711,10 +805,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const file = kind === "otio" ? "timeline.otio"
           : kind === "mp4" ? "reference.mp4"
           : kind === "instrucoes" ? "importar-no-resolve.txt"
+          : kind === "vtt" ? "legendas.vtt"
+          : kind === "srt" ? "legendas.srt"
           : kind === "verificacao" ? "verificacao.json" : "";
         if (!file) throw new HttpError(404, "saída desconhecida");
         const type = kind === "otio" || kind === "verificacao" ? "application/json"
-          : kind === "instrucoes" ? "text/plain; charset=utf-8" : "video/mp4";
+          : kind === "instrucoes" ? "text/plain; charset=utf-8"
+          : kind === "vtt" ? "text/vtt; charset=utf-8"
+          : kind === "srt" ? "application/x-subrip; charset=utf-8" : "video/mp4";
         const candidates = [join(dir, "exports", revision, file)];
         if (kind === "mp4") candidates.push(join(dir, `rev-${revision}`, "reference.mp4"));
         let served = false;
@@ -738,7 +836,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         livePreviews.clear();
         if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
-        sendJson(res, { ok: true, ...snapshot() });
+        await sendSnapshot(res, { ok: true, ...snapshot() });
         return true;
       }
 
@@ -801,7 +899,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const known = before.assembly.sources.find((item) => item.sha256 === sha256);
         if (known) {
           await cleanup();
-          sendJson(res, { project: await loadProject(dir), source: known, reused: true });
+          await sendSnapshot(res, { project: await loadProject(dir), source: known, reused: true });
           return true;
         }
         const ext = /\.([A-Za-z0-9]{1,5})$/.exec(name)?.[1] ?? "bin";
@@ -815,7 +913,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         let project: Project;
         try {
           project = await mutate(baseRevision, async (loaded) => {
-            const source = await sourceFromFile(stored, nextSourceId(loaded), name);
+            const source = await sourceFromFile(stored, nextSourceId(), name);
             return withCanvasPolicy(addSource(loaded, source));
           });
         } catch (err) {
@@ -827,7 +925,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         // caminho canônico para nunca devolver 200 sem source (V8).
         const canonical = await realpath(stored).catch(() => stored);
         const source = project.assembly.sources.find((item) => item.path === canonical);
-        sendJson(res, { project, source });
+        await sendSnapshot(res, { project, source });
         return true;
       }
 
@@ -837,7 +935,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const baseRevision = requireRevision(body);
         const picked = await pickFiles();
         if ("cancelled" in picked) {
-          sendJson(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
+          await sendSnapshot(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
           return true;
         }
         const sources: Source[] = [];
@@ -846,12 +944,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         await saveProject(dir, baseRevision, (project) => {
           let next = project;
           for (const source of sources) {
-            next = addSource(next, { ...source, id: nextSourceId(next) });
+            next = addSource(next, { ...source, id: nextSourceId() });
           }
           return withCanvasPolicy(next);
         });
         const project = await loadProject(dir);
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -866,7 +964,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           ...project,
           input: { kind, text: body.text as string, targetSeconds },
         }));
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -903,7 +1001,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             canvasManual: true,
           });
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -918,7 +1016,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (role !== "speech" && role !== "support" && role !== "both") {
           throw new HttpError(400, "role inválido");
         }
-        const project = await mutate(baseRevision, (project) => {
+        let project = await mutate(baseRevision, (project) => {
           const nextRole = role as Source["role"];
           const known = new Set(project.assembly.sources.map((source) => source.id));
           for (const id of sourceIds) {
@@ -930,7 +1028,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           );
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
-        sendJson(res, { project, ...snapshot() });
+        if (role === "speech") {
+          const pending = sourceIds.filter((sourceId) => {
+            const analysis = project.analyses.find((item) => item.sourceId === sourceId);
+            return !analysis || analysis.status === "error";
+          });
+          if (pending.length) project = await analyzeSources(project, pending, false);
+        }
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -951,7 +1056,51 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           );
           return bump({ ...project, assembly: { ...project.assembly, sources } });
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if (parts[1] === "source-remove" && req.method === "POST") {
+        const baseRevision = requireRevision(body);
+        const sourceId = String(body.sourceId ?? "");
+        if (!sourceId) throw new HttpError(400, "sourceId ausente");
+        // Escrita funcional sob o lock: o merge de snapshots preservaria as
+        // análises/correções que precisam sair junto da fonte removida.
+        await saveProject(dir, baseRevision, (project) => {
+          if (project.revision !== baseRevision) {
+            throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${project.revision}`);
+          }
+          if (!project.assembly.sources.some((source) => source.id === sourceId)) {
+            throw new HttpError(404, "fonte não cadastrada");
+          }
+          if (isPreparationActive(dir) || operation && ["analyzing", "preparing", "rendering", "proposing"].includes(operation.stage)) {
+            throw new HttpError(409, "aguarde ou cancele o processamento antes de remover o material");
+          }
+          const analysis = project.analyses.find((item) => item.sourceId === sourceId);
+          const speechIds = new Set(analysis?.speech.map((span) => span.id) ?? []);
+          const visualIds = new Set(analysis?.visual.map((span) => span.id) ?? []);
+          const inUse = project.assembly.tracks.some((track) => track.clips.some((clip) => clip.sourceId === sourceId))
+            || project.scenes.some((scene) => scene.takes.some((take) => take.sourceId === sourceId)
+              || scene.speechIds.some((id) => speechIds.has(id))
+              || scene.support.some((item) => visualIds.has(item.visualId))
+              || scene.visualEvidenceIds.some((id) => visualIds.has(id)));
+          if (inUse) throw new HttpError(409, "material em uso: remova suas ocorrências das cenas antes de removê-lo do projeto");
+          return bump({
+            ...project,
+            assembly: {
+              ...project.assembly,
+              sources: project.assembly.sources.filter((source) => source.id !== sourceId),
+              canvasSourceId: project.assembly.canvasSourceId === sourceId ? null : project.assembly.canvasSourceId,
+            },
+            analyses: project.analyses.filter((item) => item.sourceId !== sourceId),
+            corrections: project.corrections.filter((item) => item.sourceId !== sourceId),
+            proposal: null,
+            preparation: null,
+            previewArtifact: null,
+          });
+        });
+        operation = { stage: "idle" };
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 
@@ -961,7 +1110,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const sourceId = String(body.sourceId ?? "");
         const picked = await pickFiles();
         if ("cancelled" in picked) {
-          sendJson(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
+          await sendSnapshot(res, { cancelled: true, project: await loadProject(dir), ...snapshot() });
           return true;
         }
         const chosen = picked.paths[0];
@@ -983,73 +1132,29 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             },
           };
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
       if (parts[1] === "analyze" && req.method === "POST") {
         const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds.map(String) : [];
         if (sourceIds.length === 0) throw new HttpError(400, "sourceIds ausente");
+        const project = await loadProject(dir);
         const wantVisual = body.visual === true;
-        if (wantVisual && (!deps.allowPaidVisual || !deps.describeClient)) {
+        const needsVisual = wantVisual && project.assembly.sources.some((source) =>
+          sourceIds.includes(source.id) && source.role !== "speech" && source.hasVideo,
+        );
+        if (needsVisual && (!deps.allowPaidVisual || !deps.describeClient)) {
           throw new HttpError(402, PAID_BLOCKED);
         }
-        const { gen, signal } = begin("analyzing");
-        const project = await loadProject(dir);
-        let done = 0;
-        for (const sourceId of sourceIds) {
-          if (!stillCurrent(gen)) break;
-          const source = project.assembly.sources.find((item) => item.id === sourceId);
-          if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
-          operation = {
-            stage: "analyzing",
-            sourceId,
-            progress: `${done + 1}/${sourceIds.length}`,
-          };
-          try {
-            const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
-            if (wantVisual && deps.describeClient && source.hasVideo && !signal.aborted) {
-              try {
-                analysis.visual = await describeSource(source, dir, signal, {
-                  client: deps.describeClient,
-                  exec: deps.exec,
-                });
-                analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
-              } catch (err) {
-                analysis.status = "partial";
-                analysis.error = err instanceof Error ? err.message : String(err);
-              }
-            }
-            try {
-              await saveProject(dir, project.revision, (current) => {
-                if (current.revision !== project.revision) {
-                  throw new HttpError(
-                    409,
-                    `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
-                  );
-                }
-                return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
-              });
-            } catch (err) {
-              if (err instanceof HttpError) throw err;
-              const message = err instanceof Error ? err.message : String(err);
-              if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
-              throw err;
-            }
-            done += 1;
-          } catch (err) {
-            if (isCancelledError(err) || signal.aborted) break;
-            throw err;
-          }
-          if (!stillCurrent(gen)) break;
-        }
-        if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
-        sendJson(res, { project: await loadProject(dir), ...snapshot() });
+        const analyzed = await analyzeSources(project, sourceIds, wantVisual);
+        await sendSnapshot(res, { project: analyzed, ...snapshot() });
         return true;
       }
 
       if ((parts[1] === "prepare" || parts[1] === "adjust") && req.method === "POST") {
         const mode = parts[1] as "prepare" | "adjust";
+        await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const request = String(body.request ?? "");
         const modelOptIn = body.modelOptIn === true;
@@ -1079,7 +1184,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { decision: deps.decision, exec: deps.exec, proposeSend: deps.proposeSend, describeClient: deps.describeClient, speech: deps.speech },
+          { ...deps },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(() => {
           releaseHold();
@@ -1099,11 +1204,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             }
           },
         );
-        sendJson(res, { project: await loadProject(dir), ...snapshot() }, 202);
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() }, 202);
         return true;
       }
 
       if (parts[1] === "template-proposal" && req.method === "POST") {
+        await requireTextConfigured();
         const expected=requireRevision(body);let project=await loadProject(dir);
         if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
         if(project.preparation?.status==="running")throw new HttpError(409,"Aguarde ou cancele a preparação atual.");
@@ -1114,19 +1220,21 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if(!project.assembly.sources.some(s=>s.included))throw new HttpError(409,"Importe os materiais do projeto primeiro.");
         const {gen,signal}=begin("proposing");
         try {
+          const operationDeps={...deps,...await deps.resolveOperationDeps?.()};
+          const visualClient=operationDeps.describeClient;
           for(const source of project.assembly.sources.filter(s=>s.included)) {
             if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
             operation={stage:"analyzing",sourceId:source.id};
             if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
             const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
             if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
-            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:deps.describeClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:visualClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
             project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
           }
-          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:deps.proposeSend,decision:deps.decision,template});
+          const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:operationDeps.proposeSend!,decision:operationDeps.decision,template});
           if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
           await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
-          sendJson(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
+          await sendSnapshot(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
         }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}
         return true;
       }
@@ -1134,12 +1242,20 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const expected=requireRevision(body);const proposal=await readTemplateProposal();
         if(!proposal||proposal.id!==body.proposalId||proposal.baseRevision!==expected)throw new HttpError(409,"proposta ausente ou desatualizada");
         let project=await loadProject(dir);if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
-        if(parts[1]==="template-accept")project=await mutate(expected,async p=>{await writeHistorySnapshot(dir,p);return recordUndo(p,applyProposal(p,proposal),"Aplicar template");});
+        if(parts[1]==="template-accept") {
+          const proposed = proposalProject(project, proposal);
+          const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, proposal.changedSceneIds), { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() });
+          fillerSnaps = { ...fillerSnaps, ...snaps };
+          project = await commitFillerChange(dir, expected, p => applyProposalWithFillers(p, proposal, snaps), "Aplicar template");
+        }
         // Preserve a newer candidate if another generation finished concurrently.
         if((await readTemplateProposal())?.id===proposal.id)await unlink(templateProposalPath).catch(()=>{});
-        sendJson(res,{project,templateProposal:null,...snapshot()});return true;
+        await sendSnapshot(res,{project,templateProposal:null,...snapshot()});return true;
       }
       if (parts[1] === "propose" && req.method === "POST") {
+        // Proposta local (objeto pronto) é edição local e passa sem chave;
+        // só a geração via modelo exige o texto — 428 antes da mutação/409.
+        if (!(body.proposal && typeof body.proposal === "object")) await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const project = await mutate(baseRevision, async (project) => {
           if (body.proposal && typeof body.proposal === "object") {
@@ -1151,20 +1267,22 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(402, PAID_BLOCKED);
           }
           const { gen, signal } = begin("proposing");
+          const operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
           const proposal = await proposeScenes(project, request, signal, {
-            send: deps.proposeSend, decision: deps.decision,
+            send: operationDeps.proposeSend!, decision: operationDeps.decision,
           });
           if (!stillCurrent(gen)) return project;
           operation = { stage: "ready" };
           return { ...project, proposal };
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
       // Ajuste localizado de fala (#64): proposta só cobre a fala
       // escolhida; aceitar/rejeitar usam o arquivo sidecar e a revisão.
       if (parts[1] === "speech-proposal" && req.method === "POST") {
+        await requireTextConfigured();
         const baseRevision = requireRevision(body);
         const sourceId = String(body.sourceId ?? "");
         const speechId = String(body.speechId ?? "");
@@ -1189,11 +1307,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         speechProposalInFlight = true;
         const { gen, signal } = begin("proposing");
         try {
+          const operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
           const proposal = await proposeSpeechAdjustment(
-            loaded, { sourceId, speechId }, request, deps.proposeSend, signal,
+            loaded, { sourceId, speechId }, request, operationDeps.proposeSend!, signal,
           );
           if (!stillCurrent(gen)) {
-            sendJson(res, { project: await loadProject(dir), ...snapshot() });
+            await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
             return true;
           }
           // A proposta espera o modelo fora da trava de mutação: se a revisão
@@ -1202,12 +1321,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           const latest = await loadProject(dir);
           if (latest.revision !== proposal.baseRevision) {
             operation = { stage: "ready" };
-            sendJson(res, { project: latest, speechProposal: null, ...snapshot() });
+            await sendSnapshot(res, { project: latest, speechProposal: null, ...snapshot() });
             return true;
           }
           await publishAtomic(speechProposalPath, `${JSON.stringify(proposal)}\n`);
           operation = { stage: "ready" };
-          sendJson(res, {
+          await sendSnapshot(res, {
             project: latest, speechProposal: proposal, ...snapshot(),
           });
         } catch (err) {
@@ -1235,7 +1354,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return recordUndo(loaded, applySpeechProposal(loaded, proposal), "Ajuste de fala");
         });
         await unlink(speechProposalPath).catch(() => {});
-        sendJson(res, { project, speechProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project, speechProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1249,7 +1368,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente");
         }
         await unlink(speechProposalPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), speechProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1272,7 +1391,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(400, err instanceof Error ? err.message : String(err));
         }
         await publishAtomic(supportSwapPath, `${JSON.stringify(proposal)}\n`);
-        sendJson(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), supportSwap: proposal, ...snapshot() });
         return true;
       }
 
@@ -1298,7 +1417,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw err;
         }
         await unlink(supportSwapPath).catch(() => {});
-        sendJson(res, { project, supportSwap: null, ...snapshot() });
+        await sendSnapshot(res, { project, supportSwap: null, ...snapshot() });
         return true;
       }
 
@@ -1310,7 +1429,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente ou desatualizada");
         }
         await unlink(supportSwapPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), supportSwap: null, ...snapshot() });
         return true;
       }
 
@@ -1330,7 +1449,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(400, err instanceof Error ? err.message : String(err));
         }
         await publishAtomic(rhythmProposalPath, `${JSON.stringify(proposal)}\n`);
-        sendJson(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
+        await sendSnapshot(res, { project: loaded, rhythmProposal: proposal, ...snapshot() });
         return true;
       }
 
@@ -1363,7 +1482,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           return recordUndo(loaded, applyRhythmProposal(loaded, proposal), "Ritmo do corte");
         });
         await unlink(rhythmProposalPath).catch(() => {});
-        sendJson(res, { project, rhythmProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project, rhythmProposal: null, ...snapshot() });
         return true;
       }
 
@@ -1376,21 +1495,38 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           throw new HttpError(409, "proposta ausente");
         }
         await unlink(rhythmProposalPath).catch(() => {});
-        sendJson(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), rhythmProposal: null, ...snapshot() });
         return true;
       }
 
       if (parts[1] === "apply" && req.method === "POST") {
         const baseRevision = requireRevision(body);
         const proposalId = String(body.proposalId ?? "");
-        const project = await mutate(baseRevision, async (project) => {
-          if (!project.proposal || project.proposal.id !== proposalId) {
-            throw new HttpError(409, "proposta ausente ou desatualizada");
-          }
-          await writeHistorySnapshot(dir, project);
-          return recordUndo(project, applyProposal(project, project.proposal), "Aplicar proposta");
-        });
-        sendJson(res, { project, ...snapshot() });
+        const before = await loadProject(dir);
+        if (before.revision !== baseRevision || !before.proposal || before.proposal.id !== proposalId) throw new HttpError(409, "proposta ausente ou desatualizada");
+        const proposed = proposalProject(before, before.proposal);
+        const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, before.proposal.changedSceneIds), { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() });
+        fillerSnaps = { ...fillerSnaps, ...snaps };
+        const project = await commitFillerChange(dir, baseRevision, current => {
+          if (!current.proposal || current.proposal.id !== proposalId) throw new HttpError(409, "proposta ausente ou desatualizada");
+          return applyProposalWithFillers(current, current.proposal, snaps);
+        }, "Aplicar proposta");
+        await sendSnapshot(res, { project, ...snapshot() });
+        return true;
+      }
+
+      if ((parts[1] === "fillers-cut" || parts[1] === "fillers-restore") && req.method === "POST") {
+        const revision = requireRevision(body), before = await loadProject(dir);
+        if (before.revision !== revision) throw new HttpError(409, "revisão desatualizada");
+        let targets;
+        try { targets = parseFillerTargets(body.targets, before); }
+        catch (error) { throw new HttpError(400, error instanceof Error ? error.message : String(error)); }
+        const mode = parts[1] === "fillers-cut" ? "cut" : "restore";
+        const snaps = mode === "cut" ? await planFillerSnaps(before, targets, { exec: deps.exec, cache: fillerSnaps, signal: requestSignal() }) : {};
+        fillerSnaps = { ...fillerSnaps, ...snaps };
+        const project = await commitFillerChange(dir, revision, p => applyFillerEdit(p, targets, snaps, mode),
+          mode === "cut" ? "Cortar cacoetes" : "Restaurar cacoetes");
+        await sendSnapshot(res, { project, ...snapshot() }, undefined, true);
         return true;
       }
 
@@ -1433,10 +1569,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (correctionId) {
           // Alinhamento continua em background; o pending permite retomada.
           void alignCorrectionJob(dir, correctionId, project.revision);
-          sendJson(res, { project, ...snapshot() }, 202);
+          await sendSnapshot(res, { project, ...snapshot() }, 202);
           return true;
         }
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1474,7 +1610,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));
         }
-        sendJson(res, { project: await loadProject(dir), ...snapshot() });
+        await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() });
         return true;
       }
 
@@ -1504,7 +1640,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
               sha256: await hashFile(reference),
             });
           });
-          sendJson(res, { project, ...snapshot() });
+          await sendSnapshot(res, { project, ...snapshot() });
         } finally {
           settle();
         }
@@ -1525,7 +1661,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             throw new HttpError(/assistida/.test(message) ? 400 : 409, message);
           }
         });
-        sendJson(res, { project, ...snapshot() });
+        await sendSnapshot(res, { project, ...snapshot() });
         return true;
       }
 
@@ -1534,7 +1670,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
         try {
           const delivery=await deliverApproved(project,dir,deps.exec,new AbortController().signal,{exportDrp:parts[1]==="export-drp",newCopy:body.newCopy===true});
-          sendJson(res,{project:await loadProject(dir),delivery});
+          await sendSnapshot(res,{project:await loadProject(dir),delivery});
         } catch(error) {throw new HttpError(409,error instanceof Error?error.message:String(error));}
         return true;
       }
@@ -1546,7 +1682,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           const dest = await exportApproved(loaded, dir);
-          sendJson(res, {
+          await sendSnapshot(res, {
             project: loaded, path: dest,
             verificacao: await readVerification(dir, loaded.revision),
             ...snapshot(),
@@ -1576,7 +1712,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           }
           return loaded;
         });
-        sendJson(res, {
+        await sendSnapshot(res, {
           project,
           verificacao: await readVerification(dir, project.revision),
           ...snapshot(),
@@ -1586,11 +1722,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
       return false;
     } catch (err) {
+      if (err instanceof Error && err.message === "revisão desatualizada") {
+        await sendSnapshot(res, { error: err.message }, 409); return true;
+      }
       if (err instanceof HttpError) {
-        sendJson(res, { error: err.message }, err.status);
+        await sendSnapshot(res, { error: err.message }, err.status);
         return true;
       }
       throw err;
+    } finally {
+      req.off?.("aborted", abortRequest);
+      res.off?.("close", closeResponse);
     }
   }
 

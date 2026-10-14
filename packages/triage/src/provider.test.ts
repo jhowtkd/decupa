@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRESETS, presetConfig, resolveProvider } from "./provider.ts";
+import { ASSEMBLY_TEXT_FALLBACK_NOTICE, PRESETS, presetConfig, resolveAssemblyTextProvider, resolveProvider } from "./provider.ts";
 
 describe("resolveProvider", () => {
   it("aceita a escolha explícita", () => {
@@ -72,5 +72,43 @@ describe("presetConfig", () => {
     });
     expect(cfg.baseUrl).toBe("https://x.test/v1/chat/completions");
     expect(cfg.model).toBe("foo");
+  });
+});
+
+describe("resolveAssemblyTextProvider", () => {
+  it.each([
+    [{ DECUPA_ASSEMBLY_TEXT_PROVIDER: "openai", OPENAI_API_KEY: "fake" }, null, "openai", "environment", false, true],
+    [{ DECUPA_ASSEMBLY_TEXT_PROVIDER: "openai" }, null, "openai", "environment", false, false],
+    [{ DECUPA_ASSEMBLY_TEXT_PROVIDER: "text" }, null, "text", "environment", false, false],
+    [{ DECUPA_ASSEMBLY_TEXT_PROVIDER: "text" }, { openaiApiKey: "fake" }, "text", "environment", false, true],
+    [{}, { assemblyTextProvider: "openai", openaiApiKey: "fake" }, "openai", "credentials", false, true],
+    [{}, { assemblyTextProvider: "openai", openaiApiKey: "fake", assemblyTextProviderSource: "user" as const }, "openai", "user", false, true],
+    [{}, { assemblyTextProvider: "openai", openaiApiKey: "fake", assemblyTextProviderSource: "project" as const }, "text", "default", false, true],
+    [{}, { assemblyTextProvider: "openai" }, "text", "fallback", true, false],
+    [{ OPENAI_API_KEY: " " }, { assemblyTextProvider: "openai" }, "text", "fallback", true, false],
+    [{}, null, "text", "default", false, false],
+    [{ DECUPA_ASSEMBLY_TEXT_PROVIDER: "" }, { assemblyTextProvider: "openai", openaiApiKey: "fake" }, "openai", "credentials", false, true],
+  ] as const)("resolve a tabela de escolha %j / %j", (env, stored, provider, source, notice, configured) => {
+    expect(resolveAssemblyTextProvider(env, stored)).toEqual({
+      provider, source, configured, notice: notice ? ASSEMBLY_TEXT_FALLBACK_NOTICE : null,
+    });
+  });
+
+  it("valor desconhecido falha na subida, antes de qualquer resolução de chave", () => {
+    expect(() => resolveAssemblyTextProvider({ DECUPA_ASSEMBLY_TEXT_PROVIDER: "typo" })).toThrow(/DECUPA_ASSEMBLY_TEXT_PROVIDER/);
+    expect(() => resolveAssemblyTextProvider({ DECUPA_ASSEMBLY_TEXT_PROVIDER: "typo" })).toThrow(/"openai"|"text"/);
+  });
+
+  it("ambiente vence a escolha salva, mesmo pedindo texto sobre uma escolha openai gravada", () => {
+    const stored = { assemblyTextProvider: "openai" as const, openaiApiKey: "fake" };
+    expect(resolveAssemblyTextProvider({ DECUPA_ASSEMBLY_TEXT_PROVIDER: "text" }, stored)).toMatchObject({ provider: "text", source: "environment" });
+  });
+
+  it("ter a chave do Luna não autoriza o texto na OpenAI sem a escolha explícita", () => {
+    expect(resolveAssemblyTextProvider({ OPENAI_API_KEY: "luna-fake" }, null)).toEqual({ provider: "text", source: "default", configured: true, notice: null });
+  });
+
+  it("DECUPA_ASSEMBLY_TEXT_PROVIDER=openai sem chave não cai para o aviso de fallback: a chamada falha explícita adiante", () => {
+    expect(resolveAssemblyTextProvider({ DECUPA_ASSEMBLY_TEXT_PROVIDER: "openai" }, null)).toEqual({ provider: "openai", source: "environment", configured: false, notice: null });
   });
 });

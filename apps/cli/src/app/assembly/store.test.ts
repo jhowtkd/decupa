@@ -1,3 +1,6 @@
+import { fillerProject, fixedFillerSnaps } from "./filler-test-helper.ts";
+import { fillerReport, withFillerCuts } from "./fillers.ts";
+import { applyHistorySnapshot } from "./revisions.ts";
 import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -319,4 +322,39 @@ it("persiste relatório Jev opcional e rejeita scores inválidos", async () => {
   expect((await loadProject(dir)).proposal?.decisionReport).toEqual(p.proposal.decisionReport);
   p.proposal.decisionReport!.cuts[0]!.score=2;
   expect(()=>validateProject(p)).toThrow(/relatório/);
+});
+
+it("camada bem formada persiste; delta fora do take/removido e proveniência inválida falham", async () => {
+  const p = fillerProject(), target = fillerReport(p).occurrences[0]!;
+  const cut = withFillerCuts(p, [target], fixedFillerSnaps(p), "auto");
+  const dir = await mkdtemp(join(tmpdir(), "filler-store-"));
+  await createProject(dir, cut);
+  expect((await loadProject(dir)).scenes[0]!.takes[0]!.fillers).toEqual(cut.scenes[0]!.takes[0]!.fillers);
+  const bad = structuredClone(cut); bad.scenes[0]!.takes[0]!.fillers!.cuts[0]!.effective = [{ start: 0.4, end: 0.9 }];
+  expect(() => validateProject(bad)).toThrow(/fillers/);
+  const badText = structuredClone(cut); badText.scenes[0]!.takes[0]!.fillers!.cuts[0]!.wordTexts = [];
+  expect(() => validateProject(badText)).toThrow(/fillers/);
+});
+
+it("normalização poda exceção de fonte removida e texto corrigido sem quebrar save/load", async () => {
+  const p = fillerProject(); p.fillerExceptions = [{ wordId: "w2", text: "hã" }, { wordId: "ausente", text: "hã" }];
+  const dir = await mkdtemp(join(tmpdir(), "filler-exceptions-")); await createProject(dir, p);
+  expect((await loadProject(dir)).fillerExceptions).toEqual([{ wordId: "w2", text: "hã" }]);
+  await saveProject(dir, 1, current => ({ ...current, revision: 2, assembly: { ...current.assembly, revision: 2 },
+    corrections: [{ id: "c", sourceId: "a", start: 0.6, end: 0.8, text: "é", status: "aligned", words: [{ ...current.analyses[0]!.words[1]!, text: "é" }] }] }));
+  expect((await loadProject(dir)).fillerExceptions).toEqual([]);
+  await saveProject(dir, 2, current => ({ ...current, revision: 3, fillerExceptions: [{ wordId: "w2", text: "é" }],
+    assembly: { ...current.assembly, revision: 3, sources: [], tracks: [] }, scenes: [], analyses: [], corrections: [] }));
+  expect((await loadProject(dir)).fillerExceptions).toEqual([]);
+});
+
+it("histórico preserva exceções e foto antiga ausente restaura vazio", async () => {
+  const p = fillerProject(); p.fillerExceptions = [{ wordId: "w2", text: "hã" }];
+  const dir = await mkdtemp(join(tmpdir(), "filler-history-")); await createProject(dir, p); await writeHistorySnapshot(dir, p);
+  const snapshot = await readHistorySnapshot(dir, 1);
+  expect(snapshot.fillerExceptions).toEqual(p.fillerExceptions);
+  delete snapshot.fillerExceptions;
+  expect(applyHistorySnapshot(p, snapshot).fillerExceptions).toEqual([]);
+  delete p.fillerExceptions;
+  expect(validateProject(p).fillerExceptions).toBeUndefined();
 });

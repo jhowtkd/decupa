@@ -15,6 +15,7 @@ import { runTriage as runTriageLibrary } from "../triage.ts";
 import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
 import { parseSourceTimecode, sourceMediaStartSeconds } from "./assembly/timecode.ts";
+import type { FillerSpan } from "../condense/fillers.ts";
 
 export interface ExecResult {
   code: number;
@@ -137,6 +138,9 @@ export type IngestSpeech = {
   detectSilence?: typeof detectSilence;
 };
 
+/** Teto do stderr retido por chamada (chars ≈ bytes em log ASCII). */
+export const STDERR_TAIL_LIMIT = 2 * 1024 * 1024;
+
 export class SpawnExecutor implements Executor {
   /** Processos vivos, para que `cancel` cumpra o que promete. Sem isto o
    *  cancelamento só trocaria um enum e o WhisperX seguiria até o fim. */
@@ -188,7 +192,14 @@ export class SpawnExecutor implements Executor {
         return tail;
       };
       child.stdout?.on("data", (d) => { stdout += String(d); outRest = feed(String(d), outRest); });
-      child.stderr?.on("data", (d) => { stderr += String(d); errRest = feed(String(d), errRest); });
+      child.stderr?.on("data", (d) => {
+        stderr += String(d);
+        // Teto tail-keep SÓ no stderr: ffmpeg/WhisperX logam minutos aqui, e
+        // o motivo do erro está no fim (padrão render.ts). stdout NÃO tem
+        // teto: ele vira o visual_index.json que o render lê de volta.
+        if (stderr.length > STDERR_TAIL_LIMIT) stderr = "…" + stderr.slice(-STDERR_TAIL_LIMIT);
+        errRest = feed(String(d), errRest);
+      });
       // ENOENT e afins viram code !== 0: o preflight mapeia para a mensagem
       // de PATH, em vez de rejeitar a Promise e cair como erro genérico.
       child.on("error", (err) => {
@@ -601,6 +612,7 @@ export async function runPlan(
   keepList: string,
   exec: Executor,
   tracer: Tracer = createTracer(),
+  fillers?: { spans: FillerSpan[]; generation: number; supported: boolean; engine?: string },
 ): Promise<void> {
   const invalid = keepListError(keepList);
   if (invalid) throw new Error(invalid);
@@ -608,15 +620,21 @@ export async function runPlan(
   if (ranges.length === 0) {
     throw new Error("keep-list vazio: nada sobraria no corte");
   }
+  const dropArgs = ["--drop-fillers", "hard"];
+  if (fillers?.supported) {
+    const path = join(job.workDir, `fillers-spans-${fillers.generation}.json`);
+    await writeFile(path, `${JSON.stringify(fillers.spans)}\n`, "utf8");
+    dropArgs.splice(0, dropArgs.length, "--drop-filler-spans", path);
+  }
   await tracer.run("planning", async () => {
     await must(exec, {
       command: "python3",
       args: [
         CONDENSE, "plan", job.videoPath,
         "--keep", ...ranges,
-        "--drop-fillers", "hard",
+        ...dropArgs,
       ],
-      env: envFor(job),
+      env: { ...envFor(job), ...(fillers?.engine ? { VE_PLUGIN_ROOT: fillers.engine } : {}) },
       signal: job.signal,
     }, "o plano");
   });
@@ -668,6 +686,7 @@ export async function runTriage(
     projectDir?: string;
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }> = runTriageLibrary,
+  config: Pick<import("../triage.ts").TriageOptions, "env" | "fetchImpl" | "credentialsDir" | "stored"> = {},
 ): Promise<string> {
   // O proxy continua sendo do pipeline: é Executor (testável) e o trabalho
   // de gerar não pode ficar escondido dentro da biblioteca que o teste
@@ -675,6 +694,7 @@ export async function runTriage(
   // proxy próprio (ensureLightVideo, que passa o nosso direto).
   const proxy = await makeTriageProxy(job, exec);
   const result = await triageFn({
+    ...config,
     indexPath: indexPath(job),
     videoPath: proxy,
     outDir: join(job.workDir, "out"),
@@ -684,6 +704,12 @@ export async function runTriage(
     ...(job.signal ? { signal: job.signal } : {}),
   });
   return result.keepList;
+}
+
+/** Só detecção: a migração e a exigência do patch pertencem ao setup do T3b. */
+export async function engineSupportsFillerSpans(engine: string): Promise<boolean> {
+  const source = await readFile(join(engine, "mcp", "ve_tools", "condense.py"), "utf8").catch(() => null);
+  return source !== null && /["']drop_filler_spans["']/.test(source);
 }
 
 const TERMINAL_PUNCT_RE = /_TERMINAL_PUNCT\s*=\s*"([^"]*)"/;

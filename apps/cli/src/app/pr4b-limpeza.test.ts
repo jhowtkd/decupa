@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
+import { reviewGeneration } from "./review-generation.js";
 import { installDom } from "./assembly/editor/fake-dom.test-helper.ts";
 
 afterEach(() => {
@@ -28,7 +29,7 @@ function ligar(source: string, extras: Record<string, unknown> = {}) {
   const api = vi.fn();
   const fetchMock = vi.fn();
   const sandbox = {
-    document,
+    document, generations: reviewGeneration(), renderFillerCard: vi.fn(), changeFillers: vi.fn(), playRanges: vi.fn(),
     el: (id: string) => document.getElementById(id),
     toast, render, renderMessage, renderProcessing, api, fetch: fetchMock,
     setTimeout, clearTimeout,
@@ -36,7 +37,7 @@ function ligar(source: string, extras: Record<string, unknown> = {}) {
     ...extras,
   };
   const vm = runInNewContext(
-    "const jobId = \"j1\"; let timer = null; let review = null; let audioSrc = null;\n" + source + "\n;({ schedule, poll })",
+    "const jobId = \"j1\"; let timer = null, pollTimer = null; let keepTicket = null; let review = null; let kept = new Map(); let audioSrc = null; let fillerNotes = [];\n" + source + "\n;({ schedule, poll })",
     sandbox,
   ) as { schedule: () => void; poll: () => Promise<unknown> };
   return { vm, toast, renderMessage, renderProcessing, api, fetchMock, document };
@@ -103,4 +104,46 @@ it("schedule com resposta que não é JSON mostra toast", async () => {
   } finally {
     process.off("unhandledRejection", onCrash);
   }
+});
+
+it.each([
+  ["sem cliente ou ambíguos pendentes", false, 1, false, 0],
+  ["notas pendentes", true, 1, false, 1],
+  ["nova geração em andamento", false, 2, true, 1],
+  ["geração com falha já encerrada", false, 2, false, 0],
+])("poll ready: %s", async (_label, fillerNotesPending, desiredGeneration, planning, count) => {
+  const { vm, api } = ligar(await recorte());
+  api.mockResolvedValue({ stage: "ready", review: { generation: 1, units: [] }, generation: 1, desiredGeneration, fillerNotesPending, planning });
+  await vm.poll(); expect(vi.getTimerCount()).toBe(count);
+  if (count) {
+    api.mockResolvedValue({ stage: "ready", review: { generation: 2, units: [] }, generation: 2, desiredGeneration: 2, fillerNotesPending: false });
+    await vi.advanceTimersByTimeAsync(1000); expect(vi.getTimerCount()).toBe(0);
+  }
+});
+
+it("nova seleção retoma poll que já tinha parado no ready", async () => {
+  const { vm, api, fetchMock } = ligar(await recorte());
+  const current = { generation: 1, units: [] };
+  api.mockResolvedValue({ stage: "ready", review: current, generation: 1, desiredGeneration: 1, fillerNotesPending: false });
+  await vm.poll(); expect(vi.getTimerCount()).toBe(0);
+  fetchMock.mockResolvedValue({ ok: true, json: async () => ({ review: { ...current, generation: 2 } }) });
+  vm.schedule(); await vi.advanceTimersByTimeAsync(250); expect(vi.getTimerCount()).toBe(1);
+  api.mockResolvedValue({ stage: "ready", review: { ...current, generation: 2 }, generation: 2, desiredGeneration: 2, fillerNotesPending: false });
+  await vi.advanceTimersByTimeAsync(750); expect(vi.getTimerCount()).toBe(0);
+});
+
+it("seleção depois de geração com falha retoma poll até a execução terminar", async () => {
+  const { vm, api, fetchMock } = ligar(await recorte()), current = { generation: 1, units: [] };
+  api.mockResolvedValue({ stage: "ready", review: current, generation: 1, desiredGeneration: 2, planning: false,
+    warning: "a última mudança não foi aplicada", fillerNotesPending: false });
+  await vm.poll(); expect(vi.getTimerCount()).toBe(0);
+  let release!: (value: unknown) => void;
+  fetchMock.mockReturnValue(new Promise(resolve => { release = resolve; }));
+  vm.schedule(); await vi.advanceTimersByTimeAsync(250);
+  api.mockResolvedValue({ stage: "ready", review: current, generation: 1, desiredGeneration: 3, planning: true, fillerNotesPending: false });
+  await vi.advanceTimersByTimeAsync(750); expect(vi.getTimerCount()).toBe(1);
+  release({ ok: true, json: async () => ({ review: { ...current, generation: 3 } }) });
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  api.mockResolvedValue({ stage: "ready", review: { ...current, generation: 3 }, generation: 3, desiredGeneration: 3, planning: false, fillerNotesPending: false });
+  await vi.advanceTimersByTimeAsync(1000); expect(vi.getTimerCount()).toBe(0);
 });

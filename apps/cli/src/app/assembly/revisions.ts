@@ -1,7 +1,8 @@
 import type { EditAction, Project, Proposal } from "./types.ts";
 import type { EditorialSnapshot } from "./store.ts";
 import { compileScenes, validateResolvedProposal } from "./scenes.ts";
-import { applyTextEdit } from "./words.ts";
+import { autoFillerTargets, withFillerCuts, withoutFillerCuts, type FillerSnaps, type FillerTarget } from "./fillers.ts";
+import { applyTextEdit, invalidatePreview } from "./words.ts";
 
 /**
  * Edição aprovada como transição de revisão: aplica a ação por palavra e
@@ -15,7 +16,7 @@ export function applyEdit(p: Project, action: EditAction): Project {
   return { ...next, assembly: { ...compileScenes(next, next.scenes), revision: next.revision } };
 }
 
-export function applyProposal(p: Project, proposal: Proposal): Project {
+export function validateProposalScope(p: Project, proposal: Proposal): Proposal {
   if (proposal.baseRevision !== p.revision) {
     throw new Error(`proposta com revisão desatualizada: base ${proposal.baseRevision}, atual ${p.revision}`);
   }
@@ -28,12 +29,28 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
       throw new Error(`proposta reescreve cena ${id} fora do escopo`);
     }
   }
-  const assembly = compileScenes({ ...p, scenes: valid.scenes }, valid.scenes);
+  return valid;
+}
+
+export function proposalProject(p: Project, proposal: Proposal): Project {
+  return { ...p, scenes: validateProposalScope(p, proposal).scenes };
+}
+
+export function applyProposal(p: Project, proposal: Proposal): Project {
+  return applyProposalWithFillers(p, proposal, {});
+}
+
+/** Proposta e camada acústica entram no mesmo bump, antes da única compilação. */
+export function applyProposalWithFillers(p: Project, proposal: Proposal, snaps: FillerSnaps): Project {
+  const valid = validateProposalScope(p, proposal);
+  const proposed = { ...p, scenes: valid.scenes };
+  const cut = withFillerCuts(proposed, autoFillerTargets(proposed, valid.changedSceneIds), snaps, "auto");
+  const assembly = compileScenes(cut, cut.scenes);
   const revision = p.revision + 1;
   return {
     ...p,
     revision,
-    scenes: valid.scenes,
+    scenes: cut.scenes,
     assembly: { ...assembly, revision },
     proposal: valid,
     template: valid.template === undefined ? p.template : structuredClone(valid.template),
@@ -43,6 +60,14 @@ export function applyProposal(p: Project, proposal: Proposal): Project {
     previewRevision: null,
     finalApprovedRevision: null,
   };
+}
+
+/** Corte em lote é uma ação editorial, inclusive no desfazer. */
+export function applyFillerEdit(p: Project, targets: FillerTarget[], snaps: FillerSnaps, mode: "cut" | "restore"): Project {
+  const changed = mode === "cut" ? withFillerCuts(p, targets, snaps, "user") : withoutFillerCuts(p, targets);
+  if (changed === p) return p;
+  const next = invalidatePreview(changed);
+  return { ...next, assembly: { ...compileScenes(next, next.scenes), revision: next.revision } };
 }
 
 /**
@@ -59,6 +84,7 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
     input: snap.input,
     scenes: snap.scenes,
     corrections: snap.corrections,
+    fillerExceptions: structuredClone(snap.fillerExceptions ?? []),
     proposal: snap.proposal,
     template: structuredClone(snap.template ?? null),
     templateReport: structuredClone(snap.templateReport ?? undefined),

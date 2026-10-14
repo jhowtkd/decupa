@@ -277,7 +277,9 @@ class SpeechWorker:
                             "text": word["word"].strip(),
                             "startMs": int(round(word["start"] * 1000)),
                             "endMs": int(round(word["end"] * 1000)),
-                            "confidence": float(word.get("score", 0.0)),
+                            # Sem score, o tempo veio de interpolação: preservar
+                            # a palavra sem autorizar um corte nesse intervalo.
+                            "confidence": float(word["score"]) if word.get("score") is not None else None,
                             "sentenceIndex": sentence_index,
                         }
                     )

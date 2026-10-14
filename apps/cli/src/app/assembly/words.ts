@@ -1,3 +1,4 @@
+import { fillerCutIsCurrent, withoutFillerCuts } from "./fillers.ts";
 import { setSceneSupport } from "./scenes.ts";
 import { energyEnvelope, snapCut } from "@decupa/acoustics";
 import type {
@@ -361,23 +362,45 @@ function applyRemoveRestore(
 ): Project {
   if (action.wordIds.length === 0) throw new Error("nenhuma palavra selecionada");
   const scene = findScene(project, action.sceneId);
-  const take = findTake(scene, action.takeId);
+  let take = findTake(scene, action.takeId);
+  let current = project;
   const ordered = effectiveWords(project, take.sourceId);
-  const words = findWords(project, action.wordIds, take.sourceId);
+  let words = findWords(project, action.wordIds, take.sourceId);
+  if (mode === "restore") {
+    const cuts = (take.fillers?.cuts ?? []).filter(c => fillerCutIsCurrent(project, take, c) && c.wordIds.some(id => action.wordIds.includes(id)));
+    if (cuts.length) {
+      current = withoutFillerCuts(project, cuts.map(c => ({ sceneId: scene.id, takeId: take.id, candidateId: `${c.category}:${c.wordIds[0]}` })));
+      if (current === project) throw Error("palavras mudaram; reabra os cacoetes");
+      words = words.filter(w => !cuts.some(c => c.wordIds.includes(w.id)));
+      if (!words.length) return invalidatePreview(current);
+      take = findTake(findScene(current, scene.id), take.id);
+    }
+  }
   const intervals = wordIntervalsInTake(words, ordered, take);
   if (mode === "remove") {
     if (intervals.some((range) => overlaps(range, take.protected))) {
       throw new Error("trecho protegido: remova a proteção antes de cortar");
     }
     const removed = mergeRemoved(take, intervals, ordered, project.assembly.fps);
-    return invalidatePreview(withTake(project, scene.id, take.id, { ...take, removed }));
+    // A ação manual assume o delta inteiro; restaurar cacoetes não pode desfazê-la.
+    const byId = new Map(ordered.map(w => [w.id, w]));
+    const cuts = take.fillers?.cuts.filter(c => {
+      // Cobrir as palavras transfere também suas folgas para a ação manual.
+      const covered = fillerCutIsCurrent(project, take, c) && c.wordIds.every(id => {
+        const word = byId.get(id); return word && subtractRanges([word], intervals).length === 0;
+      });
+      return !covered && subtractRanges(c.effective, intervals).length > 0;
+    });
+    return invalidatePreview(withTake(current, scene.id, take.id, { ...take, removed, ...(cuts ? { fillers: { cuts } } : {}) }));
   }
   const before = normalizeRanges(take.removed);
   const after = subtractRanges(before, intervals);
   if (after.length === before.length && after.every((r, i) => r.start === before[i]!.start && r.end === before[i]!.end)) {
+    if (current !== project) return invalidatePreview(current);
     throw new Error("trecho não está removido: nada a restaurar");
   }
-  return invalidatePreview(withTake(project, scene.id, take.id, { ...take, removed: after }));
+  const cuts = take.fillers?.cuts.map(c => ({ ...c, effective: subtractRanges(c.effective, intervals) })).filter(c => c.effective.length > 0);
+  return invalidatePreview(withTake(current, scene.id, take.id, { ...take, removed: after, ...(cuts ? { fillers: { cuts } } : {}) }));
 }
 
 function applyProtect(

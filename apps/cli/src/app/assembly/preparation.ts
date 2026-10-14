@@ -1,3 +1,6 @@
+import { autoFillerTargets } from "./fillers.ts";
+import { planFillerSnaps } from "./filler-snaps.ts";
+import { observeAssemblyFillers, type FillerObserveDeps } from "./filler-observe.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
@@ -7,7 +10,7 @@ import { analyzeSource } from "./analysis.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource } from "./model.ts";
 import { renderAssembly } from "./render.ts";
-import { applyProposal, recordPreview } from "./revisions.ts";
+import { applyProposalWithFillers, proposalProject, recordPreview } from "./revisions.ts";
 import { proposeScenes } from "./scenes.ts";
 import { loadProject, mergeAnalyses, saveProject, writeHistorySnapshot } from "./store.ts";
 import { visualCoverage } from "./visual.ts";
@@ -30,7 +33,7 @@ export type ModelTransport = {
   providerKey?: string;
 };
 
-export type PreparationDeps = {
+export type PreparationDeps = FillerObserveDeps & {
   decision?: AssemblyDecisionContext;
   exec: Executor;
   proposeSend?: ModelTransport["send"];
@@ -198,6 +201,7 @@ export async function runPreparation(
     const imageJobs: Promise<void>[] = [];
     let imagesDone: Promise<void> | undefined;
     let imageFinished = true;
+    let operationDeps = deps;
     const checkAlive = (): void => {
       if (signal.aborted) throw new CancelledExit();
       if (!control.isCurrent()) throw new ObsoleteExit();
@@ -219,7 +223,15 @@ export async function runPreparation(
           p.preparation?.id === id
             ? { ...p, preparation: { ...p.preparation, status, ...(error ? { error } : {}) } }
             : p);
-        return await loadProject(dir);
+        const terminal = await loadProject(dir);
+        if (terminal.preparation?.id === id && (status === "ready" || status === "attention")) {
+          // Desligar revoga também notas que a preparação ainda não despachou.
+          const active = await deps.resolveOperationDeps?.().catch(() => null);
+          if (!deps.resolveOperationDeps || active?.decision.client) {
+            void observeAssemblyFillers(dir, terminal, { ...operationDeps, resolveOperationDeps: undefined }).catch(() => undefined);
+          }
+        }
+        return terminal;
       } catch {
         return await loadProject(dir);
       }
@@ -227,6 +239,8 @@ export async function runPreparation(
 
     let current: Project;
     try {
+      operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
+      const visualClient = operationDeps.describeClient;
       const included = opened.assembly.sources.filter((source) => source.included);
       const claim: Preparation = {
         id,
@@ -410,11 +424,11 @@ export async function runPreparation(
             await markSource(source.id, { visual: "ready" });
             continue;
           }
-          if (!deps.describeClient) continue;
+          if (!visualClient) continue;
           await markSource(source.id, { visual: "running", error: undefined });
           try {
             const spans = await describeSource(source, dir, signal, {
-              client: deps.describeClient,
+              client: visualClient,
               exec: deps.exec,
               isCurrent: control.isCurrent,
             });
@@ -498,7 +512,7 @@ export async function runPreparation(
         checkAlive();
         let proposal;
         try {
-          proposal = await proposeScenes(current, req.request, signal, { send: deps.proposeSend!, decision: deps.decision, onDecision: async (note) => {
+          proposal = await proposeScenes(current, req.request, signal, { send: operationDeps.proposeSend!, decision: operationDeps.decision, onDecision: async (note) => {
             checkAlive();
             await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
           } });
@@ -511,6 +525,9 @@ export async function runPreparation(
         }
         checkAlive();
         try {
+          const proposed = proposalProject(current, proposal);
+          const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, req.mode === "prepare" ? undefined : proposal.changedSceneIds), { exec: deps.exec, signal });
+          checkAlive();
           await writeHistorySnapshot(dir, current);
           checkAlive();
           // As cenas trocadas viram um passo do desfazer. Só o Preparar marca a
@@ -518,7 +535,8 @@ export async function runPreparation(
           // dispensaria a confirmação de um Retomar depois de edições à mão.
           await saveProject(dir, current.revision, (p) => {
             if (p.preparation?.id !== id) return p;
-            const next = applyProposal(p, proposal);
+            const scoped = req.mode === "prepare" ? { ...proposal, changedSceneIds: proposal.scenes.map(s => s.id) } : proposal;
+            const next = applyProposalWithFillers(p, scoped, snaps);
             const undone = recordUndo(p, next, req.mode === "adjust" ? "Ajuste com IA" : "Preparar montagem");
             return req.mode === "prepare" ? { ...undone, preparedRevision: next.revision } : undone;
           });

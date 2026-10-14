@@ -95,13 +95,15 @@ export function readRotation(video: FfprobeStream | undefined): number | null {
 export async function probe(path: string): Promise<MediaInfo> {
   let stdout: string;
   try {
+    // Timeout+maxBuffer como em silence.ts: ffprobe travado não pode segurar
+    // o render, e JSON de mídia gigante não pode estourar o default de 1 MiB.
     ({ stdout } = await run("ffprobe", [
       "-v", "error",
       "-print_format", "json",
       "-show_format",
       "-show_streams",
       path,
-    ]));
+    ], { timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }));
   } catch (cause) {
     throw new Error(`ffprobe falhou em ${path}`, { cause });
   }

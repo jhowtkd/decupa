@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderDoctor, runDoctor } from "./doctor.ts";
+import { writeCredentials } from "@decupa/triage";
 
 /**
  * Executor falso: binário conhecido existe (código 0), o resto não.
@@ -13,9 +14,76 @@ import { renderDoctor, runDoctor } from "./doctor.ts";
 const fakeRun = async (command: string, _args: string[]): Promise<{ code: number }> =>
   ({ code: ["ffmpeg", "ffprobe", "uv"].includes(command) || /python(3)?(\.exe)?$/.test(command) ? 0 : 1 });
 
+it("doctor informa origem do usuário e sobreposição visual sem exibir chaves", async () => {
+  const home = await emptyHome(), projectDir = await emptyHome();
+  await writeCredentials(home, { preset: "zai", apiKey: "user-text", openaiApiKey: "user-luna", visualProvider: "openai", typesafeApiKey: "user-jev", typesafe: true });
+  await writeCredentials(projectDir, { preset: "gemini", apiKey: "project-text", openaiApiKey: "project-luna", visualProvider: "text" });
+  const lines = await runDoctor({ run: fakeRun, home, projectDir, env: {} });
+  expect(lines.find(l => l.name === "provedor de visão")?.detail).toContain("origem: usuário (tela)");
+  expect(lines.find(l => l.name === "precedência da visão")?.detail).toContain("sobrepõe");
+  expect(lines.find(l => l.name === "Jev")?.detail).toContain("usuário (tela)");
+  expect(lines.find(l => l.name === "chave de análise")?.detail).toContain("gemini");
+  expect(JSON.stringify(lines)).not.toMatch(/user-luna|user-jev|user-text|project-luna|project-text/);
+  const explicit = await runDoctor({ run: fakeRun, home, projectDir, env: { DECUPA_VISUAL_PROVIDER: "text", DECUPA_TYPESAFE: "0" } });
+  expect(explicit.find(l => l.name === "provedor de visão")?.detail).toContain("origem: ambiente");
+  expect(explicit.find(l => l.name === "Jev")?.detail).toContain("desligado");
+});
+
 /** HOME sem credencial: o doctor lê ~/.decupa/credentials, e o da máquina
  *  de quem roda a suíte não pode decidir o resultado. */
 const emptyHome = () => mkdtemp(join(tmpdir(), "doctor-home-"));
+
+it("doctor mostra o texto da Montagem: padrão sem a opção, Sol ativo com origem, e falha de valor inválido", async () => {
+  const home = await emptyHome();
+  const off = await runDoctor({ run: fakeRun, home, env: {} });
+  expect(off.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: true, detail: expect.stringContaining("provedor de texto (padrão)") });
+
+  const userWithSol = await emptyHome();
+  await writeCredentials(userWithSol, { preset: "zai", apiKey: "text", openaiApiKey: "user-sol", assemblyTextProvider: "openai" });
+  const active = await runDoctor({ run: fakeRun, home: userWithSol, env: {} });
+  expect(active.find(l => l.name === "texto da Montagem")).toMatchObject({
+    ok: true, detail: expect.stringContaining("openai · gpt-6.1-sol · medium"),
+  });
+  expect(active.find(l => l.name === "texto da Montagem")?.detail).toContain("origem: usuário (tela)");
+  expect(JSON.stringify(active)).not.toContain("user-sol");
+
+  const noKey = await emptyHome();
+  await writeCredentials(noKey, { preset: "zai", apiKey: "text", assemblyTextProvider: "openai" });
+  const fallback = await runDoctor({ run: fakeRun, home: noKey, env: {} });
+  expect(fallback.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: true, detail: expect.stringContaining("provedor de texto (padrão)") });
+  expect(fallback.find(l => l.name === "texto da Montagem")?.detail).toContain("falta a chave OpenAI");
+
+  const invalid = await runDoctor({ run: fakeRun, home: await emptyHome(), env: { DECUPA_ASSEMBLY_TEXT_PROVIDER: "sol-direto" } });
+  expect(invalid.find(l => l.name === "texto da Montagem")).toMatchObject({ ok: false, detail: expect.stringContaining("DECUPA_ASSEMBLY_TEXT_PROVIDER") });
+});
+
+it("doctor mostra Jev desligado com flag true, igual ao estado da tela e ao cliente", async () => {
+  const home = await emptyHome(), projectDir = await emptyHome();
+  await writeCredentials(home, { preset: "zai", apiKey: "text", typesafe: true, typesafeApiKey: "stored-key" });
+  const lines = await runDoctor({ run: fakeRun, home, projectDir, env: { DECUPA_TYPESAFE: "true" } });
+  expect(lines.find(l => l.name === "Jev")?.detail).toContain("desligado");
+  expect(lines.find(l => l.name === "Jev")?.detail).toContain("ative o Jev");
+});
+
+it("doctor mostra texto e Luna efetivos, sem enviar requisições", async () => {
+  const lines = await runDoctor({ run: fakeRun, home: await emptyHome(), env: {
+    DECUPA_API_KEY: "meta-fake", DECUPA_MODEL: "muse-spark-1.3-contributor", DECUPA_BASE_URL: "https://api.meta.ai/v1/chat/completions",
+    DECUPA_VISUAL_PROVIDER: "openai", OPENAI_API_KEY: "openai-fake",
+  } });
+  expect(lines.find(l => l.name === "provedor de texto")).toMatchObject({ ok: true, detail: expect.stringContaining("muse-spark") });
+  expect(lines.find(l => l.name === "provedor de visão")).toMatchObject({ ok: true, detail: expect.stringContaining("gpt-6-luna") });
+  expect(renderDoctor(lines)).not.toMatch(/meta-fake|openai-fake/);
+  const missing = await runDoctor({ run: fakeRun, home: await emptyHome(), env: { ZAI_API_KEY: "text-fake", DECUPA_VISUAL_PROVIDER: "openai" } });
+  expect(missing.find(l => l.name === "provedor de texto")?.ok).toBe(true);
+  expect(missing.find(l => l.name === "provedor de visão")).toMatchObject({ ok: false, detail: expect.stringContaining("OPENAI_API_KEY") });
+  expect(missing.find(l => l.name === "provedor de visão")?.detail).toContain("origem: ambiente");
+  const empty = await runDoctor({ run: fakeRun, home: await emptyHome(), projectDir: await emptyHome(), env: {} });
+  const fallback = empty.find(l => l.name === "provedor de visão")!;
+  expect(fallback.ok).toBe(false);
+  expect(fallback.detail).toContain("alternativa sem chave");
+  expect(fallback.detail).toContain("A análise de imagem está usando o provedor de texto");
+  expect(empty.find(l => l.name === "Jev")?.detail).toContain("sem chave");
+});
 
 /**
  * Motor mínimo num tmpdir: só o que o doctor abre — `condense.py` para a

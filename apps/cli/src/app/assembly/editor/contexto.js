@@ -1,3 +1,4 @@
+import { mountFillerContext, mountFillerReview } from "./cacoetes.js";
 // Região de contexto (Task 5): player da prévia, estado das correções de
 // texto e pedido em linguagem natural. Cada render assina o estado e porta
 // o bloco original do page.js monolítico, mantendo o comentário de
@@ -58,8 +59,9 @@ export function mountStage({ state, api, player }) {
     + '<div class="review-text"><span id="reviewTitle" class="review-title"></span>'
     + '<span id="freshChip" aria-live="polite"></span></div></div>'
     + '<div class="review-actions"><button type="button" id="refreshPreview" class="quiet small">Atualizar prévia</button>'
-    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia</button></div>';
   stage.append(screen, note, meta, review);
+  mountFillerReview({ state }, review);
   document.getElementById("importFromStage").onclick = () => document.getElementById("filePicker").click();
   document.getElementById("montageView").onclick = () => {
     previewPlayer.removeAttribute("data-source");
@@ -161,6 +163,15 @@ export function mountStage({ state, api, player }) {
 
   function renderPreview(project) {
     if (!project) return;
+    const sourceId = previewPlayer.dataset.source;
+    if (sourceId && !project.assembly.sources.some((source) => source.id === sourceId)) {
+      previewPlayer.pause();
+      previewPlayer.removeAttribute("src");
+      previewPlayer.removeAttribute("data-source");
+      previewPlayer.load();
+      state.set("view", "montagem");
+      return;
+    }
     const original = state.get("view") === "original";
     if (!original && previewPlayer.hasAttribute("src") && !previewPlayer.hasAttribute("data-rev") && project.previewRevision == null) {
       previewPlayer.pause();
@@ -574,6 +585,7 @@ export function mountContexto({ state, api, player }) {
   rhythm.innerHTML = '<summary><span class="ttl">Ritmo</span></summary>'
     + '<p class="muted" id="rhythmCurrent"></p><div class="row" id="rhythmChoices"></div>';
   root.replaceChildren(pending, scenePanel, rhythm, briefingActions);
+  mountFillerContext({ state, api, player }, root);
 
   const rhythmDialog = document.createElement("dialog");
   rhythmDialog.id = "rhythmDialog";
@@ -777,13 +789,13 @@ export function mountContexto({ state, api, player }) {
       exportUi.error = null;
       exportUi.revision = null;
     }
-    // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
+    // Cadeado da entrega (Task 9): só libera depois de aprovar a prévia atual —
     // o servidor também recusa export sem aprovação (exportApproved).
     const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
     lock.textContent = approved
-      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser assistida e aprovada."
-      : "Assista à prévia atual até o fim e aprove para liberar a entrega.";
+      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser aprovada."
+      : "Aprove a prévia atual para liberar a entrega.";
     const badge = document.getElementById("deliveryBadge");
     badge.className = "pill" + (approved ? " pill-ok" : "");
     badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
@@ -814,6 +826,8 @@ export function mountContexto({ state, api, player }) {
     const exportStatus = document.getElementById("exportStatus");
     const parts = [nativeView.statusText || view.statusText];
     if (resolveDelivery) parts.push("O .drp depende dos arquivos de mídia originais.");
+    // Legendas indisponíveis: aviso discreto na linha de status; MP4/OTIO seguem intactos.
+    if (verificacao?.legendas?.status === "indisponivel") parts.push("Legendas indisponíveis nesta revisão.");
     exportStatus.textContent = parts.filter(Boolean).join(" · ");
     exportStatus.className = "export-" + view.tone;
     const downloads = document.getElementById("downloads");

@@ -6,10 +6,28 @@ function isProvider(value: string): value is Provider {
   return Object.hasOwn(PRESETS, value);
 }
 
-function typeSafeFromEnv(env: Record<string, string | undefined>): Pick<Credentials, "typesafeApiKey" | "typesafe"> {
+function extrasFromEnv(env: Record<string, string | undefined>): Pick<Credentials, "typesafeApiKey" | "typesafe" | "openaiApiKey"> {
   const typesafeApiKey = env.DECUPA_COMPANY_TYPESAFE_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
-  if (!typesafeApiKey) return {};
-  return { typesafeApiKey, typesafe: env.DECUPA_TYPESAFE !== "0" };
+  const openaiApiKey = env.DECUPA_COMPANY_OPENAI_API_KEY?.trim();
+  // Ter uma chave não é consentimento para chamadas pagas, nem no provisionamento.
+  const typesafe = env.DECUPA_TYPESAFE === "1" ? true : env.DECUPA_TYPESAFE === "0" ? false : undefined;
+  return { ...(typesafeApiKey ? { typesafeApiKey, ...(typesafe !== undefined ? { typesafe } : {}) } : {}),
+    ...(openaiApiKey ? { openaiApiKey } : {}) };
+}
+
+export function resolveTypeSafe(env: Record<string, string | undefined>, stored?: Credentials & {
+  typesafeSource?: "user" | "project"; typesafeApiKeySource?: "user" | "project";
+} | null) {
+  const configured = Boolean(env.TYPESAFE_API_KEY?.trim() || stored?.typesafeApiKey);
+  const flag = env.DECUPA_TYPESAFE?.trim() || undefined;
+  const disabled = flag !== undefined ? flag === "0" : stored?.typesafe === false;
+  // O estado deve exigir o mesmo valor literal que a criação do cliente.
+  const enabled = configured && (flag !== undefined ? env.DECUPA_TYPESAFE === "1" : stored?.typesafe === true);
+  const source: "environment" | "user" | "project" | "credentials" | "default" = flag ? "environment" : stored?.typesafe !== undefined ? stored.typesafeSource ?? "credentials"
+    : env.TYPESAFE_API_KEY?.trim() ? "environment" : stored?.typesafeApiKey ? stored.typesafeApiKeySource ?? "credentials" : "default";
+  return { configured, enabled, source,
+    notice: disabled || enabled ? null : configured ? "Decisões automáticas desligadas: ative o Jev →"
+      : "Decisões automáticas desligadas: o Jev está sem chave. Configure →" };
 }
 
 /** Completa o env da sessão com Jev gravado em ~/.decupa/credentials. */
@@ -21,7 +39,11 @@ export function envWithStoredTypeSafe(
   if (!next.TYPESAFE_API_KEY?.trim() && stored?.typesafeApiKey) {
     next.TYPESAFE_API_KEY = stored.typesafeApiKey;
   }
-  if (next.DECUPA_TYPESAFE == null && stored?.typesafe) next.DECUPA_TYPESAFE = "1";
+  if (!next.DECUPA_TYPESAFE?.trim()) {
+    const selected = resolveTypeSafe(env, stored);
+    if (stored?.typesafe === false) next.DECUPA_TYPESAFE = "0";
+    else if (selected.enabled) next.DECUPA_TYPESAFE = "1";
+  }
   return next;
 }
 
@@ -48,7 +70,7 @@ export function companyCredentialsFromEnv(
     if (model) creds.model = model;
     if (baseUrl) creds.baseUrl = baseUrl;
     assertUsable(creds);
-    return { ...creds, ...typeSafeFromEnv(env) };
+    return { ...creds, ...extrasFromEnv(env) };
   }
   try {
     const provider = resolveProvider(undefined, env);
@@ -61,7 +83,7 @@ export function companyCredentialsFromEnv(
       creds.model = cfg.model;
     }
     assertUsable(creds);
-    return { ...creds, ...typeSafeFromEnv(env) };
+    return { ...creds, ...extrasFromEnv(env) };
   } catch (error) {
     if (error instanceof Error && /DECUPA_COMPANY_PRESET|HTTPS/.test(error.message)) throw error;
     return null;
@@ -77,19 +99,23 @@ function assertUsable(creds: Credentials): void {
 }
 
 /**
- * Grava `dir/.decupa/credentials` a partir do ambiente. Não sobrescreve
- * arquivo existente. Ausência de chave não é erro — a primeira abertura
+ * Grava `dir/.decupa/credentials` a partir do ambiente. Completa apenas
+ * chaves opcionais ausentes; conserva as escolhas do usuário. Ausência de chave
  * continua pedindo o formulário.
  */
 export async function installCompanyCredentials(
   dir: string,
   env: Record<string, string | undefined> = process.env,
 ): Promise<{ status: "installed" | "skipped" | "absent" }> {
-  const extra = typeSafeFromEnv(env);
+  const extra = extrasFromEnv(env);
   const existing = await readCredentials(dir);
   if (existing) {
-    if (extra.typesafeApiKey && !existing.typesafeApiKey) {
-      await writeCredentials(dir, { ...existing, ...extra });
+    // Luna de empresa só entra na primeira configuração. Remover pela tela
+    // não pode ser desfeito na próxima subida pelo ambiente da instalação.
+    const missing = !existing.typesafeApiKey && extra.typesafeApiKey
+      ? { typesafeApiKey: extra.typesafeApiKey, typesafe: existing.typesafe ?? extra.typesafe } : {};
+    if (Object.keys(missing).length) {
+      await writeCredentials(dir, { ...existing, ...missing });
       return { status: "installed" };
     }
     return { status: "skipped" };

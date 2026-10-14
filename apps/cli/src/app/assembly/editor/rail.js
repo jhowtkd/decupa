@@ -177,25 +177,37 @@ export function exportView(ui, approved, formats = null) {
 /**
  * Arquivos da entrega (puro): só existem depois que a exportação da versão
  * aprovada rodou (verificacao.json da mesma revisão). Antes disso a tela não
- * oferece link que o servidor responderia com 404.
+ * oferece link que o servidor responderia com 404. Legendas (.vtt/.srt) são
+ * secundárias: se o manifest ou a entrega reportar indisponibilidade
+ * (legendas.status === "indisponivel"), os dois links somem sem afetar
+ * MP4/OTIO — falha de legenda nunca bloqueia a entrega.
+ * @param {{legendas?: {status?: string}} | null} [manifest]
  */
-export function deliveryFormats(project, verificacao) {
+export function deliveryFormats(project, verificacao, manifest = null) {
   const rev = project?.finalApprovedRevision;
   if (rev == null || rev !== project.revision || !verificacao || verificacao.revision !== rev) return [];
   const href = (kind) => "/project/output/" + rev + "/" + kind;
-  return [
+  const files = [
     { id: "otio", file: "timeline.otio", label: "Timeline para importar no Resolve", href: href("otio") },
     { id: "mp4", file: "reference.mp4", label: "Vídeo de referência da v" + rev, href: href("mp4") },
     { id: "instrucoes", file: "importar-no-resolve.txt", label: "Instruções de conferência", href: href("instrucoes") },
     { id: "verificacao", file: "verificacao.json", label: "Dados para conferir a importação", href: href("verificacao") },
   ];
+  const fonte = manifest ?? verificacao;
+  if (fonte?.legendas?.status === "pronto") {
+    files.push(
+      { id: "vtt", file: "legendas.vtt", label: "Legendas sincronizadas (.vtt)", href: href("vtt") },
+      { id: "srt", file: "legendas.srt", label: "Legendas sincronizadas (.srt)", href: href("srt") },
+    );
+  }
+  return files;
 }
 
 /** Cartão da conferência (puro): bloqueio → preparar → conferir → confirmada. */
 export function verifyView(project, verificacao) {
   const approved = project?.finalApprovedRevision != null && project.finalApprovedRevision === project.revision;
   if (!approved) {
-    return { state: "locked", title: "Entrega bloqueada", detail: "Assista à prévia atual até o fim e aprove para liberar.", showExport: true, showConfirm: false };
+    return { state: "locked", title: "Entrega bloqueada", detail: "Aprove a prévia atual para liberar.", showExport: true, showConfirm: false };
   }
   if (!verificacao || verificacao.revision !== project.revision) {
     return { state: "ready", title: "Preparar a entrega da v" + project.revision, detail: "Gera a timeline e o vídeo de referência para o DaVinci.", showExport: true, showConfirm: false };
@@ -463,7 +475,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     + '<button type="button" id="openBriefing" class="quiet small">Editar</button></div>'
     + '<p id="briefText" class="brief-text"></p>'
     + '<div class="brief-duration"><span id="briefDuration" class="mono big"></span><span id="briefTarget" class="mono"></span></div>'
-    + '<div class="brief-bar" aria-hidden="true"><span id="briefFill"></span><span id="briefOver"></span></div>'
+    + '<div id="briefBar" class="brief-bar" aria-hidden="true"><span id="briefFill"></span><span id="briefOver"></span></div>'
     + '<p id="briefNote" class="brief-note"></p>';
   root.appendChild(brief);
 
@@ -476,7 +488,8 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     + '<p class="muted briefing-intro">Diga o que o vídeo precisa ser. A montagem usa isto para escolher e ordenar as cenas.</p>'
     + '<label>Tipo <select id="kind"><option value="brief">Briefing</option><option value="script">Roteiro</option></select></label>'
     + '<label>Texto <textarea id="inputText" rows="6"></textarea></label>'
-    + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60"></label>'
+    + '<label class="duration-option"><input id="noTarget" type="checkbox"> Sem duração alvo</label>'
+    + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60" required></label>'
     + '<button type="button" id="saveInput">Guardar briefing</button></div>'
     + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button></div>';
   document.body.appendChild(briefingDialog);
@@ -486,13 +499,23 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
   const kindField = document.getElementById("kind");
   const textField = document.getElementById("inputText");
   const targetField = document.getElementById("target");
+  const noTarget = document.getElementById("noTarget");
+  noTarget.addEventListener("change", () => { targetField.disabled = noTarget.checked; });
   const setField = (field, value) => { if (field.value !== value) field.value = value; };
   const briefing = createBriefingDraft({
-    read: () => ({ kind: kindField.value, text: textField.value, targetSeconds: Number(targetField.value) }),
+    // Sem duração alvo vai como 0; o campo guarda 60 só como sugestão.
+    read: () => ({
+      kind: kindField.value,
+      text: textField.value,
+      targetSeconds: noTarget.checked ? 0 : Number(targetField.value),
+    }),
     write: (input) => {
+      const hasTarget = input.targetSeconds > 0;
       setField(kindField, input.kind);
       setField(textField, input.text);
-      setField(targetField, String(input.targetSeconds));
+      noTarget.checked = !hasTarget;
+      targetField.disabled = !hasTarget;
+      setField(targetField, hasTarget ? String(input.targetSeconds) : "60");
     },
     save: async (values) => {
       const { res } = await api.call("/project/input", {
@@ -503,7 +526,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       return res.ok;
     },
   });
-  for (const field of [kindField, textField, targetField]) {
+  for (const field of [kindField, textField, targetField, noTarget]) {
     field.addEventListener("input", () => briefing.edit());
     field.addEventListener("change", () => {
       briefing.edit();
@@ -648,7 +671,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
         button.onclick = () => api.call("/project/source-role", {
           method: "POST",
           body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: value }),
-          label: "Atualizando categoria…",
+          label: value === "speech" ? "Transcrevendo áudio…" : "Atualizando categoria…",
         });
         role.append(button);
       }
@@ -672,7 +695,19 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       watch.type = "button";
       watch.textContent = "Ver original";
       watch.addEventListener("click", () => player.playOriginal(source.id));
-      pop.append(role, toggle, relink, watch);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger";
+      remove.textContent = "Remover do projeto";
+      remove.addEventListener("click", () => {
+        if (!window.confirm('Remover "' + source.name + '" do projeto? O arquivo original será mantido.')) return;
+        return api.call("/project/source-remove", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
+          label: "Removendo material…",
+        });
+      });
+      pop.append(role, toggle, relink, watch, remove);
       menu.append(summary, pop);
       li.append(check, preview, body, menu);
       list.appendChild(li);
@@ -781,7 +816,8 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     const summary = briefingSummary(project.input, project.scenes.length ? montageDuration(project) : null);
     document.getElementById("briefText").textContent = summary.text || "Sem briefing ainda.";
     document.getElementById("briefDuration").textContent = summary.duration != null ? clock(summary.duration) : "–:––";
-    document.getElementById("briefTarget").textContent = summary.target != null ? "alvo " + clock(summary.target) : "";
+    document.getElementById("briefTarget").textContent = summary.target != null ? "alvo " + clock(summary.target) : "Sem duração alvo";
+    document.getElementById("briefBar").hidden = summary.target == null;
     document.getElementById("briefFill").style.width = (summary.fill * 100).toFixed(1) + "%";
     document.getElementById("briefOver").style.width = summary.over > 0 ? ((1 - summary.fill) * 100).toFixed(1) + "%" : "0%";
     const note = document.getElementById("briefNote");
@@ -840,7 +876,10 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), included: false }),
     label: "Excluindo seleção…",
   });
-  document.getElementById("saveInput").onclick = () => void briefing.flush({ force: true });
+  document.getElementById("saveInput").onclick = () => {
+    if (!noTarget.checked && !targetField.reportValidity()) return;
+    void briefing.flush({ force: true });
+  };
   const prepareClick = () => {
     const action = primaryAction(state.get("project"), state.get("operation"));
     if (action.stage) {

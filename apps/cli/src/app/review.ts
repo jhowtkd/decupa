@@ -6,6 +6,7 @@ import {
   type VisualSample,
   type VisualUnitFlags,
 } from "@decupa/triage";
+import { fillerJoin, measuredFillers, reviewFillers, type FillerProvenance, type FillerReviewOptions, type ReviewFillers } from "../condense/filler-review.ts";
 
 export interface ReviewUnitFlag {
   code: string;
@@ -20,6 +21,7 @@ export interface ReviewUnit {
   /** segundos de fonte; a página usa para ouvir o trecho sem virar timeline */
   start: number;
   end: number;
+  words?: { text: string; start: number; end: number }[];
   flags: ReviewUnitFlag[];
 }
 
@@ -31,6 +33,11 @@ export interface ReviewFlag {
 }
 
 export interface ReviewJoin {
+  isFiller?: boolean;
+  candidateId?: string;
+  category?: string;
+  rule?: string;
+  fillerItems?: FillerProvenance[];
   afterUnitId: string;
   incomingUnitId: string;
   removedSeconds: number;
@@ -45,6 +52,8 @@ export interface ReviewJoin {
 }
 
 export interface Review {
+  generation: number;
+  fillers: ReviewFillers;
   units: ReviewUnit[];
   joins: ReviewJoin[];
   outputSeconds: number;
@@ -174,6 +183,7 @@ export function buildReview(
   rawIndex: unknown,
   rawVisual?: unknown,
   extraFlags?: Record<string, ReviewUnitFlag[]>,
+  fillerOptions?: FillerReviewOptions,
 ): Review {
   const plan = rawPlan as Record<string, any>;
   const index = rawIndex as Record<string, any>;
@@ -199,10 +209,15 @@ export function buildReview(
         kept: kept.has(id),
         start: Number(u.start ?? 0),
         end: Number(u.end ?? 0),
+        ...(Array.isArray(u.words) ? { words: u.words.filter((w: Record<string, unknown>) => w
+          && typeof w.start === "number" && Number.isFinite(w.start) && typeof w.end === "number" && Number.isFinite(w.end)
+          && w.start >= Number(u.start ?? 0) && w.end <= Number(u.end ?? 0) && w.end > w.start)
+          .map((w: Record<string, unknown>) => ({ text: String(w.text ?? ""), start: Number(w.start), end: Number(w.end) })) } : {}),
         flags: mergeFlags(visualFlagsFor(id, visual), extraFlags?.[id]),
       };
     });
 
+  const measured = measuredFillers(plan);
   const joins: ReviewJoin[] = (plan?.joins ?? []).map((j: Record<string, any>) => {
     const flags: ReviewFlag[] = (j.flags ?? []).map((f: Record<string, any>) => ({
       code: String(f.code ?? ""),
@@ -213,6 +228,7 @@ export function buildReview(
     const visualFlag = visualInPointFlag(j, visual);
     if (visualFlag && !flags.some((f) => f.code === "visual_in_point")) flags.push(visualFlag);
     return {
+      ...fillerJoin(j, measured),
       afterUnitId: String(j.outgoing_unit ?? ""),
       incomingUnitId: String(j.incoming_unit ?? ""),
       removedSeconds: Number(j.removed_seconds ?? 0),
@@ -225,6 +241,8 @@ export function buildReview(
   });
 
   return {
+    generation: fillerOptions?.generation ?? 0,
+    fillers: reviewFillers(plan, fillerOptions),
     units,
     joins,
     outputSeconds: Number(plan?.output_duration ?? 0),

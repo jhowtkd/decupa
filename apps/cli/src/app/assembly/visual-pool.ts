@@ -30,6 +30,8 @@ export type VisualPools = {
 };
 
 export function isVisualRetryable(error: unknown): boolean {
+  // O transporte OpenAI já consumiu sua política limitada e Retry-After.
+  if (error && typeof error === "object" && "retryHandled" in error && error.retryHandled === true) return false;
   const message = error instanceof Error ? error.message : String(error);
   return /HTTP 429|HTTP 529/.test(message);
 }

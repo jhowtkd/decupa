@@ -20,6 +20,12 @@ import { singleFlight } from "./sequencia.js";
 /** Contexto antes do trecho em "ouvir" — padrão JOIN_PAD da tela de limpeza. */
 export const LISTEN_PAD = 0.7;
 
+/** Inclui as palavras vizinhas e a folga dos dois lados no original. */
+export function fillerListenRange(item, duration = Infinity) {
+  return { start: Math.max(0, item.listen.start - LISTEN_PAD), end: Math.min(duration, item.listen.end + LISTEN_PAD) };
+}
+
+
 /**
  * @typedef {{ removed?: boolean, protected?: boolean, takeId?: string }} MenuWord
  * @typedef {{ action: string, label: string, danger?: boolean }} MenuAction

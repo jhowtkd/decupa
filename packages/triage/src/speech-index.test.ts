@@ -150,3 +150,13 @@ describe("unitsById", () => {
     expect(byId.get("u003")).toBe(index.units[0]);
   });
 });
+
+it("lê words, connective, hash e spans com números estritos", () => {
+  const fixture = { ...raw, transcript_sha256: "sha", units: [{ ...raw.units[0], opens_with_connective: "Então", is_question: true,
+    words: [{ text: "hã", start: 3, end: 3.2 }], disfluency: { hard: [{ phrase: "hã", start: 3, end: 3.2, char_start: 0, char_end: 2 }] } }] };
+  const index = parseSpeechIndex(fixture);
+  expect(index.transcriptSha256).toBe("sha");
+  expect(index.units[0]).toMatchObject({ opensWithConnective: "Então", isQuestion: true, words: [{ text: "hã", start: 3, end: 3.2 }] });
+  expect(() => parseSpeechIndex({ ...fixture, units: [{ ...fixture.units[0], words: [{ text: "hã", start: "x", end: 3.2 }] }] })).toThrow(/words.start.*x/);
+  expect(() => parseSpeechIndex({ ...fixture, units: [{ ...fixture.units[0], disfluency: { hard: [{ start: 3, end: "x" }] } }] })).toThrow(/disfluency.hard.end.*x/);
+});

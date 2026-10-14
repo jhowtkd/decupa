@@ -133,11 +133,20 @@ async function call(path, opts = {}) {
       // à cópia anterior). Só poll e POST passam pela guarda de revisão velha.
       const latest = await client.call("/project");
       if (latest.res.ok && latest.body.project) {
+        if (latest.body.fillerReport) state.set("fillerReport", latest.body.fillerReport);
         state.set("project", latest.body.project);
         state.set("operation", latest.body.operation || null);
       }
     }
-    if (!res.ok) {
+    if (res.status === 428) {
+      // Sem-chave (fluxo sem-chave R3.2): #status informativo, sem tom de erro bloqueante;
+      // reusa #visual-provider-notice existente, sem faixa nova (C8). Edição local segue.
+      ui.error = null;
+      ui.errorFromPoll = false;
+      ui.notice = (body.error || "Sem chave de IA") + " — edição local segue funcionando.";
+      const banner = document.getElementById("visual-provider-notice");
+      if (banner?.textContent?.trim()) banner.removeAttribute("hidden");
+    } else if (!res.ok) {
       ui.error = body.error || ("erro " + res.status);
       ui.errorFromPoll = !action;
     } else if (action || ui.errorFromPoll) {
@@ -146,7 +155,7 @@ async function call(path, opts = {}) {
     }
     const current = !body.project || fresh(body.project);
     if (current) {
-      for (const key of ["undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
+      for (const key of ["fillerReport", "undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
         if (Object.hasOwn(body, key)) state.set(key, body[key]);
       }
     }
@@ -300,7 +309,8 @@ const poller = createProjectPoller({
   isBusy: () => {
     const p = project();
     const op = state.get("operation");
-    return p?.preparation?.status === "running"
+    return state.get("fillerReport")?.pending
+      || p?.preparation?.status === "running"
       || (p?.corrections || []).some((item) => item.status === "pending")
       || !!(op && OP_LABEL[op.stage]);
   },
@@ -484,6 +494,7 @@ state.subscribe("project", (p) => {
 });
 
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });
+state.subscribe("fillerReport", () => poller.schedule());
 
 document.addEventListener("decupa:schedule-preview", () => scheduleAutoPreview());
 
