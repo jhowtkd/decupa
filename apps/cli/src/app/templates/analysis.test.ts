@@ -1,5 +1,5 @@
 import {expect,it} from "vitest";
-import {mkdir,mkdtemp,copyFile,readdir,readFile,writeFile} from "node:fs/promises";import {tmpdir} from "node:os";import {join} from "node:path";
+import {mkdir,mkdtemp,copyFile,readdir,readFile,writeFile} from "node:fs/promises";import {tmpdir} from "node:os";import {basename,join} from "node:path";
 import {createHash} from "node:crypto";
 import {hashFile,probe} from "@decupa/media";
 import {FIXTURES} from "../../../../../tests/fixtures/global-setup.ts";
@@ -125,7 +125,7 @@ it("templates migram recipe-v1 sem chamadas no padrão e reaproveitam só a fala
  await analyzeRecipe(r,{...base,send:lunar.textSend,modelKey:lunar.textKey,legacyModelKey:lunar.legacyModelKey,legacyVisualCompatible:lunar.legacyVisualCompatible,visualClient:lunar.visualClient},new AbortController().signal);
  expect(calls).toBe(2);
  // O fallback não deve recolocar regras antigas depois de editar a fala migrada.
- for(const entry of await readdir(dir,{withFileTypes:true}))if(entry.isDirectory()&&entry.name!==legacy.split("/").at(-1)){
+ for(const entry of await readdir(dir,{withFileTypes:true}))if(entry.isDirectory()&&entry.name!==basename(legacy)){
   const file=join(dir,entry.name,"speech.json");if(await readFile(file,"utf8").catch(()=>null))await writeFile(file,JSON.stringify([{...speech[0],text:"fala corrigida"}]));
  }
  await analyzeRecipe(r,deps,new AbortController().signal);expect(calls).toBe(3);

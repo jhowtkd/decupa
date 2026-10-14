@@ -108,7 +108,7 @@ export async function writeCredentials(dir: string, creds: Credentials,
       await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", RESTRICT_WINDOWS_FILE], {
         env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path },
         windowsHide: true,
-        timeout: 15_000,
+        timeout: 60_000,
       });
     } catch (cause) {
       throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada", { cause });
