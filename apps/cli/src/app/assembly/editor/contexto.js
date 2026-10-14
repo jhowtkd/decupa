@@ -59,7 +59,7 @@ export function mountStage({ state, api, player }) {
     + '<div class="review-text"><span id="reviewTitle" class="review-title"></span>'
     + '<span id="freshChip" aria-live="polite"></span></div></div>'
     + '<div class="review-actions"><button type="button" id="refreshPreview" class="quiet small">Atualizar prévia</button>'
-    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia assistida</button></div>';
+    + '<button type="button" class="primary" id="approveFinal">Aprovar prévia</button></div>';
   stage.append(screen, note, meta, review);
   mountFillerReview({ state }, review);
   document.getElementById("importFromStage").onclick = () => document.getElementById("filePicker").click();
@@ -271,19 +271,18 @@ export function mountStage({ state, api, player }) {
   });
   document.getElementById("refreshPreview").onclick = () => refreshPreview();
   document.getElementById("approveFinal").onclick = () => {
-    // O front nunca mente: só parte com canApprove e envia a revisão
-    // assistida de verdade do state (o back-end rejeita divergência).
+    // Só exige a prévia atual: assistir é opcional, o anel só informa.
+    // Envia a revisão da prévia conferida (o back-end rejeita divergência).
     const project = state.get("project");
-    const watched = state.get("watched") || { revision: null, ended: false };
-    if (!watchedState(project, watched).canApprove) {
-      api.notifyError("Assista à prévia atual até o fim antes de aprovar.");
+    if (!watchedState(project, state.get("watched")).canApprove) {
+      api.notifyError("Gere a prévia da versão atual antes de aprovar.");
       return;
     }
     void api.call("/project/approve-final", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: project.revision,
-        watchedRevision: watched.revision,
+        watchedRevision: project.previewRevision,
       }),
       label: "Aprovando prévia…",
     });
@@ -786,13 +785,13 @@ export function mountContexto({ state, api, player }) {
       exportUi.error = null;
       exportUi.revision = null;
     }
-    // Cadeado da entrega (Task 9): só libera depois de assistir e aprovar —
+    // Cadeado da entrega (Task 9): só libera depois de aprovar a prévia atual —
     // o servidor também recusa export sem aprovação (exportApproved).
     const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
     lock.textContent = approved
-      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser assistida e aprovada."
-      : "Assista à prévia atual até o fim e aprove para liberar a entrega.";
+      ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser aprovada."
+      : "Aprove a prévia atual para liberar a entrega.";
     const badge = document.getElementById("deliveryBadge");
     badge.className = "pill" + (approved ? " pill-ok" : "");
     badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
@@ -823,6 +822,8 @@ export function mountContexto({ state, api, player }) {
     const exportStatus = document.getElementById("exportStatus");
     const parts = [nativeView.statusText || view.statusText];
     if (resolveDelivery) parts.push("O .drp depende dos arquivos de mídia originais.");
+    // Legendas indisponíveis: aviso discreto na linha de status; MP4/OTIO seguem intactos.
+    if (verificacao?.legendas?.status === "indisponivel") parts.push("Legendas indisponíveis nesta revisão.");
     exportStatus.textContent = parts.filter(Boolean).join(" · ");
     exportStatus.className = "export-" + view.tone;
     const downloads = document.getElementById("downloads");

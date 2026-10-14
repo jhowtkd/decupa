@@ -389,8 +389,17 @@ describe("entrega", () => {
     expect(deliveryFormats(aprovado, null)).toEqual([]);
     expect(deliveryFormats({ revision: 16, finalApprovedRevision: 15 }, { revision: 15, status: "pendente" })).toEqual([]);
     const files = deliveryFormats(aprovado, { revision: 15, status: "pendente" });
-    expect(files.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
+    expect(files.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json", "legendas.vtt", "legendas.srt"]);
     expect(files[0].href).toBe("/project/output/15/otio");
+    expect(files.find((f: { id: string }) => f.id === "vtt")).toMatchObject({ file: "legendas.vtt", label: "Legendas sincronizadas (.vtt)", href: "/project/output/15/vtt" });
+    expect(files.find((f: { id: string }) => f.id === "srt")).toMatchObject({ file: "legendas.srt", label: "Legendas sincronizadas (.srt)", href: "/project/output/15/srt" });
+  });
+
+  it("legendas indisponíveis somem sem afetar MP4/OTIO", () => {
+    const semManifest = deliveryFormats(aprovado, { revision: 15, status: "pendente" }, { legendas: { status: "indisponivel" } });
+    expect(semManifest.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
+    const semEntrega = deliveryFormats(aprovado, { revision: 15, status: "pendente", legendas: { status: "indisponivel" } });
+    expect(semEntrega.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
   });
 
   it("verifyView guia do bloqueio à conferência", () => {

@@ -177,25 +177,37 @@ export function exportView(ui, approved, formats = null) {
 /**
  * Arquivos da entrega (puro): só existem depois que a exportação da versão
  * aprovada rodou (verificacao.json da mesma revisão). Antes disso a tela não
- * oferece link que o servidor responderia com 404.
+ * oferece link que o servidor responderia com 404. Legendas (.vtt/.srt) são
+ * secundárias: se o manifest ou a entrega reportar indisponibilidade
+ * (legendas.status === "indisponivel"), os dois links somem sem afetar
+ * MP4/OTIO — falha de legenda nunca bloqueia a entrega.
+ * @param {{legendas?: {status?: string}} | null} [manifest]
  */
-export function deliveryFormats(project, verificacao) {
+export function deliveryFormats(project, verificacao, manifest = null) {
   const rev = project?.finalApprovedRevision;
   if (rev == null || rev !== project.revision || !verificacao || verificacao.revision !== rev) return [];
   const href = (kind) => "/project/output/" + rev + "/" + kind;
-  return [
+  const files = [
     { id: "otio", file: "timeline.otio", label: "Timeline para importar no Resolve", href: href("otio") },
     { id: "mp4", file: "reference.mp4", label: "Vídeo de referência da v" + rev, href: href("mp4") },
     { id: "instrucoes", file: "importar-no-resolve.txt", label: "Instruções de conferência", href: href("instrucoes") },
     { id: "verificacao", file: "verificacao.json", label: "Dados para conferir a importação", href: href("verificacao") },
   ];
+  const fonte = manifest ?? verificacao;
+  if (fonte?.legendas?.status !== "indisponivel") {
+    files.push(
+      { id: "vtt", file: "legendas.vtt", label: "Legendas sincronizadas (.vtt)", href: href("vtt") },
+      { id: "srt", file: "legendas.srt", label: "Legendas sincronizadas (.srt)", href: href("srt") },
+    );
+  }
+  return files;
 }
 
 /** Cartão da conferência (puro): bloqueio → preparar → conferir → confirmada. */
 export function verifyView(project, verificacao) {
   const approved = project?.finalApprovedRevision != null && project.finalApprovedRevision === project.revision;
   if (!approved) {
-    return { state: "locked", title: "Entrega bloqueada", detail: "Assista à prévia atual até o fim e aprove para liberar.", showExport: true, showConfirm: false };
+    return { state: "locked", title: "Entrega bloqueada", detail: "Aprove a prévia atual para liberar.", showExport: true, showConfirm: false };
   }
   if (!verificacao || verificacao.revision !== project.revision) {
     return { state: "ready", title: "Preparar a entrega da v" + project.revision, detail: "Gera a timeline e o vídeo de referência para o DaVinci.", showExport: true, showConfirm: false };
