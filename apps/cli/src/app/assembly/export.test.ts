@@ -371,3 +371,59 @@ it("reexport da mesma revisão não apaga verificacao.json registrada", async ()
   };
   expect(verificacao.status).toBe("manual");
 });
+
+it("sem falas, exporta MP4/OTIO e registra legendas indisponíveis sem falhar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 12);
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  const { readFile, stat } = await import("node:fs/promises");
+  expect((await stat(join(dest, "timeline.otio"))).size).toBeGreaterThan(0);
+  expect((await stat(join(dest, "reference.mp4"))).size).toBeGreaterThan(0);
+  const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as {
+    legendas: { status: string; motivo?: string };
+  };
+  expect(manifest.legendas.status).toBe("indisponivel");
+  expect(manifest.legendas.motivo).toMatch(/falas/);
+  await expect(stat(join(dest, "legendas.vtt"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(stat(join(dest, "legendas.srt"))).rejects.toMatchObject({ code: "ENOENT" });
+  const verificacao = JSON.parse(await readFile(join(dest, "verificacao.json"), "utf8")) as {
+    legendas: { status: string };
+  };
+  expect(verificacao.legendas).toEqual({ status: "indisponivel" });
+});
+
+it("com falas, grava legendas.vtt/srt e declara os hashes no manifest", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-export-"));
+  const project = await projectWithMedia(dir, 13);
+  project.scenes = [{ id: "s1", objective: "abrir", rationale: "", speechIds: [],
+    takes: [{ id: "t1", sourceId: "a", speechId: null, start: 0, end: 2, removed: [], protected: [] }],
+    visualEvidenceIds: [], support: [], gaps: [] }];
+  project.analyses = [{ sourceId: "a", key: "k", status: "ready", wordsStatus: "ready", visual: [],
+    speech: [{ id: "a:u1", sourceId: "a", start: 0, end: 2, text: "ola mundo" }],
+    words: [
+      { id: "a:w1", sourceId: "a", start: 0.2, end: 0.6, text: "ola", confidence: 0.9 },
+      { id: "a:w2", sourceId: "a", start: 0.8, end: 1.2, text: "mundo", confidence: 0.9 },
+    ],
+    visualCoverage: { requested: [], returned: [], missing: [] } }];
+  await createProject(dir, project);
+  const dest = await exportApproved(project, dir);
+  const { createHash: sha } = await import("node:crypto");
+  const { readFile } = await import("node:fs/promises");
+  const vtt = await readFile(join(dest, "legendas.vtt"), "utf8");
+  const srt = await readFile(join(dest, "legendas.srt"), "utf8");
+  expect(vtt).toMatch(/^WEBVTT\n\n00:00:00\.200 --> 00:00:01\.200\nola mundo\n/);
+  expect(srt).toContain("1\n00:00:00,200 --> 00:00:01,200\nola mundo\n");
+  const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as {
+    legendas: { status: string; vttSha: string; srtSha: string };
+  };
+  expect(manifest.legendas.status).toBe("pronto");
+  expect(manifest.legendas.vttSha).toBe(sha("sha256").update(vtt, "utf8").digest("hex"));
+  expect(manifest.legendas.srtSha).toBe(sha("sha256").update(srt, "utf8").digest("hex"));
+  // Reexport idêntico reaproveita a entrega (legendas entram na comparação).
+  expect(await exportApproved(project, dir)).toBe(dest);
+  const verificacao = JSON.parse(await readFile(join(dest, "verificacao.json"), "utf8")) as {
+    legendas: { status: string };
+  };
+  expect(verificacao.legendas).toEqual({ status: "pronto" });
+});

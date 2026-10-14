@@ -1,4 +1,5 @@
 import { buildHandoff } from "./handoff.ts";
+import { buildSubtitles } from "./subtitles.ts";
 import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -36,6 +37,7 @@ type ExportManifest = {
   handoff?: unknown;
   instrucoes?: unknown;
   verificacao?: unknown;
+  legendas?: unknown;
 };
 
 /** Registro de conferência da importação (verificacao.json da entrega). */
@@ -45,6 +47,8 @@ export type VerificationRecord = {
   artefato?: { timeline?: string; reference?: string };
   origem?: string | null;
   confirmadaEm?: string;
+  /** Status das legendas na exportação; ausente/nulo em entregas antigas. */
+  legendas?: { status?: string } | null;
 };
 
 /**
@@ -87,6 +91,8 @@ export async function confirmImportVerification(project: Project, dir: string): 
     },
     origem: "manual",
     confirmadaEm: new Date().toISOString(),
+    // O status das legendas sobrevive à confirmação (o manifest a tem).
+    legendas: (manifest.legendas as VerificationRecord["legendas"]) ?? null,
   };
   await writeFile(join(dest, "verificacao.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
   manifest.verificacao = "confirmada";
@@ -122,6 +128,13 @@ async function exportedDirValid(
     if (otioSha !== manifest.timeline) return false;
     if (manifest.handoff !== undefined && await exportedFileSha(join(dest, "handoff.json")) !== manifest.handoff) return false;
     if (manifest.instrucoes !== undefined && await exportedFileSha(join(dest, "importar-no-resolve.txt")) !== manifest.instrucoes) return false;
+    // Legendas são opcionais: só conferidas quando a exportação as gerou.
+    const legendas = manifest.legendas as { status?: unknown; vttSha?: unknown; srtSha?: unknown } | undefined;
+    if (legendas?.status === "pronto") {
+      if (typeof legendas.vttSha !== "string" || typeof legendas.srtSha !== "string") return false;
+      if (await exportedFileSha(join(dest, "legendas.vtt")) !== legendas.vttSha) return false;
+      if (await exportedFileSha(join(dest, "legendas.srt")) !== legendas.srtSha) return false;
+    }
     // verificacao.json não pode usar hash fixo (a confirmação manual muda o
     // conteúdo depois): valida forma e identidade — objeto com a revisão do
     // manifest e status reconhecido.
@@ -282,6 +295,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     const usedExportNames = new Set([
       "timeline.otio", "reference.mp4", "manifest.json", "handoff.json",
       "handoff.md", "importar-no-resolve.txt", "verificacao.json",
+      "legendas.vtt", "legendas.srt",
     ]);
     for (const [index, source] of snapshot.sources.entries()) {
       const resolved = await realpath(source.path);
@@ -315,6 +329,29 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     const sourceShas = Object.fromEntries(
       snapshot.sources.map((s) => [s.id, s.sha256]),
     );
+    // Legendas são best-effort: qualquer falha (ou ausência de falas) vira
+    // registro de indisponibilidade — nunca derruba MP4 nem OTIO.
+    let legendas: { status: string; vttSha?: string; srtSha?: string; motivo?: string };
+    let vttText: string | null = null;
+    let srtText: string | null = null;
+    try {
+      const subs = buildSubtitles(project);
+      if (!subs) {
+        legendas = { status: "indisponivel", motivo: "sem falas retidas na montagem" };
+      } else {
+        vttText = subs.vtt;
+        srtText = subs.srt;
+        legendas = {
+          status: "pronto",
+          vttSha: createHash("sha256").update(vttText, "utf8").digest("hex"),
+          srtSha: createHash("sha256").update(srtText, "utf8").digest("hex"),
+        };
+      }
+    } catch (err) {
+      legendas = { status: "indisponivel", motivo: err instanceof Error ? err.message : String(err) };
+      vttText = null;
+      srtText = null;
+    }
     let matchesExpected = false;
     try {
       const existing = JSON.parse(await readFile(manifestPath, "utf8")) as ExportManifest;
@@ -324,7 +361,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         && existing.reference === refSha
         && existing.handoff === handoffSha
         && existing.instrucoes === instructionsSha
-        && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
+        && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
+        && JSON.stringify(existing.legendas) === JSON.stringify(legendas);
       if (matchesExpected && (await exportedDirValid(dest, aliases))) {
         return dest;
       }
@@ -345,9 +383,15 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         revision: project.revision,
         artefato: { timeline: otioSha, reference: refSha },
         origem: null,
+        // O rail lê verificacao.legendas.status sem buscar o manifest.
+        legendas: { status: legendas.status },
       } satisfies VerificationRecord)}\n`, "utf8");
       await writeFile(join(tmp,"handoff.json"),handoffText);
       await writeFile(join(tmp,"handoff.md"),`# Handoff — revisão ${project.revision}\n\n`+buildHandoff(project).map(n=>`- ${n.sceneId} · frame ${n.startFrame}, ${n.durationFrames} frames · ${n.destination}: ${n.description}`).join("\n"));
+      if (vttText !== null && srtText !== null) {
+        await writeFile(join(tmp, "legendas.vtt"), vttText, "utf8");
+        await writeFile(join(tmp, "legendas.srt"), srtText, "utf8");
+      }
       for (const alias of aliases) {
         const target = join(tmp, alias.relativePath);
         await mkdir(dirname(target), { recursive: true });
@@ -364,6 +408,7 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         timeline: otioSha,
         reference: refSha,
         sources: sourceShas,
+        legendas,
         formato: {
           width: snapshot.width,
           height: snapshot.height,
@@ -409,7 +454,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
             && existing.reference === refSha
             && existing.handoff === handoffSha
             && existing.instrucoes === instructionsSha
-            && JSON.stringify(existing.sources) === JSON.stringify(sourceShas);
+            && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
+            && JSON.stringify(existing.legendas) === JSON.stringify(legendas);
           if (same && (await exportedDirValid(dest, aliases))) return dest;
         } catch {
           // Manifest ilegível: destino inconsistente abaixo.

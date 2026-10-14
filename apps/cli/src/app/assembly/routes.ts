@@ -805,10 +805,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const file = kind === "otio" ? "timeline.otio"
           : kind === "mp4" ? "reference.mp4"
           : kind === "instrucoes" ? "importar-no-resolve.txt"
+          : kind === "vtt" ? "legendas.vtt"
+          : kind === "srt" ? "legendas.srt"
           : kind === "verificacao" ? "verificacao.json" : "";
         if (!file) throw new HttpError(404, "saída desconhecida");
         const type = kind === "otio" || kind === "verificacao" ? "application/json"
-          : kind === "instrucoes" ? "text/plain; charset=utf-8" : "video/mp4";
+          : kind === "instrucoes" ? "text/plain; charset=utf-8"
+          : kind === "vtt" ? "text/vtt; charset=utf-8"
+          : kind === "srt" ? "application/x-subrip; charset=utf-8" : "video/mp4";
         const candidates = [join(dir, "exports", revision, file)];
         if (kind === "mp4") candidates.push(join(dir, `rev-${revision}`, "reference.mp4"));
         let served = false;
