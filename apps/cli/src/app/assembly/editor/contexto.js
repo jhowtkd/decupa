@@ -271,13 +271,17 @@ export function mountStage({ state, api, player }) {
   });
   document.getElementById("refreshPreview").onclick = () => refreshPreview();
   document.getElementById("approveFinal").onclick = () => {
-    // Só exige a prévia atual: assistir é opcional, o anel só informa.
+    // Só parte com a prévia atual; sem tê-la visto inteira, confirma antes.
     // Envia a revisão da prévia conferida (o back-end rejeita divergência).
     const project = state.get("project");
-    if (!watchedState(project, state.get("watched")).canApprove) {
+    const status = watchedState(project, state.get("watched"));
+    if (!status.canApprove) {
       api.notifyError("Gere a prévia da versão atual antes de aprovar.");
       return;
     }
+    if (!status.watched && !window.confirm(
+      "Você ainda não assistiu à prévia inteira. Aprovar mesmo assim?",
+    )) return;
     void api.call("/project/approve-final", {
       method: "POST",
       body: JSON.stringify({

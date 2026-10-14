@@ -22,13 +22,13 @@ it("assistir a prévia antiga não vale depois de editar", () => {
 it("prévia atual não assistida até o fim não libera aprovação", () => {
   expect(
     watchedState({ previewRevision: 3, revision: 3 }, { revision: null, ended: false }),
-  ).toEqual({ fresh: true, watched: false, canApprove: false, label: "prévia atualizada ✓" });
+  ).toEqual({ fresh: true, watched: false, canApprove: true, label: "prévia atualizada ✓" });
 });
 
 it("terminar o vídeo de outra revisão não conta como assistida", () => {
   expect(
     watchedState({ previewRevision: 3, revision: 3 }, { revision: 2, ended: true }),
-  ).toEqual({ fresh: true, watched: false, canApprove: false, label: "prévia atualizada ✓" });
+  ).toEqual({ fresh: true, watched: false, canApprove: true, label: "prévia atualizada ✓" });
 });
 
 it("assistir a prévia atual até o fim libera aprovação", () => {

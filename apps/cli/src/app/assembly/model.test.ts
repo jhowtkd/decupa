@@ -286,6 +286,46 @@ it("respostas complementares conservam ambos os trechos", async () => {
   ]);
 });
 
+it("janela que volta sem algum segundo é pedida de novo, apontando os segundos faltantes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 3);
+  const requests: unknown[][] = [];
+  const client = {
+    ...TEST_IDENTITY,
+    async send(content: unknown[]) {
+      requests.push(content);
+      // Primeira resposta pula o último segundo; a correção cobre tudo.
+      const end = requests.length === 1 ? 2 : 3;
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
+  expect(requests).toHaveLength(2);
+  const repair = requests[1]!.at(-1) as { text: string };
+  expect(repair.text).toMatch(/faltam os segundos locais 2\b/);
+  expect(spans.map((span) => [span.start, span.end])).toEqual([[0, 3]]);
+});
+
+it("se a correção ainda deixa lacuna, aceita o parcial para a retomada completar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
+  const source = await speechSource(dir, 3);
+  let calls = 0;
+  const client = {
+    ...TEST_IDENTITY,
+    async send() {
+      calls += 1;
+      return JSON.stringify({
+        spans: [{ id: "local-0", start: 0, end: 2, text: "mesa", confidence: "observed", tags: [] }],
+      });
+    },
+  };
+  const spans = await describeSource(source, dir, new AbortController().signal, { client, exec: frameExecutor });
+  expect(calls).toBe(2);
+  expect(spans.map((span) => [span.start, span.end])).toEqual([[0, 2]]);
+});
+
 it("replay com artefato aquecido faz 0 chamadas de encode e de API", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir);

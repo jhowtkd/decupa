@@ -35,7 +35,7 @@ export function reviewView(project, status, progress) {
   }
   if (status.watched) return { visible: true, title: "Pronta para aprovar", detail: "Prévia " + v + " · vista até o fim", ratio: 1 };
   return {
-    visible: true, title: "Assista até o fim para aprovar",
+    visible: true, title: "Pronta para aprovar",
     detail: "Prévia " + v + (progress.label ? " · " + progress.label : "") + " · voltar reinicia a contagem",
     ratio: progress.ratio,
   };
@@ -51,5 +51,5 @@ export function approveButtonView(project, status, original) {
     && project.finalApprovedRevision === project.revision;
   if (approved) return { label: "Aprovada", disabled: true, locked: false, icon: "check", approved: true };
   const locked = !status.canApprove || original;
-  return { label: "Aprovar prévia assistida", disabled: locked, locked, icon: locked ? "lock" : "check", approved: false };
+  return { label: "Aprovar prévia", disabled: locked, locked, icon: locked ? "lock" : "check", approved: false };
 }

@@ -7,10 +7,10 @@ function project(over: Record<string, unknown> = {}) {
   return { revision: 5, previewRevision: 5, ...over };
 }
 
-it("aprovação exige prévia atual assistida até o fim", () => {
+it("prévia atual libera a aprovação; assistir até o fim só marca watched", () => {
   expect(watchedState(project(), { revision: 5, ended: true }).canApprove).toBe(true);
-  expect(watchedState(project(), { revision: 5, ended: false }).canApprove).toBe(false);
-  expect(watchedState(project(), { revision: 4, ended: true }).canApprove).toBe(false);
+  expect(watchedState(project(), { revision: 5, ended: false }).canApprove).toBe(true);
+  expect(watchedState(project(), { revision: 4, ended: true })).toMatchObject({ canApprove: true, watched: false });
 });
 
 it("sem prévia ou prévia obsoleta: bloqueia com rótulo próprio", () => {
