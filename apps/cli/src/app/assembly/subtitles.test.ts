@@ -62,6 +62,21 @@ it("ordem cena->take em multi-fonte: take posterior na fonte não passa na frent
   expect(subs!.cues[1]).toMatchObject({ startMs: 2200, endMs: 3200 });
 });
 
+it("fala reutilizada em cenas distintas recebe a posição de timeline da cena certa", () => {
+  const fps = { num: 25, den: 1 };
+  // A mesma passagem da fonte A (0-2s) é usada na cena 1 e repetida na cena 2.
+  const p = project(fps, [source("a", 10)],
+    [scene("s1", [take("t1", "a", 0, 2)]), scene("s2", [take("t2", "a", 0, 2)])],
+    [analysis("a", [word("a", 1, 0.2, 0.8, "repetida")])]);
+  const subs = buildSubtitles(p);
+  expect(subs).not.toBeNull();
+  expect(subs!.cues).toHaveLength(2);
+  expect(subs!.cues[0]).toMatchObject({ text: "repetida", startMs: 200, endMs: 800 });
+  // A segunda ocorrência deve estar na timeline da cena 2 (2000ms + 200ms = 2200ms),
+  // e não herdar a posição do clipe da cena 1.
+  expect(subs!.cues[1]).toMatchObject({ text: "repetida", startMs: 2200, endMs: 2800 });
+});
+
 it("offsets exatos em 29.97 (30000/1001), sem drift entre cenas", () => {
   const fps = { num: 30000, den: 1001 };
   const p = project(fps, [source("a", 30)],

@@ -388,11 +388,16 @@ describe("entrega", () => {
   it("arquivos só aparecem depois da exportação da versão aprovada", () => {
     expect(deliveryFormats(aprovado, null)).toEqual([]);
     expect(deliveryFormats({ revision: 16, finalApprovedRevision: 15 }, { revision: 15, status: "pendente" })).toEqual([]);
-    const files = deliveryFormats(aprovado, { revision: 15, status: "pendente" });
+    const files = deliveryFormats(aprovado, { revision: 15, status: "pendente", legendas: { status: "pronto" } });
     expect(files.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json", "legendas.vtt", "legendas.srt"]);
     expect(files[0].href).toBe("/project/output/15/otio");
     expect(files.find((f: { id: string }) => f.id === "vtt")).toMatchObject({ file: "legendas.vtt", label: "Legendas sincronizadas (.vtt)", href: "/project/output/15/vtt" });
     expect(files.find((f: { id: string }) => f.id === "srt")).toMatchObject({ file: "legendas.srt", label: "Legendas sincronizadas (.srt)", href: "/project/output/15/srt" });
+  });
+
+  it("entregas antigas sem legendas omitem os links VTT/SRT", () => {
+    const semLegendas = deliveryFormats(aprovado, { revision: 15, status: "pendente" });
+    expect(semLegendas.map((f: { file: string }) => f.file)).toEqual(["timeline.otio", "reference.mp4", "importar-no-resolve.txt", "verificacao.json"]);
   });
 
   it("legendas indisponíveis somem sem afetar MP4/OTIO", () => {

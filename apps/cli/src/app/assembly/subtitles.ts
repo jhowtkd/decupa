@@ -80,8 +80,10 @@ export function buildSubtitles(project: Project): SubtitleResult | null {
     // deslocamento da palavra somados antes de arredondar, como em
     // compileScenes (toSeconds) — sem drift acumulado entre takes.
     Math.round(((clip.startFrame * fps.den) / fps.num + (t - clip.sourceStartSeconds)) * 1000);
-  const locate = (sourceId: string, t: number): Clip | undefined =>
-    master.find((clip) => clip.sourceId === sourceId && t >= clip.sourceStartSeconds && t < clipEnd(clip));
+  const locate = (sceneId: string, takeId: string, sourceId: string, t: number): Clip | undefined =>
+    master.find((clip) => clip.sceneId === sceneId && clip.id.startsWith(`${sceneId}-${takeId}#`) && clip.sourceId === sourceId && t >= clip.sourceStartSeconds && t < clipEnd(clip))
+      ?? master.find((clip) => clip.sceneId === sceneId && clip.sourceId === sourceId && t >= clip.sourceStartSeconds && t < clipEnd(clip))
+      ?? master.find((clip) => clip.sourceId === sourceId && t >= clip.sourceStartSeconds && t < clipEnd(clip));
   const timelineEndMs = master.reduce(
     (end, clip) => Math.max(end, Math.round(((clip.startFrame + clip.durationFrames) * fps.den * 1000) / fps.num)), 0);
 
@@ -99,7 +101,7 @@ export function buildSubtitles(project: Project): SubtitleResult | null {
           if (word.end <= take.start || word.start >= take.end) continue;
           // Palavra fora dos ranges retidos (corte, cacoete) não legenda.
           if (subtractRanges([{ start: word.start, end: word.end }], retained).length > 0) continue;
-          const clip = locate(word.sourceId, word.start);
+          const clip = locate(scene.id, take.id, word.sourceId, word.start);
           if (!clip) continue;
           timed.push({ text, startMs: timelineMs(clip, word.start), endMs: timelineMs(clip, word.end) });
         }
@@ -110,7 +112,7 @@ export function buildSubtitles(project: Project): SubtitleResult | null {
             const start = Math.max(span.start, range.start);
             const end = Math.min(span.end, range.end);
             if (!(end > start) || !span.text.trim()) continue;
-            const clip = locate(span.sourceId, start);
+            const clip = locate(scene.id, take.id, span.sourceId, start);
             if (!clip) continue;
             timed.push({ text: span.text.trim(), startMs: timelineMs(clip, start), endMs: timelineMs(clip, end) });
           }

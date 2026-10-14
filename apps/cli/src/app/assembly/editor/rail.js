@@ -194,7 +194,7 @@ export function deliveryFormats(project, verificacao, manifest = null) {
     { id: "verificacao", file: "verificacao.json", label: "Dados para conferir a importação", href: href("verificacao") },
   ];
   const fonte = manifest ?? verificacao;
-  if (fonte?.legendas?.status !== "indisponivel") {
+  if (fonte?.legendas?.status === "pronto") {
     files.push(
       { id: "vtt", file: "legendas.vtt", label: "Legendas sincronizadas (.vtt)", href: href("vtt") },
       { id: "srt", file: "legendas.srt", label: "Legendas sincronizadas (.srt)", href: href("srt") },
