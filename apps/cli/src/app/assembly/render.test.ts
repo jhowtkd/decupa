@@ -66,6 +66,23 @@ it("não trata falha do Executor como sucesso", async () => {
   await expect(renderAssembly(await assemblyWithMedia(dir), dir, exec)).rejects.toThrow(/render|falhou|código 1/i);
 });
 
+it("falha do render mostra o fim da saída, onde o FFmpeg diz o erro", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
+  // Cabeçalho de versão/config longo na frente; o motivo real vem por último.
+  const header = "ffmpeg version 9.0.1 configuration: --enable-gpl ".repeat(80);
+  const exec = new FakeExecutor({
+    code: 2,
+    stdout: '{"validate_timeline_data": {"issues": []}} [ERROR] ffmpeg project render command failed: ' + header,
+    stderr: "Error muxing a packet: No space left on device\nConversion failed!",
+  });
+  const error = await renderAssembly(await assemblyWithMedia(dir), dir, exec).catch((err: Error) => err);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toMatch(/^render falhou \(código 2\)/);
+  expect((error as Error).message).toContain("No space left on device");
+  expect((error as Error).message).toContain("Conversion failed!");
+  expect((error as Error).message.length).toBeLessThan(1700);
+});
+
 it("não declara sucesso se o mp4 não existe", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-render-"));
   const exec = new FakeExecutor({ code: 0, stdout: "ok" });

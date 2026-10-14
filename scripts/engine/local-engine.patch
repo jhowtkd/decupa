@@ -234,7 +234,7 @@ index 3244484..755c609 100644
      return {w for w in words if w not in _STOP_EN and w not in _TOPIC_EXCLUDE_EN}
  
 diff --git a/mcp/ve_tools/render.py b/mcp/ve_tools/render.py
-index 89cefbb..504a842 100644
+index 89cefbb..68bccc2 100644
 --- a/mcp/ve_tools/render.py
 +++ b/mcp/ve_tools/render.py
 @@ -26,13 +26,198 @@ from .timeline import (
@@ -587,7 +587,7 @@ index 89cefbb..504a842 100644
              )
              current_video = out_label
              video_overlay_idx += 1
-@@ -409,20 +648,20 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
+@@ -409,33 +648,75 @@ def build_project_ffmpeg_command(plan: dict, output_path: Path, work_dir: Path)
          text_current = out_label
      filters.append(f"[{text_current}]trim=duration={plan['duration']:.6f},setpts=PTS-STARTPTS[vout]")
  
@@ -618,20 +618,172 @@ index 89cefbb..504a842 100644
          "-movflags", "+faststart",
          str(output_path),
      ]
-@@ -498,10 +737,12 @@ def render_audio_bed(clip: dict, plan: dict, output_path: Path) -> None:
-         )
+     return cmd, filter_complex
+ 
+ 
++BED_RATE = 48000
++BED_FRAME_BYTES = 4  # estéreo, pcm_s16le
++_ZERO_CHUNK = bytes(BED_FRAME_BYTES * BED_RATE)
++
++
++def _bed_sample(seconds: float) -> int:
++    return int(round(float(seconds) * BED_RATE))
++
++
++def audio_bed_lanes(clips: list[dict], total: int) -> list[list[tuple[int, int, dict]]]:
++    """Agrupa as contribuições de áudio em pistas sem sobreposição.
++
++    Cada item vira (início, fim) em amostras absolutas da timeline; um corte
++    entra na primeira pista cujo último fim não passa do seu início. Cortes
++    sequenciais (o caso comum: uma faixa de fala) ficam numa pista só.
++    """
++    spans = []
++    for order, clip in enumerate(clips):
++        begin = max(0, _bed_sample(clip["timeline_start"]))
++        finish = min(total, max(begin + 1, _bed_sample(float(clip["timeline_start"]) + float(clip["render_duration"]))))
++        if begin < total:
++            spans.append((begin, finish, order, clip))
++    spans.sort(key=lambda item: (item[0], item[2]))
++    lanes: list[list[tuple[int, int, dict]]] = []
++    ends: list[int] = []
++    for begin, finish, _order, clip in spans:
++        for index, lane_end in enumerate(ends):
++            if lane_end <= begin:
++                lanes[index].append((begin, finish, clip))
++                ends[index] = finish
++                break
++        else:
++            lanes.append([(begin, finish, clip)])
++            ends.append(finish)
++    return lanes
++
++
+ def bake_project_audio_beds(plan: dict, work_dir: Path) -> list[tuple[Path, dict]]:
+-    """Render every timeline audio contribution to a full-length wav bed.
++    """Render the timeline audio to full-length wav beds, one per lane.
+ 
+     Keeping timeline placement out of the main ffmpeg graph avoids the
+     adelay+atrim timestamp interaction that can move delayed audio back to t=0
+     or truncate the tail on newer ffmpeg builds. The main render graph then
+     only mixes already-positioned, equal-length audio streams.
++
++    Um bed por pista sem sobreposição, não por corte: com centenas de cortes,
++    um WAV da timeline inteira para cada um enchia o disco (dezenas de GB).
++    Cada corte é renderizado só no seu trecho e copiado para a posição
++    absoluta em amostras, então não há desvio acumulado entre cortes.
+     """
+     beds: list[tuple[Path, dict]] = []
+     audio_jobs: list[dict] = []
+@@ -451,23 +732,58 @@ def bake_project_audio_beds(plan: dict, work_dir: Path) -> list[tuple[Path, dict
+             audio_jobs.append(clip)
+     audio_dir = work_dir / "audio_beds"
+     audio_dir.mkdir(parents=True, exist_ok=True)
+-    for idx, clip in enumerate(audio_jobs):
++    total = max(1, _bed_sample(plan["duration"]))
++    for idx, lane in enumerate(audio_bed_lanes(audio_jobs, total)):
+         bed_path = audio_dir / f"aud_{idx:04d}.wav"
+-        render_audio_bed(clip, plan, bed_path)
++        render_lane_bed(lane, total, bed_path)
+         if bed_path.is_file() and bed_path.stat().st_size > 1024:
+-            beds.append((bed_path, clip))
++            beds.append((bed_path, lane[0][2]))
+     return beds
+ 
+ 
+-def render_audio_bed(clip: dict, plan: dict, output_path: Path) -> None:
+-    pre = max(0.0, float(clip["timeline_start"]))
+-    body = max(0.001, float(clip["render_duration"]))
+-    post = max(0.0, float(plan["duration"]) - pre - body)
+-    labels: list[str] = []
+-    filters: list[str] = []
+-    if pre > 0.001:
+-        filters.append(f"anullsrc=channel_layout=stereo:sample_rate=48000:d={pre:.6f}[pre]")
+-        labels.append("[pre]")
++def _write_silence(handle, samples: int) -> None:
++    remaining = samples * BED_FRAME_BYTES
++    while remaining > 0:
++        chunk = min(remaining, len(_ZERO_CHUNK))
++        handle.write(_ZERO_CHUNK[:chunk])
++        remaining -= chunk
++
++
++def render_lane_bed(lane: list[tuple[int, int, dict]], total: int, output_path: Path) -> None:
++    """Escreve o WAV da pista: silêncio entre os cortes e cada corte no lugar."""
++    data_bytes = total * BED_FRAME_BYTES
++    body_path = output_path.with_suffix(".body.raw")
++    with output_path.open("wb") as handle:
++        handle.write(b"RIFF" + (36 + data_bytes).to_bytes(4, "little") + b"WAVE")
++        handle.write(b"fmt " + (16).to_bytes(4, "little") + (1).to_bytes(2, "little") + (2).to_bytes(2, "little")
++                     + BED_RATE.to_bytes(4, "little") + (BED_RATE * BED_FRAME_BYTES).to_bytes(4, "little")
++                     + BED_FRAME_BYTES.to_bytes(2, "little") + (16).to_bytes(2, "little"))
++        handle.write(b"data" + data_bytes.to_bytes(4, "little"))
++        cursor = 0
++        try:
++            for begin, finish, clip in lane:
++                _write_silence(handle, begin - cursor)
++                samples = finish - begin
++                render_audio_body(clip, samples, body_path)
++                wanted = samples * BED_FRAME_BYTES
++                with body_path.open("rb") as body:
++                    copied = 0
++                    while copied < wanted:
++                        chunk = body.read(min(1 << 20, wanted - copied))
++                        if not chunk:
++                            break
++                        handle.write(chunk)
++                        copied += len(chunk)
++                # Corte que voltou curto (fim da fonte) completa com silêncio.
++                _write_silence(handle, (wanted - copied) // BED_FRAME_BYTES)
++                cursor = finish
++            _write_silence(handle, total - cursor)
++        finally:
++            body_path.unlink(missing_ok=True)
++
++
++def render_audio_body(clip: dict, samples: int, output_path: Path) -> None:
++    """Só o trecho do corte, com exatamente `samples` amostras estéreo 48 kHz."""
+     clip_parts = [
+         "aresample=48000",
+         "aformat=channel_layouts=stereo",
+@@ -479,31 +795,20 @@ def render_audio_bed(clip: dict, plan: dict, output_path: Path) -> None:
+     volume = max(0.0, float(clip.get("volume", 1.0)))
+     clip_parts += [
+         f"volume={volume:.6f}",
+-        f"apad=pad_dur={body + 0.25:.6f}",
+-        f"atrim=0:{body:.6f}",
++        f"apad=whole_len={samples}",
++        f"atrim=end_sample={samples}",
+         "asetpts=PTS-STARTPTS",
+     ]
+-    filters.append("[0:a]" + ",".join(clip_parts) + "[body]")
+-    labels.append("[body]")
+-    if post > 0.001:
+-        filters.append(f"anullsrc=channel_layout=stereo:sample_rate=48000:d={post:.6f}[post]")
+-        labels.append("[post]")
+-    if len(labels) == 1:
+-        filters.append(f"{labels[0]}apad=pad_dur={plan['duration']:.6f},atrim=0:{plan['duration']:.6f},asetpts=PTS-STARTPTS[aout]")
+-    else:
+-        filters.append(
+-            "".join(labels)
+-            + f"concat=n={len(labels)}:v=0:a=1,"
+-            + f"apad=pad_dur={plan['duration']:.6f},atrim=0:{plan['duration']:.6f},asetpts=PTS-STARTPTS[aout]"
+-        )
      cmd = [
          "ffmpeg", "-y",
 +        "-threads", "2",
          "-ss", f"{clip['start']:.6f}",
          "-t", f"{clip['source_duration']:.6f}",
          "-i", clip["source"],
-         "-filter_complex", ";".join(filters),
+-        "-filter_complex", ";".join(filters),
++        "-filter_complex", "[0:a]" + ",".join(clip_parts) + "[aout]",
 +        "-filter_complex_threads", "1",
          "-map", "[aout]",
-         "-c:a", "pcm_s16le",
+-        "-c:a", "pcm_s16le",
++        "-c:a", "pcm_s16le", "-f", "s16le", "-ar", str(BED_RATE), "-ac", "2",
          str(output_path),
-@@ -605,6 +846,29 @@ def between_expr(clip: dict, end_pad: float = 0.0) -> str:
+     ]
+     proc = run_proc(cmd, capture_output=True, text=True, timeout=1800)
+@@ -605,6 +910,29 @@ def between_expr(clip: dict, end_pad: float = 0.0) -> str:
      return f"between(t,{clip['timeline_start']:.6f},{end:.6f})"
  
  

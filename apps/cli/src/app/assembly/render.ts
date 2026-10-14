@@ -282,7 +282,10 @@ export async function renderAssembly(
       });
     }, opts.signal ? { signal: opts.signal } : undefined);
     if (result.code !== 0) {
-      const detail = (result.stdout + result.stderr).trim().slice(0, 1500);
+      // O FFmpeg abre com cabeçalho de versão e configuração e diz o motivo
+      // no fim: guarda o final da saída, não o começo.
+      const output = (result.stdout + "\n" + result.stderr).trim();
+      const detail = output.length > 1500 ? "…" + output.slice(-1500) : output;
       throw new Error(`render falhou (código ${result.code}): ${detail || "sem saída"}`);
     }
 
