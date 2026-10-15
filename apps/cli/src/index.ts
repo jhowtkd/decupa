@@ -15,6 +15,10 @@ const USAGE = `decupa — bancada de medição
       fala/visão nos venvs dos sidecars e Python do motor): sai 0 quando
       apenas o provedor falta.
 
+  decupa models fetch
+      Baixa e verifica os modelos de fala no cache do usuário. Respeita
+      HF_HOME e TORCH_HOME.
+
   decupa bench --input <arquivo> [--input <arquivo> ...] [--scenario cold-start|resident-models|cached-artifacts] [--limit 2]
       Benchmark reproduzível de lote. Relata vazão, p50/p95, RAM e falhas.
       Recusa inventar arquivos: cada --input precisa existir.
@@ -137,6 +141,22 @@ async function main(argv: string[]): Promise<number> {
     const lines = await runDoctor({ localOnly: values.local === true });
     console.log(renderDoctor(lines));
     return lines.every((l) => l.ok) ? 0 : 1;
+  }
+
+  if (command === "models") {
+    const [subcommand] = rest;
+    if (subcommand !== "fetch") {
+      console.error("uso: decupa models fetch");
+      return 1;
+    }
+    const { runModelsFetch } = await import("./models.ts");
+    try {
+      await runModelsFetch();
+      return 0;
+    } catch (error) {
+      console.error(friendlyError(error));
+      return 1;
+    }
   }
 
   if (command === "bench") {
