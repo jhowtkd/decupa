@@ -262,69 +262,23 @@
 <video id="player" preload="auto" playsinline></video>
 <div id="toast"></div>
 <script type="module">
-import { confirmEditTakeover, projectHeaders, projectPath as projectPathFromMeta, projectTabId } from "./project-path.js";
+import { mountEditReservationUI } from "./edit-reservation-ui.js";
+import { projectHeaders, projectPath as projectPathFromMeta } from "./project-path.js";
 const projectPath = projectPathFromMeta;
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
-let reservationOwner = null;
-const originalDisabled = new WeakMap();
 // Fonte do player invisível: o proxy só de áudio quando o servidor avisa que
 // ficou pronto; senão o original. Escolhida uma vez, na primeira reprodução,
 // para o arquivo nunca trocar no meio de uma leitura por faixa.
 let audioSrc = null;
 
-function setReadOnly(owner) {
-  reservationOwner = owner;
-  const banner = document.getElementById("editReservation");
-  const text = document.getElementById("editReservationText");
-  banner.hidden = !owner;
-  if (owner) {
-    const age = Math.max(0, Math.floor((Date.now() - owner.ultimoSinal) / 1000));
-    text.textContent = owner.mesmaPessoa
-      ? "Você está editando este Projeto em outra aba"
-      : `${owner.nome} está editando este Projeto · há ${age} s`;
-  }
-  for (const button of document.querySelectorAll("button, input, textarea, select")) {
-    if (button.id === "reservationTake") continue;
-    if (owner) {
-      if (!originalDisabled.has(button)) originalDisabled.set(button, button.disabled);
-      button.disabled = true;
-    } else if (originalDisabled.has(button)) {
-      button.disabled = originalDisabled.get(button);
-      originalDisabled.delete(button);
-    }
-  }
-}
-
 const api = (p, o = {}) => fetch(projectPath(`jobs/${jobId}${p}`), { ...o, headers: projectHeaders(o.headers) }).then(async (r) => {
   const value = await r.json().catch(() => ({}));
-  if (r.status === 409 && value.dono) setReadOnly(value.dono);
+  if (r.status === 409 && value.dono) reservationUI.handleConflict(value);
   return { ...value, _status: r.status, _ok: r.ok };
 });
 
-async function acquireReservation() {
-  const response = await fetch(projectPath("reservation"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
-  const body = await response.json().catch(() => ({}));
-  if (response.status === 409) setReadOnly(body.dono && { ...body.dono, mesmaPessoa: body.mesmaPessoa === true });
-}
-
-setInterval(async () => {
-  try {
-    const response = await fetch(projectPath("reservation/heartbeat"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
-    const body = await response.json().catch(() => ({}));
-    if (response.status === 409) setReadOnly(body.dono && { ...body.dono, mesmaPessoa: body.mesmaPessoa === true });
-  } catch { /* o próximo sinal tenta novamente */ }
-}, 20_000);
-
-window.addEventListener("pagehide", () => {
-  navigator.sendBeacon?.(projectPath("reservation/release"), new Blob([JSON.stringify({ tabId: projectTabId() })], { type: "application/json" }));
-});
-
-document.getElementById("reservationTake").onclick = async () => {
-  if (!reservationOwner || !(await confirmEditTakeover(reservationOwner))) return;
-  const response = await fetch(projectPath("reservation/take"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
-  if (response.ok) { setReadOnly(null); await poll(); }
-};
+const reservationUI = mountEditReservationUI({ onTakeover: () => poll() });
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
 const STEPS = [["queued","Aguardando na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
@@ -981,7 +935,7 @@ for (const btn of exportMenu.querySelectorAll("[data-export]")) {
   };
 }
 
-acquireReservation().catch(() => {}).finally(() => poll());
+poll();
 </script>
 </body>
 </html>

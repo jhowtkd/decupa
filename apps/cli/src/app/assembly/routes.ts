@@ -80,6 +80,7 @@ export type AssemblyDeps = FillerObserveDeps & {
   pageCss?: string;
   pageJs?: string;
   projectPathJs?: string;
+  editReservationUiJs?: string;
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -673,6 +674,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (url.pathname === "/project-path.js" && deps.projectPathJs !== undefined) {
       res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
       res.end(deps.projectPathJs);
+      return true;
+    }
+    if (url.pathname === "/edit-reservation-ui.js" && deps.editReservationUiJs !== undefined) {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(deps.editReservationUiJs);
       return true;
     }
     if (url.pathname === "/page.js" && deps.pageJs !== undefined) {

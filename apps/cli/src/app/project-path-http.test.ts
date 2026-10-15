@@ -9,9 +9,9 @@ afterEach(async () => { for (const stop of stops.splice(0).reverse()) await stop
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
-// As duas páginas importam o helper como módulo: sem a rota, o import dá 404
+// As duas páginas importam os módulos como módulos: sem a rota, o import dá 404
 // e o script inteiro da página não roda.
-it("Limpeza e Montagem servem o helper de caminhos que as páginas importam", async () => {
+it("Limpeza e Montagem servem os módulos que as páginas importam", async () => {
   const dir = await mkdtemp(join(tmpdir(), "project-path-http-"));
   const cleanup = await startApp({ input: join(dir, "v.mp4"), port: 0, autoStart: false, executor });
   const assembly = await startApp({ projectDir: join(dir, "montagem"), port: 0, executor });
@@ -22,5 +22,11 @@ it("Limpeza e Montagem servem o helper de caminhos que as páginas importam", as
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/javascript/);
     expect(await res.text()).toContain("export function projectPath");
+    const reservationUi = await fetch(`http://127.0.0.1:${app.port}/edit-reservation-ui.js`);
+    expect(reservationUi.status).toBe(200);
+    expect(reservationUi.headers.get("content-type")).toMatch(/javascript/);
+    const reservationUiText = await reservationUi.text();
+    expect(reservationUiText).toContain("mountEditReservationUI");
+    expect(reservationUiText).toContain("assumiu a edição às");
   }
 });

@@ -12,6 +12,8 @@ export type EditReservation = {
   tabId: string;
   nome: string;
   ultimoSinal: number;
+  /** Preenchido somente quando a Reserva foi transferida por Assumir Edição. */
+  assumidoEm?: number;
 };
 
 export class ReservationHeldError extends Error {
@@ -33,7 +35,13 @@ function validReservation(value: unknown): EditReservation | null {
   if (typeof item.tabId !== "string" || !item.tabId
     || typeof item.nome !== "string" || !item.nome
     || typeof item.ultimoSinal !== "number" || !Number.isFinite(item.ultimoSinal)) return null;
-  return { tabId: item.tabId, nome: item.nome, ultimoSinal: item.ultimoSinal };
+  return {
+    tabId: item.tabId,
+    nome: item.nome,
+    ultimoSinal: item.ultimoSinal,
+    ...(typeof item.assumidoEm === "number" && Number.isFinite(item.assumidoEm)
+      ? { assumidoEm: item.assumidoEm } : {}),
+  };
 }
 
 async function readReservation(projeto: string): Promise<EditReservation | null> {
@@ -73,7 +81,10 @@ export async function obter(
     const atual = await readReservation(projeto);
     const dono = vigente(atual, agora);
     if (dono && dono.tabId !== tabId) throw new ReservationHeldError(dono);
-    const reserva = { tabId, nome: dono?.tabId === tabId ? dono.nome : nome, ultimoSinal: agora };
+    const reserva = {
+      tabId, nome: dono?.tabId === tabId ? dono.nome : nome, ultimoSinal: agora,
+      ...(dono?.assumidoEm === undefined ? {} : { assumidoEm: dono.assumidoEm }),
+    };
     await gravar(projeto, reserva);
     return reserva;
   });
@@ -108,7 +119,7 @@ export async function assumir(
   projeto: string, tabId: string, nome: string, agora: number,
 ): Promise<EditReservation> {
   return withProjectWrite(projeto, async () => {
-    const reserva = { tabId, nome, ultimoSinal: agora };
+    const reserva = { tabId, nome, ultimoSinal: agora, assumidoEm: agora };
     await gravar(projeto, reserva);
     return reserva;
   });
@@ -129,8 +140,13 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(payload);
 }
 
-function owner(reserva: EditReservation | null): { nome: string; ultimoSinal: number } | null {
-  return reserva ? { nome: reserva.nome, ultimoSinal: reserva.ultimoSinal } : null;
+function owner(reserva: EditReservation | null): { nome: string; ultimoSinal: number; assumidoEm?: number } | null {
+  if (!reserva) return null;
+  return {
+    nome: reserva.nome,
+    ultimoSinal: reserva.ultimoSinal,
+    ...(reserva.assumidoEm === undefined ? {} : { assumidoEm: reserva.assumidoEm }),
+  };
 }
 
 function tabFromHeader(req: IncomingMessage): string | undefined {

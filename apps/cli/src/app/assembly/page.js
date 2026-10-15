@@ -1,7 +1,8 @@
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { confirmEditTakeover, projectHeaders, projectPath, projectTabId } from "./project-path.js";
+import { mountEditReservationUI } from "./edit-reservation-ui.js";
+import { projectHeaders, projectPath } from "./project-path.js";
 
 const [
   { mountTemplates },
@@ -115,100 +116,10 @@ const client = createApi({
   },
 });
 
-const reservationElement = document.getElementById("editReservation");
-const reservationText = document.getElementById("editReservationText");
-const reservationTake = document.getElementById("reservationTake");
-const originalDisabled = new WeakMap();
-
-function reservationAge(ultimoSinal) {
-  const seconds = Math.max(0, Math.floor((Date.now() - ultimoSinal) / 1000));
-  return `há ${seconds} s`;
-}
-
-function paintReadOnly() {
-  document.body.classList.toggle("modo-leitura", ui.readOnly);
-  for (const element of document.querySelectorAll("button, input, textarea, select")) {
-    if (element === reservationTake || element.matches("[data-stage], #monitorToggle, #closeMonitor")) continue;
-    if (ui.readOnly) {
-      if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);
-      element.disabled = true;
-    } else if (originalDisabled.has(element)) {
-      element.disabled = originalDisabled.get(element);
-      originalDisabled.delete(element);
-    }
-  }
-}
-
-function setReadOnly(owner) {
-  ui.readOnly = Boolean(owner);
-  ui.owner = owner;
-  if (reservationElement && reservationText) {
-    reservationElement.hidden = !owner;
-    if (owner) {
-      reservationText.textContent = owner.mesmaPessoa
-        ? "Você está editando este Projeto em outra aba"
-        : `${owner.nome} está editando este Projeto · ${reservationAge(owner.ultimoSinal)}`;
-    }
-  }
-  paintReadOnly();
-}
-
-function handleReservationConflict(body) {
-  setReadOnly(body?.dono ? { ...body.dono, mesmaPessoa: body.mesmaPessoa === true } : null);
-}
-
-async function acquireReservation() {
-  const response = await fetch(projectPath("reservation"), {
-    method: "POST",
-    headers: projectHeaders({ "content-type": "application/json" }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (response.status === 409) handleReservationConflict(body);
-  else if (response.ok) setReadOnly(null);
-  return response;
-}
-
-async function heartbeatReservation() {
-  try {
-    const response = await fetch(projectPath("reservation/heartbeat"), {
-      method: "POST",
-      headers: projectHeaders({ "content-type": "application/json" }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (response.status === 409) handleReservationConflict(body);
-  } catch {
-    // O próximo sinal recupera a Reserva ou revela que outra aba a assumiu.
-  }
-}
-
-const reservationTimer = setInterval(() => { void heartbeatReservation(); }, 20_000);
-window.addEventListener("pagehide", () => {
-  clearInterval(reservationTimer);
-  const body = JSON.stringify({ tabId: projectTabId() });
-  if (navigator.sendBeacon) {
-    navigator.sendBeacon(projectPath("reservation/release"), new Blob([body], { type: "application/json" }));
-  } else {
-    void fetch(projectPath("reservation/release"), {
-      method: "POST", headers: projectHeaders({ "content-type": "application/json" }), body, keepalive: true,
-    });
-  }
+const reservationUI = mountEditReservationUI({
+  onReadOnly: (owner) => { ui.readOnly = Boolean(owner); ui.owner = owner; },
+  onTakeover: () => call("project"),
 });
-
-reservationTake?.addEventListener("click", async () => {
-  const owner = ui.owner;
-  if (!owner || !(await confirmEditTakeover(owner))) return;
-  const response = await fetch(projectPath("reservation/take"), {
-    method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (response.ok) {
-    setReadOnly(null);
-    await call("project");
-  } else if (response.status === 409) handleReservationConflict(body);
-});
-
-const reservationObserver = new MutationObserver(() => { if (ui.readOnly) paintReadOnly(); });
-reservationObserver.observe(document.body, { childList: true, subtree: true });
 
 // Resposta com projeto sincroniza o estado (era o corpo do api() antigo) e
 // dispara a auto-prévia; erro valida ui.error como o lastError de antes.
@@ -237,7 +148,7 @@ async function call(path, opts = {}) {
   };
   try {
     const { res, body } = await client.call(path, opts);
-    if (res.status === 409 && body.dono) handleReservationConflict(body);
+    if (res.status === 409 && body.dono) reservationUI.handleConflict(body);
     if (res.status === 409) {
       // O 409 diz que a base desta aba está errada: a resposta de reconciliação
       // é a fonte da verdade, mesmo com revisão menor (servidor que voltou
@@ -668,6 +579,6 @@ textoEl.addEventListener("drop", (ev) => {
 });
 
 renderStatus();
-acquireReservation().catch(() => {}).finally(() => call("project", { label: "Carregando…" })).then(() => {
+call("project", { label: "Carregando…" }).then(() => {
   scheduleAutoPreview();
 });

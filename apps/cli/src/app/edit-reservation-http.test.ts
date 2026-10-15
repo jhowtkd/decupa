@@ -1,8 +1,10 @@
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hashFile } from "@decupa/media";
 import { expect, it } from "vitest";
 import { blankProject } from "./assembly/routes.ts";
+import { fixtureAssembly } from "./assembly/fixture.ts";
 import { createProject } from "./assembly/store.ts";
 import { startApp } from "./server.ts";
 
@@ -87,13 +89,60 @@ it("Assumir Edição transfere a Reserva e a aba anterior descobre no sinal", as
       method: "POST", headers: { "x-decupa-tab": "tab-b" },
     });
     expect(taken.status).toBe(200);
-    expect(await taken.json()).toMatchObject({ reserva: { tabId: "tab-b", ultimoSinal: agora } });
+    expect(await taken.json()).toMatchObject({ reserva: { tabId: "tab-b", ultimoSinal: agora, assumidoEm: agora } });
 
     const oldHeartbeat = await fetch(`${one}/projects/alpha/reservation/heartbeat`, {
       method: "POST", headers: { "x-decupa-tab": "tab-a" },
     });
     expect(oldHeartbeat.status).toBe(409);
-    expect(await oldHeartbeat.json()).toMatchObject({ dono: { nome: expect.any(String), ultimoSinal: agora } });
+    expect(await oldHeartbeat.json()).toMatchObject({ dono: { nome: expect.any(String), ultimoSinal: agora, assumidoEm: agora } });
+  } finally {
+    await first.close();
+    await second.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("dois servidores compartilham a Reserva e liberam leitura e Range no Modo Leitura", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-readonly-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir);
+  const source = fixtureAssembly().sources[0]!;
+  const mediaPath = join(process.cwd(), "tests/fixtures/generated/clip.mp4");
+  const mediaStat = await stat(mediaPath);
+  const project = blankProject("alpha-project");
+  project.assembly.sources = [{
+    ...source, id: "source-a", path: mediaPath, sha256: await hashFile(mediaPath),
+    size: mediaStat.size, mtimeMs: mediaStat.mtimeMs,
+  }];
+  await createProject(dir, project);
+  let agora = 1_750_000;
+  const options = { projectsRoot: root, port: 0, executor, env: {}, now: () => agora };
+  const first = await startApp(options);
+  const second = await startApp(options);
+  const one = `http://127.0.0.1:${first.port}`;
+  const two = `http://127.0.0.1:${second.port}`;
+  try {
+    expect((await fetch(`${one}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    const occupied = await fetch(`${two}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-b" },
+    });
+    expect(occupied.status).toBe(409);
+    expect(await occupied.json()).toMatchObject({ dono: { ultimoSinal: agora } });
+
+    const projectResponse = await fetch(`${two}/projects/alpha/project`, {
+      headers: { "x-decupa-tab": "tab-b" },
+    });
+    expect(projectResponse.status).toBe(200);
+
+    const media = await fetch(`${two}/projects/alpha/project/media/source-a`, {
+      headers: { "x-decupa-tab": "tab-b", range: "bytes=0-3" },
+    });
+    expect(media.status).toBe(206);
+    expect((await media.arrayBuffer()).byteLength).toBe(4);
   } finally {
     await first.close();
     await second.close();

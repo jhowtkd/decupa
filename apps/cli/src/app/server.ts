@@ -277,7 +277,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
-  const { page, projectPathJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -312,6 +312,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         readStored,
         page,
         projectPathJs,
+        editReservationUiJs,
         pageCss,
         pageJs,
         templatesRoot,
@@ -698,6 +699,7 @@ export function withProjectDir(page: string, dir: string, prefix = ""): string {
 async function loadAssemblyPageAssets(): Promise<{
   page: string;
   projectPathJs: string;
+  editReservationUiJs: string;
   pageCss: string;
   pageJs: string;
 }> {
@@ -706,6 +708,7 @@ async function loadAssemblyPageAssets(): Promise<{
     projectPathJs: await readFile(join(HERE, "project-path.js"), "utf8"),
     pageCss: await readFile(join(HERE, "assembly", "page.css"), "utf8"),
     pageJs: await readFile(join(HERE, "assembly", "page.js"), "utf8"),
+    editReservationUiJs: await readFile(join(HERE, "edit-reservation-ui.js"), "utf8"),
   };
 }
 
@@ -719,6 +722,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   readStored: ReturnType<typeof createCredentialsReader>;
   page: string;
   projectPathJs: string;
+  editReservationUiJs: string;
   pageCss: string;
   pageJs: string;
   templatesRoot: string;
@@ -760,6 +764,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
       pageCss: opts.pageCss,
       pageJs: opts.pageJs,
       projectPathJs: opts.projectPathJs,
+      editReservationUiJs: opts.editReservationUiJs,
       templatesRoot: opts.templatesRoot,
       decision,
       exec: opts.exec,
@@ -819,7 +824,7 @@ async function startAssemblyApp(opts: {
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const exec = opts.executor ?? new SpawnExecutor();
-  const { page, projectPathJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -834,6 +839,7 @@ async function startAssemblyApp(opts: {
     readStored,
     page,
     projectPathJs,
+    editReservationUiJs,
     pageCss,
     pageJs,
     templatesRoot,

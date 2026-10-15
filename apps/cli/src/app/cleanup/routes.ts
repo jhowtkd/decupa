@@ -120,7 +120,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
         return true;
       }
 
-      if (["/keeplist.js", "/fillers-ui.js", "/review-generation.js", "/project-path.js"].includes(url.pathname)) {
+      if (["/keeplist.js", "/fillers-ui.js", "/review-generation.js", "/project-path.js", "/edit-reservation-ui.js"].includes(url.pathname)) {
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
         res.end(await readFile(new URL(`../${url.pathname.slice(1)}`, import.meta.url), "utf8"));
         return true;
