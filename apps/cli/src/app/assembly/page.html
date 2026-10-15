@@ -7,6 +7,8 @@
 <link rel="icon" href="data:,">
 <meta name="decupa-project-dir" content="">
 <meta name="decupa-project-prefix" content="">
+<meta name="decupa-team-mode" content="">
+<meta name="decupa-media-enabled" content="">
 <link rel="stylesheet" href="__DECUPA_PROJECT_CSS__">
 </head>
 <body data-stage="materiais">
@@ -63,6 +65,17 @@
   Arraste arquivos para cá ou clique para escolher
   <input type="file" id="filePicker" accept="video/*,audio/*" multiple hidden>
 </div>
+<dialog id="mediaDialog" aria-labelledby="mediaDialogTitle">
+  <h2 id="mediaDialogTitle">Adicionar Mídia</h2>
+  <p id="mediaDialogIntro" class="muted">Envie uma Mídia ou escolha uma que já está no acervo.</p>
+  <div class="media-dialog-actions">
+    <button type="button" id="mediaUpload">Enviar Mídia</button>
+    <button type="button" id="mediaRefresh" class="quiet">Atualizar acervo</button>
+  </div>
+  <div id="mediaUploads" aria-live="polite"></div>
+  <ul id="mediaLibrary" class="plain"></ul>
+  <button type="button" id="mediaClose" class="quiet">Fechar</button>
+</dialog>
 <script type="module" src="__DECUPA_PROJECT_JS__"></script>
 </body>
 </html>

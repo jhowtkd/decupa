@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, unlink, writeFile, appendFile } from "node:fs/promises";
@@ -5,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
 import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
@@ -1633,6 +1635,84 @@ async function postNoRuntime(
   );
   return { status, corpo: JSON.parse(texto) as Record<string, unknown> };
 }
+
+async function heldMediaRuntime(dir: string, mediaPath: string, coordinator?: FileCoordinator) {
+  const mediaId = createHash("sha256").update(await readFile(mediaPath)).digest("hex");
+  let workerStarted!: () => void;
+  const workerReady = new Promise<void>((resolve) => { workerStarted = resolve; });
+  let workerAborted = false;
+  const runtime = createAssemblyRuntime(dir, {
+    exec: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+    port: () => 0,
+    coordinator,
+    speech: {
+      worker: async (req) => {
+        workerStarted();
+        await new Promise<void>((_resolve, reject) => {
+          const aborted = () => { workerAborted = true; reject(new Error("cancelado")); };
+          if (req.signal?.aborted) return aborted();
+          req.signal?.addEventListener("abort", aborted, { once: true });
+        });
+        return { language: "pt", words: [], unaligned: [] };
+      },
+      extract: async () => {},
+      detectSilence: async () => [],
+    },
+    media: {
+      getMedia: async (id) => id === mediaId ? {
+        id, path: mediaPath, nome: "nova.mp4", tamanho: 1, duracao: 1, criadoEm: Date.now(),
+      } : null,
+    },
+  });
+  return { runtime, mediaId, workerReady, wasWorkerAborted: () => workerAborted };
+}
+
+it("adicionar Mídia durante análise mantém a operação e deixa o preparo pendente", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-pending-"));
+  const sourcePath = join(dir, "fala.mp4");
+  const pendingPath = join(dir, "nova.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), sourcePath);
+  await copyFile(join(FIXTURES, "tone-gap.wav"), pendingPath);
+  const project = blankProject("p1");
+  await createProject(dir, project);
+  const { runtime, mediaId, workerReady, wasWorkerAborted } = await heldMediaRuntime(dir, pendingPath);
+  const opened = await runtime.ensureProject([sourcePath]);
+  const sourceId = opened.assembly.sources[0]!.id;
+  const analyzing = postNoRuntime(runtime, dir, "/project/analyze", { sourceIds: [sourceId], visual: false });
+  await workerReady;
+  const add = await postNoRuntime(runtime, dir, "/project/media", { baseRevision: opened.revision, mediaId });
+  expect(add.status).toBe(202);
+  expect(add.corpo.pendingPreparation).toBe(true);
+  expect((add.corpo.operation as { stage: string }).stage).toBe("analyzing");
+  const cancel = await postNoRuntime(runtime, dir, "/project/cancel", {});
+  expect(cancel.status).toBe(200);
+  expect((cancel.corpo.operation as { stage: string }).stage).toBe("cancelled");
+  await analyzing;
+  expect(wasWorkerAborted()).toBe(true);
+  await runtime.close();
+});
+
+it("adicionar Mídia sem operação agenda a análise na fila e permite cancelá-la", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-media-analysis-"));
+  const mediaPath = join(dir, "nova.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), mediaPath);
+  const { runtime, mediaId, workerReady, wasWorkerAborted } = await heldMediaRuntime(
+    dir,
+    mediaPath,
+    createFileCoordinator(join(dir, "coordinator"), { limit: 1 }),
+  );
+  await createProject(dir, blankProject("p1"));
+  const add = await postNoRuntime(runtime, dir, "/project/media", { baseRevision: 0, mediaId });
+  expect(add.status).toBe(202);
+  expect(add.corpo.pendingPreparation).toBeUndefined();
+  expect(["queued", "analyzing"]).toContain((add.corpo.operation as { stage: string }).stage);
+  await workerReady;
+  const cancel = await postNoRuntime(runtime, dir, "/project/cancel", {});
+  expect(cancel.status).toBe(200);
+  expect((cancel.corpo.operation as { stage: string }).stage).toBe("cancelled");
+  expect(wasWorkerAborted()).toBe(true);
+  await runtime.close();
+});
 
 it("segundo speech-proposal enquanto o primeiro espera o modelo recebe 409 e não aborta o primeiro", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-speech-flight-"));

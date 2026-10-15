@@ -15,7 +15,7 @@ import { access, readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promi
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertSafeBind, guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
+import { assertSafeBind, guardLocalRequest, hostConfig, isLoopbackBind, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
@@ -250,6 +250,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   // escutar fora do loopback sem senha não sobe.
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
   const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  const media = await configuredMediaRuntime(opts.env, opts.now);
+  const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -336,6 +338,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         projectPathJs,
         pageCss,
         pageJs,
+        media,
+        teamMode,
         templatesRoot,
         port: () => boundPort,
         allowPaidModel,
@@ -351,7 +355,6 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       };
     },
   });
-  const media = await configuredMediaRuntime(opts.env, opts.now);
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
@@ -732,7 +735,12 @@ async function startCleanupApp(opts: {
  * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
  * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
  */
-export function withProjectDir(page: string, dir: string, prefix = ""): string {
+export function withProjectDir(
+  page: string,
+  dir: string,
+  prefix = "",
+  opts: { teamMode?: boolean; mediaEnabled?: boolean } = {},
+): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
   return page
@@ -740,6 +748,10 @@ export function withProjectDir(page: string, dir: string, prefix = ""): string {
       () => `<meta name="decupa-project-dir" content="${escaped}">`)
     .replace('<meta name="decupa-project-prefix" content="">',
       () => `<meta name="decupa-project-prefix" content="${prefix}">`)
+    .replace('<meta name="decupa-team-mode" content="">',
+      () => `<meta name="decupa-team-mode" content="${opts.teamMode === true ? "true" : "false"}">`)
+    .replace('<meta name="decupa-media-enabled" content="">',
+      () => `<meta name="decupa-media-enabled" content="${opts.mediaEnabled === true ? "true" : "false"}">`)
     .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css", prefix))
     .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js", prefix));
 }
@@ -780,6 +792,8 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   port: () => number;
   allowPaidModel: boolean;
   allowPaidVisual: boolean;
+  media?: MediaRuntime;
+  teamMode?: boolean;
   alwaysTextConfigured?: boolean;
 }): Promise<{
   runtime: ReturnType<typeof createAssemblyRuntime>;
@@ -811,7 +825,10 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   });
   try {
     const runtime = createAssemblyRuntime(opts.dir, {
-      page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix), keyProviderState(opts.visualEnv, await loadStored()).notice),
+      page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix, {
+        teamMode: opts.teamMode === true,
+        mediaEnabled: Boolean(opts.media),
+      }), keyProviderState(opts.visualEnv, await loadStored()).notice),
       pageCss: opts.pageCss,
       pageJs: opts.pageJs,
       projectPathJs: opts.projectPathJs,
@@ -829,6 +846,8 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
       fillerFetchImpl: opts.fetchImpl,
       speech: speech.speech,
       coordinator: opts.coordinator,
+      media: opts.media,
+      teamMode: opts.teamMode,
     });
     const project = await runtime.ensureProject(opts.inputs);
     return { runtime, project, loadStored, transports, speech: speech.speech, closeSpeech: speech.closeSpeech };
@@ -865,6 +884,7 @@ async function startAssemblyApp(opts: {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
   const dir = resolve(opts.projectDir);
+  const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
@@ -876,6 +896,7 @@ async function startAssemblyApp(opts: {
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
+  const media = await configuredMediaRuntime(opts.env, opts.now);
   const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
   const setup = await createAssemblyProjectRuntime({
     ...opts,
@@ -889,6 +910,8 @@ async function startAssemblyApp(opts: {
     projectPathJs,
     pageCss,
     pageJs,
+    media,
+    teamMode,
     templatesRoot,
     port: () => boundPort,
     allowPaidModel,
@@ -902,7 +925,6 @@ async function startAssemblyApp(opts: {
     resolveAnalysis:transports.resolveAnalysis,
     allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
-  const media = await configuredMediaRuntime(opts.env, opts.now);
   const newProjects: AppHandle[] = [];
 
   const server = createServer((req, res) => {
