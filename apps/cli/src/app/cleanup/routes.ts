@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -101,6 +101,19 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
     loadStored, page, replan, triageReply, triageRequestKey, otioClipsForPlan,
   } = opts;
   let triageFlight: { key: string; reply: Promise<Record<string, unknown>> } | null = null;
+  let mp4ExportTail = Promise.resolve();
+
+  async function serializeMp4Export<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = mp4ExportTail;
+    let release!: () => void;
+    mp4ExportTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
 
   return {
     handle: async (req, res): Promise<boolean> => {
@@ -287,10 +300,20 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
         }
         if (kind === "mp4") {
           const out = join(workDir, "corte.mp4");
-          // O render entra na fila global, mas não mexe no estágio do job: ele
-          // descreve a preparação da Mídia, e o export é uma requisição à parte
-          // que a tela já acompanha enquanto espera a resposta.
-          await runRender(pipelineJob, out, exec, opts.coordinator);
+          // O plano é um snapshot do clique. O arquivo compartilhado pode mudar
+          // enquanto este export espera a fila global.
+          const exportDir = await mkdtemp(join(workDir, ".decupa-export-"));
+          try {
+            await mkdir(join(exportDir, "out"), { recursive: true });
+            await writeFile(join(exportDir, "out", "condense_plan.json"), `${JSON.stringify(plan)}\n`, "utf8");
+            // O render entra na fila global, mas não mexe no estágio do job: ele
+            // descreve a preparação da Mídia, e o export é uma requisição à parte
+            // que a tela já acompanha enquanto espera a resposta. Exports do
+            // mesmo Projeto são serializados porque compartilham corte.mp4.
+            await serializeMp4Export(() => runRender({ ...pipelineJob, workDir: exportDir }, out, exec, opts.coordinator));
+          } finally {
+            await rm(exportDir, { recursive: true, force: true });
+          }
           sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/mp4`, opts.prefix) });
           return true;
         }
