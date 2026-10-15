@@ -88,11 +88,13 @@ export interface CleanupRuntimeDeps {
   coordinator?: FileCoordinator;
   now?: () => number;
   identity?: (req: IncomingMessage) => string | undefined;
+  busy?: () => boolean;
 }
 
 export interface CleanupRuntime {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
   close(): Promise<void>;
+  isBusy(): boolean;
 }
 
 export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
@@ -125,6 +127,13 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
   const withPlan = serialQueue();
 
   return {
+    isBusy: () => {
+      const stage = store.get(job.id)?.stage;
+      const active = opts.busy
+        ? opts.busy()
+        : Boolean(stage && !["ready", "error", "cancelled"].includes(stage));
+      return active || triageFlight !== null;
+    },
     handle: async (req, res): Promise<boolean> => {
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return true; }

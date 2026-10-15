@@ -500,7 +500,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
   function hasActiveOperation(): boolean {
     return (operation !== null && ["queued", "analyzing", "preparing", "rendering", "proposing"].includes(operation.stage))
-      || (preparationSignal !== null && !preparationSignal.aborted);
+      || (preparationSignal !== null && !preparationSignal.aborted)
+      || [...alignActive].some((key) => key.startsWith(`${dir}\0`));
   }
 
   async function sendSnapshot(res: ServerResponse, body: Record<string, unknown>, status?: number, includeStale = false): Promise<void> {
@@ -1897,6 +1898,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   return {
     ensureProject,
     handle: handleAssembly,
+    isBusy: hasActiveOperation,
     // O runtime não possui servidor nem porta. Encerrar significa apenas
     // interromper operações e prévias que ainda possam manter filhos vivos.
     close: async (): Promise<void> => {

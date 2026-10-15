@@ -1,9 +1,7 @@
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { createFileCoordinator } from "@decupa/coordinator";
 import { createTracer } from "@decupa/trace";
-import { createResidentSpeechClient } from "@decupa/transcript";
 import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
@@ -19,7 +17,7 @@ import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
 import {
-  assertSidecarSynced, ensureAudioProxy, indexPath, preflight, runIngest, runTriage, SPEECH_SCRIPT, SpawnExecutor,
+  ensureAudioProxy, indexPath, preflight, runIngest, runTriage, SpawnExecutor,
   visualIndexPath, type Executor, type IngestSpeech, type PipelineJob,
 } from "./pipeline.ts";
 import { triageIdentity } from "../triage.ts";
@@ -36,6 +34,7 @@ import { projectUrl } from "./project-url.ts";
 import { createProjectRuntimeRegistry, PROJECT_ID_PATTERN } from "./project-root.ts";
 import { createAuthRuntime, requestIdentity } from "./auth.ts";
 import { requireEditReservation } from "./edit-reservation.ts";
+import { createServerSpeechRuntime, type ServerSpeechRuntime } from "./speech-runtime.ts";
 
 export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
@@ -161,32 +160,12 @@ export function attachResidentSpeech(opts: {
   speech?: IngestSpeech;
   executorInjected: boolean;
 }): { speech?: IngestSpeech; closeSpeech: () => Promise<void> } {
-  const memoCoordinator = () => createFileCoordinator(join(opts.dir, ".decupa", "coordinator"));
-  if (opts.speech) {
-    if (opts.speech.coordinator) {
-      return { speech: opts.speech, closeSpeech: async () => undefined };
-    }
-    return { speech: { ...opts.speech, coordinator: memoCoordinator() }, closeSpeech: async () => undefined };
-  }
-  if (opts.executorInjected) return { closeSpeech: async () => undefined };
-  const client = createResidentSpeechClient();
-  // O worker sobe com `uv run --no-sync`: sem o venv da fala sincronizado a
-  // montagem (que não passa pelo preflight da limpeza) quebraria só na
-  // primeira transcrição, com um ModuleNotFoundError cru. Confere uma vez;
-  // falha não fica em cache, para o setup poder ser feito com o app aberto.
-  let synced: Promise<void> | undefined;
-  const ensureSynced = (): Promise<void> => {
-    synced ??= assertSidecarSynced(new SpawnExecutor(), dirname(SPEECH_SCRIPT), "fala")
-      .catch((error: unknown) => { synced = undefined; throw error; });
-    return synced;
-  };
-  return {
-    speech: {
-      worker: async (req) => { await ensureSynced(); return client.transcribe(req); },
-      coordinator: memoCoordinator(),
-    },
-    closeSpeech: () => client.close(),
-  };
+  const manager = createServerSpeechRuntime({
+    speech: opts.speech,
+    executorInjected: opts.executorInjected,
+    env: process.env,
+  });
+  return { ...manager.attach(opts.dir), closeSpeech: manager.close };
 }
 
 type StartAppOptions = {
@@ -280,6 +259,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
     : undefined;
   const exec = opts.executor ?? new SpawnExecutor();
+  const speechRuntime = createServerSpeechRuntime({
+    speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
+  });
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
@@ -309,6 +291,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
 
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
+    now: opts.now,
     createRuntime: async ({ id, dir, prefix, kind }) => {
       if (kind === "cleanup") {
         const manifest = await readSourceManifest(dir);
@@ -317,13 +300,15 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           input: resolve(manifest.path), workDir: dir, prefix, displayName: manifest.displayName, provider: opts.provider,
           providerConfigDir: opts.providerConfigDir, fetchImpl: opts.fetchImpl, env,
           now: opts.now, speech: opts.speech, triageFn: opts.triageFn, autoStart: opts.autoStart,
+          speechRuntime,
           exec, coordinator, visualEnv, visualDir, readStored, loadStored: globalLoadStored,
           page: cleanupPage,
         });
         return {
           handle: async (req, res) => { cleanupSetup.startIngest(); return cleanupSetup.runtime.handle(req, res); },
           onJevDisabled: cleanupSetup.onJevDisabled,
-          close: async () => { await Promise.all([cleanupSetup.runtime.close(), cleanupSetup.closeSpeech()]); },
+          isBusy: cleanupSetup.runtime.isBusy,
+          close: async () => { await cleanupSetup.runtime.close(); },
         };
       }
       const setup = await createAssemblyProjectRuntime({
@@ -331,6 +316,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         dir,
         prefix,
         inputs: id === opts.projectId ? opts.inputs : undefined,
+        speechRuntime,
         exec,
         coordinator,
         visualEnv,
@@ -351,9 +337,10 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       });
       return {
         handle: setup.runtime.handle,
+        isBusy: setup.runtime.isBusy,
         onJevDisabled: () => cancelAssemblyFillerNotes(dir),
         close: async () => {
-          await Promise.all([setup.runtime.close(), setup.closeSpeech()]);
+          await setup.runtime.close();
         },
       };
     },
@@ -361,6 +348,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      await speechRuntime.sweep();
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
@@ -423,12 +411,16 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     close: async () => {
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimesClosed = registry.close();
+      const speechClosed = speechRuntime.close();
       const mediaClosed = media?.close() ?? Promise.resolve();
       const authClosed = auth.close();
       const closed = new Promise<void>((resolveClosed) => { server.close(() => resolveClosed()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimesClosed, mediaClosed, authClosed, closed]);
+      await Promise.all([killed, runtimesClosed, speechClosed, mediaClosed, authClosed, closed]);
     },
-    killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
+    killChildren: () => {
+      if (exec instanceof SpawnExecutor) exec.killNow();
+      speechRuntime.killChildren();
+    },
   };
 }
 
@@ -476,6 +468,7 @@ type CleanupProjectRuntimeOptions = {
   env?: Record<string, string | undefined>;
   now?: () => number;
   speech?: IngestSpeech;
+  speechRuntime?: ServerSpeechRuntime;
   triageFn?: (opts: {
     indexPath: string;
     videoPath: string;
@@ -512,11 +505,10 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   });
   if (staleDir) console.log(`a fonte mudou desde a última sessão; os arquivos antigos foram para ${staleDir}`);
   await mkdir(join(workDir, "out"), { recursive: true });
-  const { speech, closeSpeech } = attachResidentSpeech({
-    dir: workDir,
-    speech: opts.speech,
-    executorInjected: Boolean(opts.executor),
-  });
+  const speechSetup = opts.speechRuntime
+    ? { ...opts.speechRuntime.attach(workDir), closeSpeech: async () => undefined }
+    : attachResidentSpeech({ dir: workDir, speech: opts.speech, executorInjected: Boolean(opts.executor) });
+  const { speech, closeSpeech } = speechSetup;
   const ingestAbort = new AbortController();
 
   const store = new JobStore();
@@ -534,8 +526,10 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   // Proxy só de áudio para os botões "ouvir": gerado em paralelo ao ingest,
   // a página passa a usá-lo quando o poll avisa (`audio: true`).
   let audioReady = false;
+  let ingestInFlight = false;
 
   async function ingest(): Promise<void> {
+    ingestInFlight = true;
     void ensureAudioProxy(pipelineJob, exec).then((ok) => { audioReady = ok; }, () => {});
     try {
       await preflight(pipelineJob, exec);
@@ -557,6 +551,8 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
       // `fail` não sobrescreve `cancelled`: matar o processo faz a etapa
       // falhar, e esse erro não é notícia para quem pediu para parar.
       store.fail(job.id, error instanceof Error ? error.message : String(error));
+    } finally {
+      ingestInFlight = false;
     }
   }
 
@@ -632,6 +628,7 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
     });
   }
 
+  let ingestStarted = false;
   const runtime = createCleanupRuntime({
     input, workDir, displayName: opts.displayName, provider: opts.provider, providerConfigDir: opts.providerConfigDir,
     fetchImpl: opts.fetchImpl, visualEnv, exec, pipelineJob, job, store, cleanup, ingestAbort,
@@ -640,11 +637,14 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
     page: async () => withCleanupProject(withVisualNotice(opts.page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await opts.loadStored(), false).notice), opts.prefix ?? ""),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
     coordinator: opts.coordinator, now: opts.now, identity: requestIdentity,
+    busy: () => ingestInFlight || (ingestStarted && Boolean(store.get(job.id)?.stage
+      && !["ready", "error", "cancelled"].includes(store.get(job.id)!.stage))),
   });
   let initialIngestStarted = false;
   const startIngest = (): void => {
     if (opts.autoStart === false || initialIngestStarted) return;
     initialIngestStarted = true;
+    ingestStarted = true;
     void ingest();
   };
   return { runtime, jobId: job.id, exec, closeSpeech, startIngest,
@@ -674,6 +674,9 @@ async function startCleanupApp(opts: {
   if (opts.providerConfigDir) await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
+  const speechRuntime = createServerSpeechRuntime({
+    speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
+  });
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
@@ -685,13 +688,14 @@ async function startCleanupApp(opts: {
   const page = await readFile(join(HERE, "page.html"), "utf8");
   const workDir = opts.workDir ?? cleanupWorkDir(input);
   const setup = await createCleanupProjectRuntime({ ...opts, input, workDir, exec, coordinator,
-    visualEnv, visualDir, readStored, loadStored, page });
+    visualEnv, visualDir, readStored, loadStored, page, speechRuntime });
   const { runtime, jobId, closeSpeech, startIngest } = setup;
   let boundPort = opts.port ?? 7788;
   const media = await configuredMediaRuntime(opts.env, opts.now);
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      await speechRuntime.sweep();
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
       // isso derrubava o processo inteiro.
@@ -739,10 +743,14 @@ async function startCleanupApp(opts: {
       const mediaClosed = media?.close() ?? Promise.resolve();
       const authClosed = auth.close();
       const speechClosed = closeSpeech();
+      const serverSpeechClosed = speechRuntime.close();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, closed]);
     },
-    killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
+    killChildren: () => {
+      if (exec instanceof SpawnExecutor) exec.killNow();
+      speechRuntime.killChildren();
+    },
   };
 }
 
@@ -813,6 +821,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   media?: MediaRuntime;
   teamMode?: boolean;
   alwaysTextConfigured?: boolean;
+  speechRuntime?: ServerSpeechRuntime;
 }): Promise<{
   runtime: ReturnType<typeof createAssemblyRuntime>;
   project: Awaited<ReturnType<ReturnType<typeof createAssemblyRuntime>["ensureProject"]>>;
@@ -836,11 +845,9 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
     proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || opts.allowPaidModel || opts.providerConfigDir) });
   const { decision } = await resolveOperationDeps();
   opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
-  const speech = attachResidentSpeech({
-    dir: opts.dir,
-    speech: opts.speech,
-    executorInjected: Boolean(opts.executor),
-  });
+  const speech = opts.speechRuntime
+    ? { ...opts.speechRuntime.attach(opts.dir), closeSpeech: async () => undefined }
+    : attachResidentSpeech({ dir: opts.dir, speech: opts.speech, executorInjected: Boolean(opts.executor) });
   try {
     const runtime = createAssemblyRuntime(opts.dir, {
       page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix, {
@@ -913,6 +920,9 @@ async function startAssemblyApp(opts: {
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const exec = opts.executor ?? new SpawnExecutor();
+  const speechRuntime = createServerSpeechRuntime({
+    speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
+  });
   const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
@@ -939,6 +949,7 @@ async function startAssemblyApp(opts: {
     port: () => boundPort,
     allowPaidModel,
     allowPaidVisual,
+    speechRuntime,
   });
   const { runtime, project, loadStored, transports, speech, closeSpeech } = setup;
   const templates=createTemplateRuntime(templatesRoot,{
@@ -952,6 +963,7 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
+      await speechRuntime.sweep();
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
@@ -1008,12 +1020,14 @@ async function startAssemblyApp(opts: {
       const mediaClosed = ownsMedia ? (media?.close() ?? Promise.resolve()) : Promise.resolve();
       const authClosed = auth.close();
       const speechClosed = closeSpeech();
+      const serverSpeechClosed = speechRuntime.close();
       const nested = Promise.all(newProjects.map(app => app.close()));
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, nested, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, nested, closed]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
+      speechRuntime.killChildren();
       for (const app of newProjects) app.killChildren();
     },
   };

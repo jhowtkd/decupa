@@ -29,13 +29,12 @@ async function tmp(): Promise<string> {
   return dir;
 }
 
-// O handler de `exit` só roda código síncrono: se o closeSpeech vier depois de
-// um `await`, o worker residente nunca é fechado nesse caminho.
-describe("close() inicia closeSpeech antes do primeiro await", () => {
+// O cliente agora é lazy: sem uma transcrição, não há worker para fechar.
+describe("close() não sobe o worker de fala sem transcrição", () => {
   it("montagem", async () => {
     const app = await startApp({ projectDir: await tmp(), port: 0, env: {} });
     const closing = app.close();
-    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy).toHaveBeenCalledTimes(0);
     await closing;
   });
 
@@ -45,7 +44,7 @@ describe("close() inicia closeSpeech antes do primeiro await", () => {
     await copyFile(join(FIXTURES, "clip.mp4"), input);
     const app = await startApp({ input, port: 0, autoStart: false, workDir: join(dir, "work"), env: {} });
     const closing = app.close();
-    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy).toHaveBeenCalledTimes(0);
     await closing;
   });
 });
