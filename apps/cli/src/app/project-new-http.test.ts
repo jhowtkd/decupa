@@ -207,6 +207,17 @@ it("aceita Mídias do acervo na criação de Montagem e serve a fonte dentro do 
     expect(project.assembly.sources).toHaveLength(1);
     expect(project.assembly.sources[0]).toMatchObject({ sha256: mediaId, name: "gravacao.mp4" });
 
+    // A mesma Mídia pedida duas vezes (o hash em qualquer caixa) vira uma fonte só.
+    const twice = await (await fetch(`${base}/project/new`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Duas vezes", fluxo: "montagem", midias: [mediaId, mediaId.toUpperCase()] }),
+    })).json() as { id: string };
+    const twiceProject = JSON.parse(await readFile(join(projectsRoot, twice.id, "project.json"), "utf8")) as {
+      assembly: { sources: unknown[] };
+    };
+    expect(twiceProject.assembly.sources).toHaveLength(1);
+
     const range = await fetch(`${base}${created.url}project/media/${encodeURIComponent(project.assembly.sources[0]!.id)}`, {
       headers: { range: "bytes=3-9" },
     });

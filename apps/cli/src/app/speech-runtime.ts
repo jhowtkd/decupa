@@ -140,8 +140,16 @@ export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpe
       await closing;
     },
     killChildren: (): void => {
+      // Só roda no `exit`, mas deixa o runtime coerente: nenhuma transcrição
+      // posterior tenta usar o cliente cujo processo acabou de ser morto.
+      closed = true;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = undefined;
       executor.killNow();
-      void client?.close();
+      const old = client;
+      client = undefined;
+      synced = undefined;
+      void old?.close();
     },
   };
 }

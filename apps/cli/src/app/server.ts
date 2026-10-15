@@ -528,9 +528,10 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         }
         const sources: Source[] = [];
         if (body.fluxo === "montagem") {
-          for (const mediaId of mediaIds) {
-            sources.push(await sourceFromMedia(media!, mediaId.toLowerCase(), `src-${randomUUID()}`));
-          }
+          // A mesma Mídia pedida duas vezes vira uma fonte só (o acervo é por
+          // hash); os probes das Mídias distintas rodam em paralelo.
+          const unique = [...new Set(mediaIds.map((mediaId) => mediaId.toLowerCase()))];
+          sources.push(...await Promise.all(unique.map((mediaId) => sourceFromMedia(media!, mediaId, `src-${randomUUID()}`))));
         }
         const created = body.fluxo === "limpeza"
           ? await createCleanupInProjectsRoot(projectsRoot, displayName, media!, mediaIds[0]!.toLowerCase(), opts.now)
