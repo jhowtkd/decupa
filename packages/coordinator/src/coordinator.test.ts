@@ -184,9 +184,11 @@ describe("createFileCoordinator", () => {
   it("mantém a ordem de chegada depois de uma espera longa", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });
-    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    // Lease de 200 ms e espera de 1 s (5 leases, além do limite de 4): com 40 ms
+    // um waiter vivo podia ser tomado por morto numa máquina carregada.
+    const coordinator = createFileCoordinator(root, { leaseMs: 200, pollMs: 5 });
     const order: string[] = [];
-    const first = coordinator.withSlot({ stage: "rendering" }, () => delay(220));
+    const first = coordinator.withSlot({ stage: "rendering" }, () => delay(1_000));
     await delay(10);
     const second = coordinator.withSlot({ stage: "rendering" }, () => { order.push("b"); return "b"; });
     await waitUntil("segundo waiter", async () => {
