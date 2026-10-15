@@ -69,3 +69,9 @@ it.each(["$&", "$`", "$'", "$$", "/tmp/Meu $& $` $' $$ <>\"'& projeto"])(
     );
   },
 );
+
+it("projectUrl monta URLs emitidas com o prefixo do Projeto", async () => {
+  const { projectUrl } = await import("../server.ts");
+  expect(projectUrl("jobs/j1/download/otio")).toBe("/jobs/j1/download/otio");
+  expect(projectUrl("jobs/j1/download/otio", "/projects/projeto-a")).toBe("/projects/projeto-a/jobs/j1/download/otio");
+});

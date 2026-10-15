@@ -196,10 +196,10 @@ it("serve a página de montagem, não a de limpeza", async () => {
   expect(html).toContain('id="contexto"');
   expect(html).toContain('id="faixa"');
   expect(css).toContain(".riscado");
-  expect(js).toContain("/editor/rail.js");
+  expect(js).toContain('import(projectPath("editor/rail.js"))');
   expect(js).toContain("scheduleAutoPreview");
   expect(contexto).toContain("previewPlayer");
-  expect(contexto).toContain("/project/output/");
+  expect(contexto).toContain('projectPath("project/output/');
   expect(contexto).toContain("Preparar montagem");
   expect(rail).toContain("Retomar");
   expect(contexto).toContain("download");
@@ -1309,7 +1309,7 @@ it("bloqueia mutações durante importação e sincroniza revisão após conflit
   client.call.mockResolvedValueOnce({ res: { ok: true }, body: { project: { revision: 3 } } });
   await call("/project/source-role", opts);
   expect(client.call).toHaveBeenCalledTimes(2);
-  expect(client.call).toHaveBeenLastCalledWith("/project");
+  expect(client.call).toHaveBeenLastCalledWith("project");
   expect(state.set).toHaveBeenCalledWith("project", { revision: 3 });
 });
 

@@ -78,6 +78,12 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(payload);
 }
 
+/** Monta uma URL emitida pelo servidor que pertence ao Projeto. */
+export function projectUrl(path: string, prefix = ""): string {
+  const clean = path.replace(/^\/+/, "");
+  return `${prefix}/${clean}`;
+}
+
 function parseRequestUrl(raw: string | undefined): URL | null {
   try {
     return new URL(raw ?? "/", "http://localhost");
@@ -589,7 +595,7 @@ async function startCleanupApp(opts: {
               clips: plan.clips, fps, title: basename(input),
               sourceStartFrames: Math.round(startSeconds * fps),
             }), "utf8");
-            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/edl` });
+            sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/edl`) });
             return;
           }
           if (kind === "otio") {
@@ -641,13 +647,13 @@ async function startCleanupApp(opts: {
             };
             const out = join(workDir, "corte.otio");
             await writeFile(out, `${buildOtio(assembly)}\n`, "utf8");
-            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/otio` });
+            sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/otio`) });
             return;
           }
           if (kind === "mp4") {
             const out = join(workDir, "corte.mp4");
             await runRender(pipelineJob, out, exec);
-            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/mp4` });
+            sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/mp4`) });
             return;
           }
           if (kind === "srt") {
@@ -673,13 +679,13 @@ async function startCleanupApp(opts: {
               });
             const out = join(workDir, "corte.srt");
             await writeFile(out, buildSrt({ clips: plan.clips, words }), "utf8");
-            sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/srt` });
+            sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/srt`) });
             return;
           }
           if (kind === "transcript") {
             sendJson(res, {
               path: join(workDir, "out", "condensed_transcript.json"),
-              downloadUrl: `/jobs/${current.id}/download/transcript`,
+              downloadUrl: projectUrl(`jobs/${current.id}/download/transcript`),
             });
             return;
           }
@@ -762,7 +768,9 @@ export function withProjectDir(page: string, dir: string): string {
     .replace('<meta name="decupa-project-dir" content="">',
       () => `<meta name="decupa-project-dir" content="${escaped}">`)
     .replace('<meta name="decupa-project-prefix" content="">',
-      '<meta name="decupa-project-prefix" content="">');
+      '<meta name="decupa-project-prefix" content="">')
+    .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css"))
+    .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js"));
 }
 
 async function startAssemblyApp(opts: {

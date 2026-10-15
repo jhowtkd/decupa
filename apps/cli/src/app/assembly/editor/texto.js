@@ -1,7 +1,7 @@
 // Região do texto (Task 6): os dois documentos do centro como timeline com
 // gestos de edição no ponto e menu flutuante. Lógica de menu pura e testável
 // (menuActionsFor/sceneHeaderActions); o DOM só ancora gestos e dispara
-// POST /project/edit (a sincronização do projeto volta pelo api.call do
+// POST project/edit (a sincronização do projeto volta pelo api.call do
 // bootstrap, como nos outros módulos).
 import { clock, clockPrecise, seconds1 } from "./format.js";
 import { ICON } from "./icons.js";
@@ -601,7 +601,7 @@ export function speechProposalAction({ state, api, button, readTarget, onProposa
     const p = state.get("project");
     if (!p) return undefined;
     const { sourceId, speechId, request } = readTarget();
-    return api.call("/project/speech-proposal", {
+    return api.call("project/speech-proposal", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, sourceId, speechId, request }),
       label: "Propondo ajuste…",
@@ -626,7 +626,7 @@ export async function deleteScene({ state, api, confirm }, sceneId) {
   const scene = p.scenes[index];
   const name = "cena " + (index + 1) + (scene.objective ? " (" + scene.objective + ")" : "");
   if (!confirm("Apagar a " + name + "? Dá para voltar com Desfazer.")) return false;
-  await api.call("/project/edit", {
+  await api.call("project/edit", {
     method: "POST",
     body: JSON.stringify({ baseRevision: p.revision, action: { type: "delete-scene", sceneId } }),
     label: "Excluindo cena…",
@@ -723,7 +723,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
         api.notifyError("Este trecho já está na montagem.");
         return;
       }
-      await api.call("/project/edit", {
+      await api.call("project/edit", {
         method: "POST",
         body: JSON.stringify({
           baseRevision: p.revision,
@@ -738,7 +738,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       api.notifyError("Selecione palavras de um mesmo trecho.");
       return;
     }
-    await api.call("/project/edit", {
+    await api.call("project/edit", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: p.revision,
@@ -829,7 +829,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     const p = state.get("project");
     const proposal = state.get("speechProposal");
     if (!p || !proposal) return;
-    const { res } = await api.call("/project/speech-accept", {
+    const { res } = await api.call("project/speech-accept", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
       label: "Aplicando ajuste…",
@@ -840,7 +840,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     const p = state.get("project");
     const proposal = state.get("speechProposal");
     if (!p || !proposal) return;
-    const { res } = await api.call("/project/speech-reject", {
+    const { res } = await api.call("project/speech-reject", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
       label: "Recusando proposta…",
@@ -907,7 +907,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     const p = state.get("project");
     if (!p) return;
     if (pick) {
-      const { res } = await api.call("/project/support-swap", {
+      const { res } = await api.call("project/support-swap", {
         method: "POST",
         body: JSON.stringify({
           baseRevision: p.revision,
@@ -921,7 +921,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     } else if (candidate) {
       const proposal = state.get("supportSwap");
       if (!proposal) return;
-      await api.call("/project/support-swap-accept", {
+      await api.call("project/support-swap-accept", {
         method: "POST",
         body: JSON.stringify({
           baseRevision: p.revision, proposalId: proposal.id,
@@ -935,7 +935,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     } else if (reject) {
       const proposal = state.get("supportSwap");
       if (!proposal) return;
-      await api.call("/project/support-swap-reject", {
+      await api.call("project/support-swap-reject", {
         method: "POST",
         body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
         label: "Recusando troca…",
@@ -979,7 +979,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       return;
     }
     const ordered = group.words.slice().sort((a, b) => a.start - b.start);
-    await api.call("/project/edit", {
+    await api.call("project/edit", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: p.revision,
@@ -1180,7 +1180,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       await deleteScene({ state, api, confirm: confirmAction }, scene);
       return;
     }
-    await api.call("/project/edit", {
+    await api.call("project/edit", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: p.revision,
@@ -1218,7 +1218,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       const p = state.get("project");
       if (proposal && p) {
         void api.call(proposal && speechAction.hasAttribute("data-speech-apply")
-          ? "/project/speech-accept" : "/project/speech-reject", {
+          ? "project/speech-accept" : "project/speech-reject", {
           method: "POST",
           body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
           label: speechAction.hasAttribute("data-speech-apply") ? "Aplicando ajuste…" : "Recusando proposta…",
@@ -1247,7 +1247,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       // Clique em cortado restaura na hora, sem seek (spec, Interação 3).
       const found = findWord(btn);
       if (!found) return;
-      void api.call("/project/edit", {
+      void api.call("project/edit", {
         method: "POST",
         body: JSON.stringify({
           baseRevision: state.get("project").revision,

@@ -262,9 +262,7 @@
 <div id="toast"></div>
 <script type="module">
 import { projectPath as projectPathFromMeta } from "./project-path.js";
-const projectPath = typeof projectPathFromMeta === "function"
-  ? projectPathFromMeta
-  : (path) => "/" + String(path).replace(/^\/+/, "");
+const projectPath = projectPathFromMeta;
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
 // Fonte do player invisível: o proxy só de áudio quando o servidor avisa que
@@ -273,9 +271,6 @@ let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = nu
 let audioSrc = null;
 
 const api = (p, o) => fetch(projectPath(`jobs/${jobId}${p}`), o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
-// Compatibilidade de testes: os caminhos concretos agora são montados por projectPath().
-// if (j.audio) audioSrc = "/media/audio";
-// player.src = audioSrc ?? "/media";
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
 const STEPS = [["queued","Na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
@@ -310,7 +305,7 @@ async function changeFillers(patch) {
   const ticket = generations.submit();
   queuePoll(1000);
   try {
-    const response = await fetch(`/jobs/${jobId}/fillers`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    const response = await fetch(projectPath(`jobs/${jobId}/fillers`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.error) throw Error(result.error ?? `Erro ${response.status}`);
     if (generations.accept(result.review, ticket)) readyFrom({ review: result.review });
@@ -689,7 +684,7 @@ function schedule() {
       return;
     }
     try {
-      const res = await fetch(`/jobs/${jobId}/keep`, {
+      const res = await fetch(projectPath(`jobs/${jobId}/keep`), {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ keepList: list }),
       });
@@ -717,7 +712,7 @@ function readyFrom(j) {
   kept = new Map(review.units.map((u) => [u.id, u.kept]));
   for (const id of ["triar", "exportar"]) el(id).disabled = false;
   el("cancelar").disabled = true;
-  if (!el("monitor").src) el("monitor").src = globalThis.projectPath?.("media") || "/" + "media";
+  if (!el("monitor").src) el("monitor").src = projectPath("media");
   render();
 }
 
@@ -744,7 +739,7 @@ async function poll() {
     el("cancelar").disabled = true;
     return;
   }
-  if (j.audio) audioSrc = globalThis.projectPath?.("media/audio") || "/" + "media/audio";
+  if (j.audio) audioSrc = projectPath("media/audio");
   if (j.source) {
     el("sourceName").textContent = j.source;
     el("sourceName").hidden = false;
