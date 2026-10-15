@@ -1173,10 +1173,9 @@ async function chamadaDireta(
     writeHead(codigo: number) { status = codigo; },
     end(parte?: unknown) { if (typeof parte === "string") texto = parte; },
   };
-  await runtime.handleAssembly(
+  await runtime.handle(
     req as unknown as IncomingMessage,
     res as unknown as ServerResponse,
-    dir,
   );
   return { status, corpo: JSON.parse(texto) as Record<string, unknown> };
 }
@@ -1628,10 +1627,9 @@ async function postNoRuntime(
     writeHead(codigo: number) { status = codigo; },
     end(parte?: unknown) { if (typeof parte === "string") texto = parte; },
   };
-  await runtime.handleAssembly(
+  await runtime.handle(
     req as unknown as IncomingMessage,
     res as unknown as ServerResponse,
-    dir,
   );
   return { status, corpo: JSON.parse(texto) as Record<string, unknown> };
 }

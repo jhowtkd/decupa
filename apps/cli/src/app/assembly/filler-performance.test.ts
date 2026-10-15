@@ -61,7 +61,7 @@ it("GET de 5.000 palavras reutiliza o relatório no poll seguinte", async () => 
   const get = async () => {
     const start = performance.now();
     const res = { writeHead() {}, end(value: string) { expect(JSON.parse(value).fillerReport.occurrences).toEqual([]); } };
-    await runtime.handleAssembly({ method: "GET", url: "/project", headers: {} } as IncomingMessage, res as unknown as ServerResponse, dir);
+    await runtime.handle({ method: "GET", url: "/project", headers: {} } as IncomingMessage, res as unknown as ServerResponse);
     return performance.now() - start;
   };
   const saved = await loadProject(dir);
