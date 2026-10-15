@@ -9,7 +9,7 @@
 import { clock, clockPrecise } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
-import { projectPath } from "../../project-path.js";
+import { projectPath } from "../project-path.js";
 
 /**
  * Bloco sob o playhead (puro): `{sceneId, kind} | null`. A camada de apoio
