@@ -1,6 +1,6 @@
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 
@@ -31,18 +31,11 @@ async function tmp(): Promise<string> {
 }
 
 async function activeSpeech(dir: string) {
-  const bin = join(dir, "bin");
-  await mkdir(bin, { recursive: true });
-  if (process.platform === "win32") {
-    await writeFile(join(bin, "uv.cmd"), "@echo off\r\nexit /b 0\r\n", "utf8");
-  } else {
-    const uv = join(bin, "uv");
-    await writeFile(uv, `#!${process.execPath}\nprocess.exit(0);\n`, "utf8");
-    await chmod(uv, 0o755);
-  }
-  const path = [bin, process.env.PATH].filter((value): value is string => Boolean(value)).join(delimiter);
-  const env = { PATH: path };
-  const runtime = createServerSpeechRuntime({ executorInjected: false, env });
+  const env = {};
+  const runtime = createServerSpeechRuntime({
+    executorInjected: false, env,
+    syncExecutor: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+  });
   await runtime.attach(dir).speech!.worker({ taskId: "close-speech", wav: join(dir, "audio.wav"), language: "pt" });
   return { env, runtime };
 }

@@ -7,6 +7,8 @@ import { assertSidecarSynced, SPEECH_SCRIPT, SpawnExecutor } from "./pipeline.ts
 type SpeechRuntimeOptions = {
   speech?: IngestSpeech;
   executorInjected: boolean;
+  /** Executor apenas para conferir o ambiente do sidecar; não possui filhos do worker. */
+  syncExecutor?: Executor;
   env: Record<string, string | undefined>;
   now?: () => number;
 };
@@ -37,11 +39,12 @@ export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpe
   const now = opts.now ?? Date.now;
   const idleMs = idleMinutes(opts.env) * 60_000;
   const executor = new SpawnExecutor();
+  const syncExecutor = opts.syncExecutor ?? executor;
   const speechEnv = Object.fromEntries(
     Object.entries(opts.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   const createExecutor: Executor = {
-    run: (call) => executor.run({ ...call, env: { ...speechEnv, ...call.env } }),
+    run: (call) => syncExecutor.run({ ...call, env: { ...speechEnv, ...call.env } }),
   };
   let client: ResidentSpeechClient | undefined;
   let synced: Promise<void> | undefined;

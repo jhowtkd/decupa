@@ -132,7 +132,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
       const active = opts.busy
         ? opts.busy()
         : Boolean(stage && !["ready", "error", "cancelled"].includes(stage));
-      return active || triageFlight !== null;
+      return active || triageFlight !== null || Boolean(store.get(job.id)?.fillerNotesPending);
     },
     handle: async (req, res): Promise<boolean> => {
       const url = parseRequestUrl(req.url);

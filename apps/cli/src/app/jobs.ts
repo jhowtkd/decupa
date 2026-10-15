@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type { Review } from "./review.ts";
 import type { FillerNote } from "@decupa/triage";
 
@@ -23,6 +24,12 @@ export interface Job {
   fillerWarning?: string;
 }
 
+/** O job da Limpeza precisa sobreviver ao descarregamento do runtime. */
+export function stableCleanupJobId(workDir: string): string {
+  const hex = createHash("sha256").update(`decupa-cleanup-job\0${resolve(workDir)}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 /**
  * Um job por vez, em memória, sem banco. É app local de um usuário só;
  * a fila da Limpeza persiste a seleção no workDir separadamente. Reiniciar
@@ -32,8 +39,8 @@ export class JobStore {
   private readonly jobs = new Map<string, Job>();
   private readonly controllers = new Map<string, AbortController>();
 
-  create(opts: { videoPath: string; workDir: string }): Job {
-    const job: Job = { id: randomUUID(), stage: "queued", ...opts };
+  create(opts: { videoPath: string; workDir: string; id?: string }): Job {
+    const job: Job = { id: opts.id ?? randomUUID(), stage: "queued", videoPath: opts.videoPath, workDir: opts.workDir };
     this.jobs.set(job.id, job);
     this.controllers.set(job.id, new AbortController());
     return job;

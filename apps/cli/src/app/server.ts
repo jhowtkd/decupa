@@ -14,7 +14,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertSafeBind, guardLocalRequest, hostConfig, isLoopbackBind, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
-import { JobStore } from "./jobs.ts";
+import { JobStore, stableCleanupJobId } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
 import {
   ensureAudioProxy, indexPath, preflight, runIngest, runTriage, SpawnExecutor,
@@ -514,7 +514,7 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   const ingestAbort = new AbortController();
 
   const store = new JobStore();
-  const job = store.create({ videoPath: input, workDir });
+  const job = store.create({ videoPath: input, workDir, id: stableCleanupJobId(workDir) });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir, signal: store.signal(job.id) };
   // Sem sink: o traces nunca foi lido (sink morto); o tracer segue ativo
   // para as etapas do pipeline, sem coletar eventos em memória.
