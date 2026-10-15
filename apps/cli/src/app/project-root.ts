@@ -2,6 +2,7 @@ import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estado, type EditReservation } from "./edit-reservation.ts";
+import { keepPath, readKeepList, sourceManifestPath } from "./session.ts";
 
 // O id é um nome de pasta, não um identificador de linguagem: espaços, acentos
 // e pontuação são válidos. O roteador já separa o primeiro componente; aqui
@@ -70,6 +71,7 @@ export type ProjectRootEntry = {
   id: string;
   displayName: string;
   flow: "montagem" | "limpeza";
+  /** Última alteração de um artefato editorial, não da pasta do Projeto. */
   updatedAt: number;
   reservation: Pick<EditReservation, "nome" | "ultimoSinal"> | null;
   problem?: string;
@@ -90,16 +92,32 @@ async function readRecord(path: string): Promise<{ value: Record<string, unknown
   }
 }
 
+async function editorialMtime(
+  dir: string,
+  flow: "assembly" | "cleanup",
+  manifestReadable: boolean,
+): Promise<number> {
+  const candidates: string[] = [];
+  if (flow === "assembly") {
+    if (manifestReadable) candidates.push(join(dir, "project.json"));
+  } else {
+    if (await readKeepList(dir) !== null) candidates.push(keepPath(dir));
+    if (manifestReadable) candidates.push(sourceManifestPath(dir));
+  }
+  const mtimes = await Promise.all(candidates.map(async (path) => (await stat(path).catch(() => null))?.mtimeMs ?? null));
+  return Math.max(0, ...mtimes.filter((mtime): mtime is number => mtime !== null));
+}
+
 async function projectRootEntry(root: string, id: string, now: () => number): Promise<ProjectRootEntry | null> {
   const flow = await projectKind(root, id);
   if (!flow) return null;
   const dir = join(root, id);
   const manifestPath = join(dir, flow === "assembly" ? "project.json" : "source.json");
   const manifest = await readRecord(manifestPath);
-  const directory = await stat(dir).catch(() => null);
   const problem = manifest.problem
     ? `${flow === "assembly" ? "project.json" : "source.json"} ilegível`
     : undefined;
+  const updatedAt = await editorialMtime(dir, flow, manifest.value !== null);
   const reservation = await estado(dir, now()).catch(() => null);
   if (flow === "assembly") {
     const assembly = record(manifest.value?.assembly);
@@ -107,7 +125,7 @@ async function projectRootEntry(root: string, id: string, now: () => number): Pr
       id,
       displayName: typeof assembly?.name === "string" && assembly.name.trim() ? assembly.name : id,
       flow: "montagem",
-      updatedAt: directory?.mtimeMs ?? 0,
+      updatedAt,
       reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
       ...(problem ? { problem } : {}),
     };
@@ -117,7 +135,7 @@ async function projectRootEntry(root: string, id: string, now: () => number): Pr
     id,
     displayName: typeof source?.displayName === "string" && source.displayName.trim() ? source.displayName : id,
     flow: "limpeza",
-    updatedAt: directory?.mtimeMs ?? 0,
+    updatedAt,
     reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
     ...(problem ? { problem } : {}),
   };
