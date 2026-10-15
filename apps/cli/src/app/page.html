@@ -278,7 +278,12 @@ function setReadOnly(owner) {
   const banner = document.getElementById("editReservation");
   const text = document.getElementById("editReservationText");
   banner.hidden = !owner;
-  if (owner) text.textContent = `${owner.nome} está editando este Projeto`;
+  if (owner) {
+    const age = Math.max(0, Math.floor((Date.now() - owner.ultimoSinal) / 1000));
+    text.textContent = owner.mesmaPessoa
+      ? "Você está editando este Projeto em outra aba"
+      : `${owner.nome} está editando este Projeto · há ${age} s`;
+  }
   for (const button of document.querySelectorAll("button, input, textarea, select")) {
     if (button.id === "reservationTake") continue;
     if (owner) {
@@ -300,14 +305,14 @@ const api = (p, o = {}) => fetch(projectPath(`jobs/${jobId}${p}`), { ...o, heade
 async function acquireReservation() {
   const response = await fetch(projectPath("reservation"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
   const body = await response.json().catch(() => ({}));
-  if (response.status === 409) setReadOnly(body.dono);
+  if (response.status === 409) setReadOnly(body.dono && { ...body.dono, mesmaPessoa: body.mesmaPessoa === true });
 }
 
 setInterval(async () => {
   try {
     const response = await fetch(projectPath("reservation/heartbeat"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
     const body = await response.json().catch(() => ({}));
-    if (response.status === 409) setReadOnly(body.dono);
+    if (response.status === 409) setReadOnly(body.dono && { ...body.dono, mesmaPessoa: body.mesmaPessoa === true });
   } catch { /* o próximo sinal tenta novamente */ }
 }, 20_000);
 
@@ -316,7 +321,7 @@ window.addEventListener("pagehide", () => {
 });
 
 document.getElementById("reservationTake").onclick = async () => {
-  if (!reservationOwner || !window.confirm(`${reservationOwner.nome} está editando este Projeto. Assumir Edição?`)) return;
+  if (!reservationOwner || !window.confirm(`${reservationOwner.nome} está editando este Projeto há ${Math.max(0, Math.floor((Date.now() - reservationOwner.ultimoSinal) / 1000))} s. Assumir Edição?`)) return;
   const response = await fetch(projectPath("reservation/take"), { method: "POST", headers: projectHeaders({ "content-type": "application/json" }) });
   if (response.ok) { setReadOnly(null); await poll(); }
 };
