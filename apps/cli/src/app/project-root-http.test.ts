@@ -155,7 +155,7 @@ it("deriva o Projeto inicial de projectDir e redireciona a raiz do site", async 
   }
 });
 
-it("lista os Projetos da Raiz com links codificados quando não há Projeto inicial", async () => {
+it("serve o hub da Raiz quando não há Projeto inicial", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-root-index-http-"));
   const assembly = join(root, "Meu Projeto");
   await mkdir(assembly);
@@ -176,11 +176,19 @@ it("lista os Projetos da Raiz com links codificados quando não há Projeto inic
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/text\/html/);
     const html = await response.text();
-    expect(html).toMatch(/Montagem da equipe<\/a> — Montagem</);
-    expect(html).toMatch(/Aula da equipe<\/a> — Limpeza</);
-    expect(html).toContain(`/projects/${encodeURIComponent("Meu Projeto")}/`);
-    expect(html).toContain(`/projects/${encodeURIComponent(".decupa-aula.mp4")}/`);
-    expect(html).not.toContain("<style");
+    expect(html).toContain("Projetos recentes");
+    expect(html).toContain("Novo Projeto");
+    expect(html).toContain("/hub/page.css");
+    expect(html).toContain("/hub/page.js");
+    expect((await fetch(`${base}/hub/page.css`)).status).toBe(200);
+    expect((await fetch(`${base}/hub/page.js`)).status).toBe(200);
+    expect(html).not.toContain("Forçar Liberação");
+    expect(html).not.toContain("lock");
+    const projects = await (await fetch(`${base}/api/projects`)).json() as Array<{ id: string; nome: string; fluxo: string }>;
+    expect(projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "Meu Projeto", nome: "Montagem da equipe", fluxo: "montagem" }),
+      expect.objectContaining({ id: ".decupa-aula.mp4", nome: "Aula da equipe", fluxo: "limpeza" }),
+    ]));
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

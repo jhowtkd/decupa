@@ -87,18 +87,14 @@ function escapeHtml(value: string): string {
   })[character]!);
 }
 
-function sendProjectRootPage(res: ServerResponse, projects: Awaited<ReturnType<typeof listProjectRootEntries>>): void {
-  // O Fluxo vai ao lado do nome: dois Projetos podem ter o mesmo nome de exibição.
-  const flowLabel = { montagem: "Montagem", limpeza: "Limpeza" } as const;
-  const items = projects.map(project => `<li><a href="/projects/${encodeURIComponent(project.id)}/">${escapeHtml(project.displayName)}</a> — ${flowLabel[project.flow]}</li>`).join("");
-  const content = items ? `<ul>${items}</ul>` : "<p>Nenhum Projeto na Raiz.</p>";
-  const page = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Projetos</title></head><body><main><h1>Projetos</h1>${content}</main></body></html>`;
+function sendProjectRootPage(res: ServerResponse, page: string, identity: string | undefined): void {
+  const rendered = page.replace("__DECUPA_USER__", () => escapeHtml(identity ?? "usuário local"));
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
-    "content-length": Buffer.byteLength(page),
+    "content-length": Buffer.byteLength(rendered),
     "cache-control": "no-store",
   });
-  res.end(page);
+  res.end(rendered);
 }
 
 function projectSlug(name: string): string {
@@ -379,6 +375,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
   const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const hubPage = await readFile(join(HERE, "hub", "page.html"), "utf8");
+  const hubCss = await readFile(join(HERE, "hub", "page.css"), "utf8");
+  const hubJs = await readFile(join(HERE, "hub", "page.js"), "utf8");
   const cleanupPage = await readFile(join(HERE, "page.html"), "utf8");
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
@@ -472,6 +471,32 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       }
       if (await auth.handlePublic(req, res, url)) return;
       if (!auth.authorize(req, res, url)) return;
+      if (req.method === "GET" && url.pathname === "/hub/page.css") {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+        res.end(hubCss);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/hub/page.js") {
+        res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });
+        res.end(hubJs);
+        return;
+      }
+      if (url.pathname === "/api/projects") {
+        if (req.method !== "GET") {
+          sendJson(res, { error: "método inválido" }, 405);
+          return;
+        }
+        const entries = await listProjectRootEntries(projectsRoot, opts.now);
+        sendJson(res, entries.map(project => ({
+          id: project.id,
+          nome: project.displayName,
+          fluxo: project.flow,
+          atualizadoEm: project.updatedAt,
+          reserva: project.reservation,
+          ...(project.problem ? { problema: project.problem } : {}),
+        })));
+        return;
+      }
       if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => registry.notifyJevDisabled() })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
@@ -545,7 +570,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (isRootRequest && req.method === "GET") {
-        sendProjectRootPage(res, await listProjectRootEntries(projectsRoot));
+        sendProjectRootPage(res, hubPage, requestIdentity(req));
         return;
       }
       if (await registry.handle(req, res)) return;
