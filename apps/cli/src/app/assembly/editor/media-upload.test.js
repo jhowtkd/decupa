@@ -116,3 +116,25 @@ it("marca como parado um erro no GET inicial e permite retry no primeiro clique"
   await upload.start(file());
   expect(upload.state).toBe("concluido");
 });
+
+it("expõe o status HTTP do erro do servidor para a interface escolher a mensagem", async () => {
+  const memory = () => {
+    const values = new Map();
+    return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  };
+  const tooBig = new ResumableMediaUpload({
+    storage: memory(),
+    fetchImpl: async () => response({ error: "mídia acima do tamanho máximo" }, 413),
+  });
+  await expect(tooBig.start(file())).rejects.toMatchObject({ status: 413, message: "mídia acima do tamanho máximo" });
+
+  const invalid = new ResumableMediaUpload({
+    storage: memory(),
+    fetchImpl: async (url, init = {}) => {
+      if (init.method === "POST") return response({ id: "upload-5", offset: 0, tamanhoParte: 5 }, 201);
+      if (init.method === "PATCH") return response({ error: "mídia ilegível" }, 422);
+      throw new Error(`chamada inesperada: ${url}`);
+    },
+  });
+  await expect(invalid.start(file())).rejects.toMatchObject({ status: 422 });
+});
