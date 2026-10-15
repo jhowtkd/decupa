@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { hashFile, probe } from "@decupa/media";
@@ -14,6 +14,7 @@ import { fixtureAssembly } from "./assembly/fixture.ts";
 import { createProject } from "./assembly/store.ts";
 import { fillerProject } from "./assembly/filler-test-helper.ts";
 import { readAssemblyFillerNotes } from "./assembly/filler-observe.ts";
+import { cleanupFixture } from "./cleanup-fillers.test-helper.ts";
 import type { Executor } from "./pipeline.ts";
 
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -314,6 +315,50 @@ it("Raiz de Projetos avisa todas as Montagens carregadas ao desligar o Jev", asy
   expect((await fetch(base + "/projects/projeto/project")).status).toBe(200); await entered.promise;
   const disabled = await fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: '{"section":"jev","typesafe":false}' });
   expect(disabled.status).toBe(200); expect(signal?.aborted).toBe(true);
+  release.resolve();
+});
+
+it("Raiz de Projetos avisa a Limpeza carregada ao desligar o Jev", async () => {
+  const f = await cleanupFixture(true, { ambiguous: true, decision: { mode: "observe", model: "configured-model" } });
+  await f.app.close();
+  const user = await folder();
+  await writeCredentials(user, { ...muse, typesafeApiKey: "stored-jev", typesafe: true });
+  const entered = deferred();
+  const release = deferred();
+  let signal: AbortSignal | null | undefined;
+  const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+    signal = init?.signal;
+    entered.resolve();
+    await release.promise;
+    const body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ model: body.model, answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0.9 }])) }));
+  });
+  const id = basename(f.dir);
+  const app = await startApp({
+    projectsRoot: dirname(f.dir), projectId: id, projectDir: f.dir,
+    input: f.options.input, executor: f.options.executor, providerConfigDir: user,
+    env: f.options.env, port: 0, fetchImpl, autoStart: false,
+  });
+  cleanup.push(() => app.close());
+  cleanup.push(async () => { release.resolve(); });
+  const base = `http://127.0.0.1:${app.port}`;
+  const pageResponse = await fetch(`${base}/projects/${encodeURIComponent(id)}/`);
+  expect(pageResponse.status).toBe(200);
+  const page = await pageResponse.text();
+  const jobId = /\|\|\s*"([^"]+)"/.exec(page)?.[1];
+  expect(jobId).toBeTruthy();
+  const planned = await fetch(`${base}/projects/${encodeURIComponent(id)}/jobs/${jobId}/keep`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keepList: "u001-u002" }),
+  });
+  expect(planned.status, await planned.text()).toBe(200);
+  await entered.promise;
+  const disabled = await fetch(`${base}/provider/keys`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: '{"section":"jev","typesafe":false}',
+  });
+  expect(disabled.status).toBe(200);
+  expect(signal?.aborted).toBe(true);
   release.resolve();
 });
 

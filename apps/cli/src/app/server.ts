@@ -322,6 +322,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         });
         return {
           handle: async (req, res) => { cleanupSetup.startIngest(); return cleanupSetup.runtime.handle(req, res); },
+          onJevDisabled: cleanupSetup.onJevDisabled,
           close: async () => { await Promise.all([cleanupSetup.runtime.close(), cleanupSetup.closeSpeech()]); },
         };
       }
@@ -376,7 +377,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       const projectNew = req.method === "POST" && (url.pathname === "/project/new" || /^\/projects\/[^/]+\/project\/new$/.test(url.pathname));
       if (projectNew && (url.pathname === "/project/new" || await registry.isProjectPath(req.url))) {
         if (url.pathname !== "/project/new") {
-          const id = /^\/projects\/([^/]+)\/project\/new$/.exec(url.pathname)?.[1];
+          const match = /^\/projects\/([^/]+)\/project\/new$/.exec(url.pathname);
+          let id: string | undefined;
+          try { id = match ? decodeURIComponent(match[1]!) : undefined; } catch { id = undefined; }
           const projectDir = id && PROJECT_ID_PATTERN.test(id) ? resolve(projectsRoot, id) : null;
           if (!projectDir || dirname(projectDir) !== projectsRoot
             || !await requireEditReservation(req, res, {
@@ -390,7 +393,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (url.pathname === "/" && opts.projectId) {
-        res.writeHead(307, { location: `/projects/${opts.projectId}/`, "cache-control": "no-store" });
+        res.writeHead(307, { location: `/projects/${encodeURIComponent(opts.projectId)}/`, "cache-control": "no-store" });
         res.end();
         return;
       }

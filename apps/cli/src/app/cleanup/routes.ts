@@ -11,7 +11,7 @@ import { FillerRequestError, type createCleanupPlanning } from "../../condense/c
 import { serveMedia } from "../../http/media.ts";
 import {
   audioProxyPath, keepListError, planPath, probeFps, probeSourceStartSeconds,
-  runRender, transcriptPath, SpawnExecutor, type Executor, type PipelineJob,
+  runRender, transcriptPath, type Executor, type PipelineJob,
 } from "../pipeline.ts";
 import { sourceMismatch } from "../session.ts";
 import { projectUrl } from "../project-url.ts";
@@ -175,7 +175,6 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
       if (parts[2] === "cancel" && req.method === "POST") {
         store.cancel(current.id);
         ingestAbort.abort();
-        if (exec instanceof SpawnExecutor) exec.killAll();
         sendJson(res, { ok: true });
         return true;
       }

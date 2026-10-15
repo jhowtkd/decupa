@@ -1,10 +1,11 @@
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { expect, it } from "vitest";
 import { blankProject } from "./assembly/routes.ts";
 import { createProject } from "./assembly/store.ts";
 import { startApp } from "./server.ts";
+import { sourceManifestPath } from "./session.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
@@ -55,11 +56,68 @@ it("recusa ids inválidos ou que não são Projetos sem sair da Raiz", async () 
   const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
   const base = `http://127.0.0.1:${app.port}`;
   try {
-    for (const id of ["ausente", "%2e%2e", "a%2fb", "a%2Fb", "com espaço", ".", ".."] ) {
+    for (const id of ["ausente", "%2e%2e", "a%2fb", "a%2Fb", "%2e%2e%2fvalido", "%2Fetc", "%5Cetc", "%00", ".", ".."] ) {
       expect((await fetch(`${base}/projects/${id}/`)).status, id).toBe(404);
     }
     expect((await fetch(`${base}/projects/arquivo/`)).status).toBe(404);
     expect((await fetch(`${base}/projects/valido//`)).status).toBe(404);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("serve Projetos da Raiz com nomes codificados e mantém traversal fora da Raiz", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-nomes-http-"));
+  const nomes = ["Meu Vídeo", "lição", "aula(1)", "a+b", "100%"];
+  for (const nome of nomes) {
+    const dir = join(root, nome);
+    await mkdir(dir);
+    await createProject(dir, blankProject(nome));
+  }
+  const limpezas = nomes.map((nome) => `.decupa-${nome}.mp4`);
+  for (const id of limpezas) {
+    const input = join(root, `${id.slice(".decupa-".length)}`);
+    const dir = join(root, id);
+    await writeFile(input, "media fake", "utf8");
+    const source = await stat(input);
+    await mkdir(dir);
+    await writeFile(sourceManifestPath(dir), JSON.stringify({ path: input, size: source.size, mtimeMs: source.mtimeMs }));
+  }
+  const initial = join(root, "Meu Vídeo");
+  const app = await startApp({ projectsRoot: root, projectId: "Meu Vídeo", projectDir: initial, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(base, { redirect: "manual" })).headers.get("location")).toBe("/projects/Meu%20V%C3%ADdeo/");
+    for (const nome of nomes) {
+      const encoded = encodeURIComponent(nome);
+      const page = await fetch(`${base}/projects/${encoded}/`);
+      expect(page.status, nome).toBe(200);
+      expect(await page.text(), nome).toContain(`content="/projects/${encoded}"`);
+      expect((await fetch(`${base}/projects/${encoded}/project`)).status).toBe(200);
+    }
+    for (const id of limpezas) {
+      const encoded = encodeURIComponent(id);
+      expect((await fetch(`${base}/projects/${encoded}/`)).status, id).toBe(200);
+    }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("oculta somente o sufixo stale gerado, não um nome que contém .stale-", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-stale-http-"));
+  const named = join(root, ".decupa-aula.stale-backup.mp4");
+  const stale = join(root, ".decupa-aula.mp4.stale-2026-10-15T12-00-00-000Z");
+  await mkdir(named); await mkdir(stale);
+  await createProject(named, blankProject("named-stale"));
+  await createProject(stale, blankProject("generated-stale"));
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/${encodeURIComponent(".decupa-aula.stale-backup.mp4")}/`)).status).toBe(200);
+    expect((await fetch(`${base}/projects/${encodeURIComponent(".decupa-aula.mp4.stale-2026-10-15T12-00-00-000Z")}/`)).status).toBe(404);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
