@@ -65,3 +65,19 @@ it("recusa ids inválidos ou que não são Projetos sem sair da Raiz", async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("deriva o Projeto inicial de projectDir e redireciona a raiz do site", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-initial-"));
+  const projectDir = join(root, "inicial");
+  const app = await startApp({ projectsRoot: root, projectDir, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const response = await fetch(base, { redirect: "manual" });
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/projects/inicial/");
+    expect((await fetch(`${base}/projects/inicial/`)).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

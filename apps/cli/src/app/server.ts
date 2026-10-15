@@ -216,7 +216,8 @@ type StartAppOptions = {
 export async function startApp(opts: StartAppOptions): Promise<AppHandle> {
   resolveVisualProvider(opts.env ?? process.env);
   if (opts.projectsRoot) {
-    return startProjectRootApp(opts as StartAppOptions & { projectsRoot: string });
+    const projectId = opts.projectId ?? (opts.projectDir ? basename(resolve(opts.projectDir)) : undefined);
+    return startProjectRootApp({ ...opts, projectId } as StartAppOptions & { projectsRoot: string });
   }
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
