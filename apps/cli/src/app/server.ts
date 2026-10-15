@@ -8,7 +8,7 @@ import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
 import { operationResolver } from "./analysis-operation.ts";
 import { cancelAssemblyFillerNotes } from "./assembly/filler-observe.ts";
-import { access, readFile, mkdir, stat } from "node:fs/promises";
+import { access, readFile, mkdir, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,8 @@ import { triageIdentity } from "../triage.ts";
 import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
-import { blankProject, createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
+import { blankProject, createAssemblyRuntime, sourceFromMedia, withCanvasPolicy, type AssemblyDeps } from "./assembly/routes.ts";
+import type { Source } from "./assembly/types.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
@@ -140,7 +141,11 @@ async function readProjectCreationBody(req: IncomingMessage): Promise<Record<str
   }
 }
 
-async function createAssemblyInProjectsRoot(projectsRoot: string, displayName: string): Promise<{ id: string; url: string }> {
+async function reserveProjectDirectory(
+  projectsRoot: string,
+  displayName: string,
+  initialize: (dir: string) => Promise<void>,
+): Promise<{ id: string; url: string }> {
   // Mantém folga para o hífen e os quatro caracteres aleatórios do sufixo.
   const slug = truncateUtf8(projectSlug(displayName), 240);
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -152,10 +157,52 @@ async function createAssemblyInProjectsRoot(projectsRoot: string, displayName: s
       if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw error;
     }
-    await createProject(dir, blankProject(randomUUID(), displayName));
-    return { id, url: `/projects/${encodeURIComponent(id)}/` };
+    try {
+      await initialize(dir);
+      return { id, url: `/projects/${encodeURIComponent(id)}/` };
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true });
+      throw error;
+    }
   }
   throw new Error("não foi possível reservar uma pasta para o novo Projeto");
+}
+
+async function createAssemblyInProjectsRoot(
+  projectsRoot: string,
+  displayName: string,
+  sources: Source[] = [],
+): Promise<{ id: string; url: string }> {
+  return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
+    const empty = blankProject(randomUUID(), displayName);
+    const project = sources.length === 0 ? empty : withCanvasPolicy({
+      ...empty,
+      assembly: { ...empty.assembly, sources },
+    });
+    await createProject(dir, project);
+  });
+}
+
+async function createCleanupInProjectsRoot(
+  projectsRoot: string,
+  displayName: string,
+  media: Pick<MediaRuntime, "getMedia">,
+  mediaId: string,
+  now?: () => number,
+): Promise<{ id: string; url: string }> {
+  const record = await media.getMedia(mediaId);
+  if (!record) throw Object.assign(new Error("Mídia não encontrada no acervo"), { status: 404 });
+  return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
+      // source.json é o manifesto que faz o registro tratar a pasta como
+      // Limpeza. A pasta continua na Raiz, mas o arquivo nunca é copiado.
+      await claimWorkDir(dir, record.path, now, { flow: "limpeza", displayName });
+  });
+}
+
+function projectCreationStatus(error: unknown): number {
+  const status = error && typeof error === "object" && "status" in error
+    ? Number((error as { status?: unknown }).status) : 0;
+  return Number.isInteger(status) && status >= 400 && status < 500 ? status : 500;
 }
 
 function parseRequestUrl(raw: string | undefined): URL | null {
@@ -455,15 +502,39 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           sendJson(res, { error: "nome precisa ser um texto não vazio" }, 400);
           return;
         }
-        if (body.fluxo === "limpeza") {
-          sendJson(res, { error: "Limpeza precisa de uma Mídia" }, 400);
+        const rawMediaIds = body.midias;
+        if (rawMediaIds !== undefined && !Array.isArray(rawMediaIds)) {
+          sendJson(res, { error: "midias precisa ser uma lista" }, 400);
           return;
         }
-        if (body.fluxo !== "montagem") {
+        const mediaIds: string[] = rawMediaIds === undefined
+          ? []
+          : rawMediaIds.map((mediaId) => typeof mediaId === "string" ? mediaId : "");
+        if (mediaIds.some((mediaId) => typeof mediaId !== "string" || !mediaId.trim())) {
+          sendJson(res, { error: "midias contém um id inválido" }, 400);
+          return;
+        }
+        if (body.fluxo === "limpeza" && mediaIds.length !== 1) {
+          sendJson(res, { error: "Limpeza precisa de exatamente uma Mídia" }, 400);
+          return;
+        }
+        if (body.fluxo !== "montagem" && body.fluxo !== "limpeza") {
           sendJson(res, { error: "fluxo precisa ser montagem ou limpeza" }, 400);
           return;
         }
-        const created = await createAssemblyInProjectsRoot(projectsRoot, displayName);
+        if (mediaIds.length > 0 && !media) {
+          sendJson(res, { error: "acervo de Mídias indisponível" }, 503);
+          return;
+        }
+        const sources: Source[] = [];
+        if (body.fluxo === "montagem") {
+          for (const mediaId of mediaIds) {
+            sources.push(await sourceFromMedia(media!, mediaId.toLowerCase(), `src-${randomUUID()}`));
+          }
+        }
+        const created = body.fluxo === "limpeza"
+          ? await createCleanupInProjectsRoot(projectsRoot, displayName, media!, mediaIds[0]!.toLowerCase(), opts.now)
+          : await createAssemblyInProjectsRoot(projectsRoot, displayName, sources);
         sendJson(res, { id: created.id, url: created.url }, 201);
         return;
       }
@@ -482,7 +553,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     };
     handle().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      if (!res.headersSent) sendJson(res, { error: message }, 500);
+      if (!res.headersSent) sendJson(res, { error: message }, projectCreationStatus(error));
       else res.end();
     });
   });

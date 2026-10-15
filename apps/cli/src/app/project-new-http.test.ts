@@ -1,10 +1,29 @@
-import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFileCoordinator } from "@decupa/coordinator";
 import { expect, it } from "vitest";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { startApp } from "./server.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
+
+async function seedMedia(root: string, nome = "gravacao.mp4", fixture = "clip.mp4"): Promise<{
+  mediaRoot: string;
+  mediaId: string;
+  bytes: Buffer;
+}> {
+  const mediaRoot = join(root, "media");
+  const bytes = await readFile(join(FIXTURES, fixture));
+  const mediaId = createHash("sha256").update(bytes).digest("hex");
+  await mkdir(join(mediaRoot, "pool"), { recursive: true });
+  await writeFile(join(mediaRoot, "pool", mediaId), bytes);
+  await writeFile(join(mediaRoot, "pool", `${mediaId}.json`), JSON.stringify({
+    id: mediaId, nome, tamanho: bytes.byteLength, duracao: 1, criadoEm: Date.now(),
+  }));
+  return { mediaRoot, mediaId, bytes };
+}
 
 it("cria uma Montagem nomeada na Raiz e devolve sua URL no mesmo servidor", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-new-http-"));
@@ -66,13 +85,217 @@ it("rejeita nome vazio, fluxo inválido e Limpeza sem Mídia sem criar pasta", a
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    for (const body of [{ nome: "  ", fluxo: "montagem" }, { nome: "Teste", fluxo: "desconhecido" }, { nome: "Teste", fluxo: "limpeza" }]) {
+    for (const body of [
+      { nome: "  ", fluxo: "montagem" },
+      { nome: "Teste", fluxo: "desconhecido" },
+      { nome: "Teste", fluxo: "limpeza" },
+      { nome: "Teste", fluxo: "limpeza", midias: ["a", "b"] },
+    ]) {
       const response = await post(body);
       expect(response.status).toBe(400);
     }
     expect(await readdir(root)).toEqual([]);
   } finally {
     await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("usa o nome do Projeto no manifesto e serve Range na Limpeza criada do acervo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-cleanup-media-http-"));
+  const projectsRoot = join(root, "projects");
+  const { mediaRoot, mediaId, bytes } = await seedMedia(root);
+  const app = await startApp({ projectsRoot, port: 0, executor, autoStart: false, env: { DECUPA_MEDIA_ROOT: mediaRoot } });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const response = await fetch(`${base}/project/new`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Aula de Física", fluxo: "limpeza", midias: [mediaId] }),
+    });
+
+    expect(response.status).toBe(201);
+    const created = await response.json() as { id: string; url: string };
+    expect(created.url).toBe(`/projects/${created.id}/`);
+    const source = JSON.parse(await readFile(join(projectsRoot, created.id, "source.json"), "utf8")) as { path: string; displayName: string };
+    expect(source).toMatchObject({ displayName: "Aula de Física" });
+    expect(await realpath(source.path)).toBe(await realpath(join(mediaRoot, "pool", mediaId)));
+    await expect(access(join(projectsRoot, created.id, "project.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    const page = await fetch(`${base}${created.url}`);
+    expect(page.status).toBe(200);
+    const jobId = (await page.text()).match(/\|\| ("[^"]+")/)?.[1]?.replaceAll('"', "");
+    expect(jobId).toBeTruthy();
+    expect(await (await fetch(`${base}${created.url}jobs/${jobId}`)).json()).toMatchObject({ source: "Aula de Física" });
+
+    const range = await fetch(`${base}${created.url}media`, { headers: { range: "bytes=2-7" } });
+    expect(range.status).toBe(206);
+    expect(range.headers.get("content-range")).toBe(`bytes 2-7/${bytes.byteLength}`);
+    expect(Buffer.from(await range.arrayBuffer())).toEqual(bytes.subarray(2, 8));
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("aplica a política de canvas ao criar Montagem já com Mídia", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-assembly-canvas-http-"));
+  const projectsRoot = join(root, "projects");
+  const { mediaRoot, mediaId } = await seedMedia(root, "vertical.mp4", "vertical-360x640.mov");
+  const app = await startApp({ projectsRoot, port: 0, executor, autoStart: false, env: { DECUPA_MEDIA_ROOT: mediaRoot } });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const create = (body: object) => fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const createdWithMedia = await (await create({ nome: "Com mídia", fluxo: "montagem", midias: [mediaId] })).json() as { url: string };
+    const createdEmpty = await (await create({ nome: "Vazia", fluxo: "montagem" })).json() as { url: string };
+    const withMedia = await (await fetch(`${base}${createdWithMedia.url}project`)).json() as { project: { assembly: Record<string, unknown> } };
+    const empty = await (await fetch(`${base}${createdEmpty.url}project`)).json() as { project: { revision: number; assembly: Record<string, unknown> } };
+    const added = await fetch(`${base}${createdEmpty.url}project/media`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: empty.project.revision, mediaId }),
+    });
+    expect(added.status).toBe(202);
+    const throughRoute = await added.json() as { project: { assembly: Record<string, unknown> } };
+    expect(withMedia.project.assembly.fps).toEqual(throughRoute.project.assembly.fps);
+    expect(withMedia.project.assembly.width).toBe(throughRoute.project.assembly.width);
+    expect(withMedia.project.assembly.height).toBe(throughRoute.project.assembly.height);
+    expect(withMedia.project.assembly.canvasSourceId).toMatch(/^src-/);
+    expect(throughRoute.project.assembly.canvasSourceId).toMatch(/^src-/);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("rejeita Mídia inexistente ao criar Limpeza sem criar Projeto", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-cleanup-missing-media-http-"));
+  const projectsRoot = join(root, "projects");
+  const mediaRoot = join(root, "media");
+  const app = await startApp({ projectsRoot, port: 0, executor, autoStart: false, env: { DECUPA_MEDIA_ROOT: mediaRoot } });
+  try {
+    const response = await fetch(`http://127.0.0.1:${app.port}/project/new`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Limpeza", fluxo: "limpeza", midias: ["a".repeat(64)] }),
+    });
+    expect(response.status).toBe(404);
+    expect(await readdir(projectsRoot)).toEqual([]);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("aceita Mídias do acervo na criação de Montagem e serve a fonte dentro do Projeto", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-assembly-media-http-"));
+  const projectsRoot = join(root, "projects");
+  const { mediaRoot, mediaId, bytes } = await seedMedia(root);
+  const app = await startApp({ projectsRoot, port: 0, executor, autoStart: false, env: { DECUPA_MEDIA_ROOT: mediaRoot } });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const response = await fetch(`${base}/project/new`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Montagem da aula", fluxo: "montagem", midias: [mediaId] }),
+    });
+    expect(response.status).toBe(201);
+    const created = await response.json() as { id: string; url: string };
+    const project = JSON.parse(await readFile(join(projectsRoot, created.id, "project.json"), "utf8")) as {
+      assembly: { sources: { id: string; path: string; sha256: string; name: string }[] };
+    };
+    expect(project.assembly.sources).toHaveLength(1);
+    expect(project.assembly.sources[0]).toMatchObject({ sha256: mediaId, name: "gravacao.mp4" });
+
+    const range = await fetch(`${base}${created.url}project/media/${encodeURIComponent(project.assembly.sources[0]!.id)}`, {
+      headers: { range: "bytes=3-9" },
+    });
+    expect(range.status).toBe(206);
+    expect(Buffer.from(await range.arrayBuffer())).toEqual(bytes.subarray(3, 10));
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("ao abrir a Limpeza criada na Raiz, coloca o preparo na fila global", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-cleanup-queue-http-"));
+  const projectsRoot = join(root, "projects");
+  const coordinatorDir = join(root, "queue");
+  const engine = join(root, "engine");
+  await mkdir(join(engine, "mcp", "ve_tools"), { recursive: true });
+  await writeFile(join(engine, "mcp", "ve_tools", "condense.py"), "# fake\n");
+  await writeFile(join(engine, "mcp", "ve_tools", "condense_lang.py"), "_TERMINAL_PUNCT = \".。！？!?…\"\nFILLERS_SOFT_PT = []\n");
+  const { mediaRoot, mediaId } = await seedMedia(root);
+  let entered = 0;
+  let release!: () => void;
+  let acquired!: () => void;
+  const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+  const holder = createFileCoordinator(coordinatorDir, { limit: 1 });
+  const held = holder.withSlot({ stage: "transcribing" }, () => {
+    acquired();
+    // O slot só libera quando o Projeto já demonstrou que ficou aguardando.
+    return new Promise<void>((resolve) => { release = resolve; });
+  });
+  await acquiredPromise;
+  const previousEngine = process.env.VE_PLUGIN_ROOT;
+  process.env.VE_PLUGIN_ROOT = engine;
+  const executor = {
+    async run(call: { args: string[]; env?: Record<string, string> }) {
+      if (call.args.includes("index")) {
+        await mkdir(join(call.env?.CLAUDE_PROJECT_DIR ?? root, "out"), { recursive: true });
+        await writeFile(join(call.env?.CLAUDE_PROJECT_DIR ?? root, "out", "speech_index.json"), JSON.stringify({ units: [] }));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const speech = {
+    worker: async (_req: { language: string }) => {
+      entered += 1;
+      return { language: "pt", words: [{ text: "oi", startMs: 0, endMs: 80, confidence: 1, sentenceIndex: 0 }], unaligned: [] };
+    },
+    extract: async () => undefined,
+    detectSilence: async () => [],
+  };
+  const app = await startApp({
+    projectsRoot, port: 0, executor, speech, coordinatorDir,
+    env: { DECUPA_MEDIA_ROOT: mediaRoot },
+  });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const created = await (await fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Limpeza enfileirada", fluxo: "limpeza", midias: [mediaId] }),
+    })).json() as { id: string; url: string };
+    const page = await fetch(`${base}${created.url}`);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const jobId = html.match(/\|\| ("[^"]+")/)?.[1];
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(entered).toBe(0);
+    release();
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 2_000;
+      const check = () => {
+        if (entered > 0) resolve();
+        else if (Date.now() >= deadline) reject(new Error(`preparo não entrou na fila global (${jobId ?? "sem job"})`));
+        else setTimeout(check, 10);
+      };
+      check();
+    });
+    const jobPath = `${base}${created.url}jobs/${jobId?.replaceAll('"', "")}`;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const state = await (await fetch(jobPath)).json() as { stage: string };
+      if (!["queued", "transcribing", "indexing", "visual"].includes(state.stage)) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  } finally {
+    release();
+    await app.close();
+    await held.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (previousEngine === undefined) delete process.env.VE_PLUGIN_ROOT;
+    else process.env.VE_PLUGIN_ROOT = previousEngine;
     await rm(root, { recursive: true, force: true });
   }
 });

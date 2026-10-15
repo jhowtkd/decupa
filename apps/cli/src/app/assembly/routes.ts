@@ -235,7 +235,7 @@ function applyCanvas(project: Project, canvas: Canvas): Project {
  * (primeiro vídeo numa montagem feita só com áudio), a transição é a mesma
  * da troca manual; senão, só a revisão avança, como antes.
  */
-function withCanvasPolicy(project: Project): Project {
+export function withCanvasPolicy(project: Project): Project {
   const chosen = applyCanvasPolicy(project);
   const before = project.assembly;
   const { fps, width, height, canvasSourceId, canvasManual } = chosen.assembly;
@@ -449,7 +449,7 @@ function addSource(project: Project, source: Source): Project {
   };
 }
 
-async function sourceFromMedia(
+export async function sourceFromMedia(
   media: Pick<MediaRuntime, "getMedia">,
   mediaId: string,
   id: string,
