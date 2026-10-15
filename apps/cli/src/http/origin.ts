@@ -29,7 +29,7 @@ export function resolveHostConfig(config: HostConfig): ResolvedHostConfig {
   return {
     bindHost: config.bindHost?.trim() || "127.0.0.1",
     hosts: splitList(config.allowedHosts),
-    origins: splitList(config.allowedOrigins),
+    origins: splitOrigins(config.allowedOrigins),
     trustProxy: config.trustProxy === true,
   };
 }
@@ -52,6 +52,26 @@ export function assertSafeBind(config: ResolvedHostConfig, authPasswordConfigure
 
 function splitList(value: string | undefined): string[] {
   return (value ?? "").split(",").map(item => item.trim().toLowerCase()).filter(Boolean);
+}
+
+function splitOrigins(value: string | undefined): string[] {
+  return splitList(value).map(item => {
+    try { return new URL(item).origin.toLowerCase(); }
+    catch { return item; }
+  });
+}
+
+/** Host IPv6 precisa de colchetes quando vira autoridade de uma URL. */
+export function formatHostForUrl(host: string): string {
+  const value = host.trim();
+  if (value.startsWith("[") && value.endsWith("]")) return value;
+  return isIP(value) === 6 ? `[${value}]` : value;
+}
+
+function localHost(port: number, bindHost: string): string[] {
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (isLoopbackBind(bindHost)) hosts.push(`${formatHostForUrl(bindHost)}:${port}`);
+  return hosts;
 }
 
 function resolved(config: HostConfig | ResolvedHostConfig | undefined): ResolvedHostConfig {
@@ -90,8 +110,8 @@ function hostMatches(value: string, allowed: string, port: number): boolean {
   return actual.port === undefined || actual.port === "80" || actual.port === "443" || actual.port === String(port);
 }
 
-function localOriginAllowed(origin: string, port: number): boolean {
-  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+function localOriginAllowed(origin: string, port: number, bindHost: string): boolean {
+  return localHost(port, bindHost).some(host => origin === `http://${host}`);
 }
 
 function forwardedProto(config: ResolvedHostConfig, req?: { headers: { [key: string]: string | string[] | undefined } }): string | undefined {
@@ -133,13 +153,14 @@ export function originAllowed(
   const c = resolved(config);
   const value = origin.toLowerCase();
   if (forwardedProto(c, req) === "https" && !value.startsWith("https://")) return false;
-  if (localOriginAllowed(value, port)) return true;
+  if (localOriginAllowed(value, port, c.bindHost)) return true;
   if (c.origins.length) return c.origins.includes(value);
   let parsed: URL;
   try { parsed = new URL(value); } catch { return false; }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const originPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-  const originHost = parsed.hostname.includes(":") ? `[${parsed.hostname}]:${originPort}` : `${parsed.hostname}:${originPort}`;
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const originHost = hostname.includes(":") ? `[${hostname}]:${originPort}` : `${hostname}:${originPort}`;
   return c.hosts.some(host => hostMatches(originHost, host, port));
 }
 
@@ -156,7 +177,8 @@ export function hostAllowed(host: string | undefined, port: number, config?: Hos
   if (host === undefined) return false;
   const c = resolved(config);
   const value = host.toLowerCase();
-  return value === `127.0.0.1:${port}` || value === `localhost:${port}` || c.hosts.some(allowed => hostMatches(value, allowed, port));
+  return localHost(port, c.bindHost).some(local => value === local)
+    || c.hosts.some(allowed => hostMatches(value, allowed, port));
 }
 
 /**

@@ -294,6 +294,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const templatesRoot = opts.templatesRoot ?? join(opts.providerConfigDir ?? homedir(), ".decupa", "templates");
   const templates = createTemplateRuntime(templatesRoot, {
     port: () => boundPort,
+    originConfig: network,
     selectFn: opts.selectFn,
     exec,
     speech: opts.speech,
@@ -938,7 +939,7 @@ async function startAssemblyApp(opts: {
   });
   const { runtime, project, loadStored, transports, speech, closeSpeech } = setup;
   const templates=createTemplateRuntime(templatesRoot,{
-    port:()=>boundPort,selectFn:opts.selectFn,exec,speech,
+    port:()=>boundPort,originConfig:network,selectFn:opts.selectFn,exec,speech,
     send:transports.textSend,visualClient:transports.visualClient,
     modelKey:transports.textKey,legacyModelKey:transports.legacyModelKey,legacyVisualCompatible:transports.legacyVisualCompatible,
     resolveAnalysis:transports.resolveAnalysis,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hostAllowed, originAllowed } from "./origin.ts";
+import { formatHostForUrl, hostAllowed, originAllowed } from "./origin.ts";
 
 describe("originAllowed", () => {
   it("aceita a própria página, nas duas formas de escrever o host", () => {
@@ -21,6 +21,19 @@ describe("originAllowed", () => {
   it("recusa origem opaca", () => {
     // "null" chega de iframe sandbox e de file://; é origem sem dono.
     expect(originAllowed("null", 7788)).toBe(false);
+  });
+
+  it("aceita IPv6 local sem duplicar colchetes", () => {
+    expect(originAllowed("http://[::1]:7788", 7788, { allowedHosts: "[::1]" })).toBe(true);
+  });
+
+  it("normaliza porta padrão nas origens configuradas", () => {
+    expect(originAllowed("https://editor.example", 7788, { allowedOrigins: "https://editor.example:443" })).toBe(true);
+  });
+
+  it.each(["127.0.0.2", "::1"] as const)("aceita origem do bind loopback %s", bindHost => {
+    const authority = bindHost.includes(":") ? `[${bindHost}]` : bindHost;
+    expect(originAllowed(`http://${authority}:7788`, 7788, { bindHost })).toBe(true);
   });
 });
 
@@ -54,6 +67,16 @@ describe("hostAllowed", () => {
     expect(hostAllowed("[::1]:80", 7788, { allowedHosts: "[::1]" })).toBe(true);
     expect(hostAllowed("[::1]:7788", 7788, { allowedHosts: "[::1]" })).toBe(true);
     expect(hostAllowed("[::1]:7789", 7788, { allowedHosts: "[::1]" })).toBe(false);
+  });
+
+  it("aceita o Host do bind loopback configurado", () => {
+    expect(hostAllowed("127.0.0.2:7788", 7788, { bindHost: "127.0.0.2" })).toBe(true);
+    expect(hostAllowed("[::1]:7788", 7788, { bindHost: "::1" })).toBe(true);
+  });
+
+  it("formata IPv6 para a URL que o navegador abre", () => {
+    expect(formatHostForUrl("::1")).toBe("[::1]");
+    expect(formatHostForUrl("127.0.0.2")).toBe("127.0.0.2");
   });
 
   it("deriva origens HTTP e HTTPS dos hosts e respeita o proxy", () => {

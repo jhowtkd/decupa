@@ -8,7 +8,7 @@ import { runMarkWeb } from "./mark-web/server.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
 import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
 import { openBrowser } from "./runtime.ts";
-import { isLoopbackBind } from "./http/origin.ts";
+import { formatHostForUrl, isLoopbackBind } from "./http/origin.ts";
 import { cleanupWorkDir } from "./app/session.ts";
 
 const USAGE = `decupa — bancada de medição
@@ -61,12 +61,15 @@ const USAGE = `decupa — bancada de medição
       antes da resposta: quando ele come tudo, o orçamento dobra sozinho até
       64k; --max-tokens sobe o ponto de partida.
 
-  decupa limpar --input <vídeo> [--port 7788] [--bind 127.0.0.1] [--provider zai|gemini|minimax|custom]
+  decupa limpar --input <vídeo> [--port 7788] [--bind 127.0.0.1]
+           [--allowed-hosts <hostes>] [--allowed-origins <origens>] [--trust-proxy]
+           [--provider zai|gemini|minimax|custom]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
       que não quer, exporta MP4, EDL, legendas ou transcrição.
 
   decupa montar --project <pasta> [--input <arquivo>] [--projects-root <pasta>] [--port 7788]
            [--bind 127.0.0.1]
+           [--allowed-hosts <hostes>] [--allowed-origins <origens>] [--trust-proxy]
            [--allow-paid-model] [--allow-paid-visual]
       Abre o fluxo de montagem multiarquivo. --input acrescenta uma fonte;
       omitir --input reabre o projeto já gravado na pasta.
@@ -442,7 +445,7 @@ async function main(argv: string[]): Promise<number> {
       env: envWithNetworkFlags(values),
     });
     const appEnv = envWithNetworkFlags(values);
-    const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
+    const host = formatHostForUrl(app.address);
     const url = `http://${host}:${app.port}/projects/${projectId}/`;
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
@@ -486,7 +489,7 @@ async function main(argv: string[]): Promise<number> {
       env: envWithNetworkFlags(values),
     });
     const appEnv = envWithNetworkFlags(values);
-    const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
+    const host = formatHostForUrl(app.address);
     const url = `http://${host}:${app.port}/projects/${projectId}/`;
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");

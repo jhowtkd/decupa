@@ -1,7 +1,8 @@
 import {expect,it,afterEach} from "vitest";
-import {createServer} from "node:http";import {mkdtemp} from "node:fs/promises";import {tmpdir} from "node:os";import {join} from "node:path";
+import {createServer} from "node:http";import {mkdtemp,mkdir,rm} from "node:fs/promises";import {tmpdir} from "node:os";import {join} from "node:path";
 import {createTemplateRuntime} from "./routes.ts";import {loadRecipe,saveRecipe} from "./store.ts";
 import {FIXTURES} from "../../../../../tests/fixtures/global-setup.ts";
+import {startApp} from "../server.ts";
 const closes:Array<()=>Promise<void>>=[];afterEach(async()=>{for(const close of closes.splice(0))await close();});
 async function boot(){const root=await mkdtemp(join(tmpdir(),"template-routes-"));let port=0;let calls=0;
  const runtime=createTemplateRuntime(root,{port:()=>port,selectFn:async()=>({paths:[join(FIXTURES,"clip.mp4")]}),exec:{run:async()=>{calls++;throw Error("external blocked");}},send:async()=>{calls++;return "{}";},modelKey:"test",allowModel:false,allowVisual:false});
@@ -25,4 +26,14 @@ it("protege origem, consentimento e tamanho de body",async()=>{
 it("referência cadastrada permite range e não path arbitrário",async()=>{
  const {base,recipe}=await boot();const r=await fetch(base+`/templates/api/${recipe.id}/media`,{headers:{range:"bytes=0-9"}});expect(r.status).toBe(206);expect((await r.arrayBuffer()).byteLength).toBe(10);
  expect((await fetch(base+"/templates/api/not-an-id/media")).status).toBe(400);
+});
+it("templates usa a configuração de origem da casca com host permitido",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"template-origin-config-"));await mkdir(join(root,"alpha"));
+ const app=await startApp({projectsRoot:root,port:0,autoStart:false,templatesRoot:join(root,"templates"),
+  executor:{run:async()=>({code:0,stdout:"",stderr:""})},selectFn:async()=>({paths:[join(FIXTURES,"clip.mp4")]}),
+  env:{DECUPA_ALLOWED_HOSTS:"decupa.studio"}});
+ try{
+  const response=await fetch(`http://127.0.0.1:${app.port}/templates/api`,{method:"POST",headers:{host:`decupa.studio:${app.port}`,origin:"http://decupa.studio","content-type":"application/json"},body:JSON.stringify({name:"Evento"})});
+  expect(response.status).toBe(201);
+ }finally{await app.close();await rm(root,{recursive:true,force:true});}
 });
