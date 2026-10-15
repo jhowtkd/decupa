@@ -130,6 +130,50 @@ it("limpeza local no modo Raiz cria e retoma o Projeto ao lado da Mídia", async
   }
 });
 
+it("descarrega Limpeza ociosa e recarrega o Projeto com relógio injetado", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cleanup-project-idle-http-"));
+  const project = join(root, "limpeza");
+  const input = join(root, "aula.mp4");
+  await writeFile(input, "media fake", "utf8");
+  const source = await stat(input);
+  await mkdir(project);
+  await writeFile(sourceManifestPath(project), JSON.stringify({
+    path: input, size: source.size, mtimeMs: source.mtimeMs,
+  }), "utf8");
+  let clock = 0;
+  const app = await startApp({ projectsRoot: root, port: 0, autoStart: false, executor,
+    now: () => clock, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const first = await fetch(`${base}/projects/limpeza/`);
+    const firstJob = /\|\|\s*"([0-9a-f-]{36})"/.exec(await first.text())?.[1];
+    expect(firstJob).toBeDefined();
+    await writeFile(join(project, "out", "condense_plan.json"), "{}", "utf8");
+    await writeFile(join(project, "out", "condensed_transcript.json"), "{}", "utf8");
+
+    clock = 30 * 60_000;
+    const reloaded = await fetch(`${base}/projects/limpeza/`);
+    expect(reloaded.status).toBe(200);
+    const secondJob = /\|\|\s*"([0-9a-f-]{36})"/.exec(await reloaded.text())?.[1];
+    expect(secondJob).toBeDefined();
+    expect(secondJob).toBe(firstJob);
+
+    const edit = await fetch(`${base}/projects/limpeza/jobs/${firstJob}/cancel`, { method: "POST" });
+    expect(edit.status).toBe(200);
+    const exported = await fetch(`${base}/projects/limpeza/jobs/${firstJob}/export`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "transcript" }),
+    });
+    expect(exported.status, await exported.clone().text()).toBe(200);
+    const download = await fetch(`${base}/projects/limpeza/jobs/${firstJob}/download/transcript`);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("{}");
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("resolve todos os recursos das páginas pela URL do Projeto, com e sem barra final", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-page-resources-http-"));
   const assembly = join(root, "montagem");

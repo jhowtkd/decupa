@@ -10,6 +10,8 @@ export const PROJECT_ID_PATTERN = /^(?!\.{1,2}$)(?!.*[\\/\0])[\s\S]+$/u;
 type ProjectRuntime = {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
   close(): Promise<void>;
+  /** Operação local ou trabalho pesado aguardando a fila global. */
+  isBusy?: () => boolean;
   onJevDisabled?: () => void | Promise<void>;
 };
 
@@ -67,9 +69,44 @@ async function projectKind(root: string, id: string): Promise<"assembly" | "clea
 export function createProjectRuntimeRegistry(opts: {
   projectsRoot: string;
   createRuntime: ProjectRuntimeFactory;
+  now?: () => number;
 }) {
   const root = resolve(opts.projectsRoot);
+  const now = opts.now ?? Date.now;
+  const idleMs = 30 * 60_000;
   const runtimes = new Map<string, Promise<ProjectRuntime | null>>();
+  const lastUsed = new Map<string, number>();
+  const activeRequests = new Map<string, number>();
+  let closed = false;
+  let sweepTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const armSweep = (): void => {
+    if (closed) return;
+    sweepTimer = setTimeout(() => {
+      sweep().catch(() => {}).finally(armSweep);
+    }, 60_000);
+    sweepTimer.unref?.();
+  };
+
+  async function sweep(): Promise<void> {
+    const expired = [...lastUsed.entries()]
+      .filter(([id, used]) => now() - used >= idleMs && !activeRequests.get(id));
+    for (const [id] of expired) {
+      const pending = runtimes.get(id);
+      if (!pending) {
+        lastUsed.delete(id);
+        continue;
+      }
+      const runtime = await pending;
+      if (!runtime || activeRequests.get(id) || runtime.isBusy?.()) continue;
+      // A request may have arrived while close() awaited the runtime promise.
+      // Only remove the entry if it is still the one that expired.
+      if (runtimes.get(id) !== pending || (lastUsed.get(id) ?? now()) > now() - idleMs) continue;
+      runtimes.delete(id);
+      lastUsed.delete(id);
+      await runtime.close();
+    }
+  };
 
   async function runtimeFor(id: string, prefix: string): Promise<ProjectRuntime | null> {
     const existing = runtimes.get(id);
@@ -89,33 +126,44 @@ export function createProjectRuntimeRegistry(opts: {
     return runtime;
   }
 
+  armSweep();
   return {
     async isProjectPath(url: string | undefined): Promise<boolean> {
       const route = projectRequest(url);
       return route !== null && await projectKind(root, route.id) !== null;
     },
     async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+      await sweep();
       const route = projectRequest(req.url);
       if (!route) {
         if ((req.url ?? "/").startsWith("/projects/")) notFound(res);
         return (req.url ?? "/").startsWith("/projects/");
       }
       if (route.needsSlash && await projectKind(root, route.id) !== null) {
+        lastUsed.set(route.id, now());
         res.writeHead(308, { location: `${route.prefix}/${route.search}`, "cache-control": "no-store" });
         res.end();
         return true;
       }
-      const runtime = await runtimeFor(route.id, route.prefix);
-      if (!runtime) {
-        notFound(res);
-        return true;
-      }
-      const originalUrl = req.url;
-      req.url = route.rest;
+      lastUsed.set(route.id, now());
+      activeRequests.set(route.id, (activeRequests.get(route.id) ?? 0) + 1);
       try {
-        return await runtime.handle(req, res);
+        const runtime = await runtimeFor(route.id, route.prefix);
+        if (!runtime) {
+          notFound(res);
+          return true;
+        }
+        const originalUrl = req.url;
+        req.url = route.rest;
+        try {
+          return await runtime.handle(req, res);
+        } finally {
+          req.url = originalUrl;
+        }
       } finally {
-        req.url = originalUrl;
+        const active = (activeRequests.get(route.id) ?? 1) - 1;
+        if (active > 0) activeRequests.set(route.id, active);
+        else activeRequests.delete(route.id);
       }
     },
     async notifyJevDisabled(): Promise<void> {
@@ -124,8 +172,12 @@ export function createProjectRuntimeRegistry(opts: {
         .map((runtime) => runtime.onJevDisabled?.()));
     },
     async close(): Promise<void> {
+      closed = true;
+      if (sweepTimer) clearTimeout(sweepTimer);
       const active = [...runtimes.values()];
       runtimes.clear();
+      lastUsed.clear();
+      activeRequests.clear();
       await Promise.all((await Promise.all(active)).filter((runtime): runtime is ProjectRuntime => runtime !== null).map((runtime) => runtime.close()));
     },
   };
