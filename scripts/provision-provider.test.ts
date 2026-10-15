@@ -15,7 +15,11 @@ it("provisionamento cita as chaves opcionais e grava três chaves falsas só no 
   const dir = await mkdtemp(join(tmpdir(), "provision-keys-")); dirs.push(dir);
   const script = fileURLToPath(new URL("./provision-provider.ts", import.meta.url));
   // O processo filho não herda segredos, nem o diretório real do usuário.
-  const env = { PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
+  // As variáveis de sistema do Windows não são segredo, e sem elas o PowerShell
+  // que restringe a ACL das credenciais leva dezenas de segundos para subir.
+  const windowsSystem = Object.fromEntries(["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+    .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+  const env = { ...windowsSystem, PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
   const run = (extra = {}) => promisify(execFile)(process.execPath, ["--experimental-strip-types", script], { env: { ...env, ...extra } });
   const absent = await run();
   expect(absent.stdout).toContain("DECUPA_COMPANY_OPENAI_API_KEY");
