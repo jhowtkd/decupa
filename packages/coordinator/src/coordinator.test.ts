@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CancelledError } from "@decupa/queue";
@@ -202,6 +202,45 @@ describe("createFileCoordinator", () => {
     const third = coordinator.withSlot({ stage: "rendering" }, () => { order.push("c"); return "c"; });
     await Promise.all([first, second, third]);
     expect(order).toEqual(["b", "c"]);
+  });
+
+  it("waiter deste processo não é descartado por outro mesmo sem renovar a tempo", async () => {
+    const root = dir();
+    await mkdir(join(root, "slots"), { recursive: true });
+    // A vaga está com outro processo; o relógio falso pula 100 leases sem que o
+    // waiter lento (polling de 1 s) tenha renovado, e a vaga libera. Antes, o
+    // waiter rápido o tomava por morto, regravava a fila sem ele e pegava a vaga.
+    await writeFile(join(root, "slots", "0.json"), JSON.stringify({ leaseId: "externo", until: Number.MAX_SAFE_INTEGER }));
+    let t = 1_000;
+    const order: string[] = [];
+    const slow = createFileCoordinator(root, { leaseMs: 100, pollMs: 1_000, now: () => t });
+    const fast = createFileCoordinator(root, { leaseMs: 100, pollMs: 5, now: () => t });
+    const readQueue = async (): Promise<unknown[]> => {
+      try {
+        return JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+      } catch {
+        return [];
+      }
+    };
+    const second = slow.withSlot({ stage: "rendering" }, () => { order.push("b"); });
+    await waitUntil("waiter lento", async () => (await readQueue()).length === 1);
+    t += 10_000;
+    await unlink(join(root, "slots", "0.json"));
+    const third = fast.withSlot({ stage: "rendering" }, () => { order.push("c"); });
+    await Promise.all([second, third]);
+    expect(order).toEqual(["b", "c"]);
+  });
+
+  it("erro transitório ao ler a fila é tentado de novo, sem regravá-la vazia", async () => {
+    const root = dir();
+    // Um diretório no lugar do arquivo dá EISDIR, como o EBUSY/EPERM do Windows
+    // durante a troca do arquivo. Ler isso como fila vazia apagava os waiters.
+    await mkdir(join(root, "waiters.json"), { recursive: true });
+    const coordinator = createFileCoordinator(root, { leaseMs: 200, pollMs: 5 });
+    const run = coordinator.withSlot({ stage: "rendering" }, () => "ok");
+    await delay(30);
+    await rm(join(root, "waiters.json"), { recursive: true });
+    await expect(run).resolves.toBe("ok");
   });
 
   it("reinsere waiter vivo se o arquivo da fila desaparecer", async () => {

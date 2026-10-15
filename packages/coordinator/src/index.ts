@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CancelledError, isCancelledError } from "@decupa/queue";
 import { inspectArtifact, publishAtomic } from "@decupa/cache";
 
@@ -69,6 +69,15 @@ const DEFAULT_LIMIT = 1;
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
+
+/**
+ * Waiters que este processo ainda está atendendo, por pasta de fila. Eles estão
+ * vivos por definição: um processo lento (lock disputado, timer atrasado no
+ * Windows) não pode ser tomado por morto por outro waiter do mesmo processo e
+ * perder o lugar na fila. A expiração por heartbeat continua valendo para os
+ * waiters de outros processos.
+ */
+const localWaiters = new Map<string, Set<string>>();
 
 function waiterHeartbeatMs(leaseMs: number): number {
   return Math.max(1, Math.floor(leaseMs / 3));
@@ -187,9 +196,31 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     await publishAtomic(taskPath(record.id), `${JSON.stringify(record)}\n`);
   };
 
+  const liveHere = localWaiters.get(resolve(dir)) ?? new Set<string>();
+  localWaiters.set(resolve(dir), liveHere);
+
+  /**
+   * Só ENOENT é fila vazia. Outro erro de leitura (EBUSY/EPERM do Windows
+   * durante a troca do arquivo) é tentado de novo: devolver [] faria quem leu
+   * regravar a fila só consigo e apagar os demais waiters.
+   */
+  const readWaitersText = async (): Promise<string | null> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await readFile(paths.waiters, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        if (attempt >= 20) throw error;
+        await sleep(pollMs);
+      }
+    }
+  };
+
   const readWaiters = async (): Promise<Waiter[]> => {
+    const text = await readWaitersText();
+    if (text === null) return [];
     try {
-      const raw = JSON.parse(await readFile(paths.waiters, "utf8")) as Waiter[];
+      const raw = JSON.parse(text) as Waiter[];
       const cutoff = now() - leaseMs * 4;
       return raw
         .map((waiter) => ({
@@ -198,7 +229,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
           // único sinal disponível para lê-los sem quebrar a fila existente.
           seenAt: Number.isFinite(waiter.seenAt) ? waiter.seenAt : waiter.at,
         }))
-        .filter((waiter) => waiter.seenAt >= cutoff);
+        .filter((waiter) => waiter.seenAt >= cutoff || liveHere.has(waiter.waiterId));
     } catch {
       return [];
     }
@@ -325,7 +356,13 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
       const waiterId = crypto.randomUUID();
       const enteredAt = now();
       const waiter = { waiterId, taskId: runOpts.id, priority, at: enteredAt, seenAt: enteredAt };
-      await enqueue(waiter);
+      liveHere.add(waiterId);
+      try {
+        await enqueue(waiter);
+      } catch (error) {
+        liveHere.delete(waiterId);
+        throw error;
+      }
       let slot: { index: number; leaseId: string } | null = null;
       let beat: ReturnType<typeof setInterval> | undefined;
       try {
@@ -382,6 +419,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         return value;
       } finally {
         if (beat) clearInterval(beat);
+        liveHere.delete(waiterId);
         await dequeue(waiterId);
         if (slot) await freeSlot(slot.index, slot.leaseId);
       }
@@ -391,7 +429,13 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
       const waiterId = crypto.randomUUID();
       const enteredAt = now();
       const waiter = { waiterId, taskId: waiterId, priority, at: enteredAt, seenAt: enteredAt };
-      await enqueue(waiter);
+      liveHere.add(waiterId);
+      try {
+        await enqueue(waiter);
+      } catch (error) {
+        liveHere.delete(waiterId);
+        throw error;
+      }
       let slot: { index: number; leaseId: string } | null = null;
       let beat: ReturnType<typeof setInterval> | undefined;
       try {
@@ -428,6 +472,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         }
       } finally {
         if (beat) clearInterval(beat);
+        liveHere.delete(waiterId);
         await dequeue(waiterId);
         if (slot) await freeSlot(slot.index, slot.leaseId);
       }
