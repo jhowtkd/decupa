@@ -9,18 +9,18 @@ import { startApp } from "./server.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
-async function seedMedia(root: string): Promise<{
+async function seedMedia(root: string, nome = "gravacao.mp4", fixture = "clip.mp4"): Promise<{
   mediaRoot: string;
   mediaId: string;
   bytes: Buffer;
 }> {
   const mediaRoot = join(root, "media");
-  const bytes = await readFile(join(FIXTURES, "clip.mp4"));
+  const bytes = await readFile(join(FIXTURES, fixture));
   const mediaId = createHash("sha256").update(bytes).digest("hex");
   await mkdir(join(mediaRoot, "pool"), { recursive: true });
   await writeFile(join(mediaRoot, "pool", mediaId), bytes);
   await writeFile(join(mediaRoot, "pool", `${mediaId}.json`), JSON.stringify({
-    id: mediaId, nome: "aula.mp4", tamanho: bytes.byteLength, duracao: 1, criadoEm: Date.now(),
+    id: mediaId, nome, tamanho: bytes.byteLength, duracao: 1, criadoEm: Date.now(),
   }));
   return { mediaRoot, mediaId, bytes };
 }
@@ -101,7 +101,7 @@ it("rejeita nome vazio, fluxo inválido e Limpeza sem Mídia sem criar pasta", a
   }
 });
 
-it("cria uma Limpeza a partir de uma Mídia do acervo, abre na Raiz e serve Range", async () => {
+it("usa o nome do Projeto no manifesto e serve Range na Limpeza criada do acervo", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-new-cleanup-media-http-"));
   const projectsRoot = join(root, "projects");
   const { mediaRoot, mediaId, bytes } = await seedMedia(root);
@@ -111,22 +111,57 @@ it("cria uma Limpeza a partir de uma Mídia do acervo, abre na Raiz e serve Rang
     const response = await fetch(`${base}/project/new`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ nome: "Limpeza da aula", fluxo: "limpeza", midias: [mediaId] }),
+      body: JSON.stringify({ nome: "Aula de Física", fluxo: "limpeza", midias: [mediaId] }),
     });
 
     expect(response.status).toBe(201);
     const created = await response.json() as { id: string; url: string };
     expect(created.url).toBe(`/projects/${created.id}/`);
     const source = JSON.parse(await readFile(join(projectsRoot, created.id, "source.json"), "utf8")) as { path: string; displayName: string };
-    expect(source).toMatchObject({ displayName: "aula.mp4" });
+    expect(source).toMatchObject({ displayName: "Aula de Física" });
     expect(await realpath(source.path)).toBe(await realpath(join(mediaRoot, "pool", mediaId)));
     await expect(access(join(projectsRoot, created.id, "project.json"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await fetch(`${base}${created.url}`)).status).toBe(200);
+    const page = await fetch(`${base}${created.url}`);
+    expect(page.status).toBe(200);
+    const jobId = (await page.text()).match(/\|\| ("[^"]+")/)?.[1]?.replaceAll('"', "");
+    expect(jobId).toBeTruthy();
+    expect(await (await fetch(`${base}${created.url}jobs/${jobId}`)).json()).toMatchObject({ source: "Aula de Física" });
 
     const range = await fetch(`${base}${created.url}media`, { headers: { range: "bytes=2-7" } });
     expect(range.status).toBe(206);
     expect(range.headers.get("content-range")).toBe(`bytes 2-7/${bytes.byteLength}`);
     expect(Buffer.from(await range.arrayBuffer())).toEqual(bytes.subarray(2, 8));
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("aplica a política de canvas ao criar Montagem já com Mídia", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-assembly-canvas-http-"));
+  const projectsRoot = join(root, "projects");
+  const { mediaRoot, mediaId } = await seedMedia(root, "vertical.mp4", "vertical-360x640.mov");
+  const app = await startApp({ projectsRoot, port: 0, executor, autoStart: false, env: { DECUPA_MEDIA_ROOT: mediaRoot } });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const create = (body: object) => fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const createdWithMedia = await (await create({ nome: "Com mídia", fluxo: "montagem", midias: [mediaId] })).json() as { url: string };
+    const createdEmpty = await (await create({ nome: "Vazia", fluxo: "montagem" })).json() as { url: string };
+    const withMedia = await (await fetch(`${base}${createdWithMedia.url}project`)).json() as { project: { assembly: Record<string, unknown> } };
+    const empty = await (await fetch(`${base}${createdEmpty.url}project`)).json() as { project: { revision: number; assembly: Record<string, unknown> } };
+    const added = await fetch(`${base}${createdEmpty.url}project/media`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: empty.project.revision, mediaId }),
+    });
+    expect(added.status).toBe(202);
+    const throughRoute = await added.json() as { project: { assembly: Record<string, unknown> } };
+    expect(withMedia.project.assembly.fps).toEqual(throughRoute.project.assembly.fps);
+    expect(withMedia.project.assembly.width).toBe(throughRoute.project.assembly.width);
+    expect(withMedia.project.assembly.height).toBe(throughRoute.project.assembly.height);
+    expect(withMedia.project.assembly.canvasSourceId).toMatch(/^src-/);
+    expect(throughRoute.project.assembly.canvasSourceId).toMatch(/^src-/);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
@@ -170,7 +205,7 @@ it("aceita Mídias do acervo na criação de Montagem e serve a fonte dentro do 
       assembly: { sources: { id: string; path: string; sha256: string; name: string }[] };
     };
     expect(project.assembly.sources).toHaveLength(1);
-    expect(project.assembly.sources[0]).toMatchObject({ sha256: mediaId, name: "aula.mp4" });
+    expect(project.assembly.sources[0]).toMatchObject({ sha256: mediaId, name: "gravacao.mp4" });
 
     const range = await fetch(`${base}${created.url}project/media/${encodeURIComponent(project.assembly.sources[0]!.id)}`, {
       headers: { range: "bytes=3-9" },

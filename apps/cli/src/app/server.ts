@@ -26,7 +26,7 @@ import { triageIdentity } from "../triage.ts";
 import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
-import { blankProject, createAssemblyRuntime, sourceFromMedia, type AssemblyDeps } from "./assembly/routes.ts";
+import { blankProject, createAssemblyRuntime, sourceFromMedia, withCanvasPolicy, type AssemblyDeps } from "./assembly/routes.ts";
 import type { Source } from "./assembly/types.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
@@ -122,10 +122,10 @@ async function readProjectCreationBody(req: IncomingMessage): Promise<Record<str
   }
 }
 
-async function createAssemblyInProjectsRoot(
+async function reserveProjectDirectory(
   projectsRoot: string,
   displayName: string,
-  sources: Source[] = [],
+  initialize: (dir: string) => Promise<void>,
 ): Promise<{ id: string; url: string }> {
   // Mantém folga para o hífen e os quatro caracteres aleatórios do sufixo.
   const slug = truncateUtf8(projectSlug(displayName), 240);
@@ -139,9 +139,7 @@ async function createAssemblyInProjectsRoot(
       throw error;
     }
     try {
-      const project = blankProject(randomUUID(), displayName);
-      project.assembly.sources = sources;
-      await createProject(dir, project);
+      await initialize(dir);
       return { id, url: `/projects/${encodeURIComponent(id)}/` };
     } catch (error) {
       await rm(dir, { recursive: true, force: true });
@@ -149,6 +147,21 @@ async function createAssemblyInProjectsRoot(
     }
   }
   throw new Error("não foi possível reservar uma pasta para o novo Projeto");
+}
+
+async function createAssemblyInProjectsRoot(
+  projectsRoot: string,
+  displayName: string,
+  sources: Source[] = [],
+): Promise<{ id: string; url: string }> {
+  return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
+    const empty = blankProject(randomUUID(), displayName);
+    const project = sources.length === 0 ? empty : withCanvasPolicy({
+      ...empty,
+      assembly: { ...empty.assembly, sources },
+    });
+    await createProject(dir, project);
+  });
 }
 
 async function createCleanupInProjectsRoot(
@@ -160,27 +173,11 @@ async function createCleanupInProjectsRoot(
 ): Promise<{ id: string; url: string }> {
   const record = await media.getMedia(mediaId);
   if (!record) throw Object.assign(new Error("Mídia não encontrada no acervo"), { status: 404 });
-  const slug = truncateUtf8(projectSlug(displayName), 240);
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const id = `${slug}-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
-    const dir = join(projectsRoot, id);
-    try {
-      await mkdir(dir);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-      throw error;
-    }
-    try {
+  return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
       // source.json é o manifesto que faz o registro tratar a pasta como
       // Limpeza. A pasta continua na Raiz, mas o arquivo nunca é copiado.
-      await claimWorkDir(dir, record.path, now, { flow: "limpeza", displayName: record.nome });
-      return { id, url: `/projects/${encodeURIComponent(id)}/` };
-    } catch (error) {
-      await rm(dir, { recursive: true, force: true });
-      throw error;
-    }
-  }
-  throw new Error("não foi possível reservar uma pasta para o novo Projeto");
+      await claimWorkDir(dir, record.path, now, { flow: "limpeza", displayName });
+  });
 }
 
 function projectCreationStatus(error: unknown): number {
