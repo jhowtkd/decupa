@@ -73,6 +73,9 @@ export type AssemblyOperation = {
 } | null;
 
 export type AssemblyDeps = FillerObserveDeps & {
+  page?: () => Promise<string>;
+  pageCss?: string;
+  pageJs?: string;
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -629,6 +632,21 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     res: ServerResponse,
   ): Promise<boolean> {
     const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.pathname === "/" && deps.page) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(await deps.page());
+      return true;
+    }
+    if (url.pathname === "/page.css" && deps.pageCss !== undefined) {
+      res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+      res.end(deps.pageCss);
+      return true;
+    }
+    if (url.pathname === "/page.js" && deps.pageJs !== undefined) {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(deps.pageJs);
+      return true;
+    }
     if (!url.pathname.startsWith("/project") && !url.pathname.startsWith("/editor/")) return false;
     const parts = url.pathname.split("/").filter(Boolean);
 
@@ -1731,9 +1749,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   return {
     ensureProject,
     handle: handleAssembly,
-    // Alias mantido para os testes e consumidores internos antigos durante a
-    // extração da fronteira do runtime.
-    handleAssembly: (req: IncomingMessage, res: ServerResponse, _projectDir?: string) => handleAssembly(req, res),
     // O runtime não possui servidor nem porta. Encerrar significa apenas
     // interromper operações e prévias que ainda possam manter filhos vivos.
     close: async (): Promise<void> => {
