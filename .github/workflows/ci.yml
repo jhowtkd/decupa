@@ -54,7 +54,11 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm smoke
-      - run: pnpm test
+      # No Windows os testes de credenciais sobem um PowerShell por gravação para
+      # restringir a ACL, e a partida a frio dele disputa CPU com o resto da
+      # suíte em paralelo: com todos os workers, estoura limites de 60 s de forma
+      # intermitente. Dois workers deixam CPU para o PowerShell.
+      - run: pnpm test${{ matrix.os == 'windows-latest' && ' --maxWorkers=2' || '' }}
 
       # Testes Python com mocks: não baixam modelo nem precisam dos venvs dos
       # sidecars (WhisperX, MediaPipe), só da biblioteca padrão.
