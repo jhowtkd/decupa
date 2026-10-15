@@ -102,6 +102,19 @@ it("stageLabel traduz etapas e repassa desconhecidas", () => {
   expect(stageLabel("weird-stage")).toBe("weird-stage");
 });
 
+it("preparação queued mostra que está aguardando a fila", () => {
+  const source = { id: "a", name: "a.mp4", included: true };
+  const p = project({
+    assembly: { sources: [source] },
+    analyses: [],
+    preparation: { status: "running", stage: "audio", sources: { a: { media: "ready", audio: "pending", visual: "pending" } } },
+  });
+  expect(preparationView(p, { stage: "queued" })).toMatchObject({
+    title: "Aguardando na fila", tone: "running", busy: true,
+  });
+  expect(sourceStatusText(sourceProgress(p, source))).toBe("Aguardando na fila");
+});
+
 
 it("falha visual prevalece sobre transcrição pronta e operação ready", () => {
   const source = { id: "a", name: "entrevista.mov", included: true, hasVideo: true };
