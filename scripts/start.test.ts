@@ -73,8 +73,9 @@ async function esperarServidor(port: number, child: ChildProcess, saida: string[
   while (Date.now() < limite) {
     if (child.exitCode !== null) break;
     try {
-      // R3.1 sem-chave: sem chave o app abre direto (200), sem barreira 428.
-      const res = await fetch(`http://127.0.0.1:${port}/project`, { signal: AbortSignal.timeout(1_000) });
+      // O Projeto vive sob `/projects/:id/` desde o modo Raiz; `/healthz` responde
+      // em qualquer modo, sem sessão nem chave.
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1_000) });
       if (res.status === 200) return;
     } catch { /* ainda subindo */ }
     await new Promise((r) => setTimeout(r, 200));
@@ -86,7 +87,7 @@ async function portaFechada(port: number): Promise<boolean> {
   const limite = Date.now() + 2_000;
   while (Date.now() < limite) {
     try {
-      await fetch(`http://127.0.0.1:${port}/project`, { signal: AbortSignal.timeout(500) });
+      await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) });
     } catch {
       return true;
     }
