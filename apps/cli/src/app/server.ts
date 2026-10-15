@@ -29,6 +29,7 @@ import { claimWorkDir, cleanupWorkDir } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
+export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
