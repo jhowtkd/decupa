@@ -8,29 +8,87 @@ export function projectPath(path) {
 }
 
 const TAB_KEY = "decupa-tab-id";
-let fallbackTabId = null;
+const DUPLICATE_DETECTION_MS = 50;
 
+/** @returns {string} */
 function newTabId() {
   return globalThis.crypto?.randomUUID?.()
     || `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** Uma aba mantém a mesma identidade mesmo quando a página é recarregada. */
-export function projectTabId() {
+/**
+ * sessionStorage é copiado por "Duplicar aba". O BroadcastChannel dá uma
+ * janela para a cópia perceber que já há uma página viva com o mesmo id e
+ * trocar somente a sua identidade; recarregar a página, por outro lado,
+ * conserva o id para retomar a Reserva.
+ */
+/**
+ * @param {{ storage?: { getItem: (key: string) => string | null, setItem: (key: string, value: string) => void }, channel?: { addEventListener: Function, postMessage: Function }, idFactory?: () => string, duplicateDetectionMs?: number }} options
+ */
+export function createTabIdentity({
+  storage,
+  channel,
+  idFactory = newTabId,
+  duplicateDetectionMs = DUPLICATE_DETECTION_MS,
+} = {}) {
+  let id;
   try {
-    const existing = sessionStorage.getItem(TAB_KEY);
-    if (existing) return existing;
-    const generated = newTabId();
-    sessionStorage.setItem(TAB_KEY, generated);
-    return generated;
+    id = storage?.getItem(TAB_KEY) || idFactory();
+    storage?.setItem(TAB_KEY, id);
   } catch {
-    // Ambientes sem sessionStorage continuam funcionando; a aba perde a
-    // retomada silenciosa ao recarregar, mas mantém a mesma identidade
-    // enquanto a página vive — senão cada chamada seria outra aba e perderia
-    // a própria Reserva.
-    fallbackTabId ??= newTabId();
-    return fallbackTabId;
+    id = idFactory();
   }
+  const nonce = idFactory();
+  const listeners = new Set();
+  const changeId = () => {
+    const previous = id;
+    id = idFactory();
+    try { storage?.setItem(TAB_KEY, id); } catch { /* sessão indisponível */ }
+    for (const listener of listeners) listener(id, previous);
+  };
+  let resolveReady;
+  const ready = new Promise((resolve) => { resolveReady = resolve; });
+  if (channel?.addEventListener) {
+    channel.addEventListener("message", (event) => {
+      const message = event.data;
+      if (message?.type === "decupa-tab-hello" && message.nonce !== nonce && message.id === id) {
+        channel.postMessage({ type: "decupa-tab-conflict", id, target: message.nonce });
+      } else if (message?.type === "decupa-tab-conflict" && message.target === nonce && message.id === id) {
+        changeId();
+      }
+    });
+    channel.postMessage({ type: "decupa-tab-hello", id, nonce });
+    // BroadcastChannel entrega mensagens em outra tarefa no navegador; a janela
+    // evita adquirir a Reserva antes da resposta de uma aba já aberta.
+    setTimeout(resolveReady, duplicateDetectionMs);
+  } else {
+    resolveReady();
+  }
+  return {
+    get: () => id,
+    ready,
+    onChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+function browserStorage() {
+  try { return globalThis.sessionStorage; } catch { return undefined; }
+}
+
+const tabStorage = browserStorage();
+const tabChannel = tabStorage && typeof globalThis.BroadcastChannel === "function"
+  ? new globalThis.BroadcastChannel("decupa-tab-id") : undefined;
+const tabIdentity = createTabIdentity({ storage: tabStorage, channel: tabChannel });
+
+export function projectTabId() { return tabIdentity.get(); }
+
+export function projectTabReady() { return tabIdentity.ready; }
+
+export function projectTabChanges(listener) {
+  return tabIdentity.onChange(listener);
 }
 
 export function projectHeaders(headers = {}) {

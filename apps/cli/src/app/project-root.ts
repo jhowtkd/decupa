@@ -2,9 +2,10 @@ import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-// A Limpeza local mantém a pasta histórica `.decupa-<mídia>`; ela é segura
-// porque o prefixo é fixo. Os demais ids continuam começando por alfanumérico.
-export const PROJECT_ID_PATTERN = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.decupa-[A-Za-z0-9][A-Za-z0-9._-]*)$/;
+// O id é um nome de pasta, não um identificador de linguagem: espaços, acentos
+// e pontuação são válidos. O roteador já separa o primeiro componente; aqui
+// ficam somente as proteções que impedem sair da Raiz de Projetos.
+export const PROJECT_ID_PATTERN = /^(?!\.{1,2}$)(?!.*[\\/\0])[\s\S]+$/u;
 
 type ProjectRuntime = {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
@@ -32,17 +33,26 @@ function projectRequest(url: string | undefined): { id: string; prefix: string; 
     return null;
   }
   const match = /^\/projects\/([^/]+)(\/.*)?$/.exec(parsed.pathname);
-  if (!match || !PROJECT_ID_PATTERN.test(match[1]!)) return null;
+  if (!match) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(match[1]!);
+  } catch {
+    return null;
+  }
+  if (!PROJECT_ID_PATTERN.test(id)) return null;
   if (match[2]?.startsWith("//")) return null;
-  const prefix = `/projects/${match[1]}`;
+  const prefix = `/projects/${encodeURIComponent(id)}`;
   return {
-    id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}`,
+    id, prefix, rest: `${match[2] ?? "/"}${parsed.search}`,
     needsSlash: match[2] === undefined, search: parsed.search,
   };
 }
 
 async function projectKind(root: string, id: string): Promise<"assembly" | "cleanup" | null> {
-  if (id.startsWith(".decupa-") && id.includes(".stale-")) return null;
+  // `freeStaleName` usa exatamente este carimbo; `.stale-` no nome original
+  // da pasta não transforma o Projeto em lixo histórico.
+  if (id.startsWith(".decupa-") && /\.stale-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?$/.test(id)) return null;
   const dir = resolve(root, id);
   if (dirname(dir) !== root) return null;
   const project = await lstat(dir).catch(() => null);

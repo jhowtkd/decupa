@@ -1,4 +1,4 @@
-import { projectHeaders, projectPath, projectTabId } from "./project-path.js";
+import { projectHeaders, projectPath, projectTabChanges, projectTabId, projectTabReady } from "./project-path.js";
 
 function reservationAge(ultimoSinal) {
   return Math.max(0, Math.floor((Date.now() - ultimoSinal) / 1000));
@@ -8,6 +8,48 @@ function localTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString("pt-BR", {
     hour: "2-digit", minute: "2-digit", hour12: false,
   });
+}
+
+export function paintReadOnlyControls(root, currentOwner, reservationTake, originalDisabled) {
+  root.body.classList.toggle("modo-leitura", Boolean(currentOwner));
+  for (const element of root.querySelectorAll("button, input, textarea, select")) {
+    if (element === reservationTake
+      || element.matches("[data-stage], #monitorToggle, #closeMonitor")
+      || element.closest?.("[data-edit-reservation-dialog]")) continue;
+    if (currentOwner) {
+      if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);
+      element.disabled = true;
+    } else if (originalDisabled.has(element)) {
+      element.disabled = originalDisabled.get(element);
+      originalDisabled.delete(element);
+    }
+  }
+}
+
+/**
+ * @param {{ acquire: () => Promise<unknown>, release: () => unknown, heartbeat: () => unknown, setIntervalFn?: (fn: () => void, ms: number) => unknown, clearIntervalFn?: (timer: unknown) => void }} options
+ */
+export function createReservationLifecycle({ acquire, release, heartbeat, setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
+  let timer = null;
+  function start() {
+    if (timer === null) timer = setIntervalFn(() => { void heartbeat(); }, 20_000);
+  }
+  function stop() {
+    if (timer === null) return;
+    clearIntervalFn(timer);
+    timer = null;
+  }
+  async function resume() {
+    try { await acquire(); } finally { start(); }
+  }
+  function pagehide() {
+    stop();
+    void release();
+  }
+  async function pageshow(event) {
+    if (event?.persisted) await resume();
+  }
+  return { start, stop, resume, pagehide, pageshow };
 }
 
 /** Confirma a tomada da Reserva mostrando a idade e o risco de um sinal recente. */
@@ -33,6 +75,7 @@ async function confirmEditTakeover(owner) {
     take.type = "button";
     take.textContent = "Assumir Edição";
     actions.append(cancel, take);
+    dialog.setAttribute("data-edit-reservation-dialog", "");
     dialog.append(title, message, warning, actions);
     let done = false;
     const finish = (value) => {
@@ -55,30 +98,34 @@ function ownerFrom(body) {
 }
 
 /** Monta a faixa, a tomada, o sinal e a liberação da Reserva da página. */
-export function mountEditReservationUI({ onReadOnly = () => {}, onTakeover = () => {} } = {}) {
+/**
+ * @param {{ onReadOnly?: (owner: unknown) => void, onTakeover?: () => unknown, tabIdentity?: { ready: () => Promise<unknown>, onChange: (listener: () => void) => unknown } }} options
+ */
+export function mountEditReservationUI({
+  onReadOnly = () => {},
+  onTakeover = () => {},
+  tabIdentity = { ready: projectTabReady, onChange: projectTabChanges },
+} = {}) {
   const reservationElement = document.getElementById("editReservation");
   const reservationText = document.getElementById("editReservationText");
   const reservationTake = document.getElementById("reservationTake");
   const originalDisabled = new WeakMap();
   let currentOwner = null;
+  let identityChanging = false;
 
-  function paintReadOnly() {
-    document.body.classList.toggle("modo-leitura", Boolean(currentOwner));
-    for (const element of document.querySelectorAll("button, input, textarea, select")) {
-      if (element === reservationTake || element.matches("[data-stage], #monitorToggle, #closeMonitor")) continue;
-      if (currentOwner) {
-        if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);
-        element.disabled = true;
-      } else if (originalDisabled.has(element)) {
-        element.disabled = originalDisabled.get(element);
-        originalDisabled.delete(element);
-      }
-    }
-  }
+  const paintReadOnly = () => paintReadOnlyControls(
+    document,
+    currentOwner || (identityChanging ? {} : null),
+    reservationTake,
+    originalDisabled,
+  );
 
-  function setReadOnly(owner) {
+  const notifyReadOnly = () => onReadOnly(currentOwner || (identityChanging ? { identityChanging: true } : null));
+
+  function setReadOnly(owner, { confirmed = false } = {}) {
+    if (confirmed) identityChanging = false;
     currentOwner = owner;
-    onReadOnly(owner);
+    notifyReadOnly();
     if (reservationElement && reservationText) {
       reservationElement.hidden = !owner;
       if (owner) {
@@ -97,59 +144,97 @@ export function mountEditReservationUI({ onReadOnly = () => {}, onTakeover = () 
   }
 
   async function acquire() {
+    const requestTabId = projectTabId();
     const response = await fetch(projectPath("reservation"), {
       method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
     });
     const body = await response.json().catch(() => ({}));
-    if (response.status === 409) handleConflict(body);
-    else if (response.ok) setReadOnly(null);
+    if (requestTabId !== projectTabId()) return false;
+    if (response.status === 409) {
+      handleConflict(body);
+      return false;
+    }
+    if (response.ok) {
+      setReadOnly(null, { confirmed: true });
+      return true;
+    }
+    return false;
   }
+
+  let acquireQueue = Promise.resolve();
+  const acquireQueued = () => {
+    const next = acquireQueue.then(() => acquire());
+    acquireQueue = next.catch(() => {});
+    return next;
+  };
 
   async function heartbeat() {
     try {
+      const requestTabId = projectTabId();
       const response = await fetch(projectPath("reservation/heartbeat"), {
         method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
       });
       const body = await response.json().catch(() => ({}));
+      if (requestTabId !== projectTabId()) return;
       if (response.status === 409) handleConflict(body);
-      else if (response.ok) setReadOnly(null);
+      else if (response.ok) setReadOnly(null, { confirmed: true });
     } catch {
       // O próximo sinal tenta renovar ou revela que outra aba assumiu.
     }
   }
 
-  const reservationTimer = setInterval(() => { void heartbeat(); }, 20_000);
-  window.addEventListener("pagehide", () => {
-    clearInterval(reservationTimer);
+  const releaseReservation = () => {
     const body = JSON.stringify({ tabId: projectTabId() });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(projectPath("reservation/release"), new Blob([body], { type: "application/json" }));
     } else {
-      void fetch(projectPath("reservation/release"), {
+      return fetch(projectPath("reservation/release"), {
         method: "POST", headers: projectHeaders({ "content-type": "application/json" }), body, keepalive: true,
       });
     }
-  });
+  };
+  const lifecycle = createReservationLifecycle({ acquire: acquireQueued, release: releaseReservation, heartbeat });
+  window.addEventListener("pagehide", lifecycle.pagehide);
+  window.addEventListener("pageshow", (event) => { void lifecycle.pageshow(event).catch(() => {}); });
 
   reservationTake?.addEventListener("click", async () => {
     if (!currentOwner || !(await confirmEditTakeover(currentOwner))) return;
+    const requestTabId = projectTabId();
     const response = await fetch(projectPath("reservation/take"), {
       method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
     });
     const body = await response.json().catch(() => ({}));
+    if (requestTabId !== projectTabId()) return;
     if (response.ok) {
-      setReadOnly(null);
+      setReadOnly(null, { confirmed: true });
       await onTakeover();
     } else if (response.status === 409) handleConflict(body);
   });
 
-  const observer = new MutationObserver(() => { if (currentOwner) paintReadOnly(); });
+  const observer = new MutationObserver(() => { if (currentOwner || identityChanging) paintReadOnly(); });
   observer.observe(document.body, { childList: true, subtree: true });
-  void acquire().catch(() => {});
+
+  let identityChangeGeneration = 0;
+  tabIdentity.onChange(() => {
+    const generation = ++identityChangeGeneration;
+    identityChanging = true;
+    notifyReadOnly();
+    paintReadOnly();
+    // Uma troca tardia identifica esta página como cópia; a nova Reserva só é
+    // aceita se o servidor confirmar que ela ainda pode editar.
+    void acquireQueued().then((acquired) => {
+      if (generation !== identityChangeGeneration) return;
+      if (!acquired && !currentOwner) return;
+      identityChanging = false;
+      notifyReadOnly();
+      paintReadOnly();
+    }).catch(() => {});
+  });
+  void tabIdentity.ready().then(() => lifecycle.resume()).catch(() => {});
 
   return {
     handleConflict,
-    isReadOnly: () => Boolean(currentOwner),
+    isReadOnly: () => Boolean(currentOwner || identityChanging),
     setReadOnly,
   };
 }

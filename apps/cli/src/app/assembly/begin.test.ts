@@ -6,6 +6,8 @@ import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { ExecCall, Executor } from "../pipeline.ts";
 import { SpawnExecutor } from "../pipeline.ts";
 import { startApp } from "../server.ts";
+import { blankProject } from "./routes.ts";
+import { createProject } from "./store.ts";
 
 let stop: (() => Promise<void>) | null = null;
 afterEach(async () => { await stop?.(); stop = null; });
@@ -52,6 +54,40 @@ it.skipIf(process.platform === "win32")("begin não mata processo do executor qu
     expect(vivo(pid), "o processo longo morreu no begin()").toBe(true);
   } finally {
     exec.killAll();
+  }
+});
+
+it.skipIf(process.platform === "win32")("cancelar um Projeto não mata processo de outro Projeto da Raiz", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cancel-root-isolado-"));
+  const alpha = join(root, "alpha");
+  const beta = join(root, "beta");
+  await mkdir(alpha); await mkdir(beta);
+  const exec = new SpawnExecutor();
+  const app = await startApp({ projectsRoot: root, port: 0, executor: exec, env: {}, autoStart: false });
+  let pid = 0;
+  try {
+    await createProject(alpha, blankProject("alpha"));
+    await createProject(beta, blankProject("beta"));
+    const base = `http://127.0.0.1:${app.port}`;
+    await fetch(`${base}/projects/alpha/project`);
+    await fetch(`${base}/projects/beta/project`);
+    const pidFile = join(root, "beta.pid");
+    void exec.run({
+      command: process.execPath,
+      args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(()=>{}, 30000)`],
+    });
+    await vi.waitFor(async () => {
+      pid = Number(await readFile(pidFile, "utf8"));
+      expect(pid).toBeGreaterThan(0);
+    });
+
+    expect((await fetch(`${base}/projects/alpha/project/cancel`, { method: "POST" })).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(vivo(pid), "o cancelamento de alpha matou o filho de beta").toBe(true);
+  } finally {
+    if (pid && vivo(pid)) exec.killAll();
+    await app.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
