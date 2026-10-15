@@ -132,7 +132,11 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
       const active = opts.busy
         ? opts.busy()
         : Boolean(stage && !["ready", "error", "cancelled"].includes(stage));
-      return active || triageFlight !== null || Boolean(store.get(job.id)?.fillerNotesPending);
+      // Num job cancelado ou com erro o store ignora novas mutações, então a
+      // marca de notas pendentes pode ficar presa em true; ali as notas já foram
+      // canceladas junto com o job e não seguram o Projeto na memória.
+      const terminal = stage === "cancelled" || stage === "error";
+      return active || triageFlight !== null || (!terminal && Boolean(store.get(job.id)?.fillerNotesPending));
     },
     handle: async (req, res): Promise<boolean> => {
       const url = parseRequestUrl(req.url);

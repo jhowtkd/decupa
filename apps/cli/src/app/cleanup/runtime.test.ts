@@ -34,4 +34,10 @@ it("considera notas de cacoetes pendentes trabalho em andamento", async () => {
   store.setStage(job.id, "ready");
   store.setFillerNotesPending(job.id, true);
   expect(runtime.isBusy()).toBe(true);
+
+  // Cancelar congela o job: a marca de notas pendentes não é mais limpa pelo
+  // store, mas não pode impedir o descarregamento por ociosidade.
+  store.cancel(job.id);
+  expect(store.get(job.id)?.fillerNotesPending).toBe(true);
+  expect(runtime.isBusy()).toBe(false);
 });
