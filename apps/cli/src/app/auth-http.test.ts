@@ -1,8 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { blankProject } from "./assembly/routes.ts";
+import { createProject } from "./assembly/store.ts";
 import { startApp } from "./server.ts";
 
 const stops: Array<() => Promise<void>> = [];
@@ -18,6 +20,22 @@ async function boot(extra: Record<string, string | undefined> = {}, now?: () => 
   });
   stops.push(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
   return { app, base: `http://127.0.0.1:${app.port}`, dir, input };
+}
+
+async function bootRoot(extra: Record<string, string | undefined> = {}, now?: () => number) {
+  const root = await mkdtemp(join(tmpdir(), "decupa-auth-root-"));
+  const projectDir = join(root, "alpha");
+  await mkdir(projectDir);
+  await createProject(projectDir, blankProject("alpha-project"));
+  const app = await startApp({
+    projectsRoot: root,
+    port: 0,
+    executor: { async run() { return { code: 0, stdout: "", stderr: "" }; } },
+    env: { DECUPA_AUTH_PASSWORD: "senha certa", DECUPA_SESSION_SECRET: "segredo do teste", ...extra },
+    now,
+  });
+  stops.push(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  return { app, base: `http://127.0.0.1:${app.port}`, root };
 }
 
 function cookieFrom(response: Response): string {
@@ -129,4 +147,64 @@ it("relógio injetado expira a sessão", async () => {
   expect((await fetch(`${base}/`, { headers: { cookie: session } })).status).toBe(200);
   clock += 15 * 24 * 60 * 60 * 1000;
   expect((await fetch(`${base}/`, { headers: { cookie: session } })).status).toBe(401);
+});
+
+it("relógio injetado governa o backoff por IP e login certo zera a sequência", async () => {
+  let clock = 2_000_000;
+  const { base } = await bootRoot({}, () => clock);
+  const login = (senha: string, headers: Record<string, string> = {}) => fetch(`${base}/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ senha, nome: "Ana" }),
+  });
+
+  expect((await login("errada")).status).toBe(401);
+  expect((await login("errada")).status).toBe(401);
+  const blocked = await login("errada");
+  expect(blocked.status).toBe(429);
+  expect(blocked.headers.get("retry-after")).toBe("1");
+  expect(await blocked.json()).toEqual({ error: "tente novamente mais tarde" });
+
+  clock += 999;
+  const stillBlocked = await login("senha certa");
+  expect(stillBlocked.status).toBe(429);
+  expect(stillBlocked.headers.get("retry-after")).toBe("1");
+
+  clock += 1;
+  const success = await login("senha certa");
+  expect(success.status).toBe(303);
+
+  expect((await login("errada")).status).toBe(401);
+  expect((await login("errada")).status).toBe(401);
+  expect((await login("errada")).status).toBe(429);
+  clock += 1_000;
+  const longerBlock = await login("errada");
+  expect(longerBlock.status).toBe(429);
+  expect(longerBlock.headers.get("retry-after")).toBe("2");
+});
+
+it("só usa X-Forwarded-For quando o proxy é confiável", async () => {
+  let clock = 3_000_000;
+  const local = await boot({}, () => clock);
+  const localLogin = (ip: string, senha = "errada") => fetch(`${local.base}/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": ip },
+    body: JSON.stringify({ senha, nome: "Ana" }),
+  });
+  await localLogin("198.51.100.10");
+  await localLogin("198.51.100.10");
+  expect((await localLogin("198.51.100.10")).status).toBe(429);
+  expect((await localLogin("198.51.100.11")).status).toBe(429);
+
+  const trusted = await boot({ DECUPA_TRUST_PROXY: "1" }, () => clock);
+  const trustedLogin = (ip: string, senha = "errada") => fetch(`${trusted.base}/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": ip },
+    body: JSON.stringify({ senha, nome: "Ana" }),
+  });
+  await trustedLogin("198.51.100.10");
+  await trustedLogin("198.51.100.10");
+  expect((await trustedLogin("198.51.100.10")).status).toBe(429);
+  expect((await trustedLogin("198.51.100.11")).status).toBe(401);
 });
