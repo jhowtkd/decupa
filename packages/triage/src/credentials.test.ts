@@ -9,7 +9,7 @@ import { credentialsPath, readCredentials, writeCredentials } from "./credential
 const run = promisify(execFile);
 async function windowsAcl(path: string, script: string): Promise<string> {
   const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path }, timeout: 60_000,
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path }, timeout: 120_000,
   });
   return stdout;
 }
@@ -32,7 +32,10 @@ $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.Security
   expect(JSON.parse(output)).toEqual({ protected: true, count: 1, onlyUser: true, fullControl: true });
 }
 
-describe("credentials", () => {
+// No Windows cada gravação sobe um PowerShell para a ACL (até 120 s cada) e
+// alguns casos gravam e conferem mais de uma vez: o limite padrão de 60 s do
+// vitest derrubaria o teste antes do PowerShell.
+describe("credentials", { timeout: process.platform === "win32" ? 600_000 : undefined }, () => {
   it("conserva visão e Jev, inclusive o desligamento, ao regravar o texto", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-cred-keys-"));
     await writeCredentials(dir, { preset: "custom", apiKey: "muse", model: "muse", baseUrl: "https://meta.example/v1", openaiApiKey: "luna", visualProvider: "text", typesafeApiKey: "jev", typesafe: false });
