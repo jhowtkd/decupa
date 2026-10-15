@@ -31,7 +31,9 @@ export class UploadPausedError extends Error {
 
 /** Upload sequencial: uma parte em voo, estado persistido e retomável. */
 export class ResumableMediaUpload {
-  constructor({ fetchImpl = fetch, storage = globalThis.localStorage, onProgress = () => {} } = {}) {
+  // O `fetch` do navegador não pode ser guardado e chamado como método de outro
+  // objeto (`this.fetchImpl(...)`): no Chrome isso lança "Illegal invocation".
+  constructor({ fetchImpl = (url, init) => fetch(url, init), storage = globalThis.localStorage, onProgress = () => {} } = {}) {
     this.fetchImpl = fetchImpl;
     this.storage = storage;
     this.onProgress = onProgress;
