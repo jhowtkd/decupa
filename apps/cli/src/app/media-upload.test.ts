@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { startApp, type AppHandle } from "./server.ts";
+import { createMediaRuntime, writeBufferFully } from "./media-runtime.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 const apps: AppHandle[] = [];
@@ -98,6 +99,85 @@ it("retoma depois de reiniciar, aceita parte repetida e recusa salto com o offse
   }
 });
 
+it("publica no GET quando o processo caiu depois de gravar o estado final", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-recover-final-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const base = await boot(root);
+  const upload = await (await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "queda.mp4", tamanho: input.byteLength }),
+  })).json() as { id: string };
+  await writeFile(join(root, ".tmp", upload.id, "data"), input);
+  await writeFile(join(root, ".tmp", upload.id, "state.json"), JSON.stringify({
+    nome: "queda.mp4", tamanhoTotal: input.byteLength, recebido: input.byteLength,
+    criadoEm: Date.now(), atualizadoEm: Date.now(),
+  }));
+
+  const repeatedStart = input.byteLength - 4096;
+  const repeated = await fetch(`${base}/api/uploads/${upload.id}`, {
+    method: "PATCH", headers: { "Content-Range": range(repeatedStart, input.byteLength - 1, input.byteLength) }, body: input.subarray(repeatedStart),
+  });
+  expect(repeated.status).toBe(201);
+  expect(await repeated.json()).toMatchObject({
+    mediaId: createHash("sha256").update(input).digest("hex"),
+  });
+  const recovered = await fetch(`${base}/api/uploads/${upload.id}`);
+  expect(recovered.status).toBe(200);
+  expect(await recovered.json()).toMatchObject({
+    mediaId: createHash("sha256").update(input).digest("hex"), estado: "ready",
+  });
+  expect(await (await fetch(`${base}/api/media`)).json()).toHaveLength(1);
+});
+
+it("descarta o hash e o parcial quando a gravação do estado falha", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-state-failure-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  const base = await boot(root);
+  const upload = await (await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "falha.mp4", tamanho: input.byteLength, sha256 }),
+  })).json() as { id: string; tamanhoParte: number };
+  const uploadDir = join(root, ".tmp", upload.id);
+  const firstEnd = Math.min(input.byteLength, upload.tamanhoParte) - 1;
+  await chmod(uploadDir, 0o555);
+  const failed = await fetch(`${base}/api/uploads/${upload.id}`, {
+    method: "PATCH", headers: { "Content-Range": range(0, firstEnd, input.byteLength) },
+    body: input.subarray(0, firstEnd + 1),
+  });
+  await chmod(uploadDir, 0o755);
+  expect(failed.status).toBe(500);
+
+  let offset = 0;
+  let final: Response | undefined;
+  while (offset < input.byteLength) {
+    const end = Math.min(input.byteLength, offset + upload.tamanhoParte) - 1;
+    final = await fetch(`${base}/api/uploads/${upload.id}`, {
+      method: "PATCH", headers: { "Content-Range": range(offset, end, input.byteLength) },
+      body: input.subarray(offset, end + 1),
+    });
+    offset = end + 1;
+  }
+  expect(final!.status).toBe(201);
+  expect(await final!.json()).toMatchObject({ mediaId: sha256, deduplicado: false });
+});
+
+it("recria o metadado de uma Mídia deduplicada que só tem o arquivo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-metadata-repair-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  await mkdir(join(root, "pool"), { recursive: true });
+  await writeFile(join(root, "pool", sha256), input);
+  const base = await boot(root);
+  const response = await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "recuperada.mp4", tamanho: input.byteLength, sha256 }),
+  });
+  expect(response.status).toBe(200);
+  const listed = await (await fetch(`${base}/api/media`)).json() as { id: string }[];
+  expect(listed.map((item) => item.id)).toEqual([sha256]);
+});
+
 it("deduplica pelo hash já conhecido e rejeita mídia ilegível apagando o temporário", async () => {
   const root = await mkdtemp(join(tmpdir(), "media-dedupe-"));
   const input = await readFile(join(FIXTURES, "clip.mp4"));
@@ -170,4 +250,106 @@ it("recusa mídia acima do máximo configurado", async () => {
     body: JSON.stringify({ nome: "grande.mp4", tamanho: 100_000 }),
   });
   expect(response.status).toBe(413);
+});
+
+it("recusa envio de mídia vazia", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-empty-"));
+  const base = await boot(root);
+  const response = await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "vazia.mp4", tamanho: 0 }),
+  });
+  expect(response.status).toBe(400);
+});
+
+it("guarda a resposta final para uma retomada depois de resposta perdida", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-completion-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  const base = await boot(root);
+  const upload = await (await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "resposta-perdida.mp4", tamanho: input.byteLength }),
+  })).json() as { id: string; tamanhoParte: number };
+  for (let offset = 0; offset < input.byteLength;) {
+    const end = Math.min(input.byteLength, offset + upload.tamanhoParte) - 1;
+    await fetch(`${base}/api/uploads/${upload.id}`, {
+      method: "PATCH", headers: { "Content-Range": range(offset, end, input.byteLength) },
+      body: input.subarray(offset, end + 1),
+    });
+    offset = end + 1;
+  }
+  const state = await fetch(`${base}/api/uploads/${upload.id}`);
+  expect(state.status).toBe(200);
+  expect(await state.json()).toMatchObject({ mediaId: sha256, estado: "ready" });
+});
+
+it("reusa o runtime de Mídias ao abrir um Projeto novo e reconstitui hash alterado em disco", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-shared-runtime-"));
+  const projectDir = join(root, "project");
+  const mediaRoot = join(root, "media");
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  await mkdir(projectDir, { recursive: true });
+  const app = await startApp({
+    projectDir, port: 0, executor,
+    env: { DECUPA_MEDIA_ROOT: mediaRoot, DECUPA_UPLOAD_PART_BYTES: "20000" },
+  });
+  apps.push(app);
+  const base = `http://127.0.0.1:${app.port}`;
+  const upload = await (await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "compartilhada.mp4", tamanho: input.byteLength }),
+  })).json() as { id: string; tamanhoParte: number };
+  const firstEnd = upload.tamanhoParte - 1;
+  expect((await fetch(`${base}/api/uploads/${upload.id}`, {
+    method: "PATCH", headers: { "Content-Range": range(0, firstEnd, input.byteLength) }, body: input.subarray(0, firstEnd + 1),
+  })).status).toBe(200);
+
+  const created = await fetch(`${base}/project/new`, { method: "POST" });
+  expect(created.status).toBe(201);
+  const child = await created.json() as { url: string };
+  const secondEnd = Math.min(input.byteLength, upload.tamanhoParte * 2) - 1;
+  expect((await fetch(`${child.url}api/uploads/${upload.id}`, {
+    method: "PATCH", headers: { "Content-Range": range(upload.tamanhoParte, secondEnd, input.byteLength) },
+    body: input.subarray(upload.tamanhoParte, secondEnd + 1),
+  })).status).toBe(200);
+
+  const finalStart = secondEnd + 1;
+  const final = await fetch(`${base}/api/uploads/${upload.id}`, {
+    method: "PATCH", headers: { "Content-Range": range(finalStart, input.byteLength - 1, input.byteLength) },
+    body: input.subarray(finalStart),
+  });
+  expect(final.status).toBe(201);
+  expect(await final.json()).toMatchObject({ mediaId: sha256, deduplicado: false });
+});
+
+it("repete uma escrita curta até consumir toda a parte", async () => {
+  const calls: Array<{ offset: number; length: number; position: number }> = [];
+  const file = {
+    async write(buffer: Uint8Array, offset: number, length: number, position: number) {
+      calls.push({ offset, length, position });
+      return { bytesWritten: Math.min(2, length) };
+    },
+  };
+  await writeBufferFully(file, Buffer.from("abcde"), 10);
+  expect(calls.map(({ length, position }) => ({ length, position }))).toEqual([
+    { length: 5, position: 10 }, { length: 3, position: 12 }, { length: 1, position: 14 },
+  ]);
+});
+
+it("registra erro da limpeza periódica sem rejeição não tratada", async () => {
+  vi.useFakeTimers();
+  const root = await mkdtemp(join(tmpdir(), "media-cleanup-error-"));
+  const errors: unknown[] = [];
+  const runtime = await createMediaRuntime({
+    root, env: { DECUPA_UPLOAD_TTL_HOURS: "0" },
+    log: (_message, error) => errors.push(error),
+    cleanupIntervalMs: 1,
+  });
+  await rm(join(root, ".tmp"), { recursive: true, force: true });
+  await vi.advanceTimersByTimeAsync(1);
+  expect(errors).toHaveLength(1);
+  await runtime.close();
+  vi.useRealTimers();
 });
