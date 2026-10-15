@@ -1,6 +1,8 @@
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { estado, type EditReservation } from "./edit-reservation.ts";
+import { keepPath, sourceManifestPath } from "./session.ts";
 
 // O id é um nome de pasta, não um identificador de linguagem: espaços, acentos
 // e pontuação são válidos. O roteador já separa o primeiro componente; aqui
@@ -69,6 +71,10 @@ export type ProjectRootEntry = {
   id: string;
   displayName: string;
   flow: "montagem" | "limpeza";
+  /** Última alteração de um artefato editorial, não da pasta do Projeto. */
+  updatedAt: number;
+  reservation: Pick<EditReservation, "nome" | "ultimoSinal"> | null;
+  problem?: string;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -77,41 +83,74 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-async function readRecord(path: string): Promise<Record<string, unknown> | null> {
-  try { return record(JSON.parse(await readFile(path, "utf8")) as unknown); }
-  catch { return null; }
+async function readRecord(path: string): Promise<{ value: Record<string, unknown> | null; problem?: string }> {
+  try {
+    const value = record(JSON.parse(await readFile(path, "utf8")) as unknown);
+    return value ? { value } : { value: null, problem: "manifesto ilegível" };
+  } catch {
+    return { value: null, problem: "manifesto ilegível" };
+  }
 }
 
-async function projectRootEntry(root: string, id: string): Promise<ProjectRootEntry | null> {
+async function editorialMtime(
+  dir: string,
+  flow: "assembly" | "cleanup",
+  manifestReadable: boolean,
+): Promise<number> {
+  const candidates: string[] = [];
+  if (flow === "assembly") {
+    if (manifestReadable) candidates.push(join(dir, "project.json"));
+  } else {
+    // Sem keep-list, o `stat` abaixo falha e o candidato é ignorado.
+    candidates.push(keepPath(dir));
+    if (manifestReadable) candidates.push(sourceManifestPath(dir));
+  }
+  const mtimes = await Promise.all(candidates.map(async (path) => (await stat(path).catch(() => null))?.mtimeMs ?? null));
+  return Math.max(0, ...mtimes.filter((mtime): mtime is number => mtime !== null));
+}
+
+async function projectRootEntry(root: string, id: string, now: () => number): Promise<ProjectRootEntry | null> {
   const flow = await projectKind(root, id);
   if (!flow) return null;
   const dir = join(root, id);
+  const manifestPath = join(dir, flow === "assembly" ? "project.json" : "source.json");
+  const manifest = await readRecord(manifestPath);
+  const problem = manifest.problem
+    ? `${flow === "assembly" ? "project.json" : "source.json"} ilegível`
+    : undefined;
+  const updatedAt = await editorialMtime(dir, flow, manifest.value !== null);
+  const reservation = await estado(dir, now()).catch(() => null);
   if (flow === "assembly") {
-    const project = await readRecord(join(dir, "project.json"));
-    const assembly = record(project?.assembly);
+    const assembly = record(manifest.value?.assembly);
     return {
       id,
       displayName: typeof assembly?.name === "string" && assembly.name.trim() ? assembly.name : id,
       flow: "montagem",
+      updatedAt,
+      reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
+      ...(problem ? { problem } : {}),
     };
   }
-  const source = await readRecord(join(dir, "source.json"));
+  const source = manifest.value;
   return {
     id,
     displayName: typeof source?.displayName === "string" && source.displayName.trim() ? source.displayName : id,
     flow: "limpeza",
+    updatedAt,
+    reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
+    ...(problem ? { problem } : {}),
   };
 }
 
 /** Lista somente Projetos diretos da Raiz; arquivos auxiliares ficam fora. */
-export async function listProjectRootEntries(root: string): Promise<ProjectRootEntry[]> {
+export async function listProjectRootEntries(root: string, now: () => number = Date.now): Promise<ProjectRootEntry[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const projects = await Promise.all(entries
     .filter(entry => entry.isDirectory())
-    .map(entry => projectRootEntry(root, entry.name)));
+    .map(entry => projectRootEntry(root, entry.name, now)));
   return projects
     .filter((project): project is ProjectRootEntry => project !== null)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
 }
 
 /** Registro dos runtimes de Projetos que vivem numa mesma Raiz. */
