@@ -1,0 +1,21 @@
+{
+	# O modo é selecionado pelo operador em DECUPA_TLS_MODE. O bloco global
+	# desliga o HTTPS automático somente no modo off.
+	{$DECUPA_CADDY_GLOBAL}
+}
+
+{$DECUPA_DOMAIN} {
+	{$DECUPA_CADDY_TLS}
+
+	reverse_proxy decupa:7788 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-Host {http.request.host}
+		header_up X-Forwarded-Proto {http.request.scheme}
+		header_up X-Forwarded-For {http.request.remote.host}
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			read_buffer 0
+		}
+	}
+}

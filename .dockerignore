@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+work
+dist
+coverage
+.venv
+services/speech/.venv
+services/vision/.venv
+services/vision/.models
+tests/fixtures/generated
+__pycache__
+*.pyc
+.DS_Store
+.env
+*.log
