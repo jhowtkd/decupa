@@ -1,4 +1,4 @@
-import { projectHeaders, projectPath, projectTabId } from "./project-path.js";
+import { projectHeaders, projectPath, projectTabId, projectTabReady } from "./project-path.js";
 
 function reservationAge(ultimoSinal) {
   return Math.max(0, Math.floor((Date.now() - ultimoSinal) / 1000));
@@ -8,6 +8,48 @@ function localTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString("pt-BR", {
     hour: "2-digit", minute: "2-digit", hour12: false,
   });
+}
+
+export function paintReadOnlyControls(root, currentOwner, reservationTake, originalDisabled) {
+  root.body.classList.toggle("modo-leitura", Boolean(currentOwner));
+  for (const element of root.querySelectorAll("button, input, textarea, select")) {
+    if (element === reservationTake
+      || element.matches("[data-stage], #monitorToggle, #closeMonitor")
+      || element.closest?.("[data-edit-reservation-dialog]")) continue;
+    if (currentOwner) {
+      if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);
+      element.disabled = true;
+    } else if (originalDisabled.has(element)) {
+      element.disabled = originalDisabled.get(element);
+      originalDisabled.delete(element);
+    }
+  }
+}
+
+/**
+ * @param {{ acquire: () => Promise<unknown>, release: () => unknown, heartbeat: () => unknown, setIntervalFn?: (fn: () => void, ms: number) => unknown, clearIntervalFn?: (timer: unknown) => void }} options
+ */
+export function createReservationLifecycle({ acquire, release, heartbeat, setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
+  let timer = null;
+  function start() {
+    if (timer === null) timer = setIntervalFn(() => { void heartbeat(); }, 20_000);
+  }
+  function stop() {
+    if (timer === null) return;
+    clearIntervalFn(timer);
+    timer = null;
+  }
+  async function resume() {
+    try { await acquire(); } finally { start(); }
+  }
+  function pagehide() {
+    stop();
+    void release();
+  }
+  async function pageshow(event) {
+    if (event?.persisted) await resume();
+  }
+  return { start, stop, resume, pagehide, pageshow };
 }
 
 /** Confirma a tomada da Reserva mostrando a idade e o risco de um sinal recente. */
@@ -33,6 +75,7 @@ async function confirmEditTakeover(owner) {
     take.type = "button";
     take.textContent = "Assumir Edição";
     actions.append(cancel, take);
+    dialog.setAttribute("data-edit-reservation-dialog", "");
     dialog.append(title, message, warning, actions);
     let done = false;
     const finish = (value) => {
@@ -62,19 +105,7 @@ export function mountEditReservationUI({ onReadOnly = () => {}, onTakeover = () 
   const originalDisabled = new WeakMap();
   let currentOwner = null;
 
-  function paintReadOnly() {
-    document.body.classList.toggle("modo-leitura", Boolean(currentOwner));
-    for (const element of document.querySelectorAll("button, input, textarea, select")) {
-      if (element === reservationTake || element.matches("[data-stage], #monitorToggle, #closeMonitor")) continue;
-      if (currentOwner) {
-        if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);
-        element.disabled = true;
-      } else if (originalDisabled.has(element)) {
-        element.disabled = originalDisabled.get(element);
-        originalDisabled.delete(element);
-      }
-    }
-  }
+  const paintReadOnly = () => paintReadOnlyControls(document, currentOwner, reservationTake, originalDisabled);
 
   function setReadOnly(owner) {
     currentOwner = owner;
@@ -118,18 +149,19 @@ export function mountEditReservationUI({ onReadOnly = () => {}, onTakeover = () 
     }
   }
 
-  const reservationTimer = setInterval(() => { void heartbeat(); }, 20_000);
-  window.addEventListener("pagehide", () => {
-    clearInterval(reservationTimer);
+  const releaseReservation = () => {
     const body = JSON.stringify({ tabId: projectTabId() });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(projectPath("reservation/release"), new Blob([body], { type: "application/json" }));
     } else {
-      void fetch(projectPath("reservation/release"), {
+      return fetch(projectPath("reservation/release"), {
         method: "POST", headers: projectHeaders({ "content-type": "application/json" }), body, keepalive: true,
       });
     }
-  });
+  };
+  const lifecycle = createReservationLifecycle({ acquire, release: releaseReservation, heartbeat });
+  window.addEventListener("pagehide", lifecycle.pagehide);
+  window.addEventListener("pageshow", (event) => { void lifecycle.pageshow(event).catch(() => {}); });
 
   reservationTake?.addEventListener("click", async () => {
     if (!currentOwner || !(await confirmEditTakeover(currentOwner))) return;
@@ -145,7 +177,7 @@ export function mountEditReservationUI({ onReadOnly = () => {}, onTakeover = () 
 
   const observer = new MutationObserver(() => { if (currentOwner) paintReadOnly(); });
   observer.observe(document.body, { childList: true, subtree: true });
-  void acquire().catch(() => {});
+  void projectTabReady().then(() => lifecycle.resume()).catch(() => {});
 
   return {
     handleConflict,
