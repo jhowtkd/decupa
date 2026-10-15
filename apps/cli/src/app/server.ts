@@ -1,6 +1,6 @@
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
-import type { FileCoordinator } from "@decupa/coordinator";
+import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
@@ -124,13 +124,13 @@ export function attachResidentSpeech(opts: {
   dir: string;
   speech?: IngestSpeech;
   executorInjected: boolean;
-  coordinator?: FileCoordinator;
 }): { speech?: IngestSpeech; closeSpeech: () => Promise<void> } {
+  const memoCoordinator = () => createFileCoordinator(join(opts.dir, ".decupa", "coordinator"));
   if (opts.speech) {
-    if (!opts.coordinator || opts.speech.coordinator) {
+    if (opts.speech.coordinator) {
       return { speech: opts.speech, closeSpeech: async () => undefined };
     }
-    return { speech: { ...opts.speech, coordinator: opts.coordinator }, closeSpeech: async () => undefined };
+    return { speech: { ...opts.speech, coordinator: memoCoordinator() }, closeSpeech: async () => undefined };
   }
   if (opts.executorInjected) return { closeSpeech: async () => undefined };
   const client = createResidentSpeechClient();
@@ -147,7 +147,7 @@ export function attachResidentSpeech(opts: {
   return {
     speech: {
       worker: async (req) => { await ensureSynced(); return client.transcribe(req); },
-      ...(opts.coordinator ? { coordinator: opts.coordinator } : {}),
+      coordinator: memoCoordinator(),
     },
     closeSpeech: () => client.close(),
   };
@@ -277,7 +277,6 @@ async function startCleanupApp(opts: {
     dir: workDir,
     speech: opts.speech,
     executorInjected: Boolean(opts.executor),
-    coordinator,
   });
   const ingestAbort = new AbortController();
 
@@ -524,7 +523,6 @@ async function startAssemblyApp(opts: {
     dir,
     speech: opts.speech,
     executorInjected: Boolean(opts.executor),
-    coordinator,
   });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");

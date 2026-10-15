@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
 
 export type HeavyWorkOptions = {
@@ -31,15 +30,9 @@ export function createHeavyCoordinator(opts: HeavyWorkOptions): FileCoordinator 
   return createFileCoordinator(dir, { limit: jobConcurrency(opts.env) });
 }
 
-/** O nome do arquivo de tarefa precisa caber mesmo com Projetos profundos. */
-export function heavyTaskId(stage: string, key: string): string {
-  return `${stage}:${createHash("sha256").update(key).digest("hex")}`;
-}
-
 export function runHeavy<T>(
   coordinator: FileCoordinator | undefined,
   opts: {
-    id: string;
     stage: string;
     signal?: AbortSignal;
     onQueued?: () => void;
@@ -52,13 +45,11 @@ export function runHeavy<T>(
     return Promise.resolve().then(opts.build);
   }
   opts.onQueued?.();
-  return coordinator.run({
-    id: opts.id,
+  return coordinator.withSlot({
     stage: opts.stage,
     signal: opts.signal,
-    build: () => {
+  }, () => {
       opts.onStarted?.();
       return opts.build();
-    },
   });
 }

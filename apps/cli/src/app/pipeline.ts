@@ -16,7 +16,7 @@ import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
 import { parseSourceTimecode, sourceMediaStartSeconds } from "./assembly/timecode.ts";
 import type { FillerSpan } from "../condense/fillers.ts";
-import { heavyTaskId, runHeavy } from "./heavy-work.ts";
+import { runHeavy } from "./heavy-work.ts";
 
 export interface ExecResult {
   code: number;
@@ -417,7 +417,7 @@ export async function runIngest(
 ): Promise<{ warning?: string }> {
   const wantsVisual = opts.visual ?? true;
   const activeTracer = tracer ?? createTracer();
-  const coordinator = opts.coordinator ?? speech?.coordinator;
+  const coordinator = opts.coordinator;
   // Os dois cancelam: o do job (cancelar na tela) e o de quem chamou.
   const abort = eitherSignal(signal, job.signal);
   throwIfAborted(abort);
@@ -425,16 +425,8 @@ export async function runIngest(
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
     await activeTracer.run("transcribing", async () => {
-      const source = await stat(job.videoPath).catch(() => ({ size: 0, mtimeMs: 0 }));
-      // O resultado desta etapa também grava `transcript.json`; o diretório
-      // entra na chave para um cache concluído em outro Projeto não pular essa
-      // gravação local. A fila continua global, mesmo quando a Mídia é a mesma.
-      const id = heavyTaskId(
-        "transcribing",
-        `${job.workDir}:${source.size}:${source.mtimeMs}${opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""}`,
-      );
       await runHeavy(coordinator, {
-        id, stage: "transcribing", signal: abort,
+        stage: "transcribing", signal: abort,
         onQueued: () => onStage("queued"), onStarted: () => onStage("transcribing"),
         build: async () => {
           if (speech?.worker) {
@@ -454,8 +446,9 @@ export async function runIngest(
                   taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language)
                     + (opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""),
                 }, {
-                  // O coordinator externo já guarda a etapa inteira; aninhar o
-                  // mesmo coordinator aqui travaria a fila consigo mesma.
+                  // Este é o cache por conteúdo do Projeto, separado da fila
+                  // global que envolve a etapa inteira.
+                  coordinator: speech.coordinator,
                   worker: opts.requireSpeech
                     ? async (req) => {
                       const out = await worker(req);
@@ -529,9 +522,7 @@ export async function runIngest(
       onStage("visual");
       return undefined;
     }
-    const source = await stat(job.videoPath).catch(() => ({ size: 0, mtimeMs: 0 }));
     return runHeavy(coordinator, {
-      id: heavyTaskId("visual", `${job.workDir}:${source.size}:${source.mtimeMs}`),
       stage: "visual", signal: abort,
       onQueued: () => onStage("queued"), onStarted: () => onStage("visual"),
       build: () => runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin", abort),
@@ -914,7 +905,6 @@ export async function runRender(
   status?: { onQueued?: () => void; onStarted?: () => void },
 ): Promise<string> {
   await runHeavy(coordinator, {
-    id: heavyTaskId("rendering", `${job.workDir}:${outPath}`),
     stage: "rendering",
     signal: job.signal,
     onQueued: status?.onQueued,

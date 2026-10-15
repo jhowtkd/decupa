@@ -13,7 +13,7 @@ import { parseModelJson, requestValidated } from "./model-response.ts";
 import type { VisualFrame, VisualWindow } from "./frames.ts";
 import { sanitizeProviderKey, visualIdentityKey } from "./visual-identity.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
-import { heavyTaskId, runHeavy } from "../heavy-work.ts";
+import { runHeavy } from "../heavy-work.ts";
 export { sanitizeProviderKey } from "./visual-identity.ts";
 
 export const VISUAL_PROMPT = `Você recebe frames JPEG timestampados (amostrados a 1 fps), não um vídeo contínuo.
@@ -503,10 +503,6 @@ export async function describeSource(
 ): Promise<VisualSpan[]> {
   if (!deps?.coordinator) return describeSourceUnqueued(source, dir, signal, deps);
   return runHeavy(deps.coordinator, {
-    id: heavyTaskId(
-      "visual",
-      `${dir}:${source.id}:${source.sha256}:${deps.profile ?? "baseline"}:${deps.client?.model ?? "unknown"}:${deps.client?.providerKey ?? "unknown"}`,
-    ),
     stage: "visual",
     signal,
     onQueued: deps.onQueued,

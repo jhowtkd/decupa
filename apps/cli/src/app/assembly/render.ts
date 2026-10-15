@@ -13,7 +13,7 @@ import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 import { encoderFor, detectHardwareProfile, type HardwareProfile } from "./hardware.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
-import { heavyTaskId, runHeavy } from "../heavy-work.ts";
+import { runHeavy } from "../heavy-work.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const RENDER_SCRIPT = join(REPO_ROOT, "scripts", "render-assembly.py");
@@ -293,7 +293,6 @@ export async function renderAssembly(
     // Adquire a fila global antes da fila local de mídia: quem espera entre
     // Projetos já aparece como "aguardando na fila" e não ocupa o slot local.
     const result = await runHeavy(opts.coordinator, {
-      id: heavyTaskId("rendering", `${outDir}:${valid.revision}:${requestKey}`),
       stage: "rendering",
       signal: opts.signal,
       onQueued: opts.onQueued,

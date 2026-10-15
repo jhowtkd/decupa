@@ -96,8 +96,13 @@ it("duas Limpezas usam uma fila global FIFO para transcrição", async () => {
     await eventually(job(appA), (state) => !["queued", "transcribing"].includes(state.stage));
     await eventually(job(appB), (state) => !["queued", "transcribing"].includes(state.stage));
     expect(maxActive).toBe(1);
-    await expect(access(join(root, ".decupa-a.mp4", ".decupa", "coordinator"))).rejects.toThrow();
-    await expect(access(join(coordinatorDir, "tasks"))).resolves.toBeUndefined();
+    // O cache por conteúdo da fala continua no Projeto; só a fila de trabalho
+    // pesado fica compartilhada fora dele.
+    await expect(access(join(root, ".decupa-a.mp4", ".decupa", "coordinator"))).resolves.toBeUndefined();
+    await expect(access(coordinatorDir)).resolves.toBeUndefined();
+    // A fila global não grava tarefas concluídas, portanto não cria o cache
+    // persistente que existia no coordinator antigo.
+    await expect(access(join(coordinatorDir, "tasks"))).rejects.toThrow();
   } finally {
     releaseFirst();
     await Promise.all([appA.close(), appB.close()]);
