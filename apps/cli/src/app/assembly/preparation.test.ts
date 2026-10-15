@@ -765,7 +765,7 @@ describe("runPreparation", () => {
     await vi.waitFor(async () => {
       const claimed = await loadProject(dir);
       expect(claimed.preparation?.status).toBe("running");
-      expect(claimed.preparation?.sources.fala?.audio).toBe("running");
+      expect(claimed.preparation?.sources.fala?.audio).toBe("pending");
     }, { timeout: 10_000 });
     const before = await loadProject(dir);
     await saveProject(dir, before.revision, (p) =>
@@ -1171,7 +1171,7 @@ describe("runPreparation", () => {
     release();
     await running;
   });
-  it("visual e proposta correm antes do proxy; o render espera proxy e waveform", async () => {
+  it("visual e proposta correm antes do proxy; o áudio só aparece running depois de pronto", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
     const fakes = makeFakes({ withWords: true, validProxy: true });
     const audio = fakes.blockAudio();
@@ -1190,13 +1190,10 @@ describe("runPreparation", () => {
         const mid = await loadProject(dir);
         expect(mid.preparation?.status).toBe("running");
         expect(mid.preparation?.stage).toBe("audio");
-        expect(mid.preparation?.sources.fala).toMatchObject({
-          media: "ready",
-          audio: "running",
-          visual: "pending",
-        });
+        expect(mid.preparation?.sources.fala).toMatchObject({ media: "ready", audio: "pending", visual: "pending" });
         expect(mid.preparation?.note).toBeUndefined();
-        // O estado "running" é salvo antes de o processo de áudio nascer.
+        // A etapa ainda está na preparação; o estado running só é publicado após
+        // o trabalho da fila terminar e o resultado ser salvo.
         expect(fakes.liveExec()).toBeGreaterThan(0);
       }, { timeout: 5000 });
       expect(fakes.calls.describe).toBe(0);

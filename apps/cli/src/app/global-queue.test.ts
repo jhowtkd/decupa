@@ -1,6 +1,7 @@
-import { access, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFileCoordinator } from "@decupa/coordinator";
 import { expect, it } from "vitest";
 import type { Executor } from "./pipeline.ts";
 import { startApp } from "./server.ts";
@@ -145,6 +146,69 @@ it("export de MP4 passa pela fila global sem mudar o estágio do job", async () 
     // A fila não memoriza: o segundo export renderiza de novo.
     expect(renders).toHaveLength(2);
     expect(await stage()).toBe(before);
+  } finally {
+    await app.close();
+  }
+});
+
+it("export de MP4 congela o plano antes de esperar a fila global", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-global-queue-export-plan-"));
+  const video = join(dir, "video.mp4");
+  await writeFile(video, "fake video");
+  const source = await stat(video);
+  await writeFile(join(dir, "source.json"), JSON.stringify({ path: video, size: source.size, mtimeMs: source.mtimeMs }));
+  await mkdir(join(dir, "out"), { recursive: true });
+  await writeFile(join(dir, "transcript.json"), JSON.stringify({ segments: [] }));
+  await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({ units: [
+    { id: "u001", index: 0, start: 0, end: 1, duration: 1, text: "um" },
+    { id: "u002", index: 1, start: 1, end: 2, duration: 1, text: "dois" },
+  ] }));
+  await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+    source_duration: 2, output_duration: 2,
+    clips: [{ unit_ids: ["u001", "u002"], start: 0, end: 2 }], joins: [],
+  }));
+
+  const renderedPlans: string[] = [];
+  const executor: Executor = { run: async (call) => {
+    if (call.args.includes("plan")) {
+      const start = call.args.indexOf("--keep") + 1;
+      const end = call.args.findIndex((arg) => arg.startsWith("--drop"));
+      await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+        source_duration: 2, output_duration: 1,
+        clips: [{ unit_ids: call.args.slice(start, end), start: 0, end: 1 }], joins: [],
+      }));
+    }
+    if (call.args.includes("render")) {
+      const plan = JSON.parse(await readFile(join(call.env?.CLAUDE_PROJECT_DIR ?? "", "out", "condense_plan.json"), "utf8")) as {
+        clips: { unit_ids: string[] }[];
+      };
+      renderedPlans.push(plan.clips.flatMap((clip) => clip.unit_ids).join(","));
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  } };
+  const coordinatorDir = join(dir, "coordinator");
+  const app = await startApp({ input: video, workDir: dir, executor, autoStart: false, port: 0, coordinatorDir });
+  const other = createFileCoordinator(coordinatorDir, { limit: 1 });
+  let release!: () => void;
+  let acquired!: () => void;
+  const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+  const holder = other.withSlot({ stage: "rendering" }, () => new Promise<void>((resolve) => {
+    acquired();
+    release = resolve;
+  }));
+  await acquiredPromise;
+  const base = `http://127.0.0.1:${app.port}/jobs/${app.jobId}`;
+  const post = (route: string, body: object) => fetch(base + route, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const exportRequest = post("/export", { kind: "mp4", keepList: "u001" });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect((await post("/keep", { keepList: "u002" })).status).toBe(200);
+  release();
+  await holder;
+  try {
+    expect((await exportRequest).status).toBe(200);
+    expect(renderedPlans).toEqual(["u001"]);
   } finally {
     await app.close();
   }

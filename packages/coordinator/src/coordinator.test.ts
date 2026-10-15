@@ -125,6 +125,35 @@ describe("createFileCoordinator", () => {
     await expect(coordinator.withSlot({ stage: "rendering" }, async () => "seguinte")).resolves.toBe("seguinte");
   });
 
+  it("cancelar depois do claim não inicia o trabalho", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { limit: 1, leaseMs: 300, pollMs: 5 });
+    await mkdir(join(root, "slots"), { recursive: true });
+    await writeFile(join(root, "slots", "0.json"), JSON.stringify({ leaseId: "outro", until: Date.now() + 300 }));
+    const controller = new AbortController();
+    let ran = false;
+    const pending = coordinator.withSlot({ stage: "rendering", signal: controller.signal }, () => {
+      ran = true;
+      return "renderizado";
+    });
+    await delay(80);
+    for (;;) {
+      try {
+        await writeFile(join(root, ".lock"), `${process.pid} ${hostname()}\n`, { flag: "wx" });
+        break;
+      } catch {
+        await delay(1);
+      }
+    }
+    await delay(50);
+    controller.abort();
+    await delay(250);
+    await unlink(join(root, ".lock"));
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
+    expect(ran).toBe(false);
+  });
+
   it("libera o slot quando a função lança", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });
