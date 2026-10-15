@@ -74,6 +74,7 @@ it("usa DECUPA_ALLOWED_ORIGINS explícita e mantém o comportamento local sem co
   const configured = await boot({ DECUPA_ALLOWED_HOSTS: "decupa.studio", DECUPA_ALLOWED_ORIGINS: "https://editor.example" });
   expect((await request(configured.port, "decupa.studio", { method: "POST", origin: "https://editor.example" })).status).toBe(200);
   expect((await request(configured.port, "decupa.studio", { method: "POST", origin: "https://decupa.studio" })).status).toBe(403);
+  expect((await request(configured.port, "decupa.studio", { method: "POST", origin: `http://localhost:${configured.port}` })).status).toBe(200);
 
   const local = await boot({});
   expect((await request(local.port, `localhost:${local.port}`)).status).toBe(200);

@@ -58,7 +58,6 @@ function parseHost(value: string): ParsedHost | undefined {
   if (colon >= 0 && /^\d+$/.test(text.slice(colon + 1))) {
     return { name: text.slice(0, colon), port: text.slice(colon + 1) };
   }
-  if (text.includes(":")) return { name: text };
   return { name: text };
 }
 
@@ -91,7 +90,18 @@ export function effectiveHost(
   return req.headers.host?.toLowerCase();
 }
 
-/** O navegador manda Origin em toda requisição não-GET; a ausência passa para scripts. */
+/**
+ * Bind em 127.0.0.1 protege da rede, não do navegador: qualquer página aberta
+ * na mesma máquina pode fazer POST em http://127.0.0.1:7788 e disparar render,
+ * export ou cancel no material do cliente.
+ *
+ * O navegador manda `Origin` em toda requisição não-GET, inclusive same-origin,
+ * então basta recusar o que não veio da própria página. A lista configurada
+ * amplia a própria página para os nomes que o operador declarou, e a confiança
+ * no proxy só troca o esquema efetivo quando foi ligada. Ausência de `Origin` é
+ * cliente que não é navegador (curl, script) e continua passando — o SKILL
+ * documenta chamar estas rotas na mão.
+ */
 export function originAllowed(
   origin: string | undefined,
   port: number,
@@ -102,16 +112,25 @@ export function originAllowed(
   const c = resolved(config);
   const value = origin.toLowerCase();
   if (forwardedProto(c, req) === "https" && !value.startsWith("https://")) return false;
+  if (localOriginAllowed(value, port)) return true;
   if (c.origins.length) return c.origins.includes(value);
   let parsed: URL;
   try { parsed = new URL(value); } catch { return false; }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const originPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   const originHost = parsed.hostname.includes(":") ? `[${parsed.hostname}]:${originPort}` : `${parsed.hostname}:${originPort}`;
-  return c.hosts.some(host => hostMatches(originHost, host, port)) || localOriginAllowed(value, port);
+  return c.hosts.some(host => hostMatches(originHost, host, port));
 }
 
-/** O `Host` continua sendo o portão contra DNS rebinding. */
+/**
+ * O `Origin` não cobre DNS rebinding: um domínio que passa a resolver para
+ * 127.0.0.1 é same-origin para o navegador e lê `/project`, a mídia e os
+ * downloads com GET. O `Host` continua sendo o nome do atacante, então só
+ * passam os nomes locais e os hosts declarados pelo operador — em toda rota,
+ * GET incluído. O proxy só pode informar outro host quando a confiança foi
+ * explicitamente ligada, e esse host ainda passa pela mesma lista.
+ * curl e scripts mandam o `Host` da URL que usaram, que é um destes.
+ */
 export function hostAllowed(host: string | undefined, port: number, config?: HostConfig | ResolvedHostConfig): boolean {
   if (host === undefined) return false;
   const c = resolved(config);
@@ -119,7 +138,13 @@ export function hostAllowed(host: string | undefined, port: number, config?: Hos
   return value === `127.0.0.1:${port}` || value === `localhost:${port}` || c.hosts.some(allowed => hostMatches(value, allowed, port));
 }
 
-/** Portão comum: Host fora da lista recebe 403 antes de qualquer rota. */
+/**
+ * Portão comum dos servidores locais: `Host` fora da lista recebe 403 antes de
+ * qualquer rota, e toda resposta proíbe ser emoldurada. Numa página dentro de
+ * um iframe, o clique do usuário sai com o `Origin` legítimo e contornaria o
+ * portão acima — inclusive no "Preparar" pago. Devolve false quando já
+ * respondeu.
+ */
 export function guardLocalRequest(
   req: { headers: { host?: string; [key: string]: string | string[] | undefined } },
   res: ServerResponse,

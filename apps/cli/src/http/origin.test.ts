@@ -63,6 +63,13 @@ describe("hostAllowed", () => {
     expect(originAllowed("http://decupa.studio", 7788, { allowedHosts: "decupa.studio" }, { headers: { "x-forwarded-proto": "https" } })).toBe(true);
   });
 
+  it("mantém as origens locais permitidas mesmo com lista explícita", () => {
+    const config = { allowedOrigins: "https://decupa.studio" };
+    expect(originAllowed("http://localhost:7788", 7788, config)).toBe(true);
+    expect(originAllowed("http://127.0.0.1:7788", 7788, config)).toBe(true);
+    expect(originAllowed("http://localhost:7788", 7788, { ...config, trustProxy: true }, { headers: { "x-forwarded-proto": "https" } })).toBe(false);
+  });
+
   it("não consulta process.env quando a configuração é injetada", () => {
     const before = process.env.DECUPA_ALLOWED_HOSTS;
     process.env.DECUPA_ALLOWED_HOSTS = "vazamento.example";
