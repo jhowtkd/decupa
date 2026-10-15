@@ -56,6 +56,7 @@ type Waiter = {
   taskId: string;
   priority: TaskPriority;
   at: number;
+  seenAt: number;
 };
 
 type Slot = { leaseId: string; until: number };
@@ -68,6 +69,10 @@ const DEFAULT_LIMIT = 1;
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_POLL_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
+
+function waiterHeartbeatMs(leaseMs: number): number {
+  return Math.max(1, Math.floor(leaseMs / 3));
+}
 
 function lockBusy(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
@@ -105,6 +110,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
   const leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   const staleLockMs = opts.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
+  const waiterBeatMs = waiterHeartbeatMs(leaseMs);
   const now = opts.now ?? Date.now;
   const liveClock = opts.now === undefined;
 
@@ -185,7 +191,14 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     try {
       const raw = JSON.parse(await readFile(paths.waiters, "utf8")) as Waiter[];
       const cutoff = now() - leaseMs * 4;
-      return raw.filter((w) => w.at >= cutoff);
+      return raw
+        .map((waiter) => ({
+          ...waiter,
+          // Waiters antigos não tinham heartbeat; o instante de entrada é o
+          // único sinal disponível para lê-los sem quebrar a fila existente.
+          seenAt: Number.isFinite(waiter.seenAt) ? waiter.seenAt : waiter.at,
+        }))
+        .filter((waiter) => waiter.seenAt >= cutoff);
     } catch {
       return [];
     }
@@ -219,8 +232,21 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     return ordered[0]?.waiterId === waiterId;
   };
 
+  const refreshWaiter = (waiters: Waiter[], waiter: Waiter, t: number): boolean => {
+    const current = waiters.find((candidate) => candidate.waiterId === waiter.waiterId);
+    if (!current) {
+      // O arquivo pode ter sido perdido ou o registro pode ter expirado
+      // durante a espera. Reentra com a ordem original, não como o último.
+      waiters.push({ ...waiter, seenAt: t });
+      return true;
+    }
+    if (t - current.seenAt < waiterBeatMs) return false;
+    current.seenAt = t;
+    return true;
+  };
+
   const claimWork = async (
-    waiterId: string,
+    waiter: Waiter,
     taskId: string,
     stage: string,
     priority: TaskPriority,
@@ -229,18 +255,20 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
       const existing = await readTask(taskId);
       if (existing?.status === "completed") {
         const waiters = await readWaiters();
-        await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
+        await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
         return { kind: "done", result: existing.result };
       }
       const waiters = await readWaiters();
-      if (!isHead(waiters, waiterId)) return null;
+      const changed = refreshWaiter(waiters, waiter, now());
+      if (changed) await writeWaiters(waiters);
+      if (!isHead(waiters, waiter.waiterId)) return null;
       const t = now();
       for (let i = 0; i < limit; i += 1) {
         const slot = await readSlot(i);
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
         await writeSlot(i, { leaseId, until: t + leaseMs });
-        await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
+        await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
         await writeTask({
           id: taskId,
           stage,
@@ -256,18 +284,20 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
   };
 
   const claimSlot = async (
-    waiterId: string,
+    waiter: Waiter,
   ): Promise<{ index: number; leaseId: string } | null> => {
     return withLock(async () => {
       const waiters = await readWaiters();
-      if (!isHead(waiters, waiterId)) return null;
+      const changed = refreshWaiter(waiters, waiter, now());
+      if (changed) await writeWaiters(waiters);
+      if (!isHead(waiters, waiter.waiterId)) return null;
       const t = now();
       for (let i = 0; i < limit; i += 1) {
         const slot = await readSlot(i);
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
         await writeSlot(i, { leaseId, until: t + leaseMs });
-        await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
+        await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
         return { index: i, leaseId };
       }
       return null;
@@ -293,7 +323,9 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     async run<T>(runOpts: CoordinatorRunOptions<T>): Promise<T> {
       const priority = runOpts.priority ?? "batch";
       const waiterId = crypto.randomUUID();
-      await enqueue({ waiterId, taskId: runOpts.id, priority, at: now() });
+      const enteredAt = now();
+      const waiter = { waiterId, taskId: runOpts.id, priority, at: enteredAt, seenAt: enteredAt };
+      await enqueue(waiter);
       let slot: { index: number; leaseId: string } | null = null;
       let beat: ReturnType<typeof setInterval> | undefined;
       try {
@@ -304,7 +336,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
             await dequeue(waiterId);
             return existing.result as T;
           }
-          const claimed = await claimWork(waiterId, runOpts.id, runOpts.stage, priority);
+          const claimed = await claimWork(waiter, runOpts.id, runOpts.stage, priority);
           if (claimed?.kind === "done") return claimed.result as T;
           if (claimed?.kind === "slot") {
             slot = { index: claimed.index, leaseId: claimed.leaseId };
@@ -355,13 +387,15 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     async withSlot<T>(slotOpts: CoordinatorSlotOptions, fn: () => Promise<T> | T): Promise<T> {
       const priority = slotOpts.priority ?? "batch";
       const waiterId = crypto.randomUUID();
-      await enqueue({ waiterId, taskId: waiterId, priority, at: now() });
+      const enteredAt = now();
+      const waiter = { waiterId, taskId: waiterId, priority, at: enteredAt, seenAt: enteredAt };
+      await enqueue(waiter);
       let slot: { index: number; leaseId: string } | null = null;
       let beat: ReturnType<typeof setInterval> | undefined;
       try {
         for (;;) {
           if (slotOpts.signal?.aborted) throw cancelled(slotOpts.signal.reason);
-          const claimed = await claimSlot(waiterId);
+          const claimed = await claimSlot(waiter);
           if (claimed) {
             slot = claimed;
             break;

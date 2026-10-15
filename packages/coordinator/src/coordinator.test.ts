@@ -134,6 +134,95 @@ describe("createFileCoordinator", () => {
     await expect(coordinator.withSlot({ stage: "rendering" }, async () => "depois")).resolves.toBe("depois");
   });
 
+  it("waiter vivo continua elegível depois de esperar mais que quatro leases", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    const first = coordinator.withSlot({ stage: "rendering" }, () => delay(220));
+    await delay(10);
+    const controller = new AbortController();
+    const second = coordinator.withSlot({ stage: "rendering", signal: controller.signal }, () => "b rodou");
+    await first;
+    const result = await Promise.race([
+      second,
+      delay(120).then(() => "travou"),
+    ]);
+    expect(result).toBe("b rodou");
+    controller.abort();
+    await second.catch(() => undefined);
+  });
+
+  it("mantém a ordem de chegada depois de uma espera longa", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    const order: string[] = [];
+    const first = coordinator.withSlot({ stage: "rendering" }, () => delay(220));
+    await delay(10);
+    const second = coordinator.withSlot({ stage: "rendering" }, () => { order.push("b"); return "b"; });
+    await waitUntil("segundo waiter", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return waiters.length === 1;
+      } catch {
+        return false;
+      }
+    });
+    const third = coordinator.withSlot({ stage: "rendering" }, () => { order.push("c"); return "c"; });
+    await Promise.all([first, second, third]);
+    expect(order).toEqual(["b", "c"]);
+  });
+
+  it("reinsere waiter vivo se o arquivo da fila desaparecer", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    const first = coordinator.withSlot({ stage: "rendering" }, () => delay(120));
+    await delay(10);
+    const second = coordinator.withSlot({ stage: "rendering" }, () => "reentrou");
+    await waitUntil("waiter para apagar", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return waiters.length === 1;
+      } catch {
+        return false;
+      }
+    });
+    await unlink(join(root, "waiters.json"));
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, "reentrou"]);
+  });
+
+  it("descarta waiter que parou de renovar", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const now = Date.now();
+    await writeFile(join(root, "waiters.json"), JSON.stringify([{
+      waiterId: "processo-morto",
+      taskId: "processo-morto",
+      priority: "batch",
+      at: now,
+      seenAt: now - 200,
+    }]));
+    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    await expect(coordinator.withSlot({ stage: "rendering" }, () => "liberado")).resolves.toBe("liberado");
+    const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as { waiterId: string }[];
+    expect(waiters.some((waiter) => waiter.waiterId === "processo-morto")).toBe(false);
+  });
+
+  it("lê waiter antigo sem seenAt", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const old = Date.now() - 200;
+    await writeFile(join(root, "waiters.json"), JSON.stringify([{
+      waiterId: "formato-antigo",
+      taskId: "formato-antigo",
+      priority: "batch",
+      at: old,
+    }]));
+    const coordinator = createFileCoordinator(root, { leaseMs: 40, pollMs: 5 });
+    await expect(coordinator.withSlot({ stage: "rendering" }, () => "legivel")).resolves.toBe("legivel");
+  });
+
   it("morte/reinício retoma só o incompleto", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });
