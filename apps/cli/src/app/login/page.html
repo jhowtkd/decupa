@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>decupa · entrar</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/login.css">
+</head>
+<body>
+<main class="login-card">
+  <div class="brand" aria-label="decupa"><span class="brand-mark" aria-hidden="true"></span><strong>decupa</strong></div>
+  <p class="eyebrow">Bancada editorial</p>
+  <h1>Entrar no Decupa</h1>
+  <p class="intro">Use a senha da equipe e seu nome de exibição.</p>
+  <form id="loginForm">
+    <label>Nome de exibição<input name="nome" autocomplete="name" maxlength="80" required></label>
+    <label>Senha<input name="senha" type="password" autocomplete="current-password" required></label>
+    <p id="error" class="error" role="alert" hidden></p>
+    <button type="submit">Entrar</button>
+  </form>
+</main>
+<script type="module" src="/login.js"></script>
+</body>
+</html>

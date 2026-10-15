@@ -1,7 +1,7 @@
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { projectPath } from "../project-path.js";
+import { projectPath } from "./project-path.js";
 
 const [
   { mountTemplates },

@@ -4,7 +4,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
-import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
+import { assertSafeBind, guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
+import { createAuthRuntime } from "../app/auth.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -46,9 +47,14 @@ export async function runMarkWeb(opts: {
    * retorno só resolve depois de a página salvar. */
   onListen?: (port: number) => void;
   env?: Record<string, string | undefined>;
+  configDir?: string;
+  now?: () => number;
 }): Promise<MarkWebResult> {
   const cacheDir = opts.cacheDir ?? resolve("work/proxy");
-  const network = resolveHostConfig(hostConfig(opts.env));
+  const env = opts.env ?? process.env;
+  const network = resolveHostConfig(hostConfig(env));
+  assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
+  const auth = await createAuthRuntime({ env, configDir: opts.configDir, network, now: opts.now });
   const info = await probe(opts.input);
 
   const [proxyPath, pcm, page] = await Promise.all([
@@ -89,6 +95,8 @@ export async function runMarkWeb(opts: {
           sendJson(res, { error: "origem não permitida" }, 403);
           return;
         }
+        if (await auth.handlePublic(req, res, url)) return;
+        if (!auth.authorize(req, res, url)) return;
         if (url.pathname === "/") {
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           res.end(page);
@@ -155,6 +163,7 @@ export async function runMarkWeb(opts: {
           res.once("finish", () => {
             server.close();
             server.closeAllConnections();
+            void auth.close();
             resolvePromise({ boundariesMs, outPath: opts.outPath });
           });
           sendJson(res, { ok: true, count: boundariesMs.length });
@@ -171,12 +180,12 @@ export async function runMarkWeb(opts: {
     });
 
     server.on("error", rejectPromise);
-    server.listen(opts.port ?? 7777, "127.0.0.1", () => {
+    server.listen(opts.port ?? 7777, network.bindHost, () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : (opts.port ?? 7777);
       boundPort = port;
       opts.onListen?.(port);
-      console.log(`marcador aberto em http://127.0.0.1:${port}`);
+      console.log(`marcador aberto em http://${network.bindHost}:${port}`);
       console.log("marque as fronteiras e clique em Salvar — o terminal fecha sozinho");
     });
   });

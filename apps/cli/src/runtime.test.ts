@@ -35,6 +35,12 @@ it("Windows abre URL loopback sem interpolação em shell", () => {
   expect(browserCommand("https://example.com", "win32")).toBeNull();
 });
 
+it("Windows aceita a URL prefixada de uma Montagem", () => {
+  expect(browserCommand("http://127.0.0.1:7788/projects/alpha/", "win32")).toEqual({
+    command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", "http://127.0.0.1:7788/projects/alpha/"],
+  });
+});
+
 // Lifecycle de verdade, não mock de plataforma: o mesmo teste vale no macOS e
 // no Windows. A criação do spawn é síncrona, então killAll já vê o filho vivo
 // antes da primeira espera; `run` precisa resolver com code != 0 em até 5s.
