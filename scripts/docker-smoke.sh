@@ -74,11 +74,11 @@ published="$(curl --fail --silent -b "$COOKIE" -X PATCH \
   "$BASE/api/uploads/$upload_id")"
 media_id="$(node -e 'console.log(JSON.parse(process.argv[1]).mediaId)' "$published")"
 
-revision="$(curl --fail --silent -b "$COOKIE" "$project_url/project" \
+revision="$(curl --fail --silent -b "$COOKIE" "${project_url}project" \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).project.revision))')"
 added="$(curl --fail --silent -b "$COOKIE" -H 'Content-Type: application/json' \
   --data "{\"baseRevision\":$revision,\"mediaId\":\"$media_id\"}" \
-  "$project_url/project/media")"
+  "${project_url}project/media")"
 source_id="$(node -e 'console.log(JSON.parse(process.argv[1]).source.id)' "$added")"
 
 range_headers="$WORK/range.headers"

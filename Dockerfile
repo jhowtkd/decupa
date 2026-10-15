@@ -86,7 +86,10 @@ FROM python-deps AS runtime
 ARG DECUPA_UID=1000
 ARG DECUPA_GID=1000
 
-RUN groupadd --gid "${DECUPA_GID}" decupa \
+# A imagem do Ubuntu 24.04 já traz o usuário `ubuntu` com UID/GID 1000.
+RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
+    && if getent group ubuntu >/dev/null; then groupdel ubuntu; fi \
+    && groupadd --gid "${DECUPA_GID}" decupa \
     && useradd --uid "${DECUPA_UID}" --gid "${DECUPA_GID}" --create-home --shell /usr/sbin/nologin decupa \
     && mkdir -p /home/decupa/.cache /home/decupa/.decupa /data/projects /data/media \
     && chown -R decupa:decupa /home/decupa /data /opt/decupa
