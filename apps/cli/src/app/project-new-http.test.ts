@@ -30,6 +30,33 @@ it("cria uma Montagem nomeada na Raiz e devolve sua URL no mesmo servidor", asyn
   }
 });
 
+it("limita o nome da pasta em bytes e conserva nomes longos completos na exibição", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-long-name-http-"));
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
+  const names = [
+    "a".repeat(251),
+    `${"á".repeat(30)}${"a".repeat(230)}`,
+  ];
+  try {
+    for (const nome of names) {
+      const response = await fetch(`http://127.0.0.1:${app.port}/project/new`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nome, fluxo: "montagem" }),
+      });
+
+      expect(response.status).toBe(201);
+      const body = await response.json() as { id: string };
+      expect(Buffer.byteLength(body.id, "utf8")).toBeLessThanOrEqual(245);
+      expect(JSON.parse(await readFile(join(root, body.id, "project.json"), "utf8")))
+        .toMatchObject({ assembly: { name: nome } });
+    }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("rejeita nome vazio, fluxo inválido e Limpeza sem Mídia sem criar pasta", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-new-invalid-http-"));
   const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });

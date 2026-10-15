@@ -237,6 +237,43 @@ it("o portão recusa alterações, a Reserva expira e outra aba pode assumi-la",
   }
 });
 
+it("não deixa os caminhos não canônicos de renomear contornarem a Reserva", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-rename-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir);
+  await createProject(dir, blankProject("alpha-project"));
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    for (const path of ["editor/rename", "editor/name"]) {
+      const response = await fetch(`${base}/projects/alpha/${path}`, {
+        method: "POST",
+        headers: { "x-decupa-tab": "tab-b", "content-type": "application/json" },
+        body: JSON.stringify({ nome: "não deve gravar" }),
+      });
+      expect(response.status).toBe(404);
+    }
+
+    const blocked = await fetch(`${base}/projects/alpha/project/rename`, {
+      method: "POST",
+      headers: { "x-decupa-tab": "tab-b", "content-type": "application/json" },
+      body: JSON.stringify({ nome: "não deve gravar" }),
+    });
+    expect(blocked.status).toBe(409);
+
+    expect(await (await fetch(`${base}/projects/alpha/project`)).json()).toMatchObject({
+      project: { assembly: { name: "alpha-project" }, revision: 0 },
+    });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("aplica a mesma Reserva ao runtime legado de Limpeza", async () => {
   const root = await mkdtemp(join(tmpdir(), "edit-reservation-cleanup-"));
   let agora = 2_000_000;

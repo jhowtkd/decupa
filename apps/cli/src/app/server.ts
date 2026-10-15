@@ -90,6 +90,18 @@ function projectSlug(name: string): string {
   return slug || "projeto";
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = "";
+  let size = 0;
+  for (const character of value) {
+    const characterSize = Buffer.byteLength(character, "utf8");
+    if (size + characterSize > maxBytes) break;
+    result += character;
+    size += characterSize;
+  }
+  return result.replace(/-+$/, "");
+}
+
 async function readProjectCreationBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -110,7 +122,8 @@ async function readProjectCreationBody(req: IncomingMessage): Promise<Record<str
 }
 
 async function createAssemblyInProjectsRoot(projectsRoot: string, displayName: string): Promise<{ id: string; url: string }> {
-  const slug = projectSlug(displayName);
+  // Mantém folga para o hífen e os quatro caracteres aleatórios do sufixo.
+  const slug = truncateUtf8(projectSlug(displayName), 240);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const id = `${slug}-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
     const dir = join(projectsRoot, id);

@@ -736,7 +736,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     try {
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
-      if ((parts[1] === "rename" || parts[1] === "name") && req.method === "POST") {
+      if (parts[0] === "project" && (parts[1] === "rename" || parts[1] === "name") && req.method === "POST") {
         const body = await readLimitedBody(req);
         const displayName = typeof body.nome === "string" ? body.nome.trim() : "";
         if (!displayName) throw new HttpError(400, "nome precisa ser um texto não vazio");
