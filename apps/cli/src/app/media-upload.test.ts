@@ -129,7 +129,9 @@ it("publica no GET quando o processo caiu depois de gravar o estado final", asyn
   expect(await (await fetch(`${base}/api/media`)).json()).toHaveLength(1);
 });
 
-it("descarta o hash e o parcial quando a gravação do estado falha", async () => {
+// A falha de gravação é simulada com uma pasta somente leitura (`chmod`), que o
+// Windows não aplica a diretórios; nas outras plataformas o caso roda inteiro.
+it.skipIf(process.platform === "win32")("descarta o hash e o parcial quando a gravação do estado falha", async () => {
   const root = await mkdtemp(join(tmpdir(), "media-state-failure-"));
   const input = await readFile(join(FIXTURES, "clip.mp4"));
   const sha256 = createHash("sha256").update(input).digest("hex");
@@ -284,7 +286,9 @@ it("guarda a resposta final para uma retomada depois de resposta perdida", async
   expect(await state.json()).toMatchObject({ mediaId: sha256, estado: "ready" });
 });
 
-it("mantém a recuperação quando o registro durável falha antes da publicação", async () => {
+// A falha de gravação é simulada com uma pasta somente leitura (`chmod`), que o
+// Windows não aplica a diretórios; nas outras plataformas o caso roda inteiro.
+it.skipIf(process.platform === "win32")("mantém a recuperação quando o registro durável falha antes da publicação", async () => {
   const root = await mkdtemp(join(tmpdir(), "media-completion-failure-"));
   const input = await readFile(join(FIXTURES, "clip.mp4"));
   const sha256 = createHash("sha256").update(input).digest("hex");
