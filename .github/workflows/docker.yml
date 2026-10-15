@@ -1,0 +1,23 @@
+name: docker
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker-compose.yml
+      - Caddyfile
+      - .dockerignore
+      - .env.example
+      - docker/**
+      - scripts/docker-smoke.sh
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: smoke do compose CPU
+        run: bash scripts/docker-smoke.sh
