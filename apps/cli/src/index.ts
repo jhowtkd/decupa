@@ -326,6 +326,7 @@ async function main(argv: string[]): Promise<number> {
         target: { type: "string" },
         model: { type: "string" },
         provider: { type: "string" },
+        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
         "max-tokens": { type: "string" },
         route: { type: "string" },
       },
@@ -375,6 +376,7 @@ async function main(argv: string[]): Promise<number> {
         input: { type: "string" },
         port: { type: "string" },
         provider: { type: "string" },
+        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
     if (!values.input) {
@@ -387,6 +389,7 @@ async function main(argv: string[]): Promise<number> {
       input: values.input,
       port: values.port ? Number(values.port) : undefined,
       provider: values.provider,
+      env: { ...process.env, ...(values["allowed-hosts"] ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}), ...(values["allowed-origins"] ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}), ...(values["trust-proxy"] ? { DECUPA_TRUST_PROXY: "1" } : {}) },
     });
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de limpeza aberta em ${url}`);
@@ -406,6 +409,7 @@ async function main(argv: string[]): Promise<number> {
         port: { type: "string" },
         "allow-paid-model": { type: "boolean" },
         "allow-paid-visual": { type: "boolean" },
+        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
     if (!values.project) {
@@ -420,6 +424,7 @@ async function main(argv: string[]): Promise<number> {
       port: values.port ? Number(values.port) : undefined,
       allowPaidModel: values["allow-paid-model"] === true,
       allowPaidVisual: values["allow-paid-visual"] === true,
+      env: { ...process.env, ...(values["allowed-hosts"] ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}), ...(values["allowed-origins"] ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}), ...(values["trust-proxy"] ? { DECUPA_TRUST_PROXY: "1" } : {}) },
     });
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de montagem aberta em ${url}`);

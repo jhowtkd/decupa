@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
-import { guardLocalRequest, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
@@ -416,14 +416,15 @@ async function startCleanupApp(opts: {
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      const network = hostConfig(opts.env);
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
       // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
       // isso derrubava o processo inteiro.
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
       const parts = url.pathname.split("/").filter(Boolean);
 
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
@@ -846,9 +847,10 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      const network = hostConfig(opts.env);
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
