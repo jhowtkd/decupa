@@ -14,7 +14,8 @@ it("provider-setup usa os tokens sem mudar copy de custódia", async () => {
 
 it("limpeza: a extensão de cada item de exportar é a do arquivo que o servidor entrega", async () => {
   const html = await readFile(new URL("../apps/cli/src/app/page.html", import.meta.url), "utf8");
-  const server = await readFile(new URL("../apps/cli/src/app/server.ts", import.meta.url), "utf8");
+  // O mapa de downloads vive no runtime da Limpeza desde que ele saiu da casca do servidor.
+  const server = await readFile(new URL("../apps/cli/src/app/cleanup/routes.ts", import.meta.url), "utf8");
   const block = server.slice(server.indexOf("const files: Record<string, string> = {"));
   const served = new Map(
     [...block.slice(0, block.indexOf("};")).matchAll(/(\w+): join\(workDir, (?:"[^"]+", )*"[^"]*\.(\w+)"\)/g)]

@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runModelsFetch } from "./models.ts";
@@ -43,15 +44,17 @@ it("transforma falha de rede ou de espaço numa mensagem acionável", async () =
   await expect(runModelsFetch({ execute })).rejects.toThrow(/rede|espaço/);
 });
 
-it("falha do download sai com código 1 e só a mensagem acionável no stderr", async () => {
-  const dir = await mkdtemp(join("/tmp", "decupa-models-cli-"));
+// O `uv` falso é um script com shebang achado pelo PATH; no Windows o spawn sem
+// shell só executa `.exe`, então o caso é coberto nas outras plataformas.
+it.skipIf(process.platform === "win32")("falha do download sai com código 1 e só a mensagem acionável no stderr", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-models-cli-"));
   try {
     const fakeUv = join(dir, "uv");
     await writeFile(fakeUv, "#!/usr/bin/env node\nconsole.error('falha de rede'); process.exit(1);\n");
     await chmod(fakeUv, 0o755);
 
     const result = await runCli(["models", "fetch"], {
-      PATH: `${dir}:${process.env.PATH ?? ""}`,
+      PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
       DECUPA_DEBUG: "1",
     });
 

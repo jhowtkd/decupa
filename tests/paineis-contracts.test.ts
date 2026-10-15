@@ -53,7 +53,8 @@ it("casca: etapa não remonta a bancada; entrega mora no cartão central", async
 
 it("topo: etapas pintadas pelo estado do projeto, versão em pílula", async () => {
   const js = await read(PAGEJS);
-  expect(js).toContain('from "/editor/topbar.js"');
+  // Os módulos do editor carregam pelo prefixo do Projeto (`/projects/:id/`).
+  expect(js).toContain('import(projectPath("editor/topbar.js"))');
   expect(js).toContain("function paintStages(");
   expect(js).toContain('getElementById("versionPill")');
   expect(js).not.toContain('"revisão " + p.revision');
