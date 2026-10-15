@@ -21,6 +21,12 @@ export type CoordinatorRunOptions<T> = {
   build: () => Promise<T> | T;
 };
 
+export type CoordinatorSlotOptions = {
+  stage: string;
+  priority?: TaskPriority;
+  signal?: AbortSignal;
+};
+
 export type FileCoordinatorOptions = {
   limit?: number;
   leaseMs?: number;
@@ -32,6 +38,7 @@ export type FileCoordinatorOptions = {
 
 export type FileCoordinator = {
   run<T>(opts: CoordinatorRunOptions<T>): Promise<T>;
+  withSlot<T>(opts: CoordinatorSlotOptions, fn: () => Promise<T> | T): Promise<T>;
 };
 
 type TaskRecord = {
@@ -248,6 +255,25 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     });
   };
 
+  const claimSlot = async (
+    waiterId: string,
+  ): Promise<{ index: number; leaseId: string } | null> => {
+    return withLock(async () => {
+      const waiters = await readWaiters();
+      if (!isHead(waiters, waiterId)) return null;
+      const t = now();
+      for (let i = 0; i < limit; i += 1) {
+        const slot = await readSlot(i);
+        if (slot && slot.until > t) continue;
+        const leaseId = crypto.randomUUID();
+        await writeSlot(i, { leaseId, until: t + leaseMs });
+        await writeWaiters(waiters.filter((w) => w.waiterId !== waiterId));
+        return { index: i, leaseId };
+      }
+      return null;
+    });
+  };
+
   const enqueue = async (waiter: Waiter): Promise<void> => {
     await withLock(async () => {
       const waiters = await readWaiters();
@@ -320,6 +346,48 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
           });
         });
         return value;
+      } finally {
+        if (beat) clearInterval(beat);
+        await dequeue(waiterId);
+        if (slot) await freeSlot(slot.index, slot.leaseId);
+      }
+    },
+    async withSlot<T>(slotOpts: CoordinatorSlotOptions, fn: () => Promise<T> | T): Promise<T> {
+      const priority = slotOpts.priority ?? "batch";
+      const waiterId = crypto.randomUUID();
+      await enqueue({ waiterId, taskId: waiterId, priority, at: now() });
+      let slot: { index: number; leaseId: string } | null = null;
+      let beat: ReturnType<typeof setInterval> | undefined;
+      try {
+        for (;;) {
+          if (slotOpts.signal?.aborted) throw cancelled(slotOpts.signal.reason);
+          const claimed = await claimSlot(waiterId);
+          if (claimed) {
+            slot = claimed;
+            break;
+          }
+          await sleep(pollMs, slotOpts.signal);
+        }
+
+        const leaseId = slot.leaseId;
+        if (liveClock) {
+          beat = setInterval(() => {
+            void withLock(async () => {
+              const current = await readSlot(slot!.index);
+              if (current?.leaseId !== leaseId) return;
+              await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
+            }).catch(() => undefined);
+          }, Math.max(10, Math.floor(leaseMs / 3)));
+        }
+
+        try {
+          return await fn();
+        } catch (error) {
+          if (isCancelledError(error) || slotOpts.signal?.aborted) {
+            throw cancelled(slotOpts.signal?.reason);
+          }
+          throw error;
+        }
       } finally {
         if (beat) clearInterval(beat);
         await dequeue(waiterId);

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, unlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { CancelledError } from "@decupa/queue";
 import { describe, expect, it } from "vitest";
 import { AbandonedError, createFileCoordinator } from "./index.ts";
 
@@ -56,6 +57,81 @@ describe("createFileCoordinator", () => {
     ]);
     expect(new Set([ra, rb])).toEqual(new Set(["t1", "t2"]));
     expect(max).toBe(1);
+  });
+
+  it("não reutiliza uma tarefa concluída quando ela é executada de novo", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { pollMs: 5 });
+    let builds = 0;
+    const execute = () => {
+      builds += 1;
+      return builds;
+    };
+    await coordinator.withSlot({ stage: "rendering" }, execute);
+    await coordinator.withSlot({ stage: "rendering" }, execute);
+    expect(builds).toBe(2);
+  });
+
+  it("withSlot serializa clientes diferentes sem memorizar resultado", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const a = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const b = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    let concurrent = 0;
+    let max = 0;
+    const work = async (): Promise<void> => {
+      concurrent += 1;
+      max = Math.max(max, concurrent);
+      await delay(40);
+      concurrent -= 1;
+    };
+    await Promise.all([
+      a.withSlot({ stage: "rendering" }, work),
+      b.withSlot({ stage: "rendering" }, work),
+    ]);
+    expect(max).toBe(1);
+  });
+
+  it("cancelar enquanto espera tira o waiter e deixa a fila avançar", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const blocker = coordinator.withSlot({ stage: "rendering" }, () => held);
+    await waitUntil("slot ocupado", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return Array.isArray(waiters) && waiters.length === 0;
+      } catch {
+        return false;
+      }
+    });
+    const controller = new AbortController();
+    const cancelled = coordinator.withSlot({ stage: "rendering", signal: controller.signal }, async () => "cancelada");
+    await waitUntil("waiter cancelável", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return Array.isArray(waiters) && waiters.length === 1;
+      } catch {
+        return false;
+      }
+    });
+    controller.abort();
+    await expect(cancelled).rejects.toBeInstanceOf(CancelledError);
+    release();
+    await blocker;
+    await expect(coordinator.withSlot({ stage: "rendering" }, async () => "seguinte")).resolves.toBe("seguinte");
+  });
+
+  it("libera o slot quando a função lança", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { pollMs: 5 });
+    const error = new Error("falha do render");
+    await expect(coordinator.withSlot({ stage: "rendering" }, async () => { throw error; })).rejects.toBe(error);
+    await expect(coordinator.withSlot({ stage: "rendering" }, async () => "depois")).resolves.toBe("depois");
   });
 
   it("morte/reinício retoma só o incompleto", async () => {
