@@ -65,6 +65,8 @@ type CleanupPlanning = ReturnType<typeof createCleanupPlanning>;
 export interface CleanupRuntimeDeps {
   input: string;
   workDir: string;
+  displayName?: string;
+  prefix?: string;
   provider?: string;
   providerConfigDir?: string;
   fetchImpl?: typeof fetch;
@@ -153,7 +155,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
           progress: current.progress,
           keepList: current.keepList, review: current.review,
           generation: current.review?.generation ?? 0, desiredGeneration: cleanup.generation(), fillerNotes: current.fillerNotes,
-          source: basename(input),
+          source: opts.displayName ?? basename(input),
           audio: opts.audioReady(),
         });
         return true;
@@ -237,7 +239,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
             clips: plan.clips, fps, title: basename(input),
             sourceStartFrames: Math.round(startSeconds * fps),
           }), "utf8");
-          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/edl`) });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/edl`, opts.prefix) });
           return true;
         }
         if (kind === "otio") {
@@ -269,7 +271,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
           };
           const out = join(workDir, "corte.otio");
           await writeFile(out, `${buildOtio(assembly)}\n`, "utf8");
-          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/otio`) });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/otio`, opts.prefix) });
           return true;
         }
         if (kind === "mp4") {
@@ -278,7 +280,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
           // descreve a preparação da Mídia, e o export é uma requisição à parte
           // que a tela já acompanha enquanto espera a resposta.
           await runRender(pipelineJob, out, exec, opts.coordinator);
-          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/mp4`) });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/mp4`, opts.prefix) });
           return true;
         }
         if (kind === "srt") {
@@ -294,11 +296,11 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
             });
           const out = join(workDir, "corte.srt");
           await writeFile(out, buildSrt({ clips: plan.clips, words }), "utf8");
-          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/srt`) });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/srt`, opts.prefix) });
           return true;
         }
         if (kind === "transcript") {
-          sendJson(res, { path: join(workDir, "out", "condensed_transcript.json"), downloadUrl: projectUrl(`jobs/${current.id}/download/transcript`) });
+          sendJson(res, { path: join(workDir, "out", "condensed_transcript.json"), downloadUrl: projectUrl(`jobs/${current.id}/download/transcript`, opts.prefix) });
           return true;
         }
         sendJson(res, { error: `kind desconhecido: ${kind}` }, 400);
