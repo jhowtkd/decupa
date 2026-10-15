@@ -449,7 +449,7 @@ function addSource(project: Project, source: Source): Project {
   };
 }
 
-async function sourceFromMedia(
+export async function sourceFromMedia(
   media: Pick<MediaRuntime, "getMedia">,
   mediaId: string,
   id: string,
