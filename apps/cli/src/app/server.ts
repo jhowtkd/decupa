@@ -414,19 +414,13 @@ async function startCleanupApp(opts: {
 
   let initialIngestStarted = false;
   let boundPort = opts.port ?? 7788;
-  const server = createServer((req, res) => {
-    const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+  const cleanupRuntime = {
+    handle: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
       // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
       // isso derrubava o processo inteiro.
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
       const parts = url.pathname.split("/").filter(Boolean);
-
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
-        sendJson(res, { error: "origem não permitida" }, 403);
-        return;
-      }
 
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => {
         // A revogação vale mesmo se decision.json não puder ser relido.
@@ -712,9 +706,19 @@ async function startCleanupApp(opts: {
 
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       res.end("não encontrado");
-    };
-
-    handle().catch((error: unknown) => {
+    },
+    close: async (): Promise<void> => {
+      store.cancel(job.id);
+      cleanup.close();
+    },
+  };
+  const server = createServer((req, res) => {
+    if (!guardLocalRequest(req, res, boundPort)) return;
+    if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      sendJson(res, { error: "origem não permitida" }, 403);
+      return;
+    }
+    cleanupRuntime.handle(req, res).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       if (!res.headersSent) sendJson(res, { error: message }, error instanceof BodyTooLargeError ? 413 : 500);
       else res.end();
@@ -740,11 +744,10 @@ async function startCleanupApp(opts: {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos recebem o sinal.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
-      store.cancel(job.id);
-      const notesClosed = cleanup.close();
+      const runtimeClosed = cleanupRuntime.close();
       const speechClosed = closeSpeech();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, speechClosed, closed, notesClosed]);
+      await Promise.all([killed, runtimeClosed, speechClosed, closed]);
     },
     killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };
@@ -884,7 +887,7 @@ async function startAssemblyApp(opts: {
         return;
       }
       if(await templates.handleTemplates(req,res))return;
-      const handled = await runtime.handleAssembly(req, res, dir);
+      const handled = await runtime.handle(req, res);
       if (handled) return;
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       res.end("não encontrado");
@@ -910,10 +913,11 @@ async function startAssemblyApp(opts: {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos e o worker de fala morrem.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const runtimeClosed = runtime.close();
       const speechClosed = closeSpeech();
       const nested = Promise.all(newProjects.map(app => app.close()));
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, speechClosed, nested, closed]);
+      await Promise.all([killed, runtimeClosed, speechClosed, nested, closed]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();

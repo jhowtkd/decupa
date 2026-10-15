@@ -17,7 +17,6 @@ import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { isCancelledError } from "@decupa/queue";
 import { alignText } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
-import { originAllowed } from "../../http/origin.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
@@ -628,9 +627,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   async function handleAssembly(
     req: IncomingMessage,
     res: ServerResponse,
-    projectDir: string,
   ): Promise<boolean> {
-    if (projectDir !== dir) return false;
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/project") && !url.pathname.startsWith("/editor/")) return false;
     const parts = url.pathname.split("/").filter(Boolean);
@@ -644,11 +641,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     res.once?.("close", closeResponse);
     const requestSignal = () => requestController.signal;
     try {
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, deps.port())) {
-        await sendSnapshot(res, { error: "origem não permitida" }, 403);
-        return true;
-      }
-
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
 
       const readSpeechProposal = async (): Promise<SpeechProposal | null> => {
@@ -1736,5 +1728,18 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     }
   }
 
-  return { ensureProject, handleAssembly, snapshot };
+  return {
+    ensureProject,
+    handle: handleAssembly,
+    // Alias mantido para os testes e consumidores internos antigos durante a
+    // extração da fronteira do runtime.
+    handleAssembly: (req: IncomingMessage, res: ServerResponse, _projectDir?: string) => handleAssembly(req, res),
+    // O runtime não possui servidor nem porta. Encerrar significa apenas
+    // interromper operações e prévias que ainda possam manter filhos vivos.
+    close: async (): Promise<void> => {
+      abortOperations();
+      livePreviews.clear();
+    },
+    snapshot,
+  };
 }
