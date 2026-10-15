@@ -146,7 +146,10 @@ it("recupera segredo de sessão vazio deixado por subida interrompida", async ()
   expect((await readFile(join(dir, ".decupa", "session-secret"), "utf8")).trim()).not.toBe("");
 });
 
-it.each(["127.0.0.2", "::1"] as const)("aceita Host e Origin do bind loopback %s", async bindHost => {
+// O macOS só responde em 127.0.0.1 por padrão: 127.0.0.2 nem chega a abrir
+// (EADDRNOTAVAIL) sem um alias configurado na interface de loopback.
+const loopbackBinds = process.platform === "darwin" ? ["::1"] as const : ["127.0.0.2", "::1"] as const;
+it.each(loopbackBinds)("aceita Host e Origin do bind loopback %s", async bindHost => {
   const dir = await mkdtemp(join(tmpdir(), "decupa-auth-bind-"));
   const input = join(dir, "v.mp4");
   await writeFile(input, "fonte", "utf8");
