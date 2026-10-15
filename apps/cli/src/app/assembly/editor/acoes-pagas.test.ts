@@ -49,7 +49,7 @@ it("propor ajuste: dois cliques com a primeira chamada pendente disparam um POST
   const first = run();
   expect(run()).toBeUndefined();
   expect(calls).toEqual([{
-    path: "/project/speech-proposal",
+    path: "project/speech-proposal",
     method: "POST",
     label: "Propondo ajuste…",
     body: { baseRevision: 4, sourceId: "src", speechId: "sp1", request: "encurte o gancho" },
@@ -146,7 +146,7 @@ it("pedir ajuste: dois cliques com a primeira chamada pendente disparam um POST"
   const first = run();
   expect(run()).toBeUndefined();
   expect(calls).toEqual([{
-    path: "/project/adjust",
+    path: "project/adjust",
     method: "POST",
     label: "Ajustando montagem…",
     body: { baseRevision: 2, request: "tire o silêncio do gancho", modelOptIn: true, visualOptIn: true },

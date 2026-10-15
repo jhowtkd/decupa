@@ -14,7 +14,7 @@ async function route(runtime: ReturnType<typeof createAssemblyRuntime>, dir: str
   const req = { method: body === undefined ? "GET" : "POST", url: path, headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)); } };
   let status = 0, payload = "";
   const res = { writeHead(code: number) { status = code; }, end(value?: unknown) { if (typeof value === "string") payload = value; } };
-  await runtime.handleAssembly(req as unknown as IncomingMessage, res as unknown as ServerResponse, dir);
+  await runtime.handle(req as unknown as IncomingMessage, res as unknown as ServerResponse);
   return { status, body: JSON.parse(payload) };
 }
 
@@ -141,7 +141,7 @@ it("desconexão da resposta cancela PCM e não grava uma edição", async () => 
   const req = Object.assign(new EventEmitter(), { method: "POST", url: "/project/fillers-cut", headers: {},
     async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)); } });
   const res = Object.assign(new EventEmitter(), { writableEnded: false, writeHead() {}, end() {} });
-  const pending = runtime.handleAssembly(req as unknown as IncomingMessage, res as unknown as ServerResponse, dir);
+  const pending = runtime.handle(req as unknown as IncomingMessage, res as unknown as ServerResponse);
   const rejected = expect(pending).rejects.toThrow(/aborted/i);
   await entered; res.emit("close"); await rejected;
   expect((await loadProject(dir)).revision).toBe(1);

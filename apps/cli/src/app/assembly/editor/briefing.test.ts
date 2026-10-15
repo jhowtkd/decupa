@@ -389,7 +389,7 @@ function mountInterruptedResume() {
   const api = {
     call(path: string, init: { body?: string }) {
       calls.push({ path, body: init.body ?? "" });
-      if (path === "/project/prepare") {
+      if (path === "project/prepare") {
         state.set("project", current);
         state.set("operation", { stage: "preparing" });
         return Promise.resolve({ res: { ok: true, status: 202 }, body: {} });
@@ -406,7 +406,7 @@ function mountTypedBriefing() {
   const api = {
     call(path: string, init: { body?: string }) {
       calls.push({ path, body: init.body ?? "" });
-      if (path === "/project/prepare") return new Promise(() => {});
+      if (path === "project/prepare") return new Promise(() => {});
       return Promise.resolve({ res: { ok: true }, body: {} });
     },
   };
@@ -436,7 +436,7 @@ it("202 com preparação interrompida trava retomar e um segundo clique não pre
   const prepareClick = prepare?.onclick;
   if (!resume || !prepare || !resumeClick || !prepareClick) throw new Error("botões de preparar ausentes");
   const press = { type: "click", preventDefault() {} };
-  const prepares = () => calls.filter((call) => call.path === "/project/prepare").length;
+  const prepares = () => calls.filter((call) => call.path === "project/prepare").length;
   expect(resume.hidden).toBe(false);
   expect(resume.disabled).toBe(false);
   resumeClick(press);
@@ -462,8 +462,8 @@ it("clicar em preparar envia o briefing digitado e um segundo clique não prepar
   if (!prepare?.onclick) throw new Error("botão preparar ausente");
   prepare.onclick({ type: "click", preventDefault() {} });
   prepare.onclick({ type: "click", preventDefault() {} });
-  await vi.waitFor(() => expect(calls.map((call) => call.path)).toEqual(["/project/input", "/project/prepare"]));
+  await vi.waitFor(() => expect(calls.map((call) => call.path)).toEqual(["project/input", "project/prepare"]));
   expect(JSON.parse(calls[0].body).text).toBe("roteiro X");
   expect(field.value).toBe("roteiro X");
-  expect(calls.filter((call) => call.path === "/project/prepare")).toHaveLength(1);
+  expect(calls.filter((call) => call.path === "project/prepare")).toHaveLength(1);
 });

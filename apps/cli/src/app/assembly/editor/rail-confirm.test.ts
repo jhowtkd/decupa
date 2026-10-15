@@ -68,7 +68,7 @@ it("montar de novo na revisão já preparada não pergunta", async () => {
   document.getElementById("prepare")?.click();
   await Promise.resolve();
   expect(confirm).not.toHaveBeenCalled();
-  expect(api.call.mock.calls.map((call) => call[0])).toContain("/project/prepare");
+  expect(api.call.mock.calls.map((call) => call[0])).toContain("project/prepare");
 });
 
 it("Novo projeto abre a página com #novo", async () => {
@@ -76,7 +76,7 @@ it("Novo projeto abre a página com #novo", async () => {
   document.getElementById("newProject")?.click();
   await Promise.resolve();
   await Promise.resolve();
-  expect(api.call.mock.calls[0]?.[0]).toBe("/project/new");
+  expect(api.call.mock.calls[0]?.[0]).toBe("project/new");
   expect(domWindow().location.assign).toHaveBeenCalledWith("http://127.0.0.1:9/#novo");
 });
 
@@ -102,7 +102,7 @@ it("depois de desfazer Preparar (pronta, sem cenas) o botão volta a Montar e ch
     antes: { label: "Montar vídeo", action: "montar", disabled: false },
     navegou: 0,
     confirmou: 0,
-    paths: ["/project/prepare"],
+    paths: ["project/prepare"],
   });
 });
 
