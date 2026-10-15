@@ -234,6 +234,9 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
 
   async function publish(id: string, state: UploadState, hash: Hash): Promise<{ mediaId: string; deduplicado: boolean }> {
     const mediaId = hash.digest("hex");
+    // `digest` encerra o hash: uma nova tentativa depois de uma falha abaixo
+    // precisa recalculá-lo a partir do parcial, não reaproveitar este.
+    hashes.delete(id);
     if (state.sha256 && state.sha256 !== mediaId) {
       await removeUpload(id);
       throw new UploadHttpError(422, "sha256 da mídia não confere");
@@ -343,7 +346,14 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       if (!entry.isDirectory() || !uploadId(entry.name)) continue;
       const state = await readFile(join(temporary, entry.name, "state.json"), "utf8")
         .then((raw) => JSON.parse(raw) as UploadState, () => null);
-      if (state && state.atualizadoEm <= cutoff) await removeUpload(entry.name);
+      // Sob o lock do envio: uma parte chegando agora não pode ter a pasta
+      // apagada no meio da escrita.
+      if (state && state.atualizadoEm <= cutoff) {
+        await withUploadLock(entry.name, async () => {
+          const current = await readState(entry.name).catch(() => null);
+          if (current && current.atualizadoEm <= cutoff) await removeUpload(entry.name);
+        });
+      }
     }
   }
 
