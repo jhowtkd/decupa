@@ -30,7 +30,7 @@ export function browserCommand(
   url: string,
   platform = process.platform,
 ): { command: string; args: string[] } | null {
-  if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/.test(url)) return null;
+  if (!/^http:\/\/127\.0\.0\.1:\d{1,5}(?:\/?|\/projects\/[A-Za-z0-9][A-Za-z0-9._-]*\/?)$/.test(url)) return null;
   if (platform === "win32") return { command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] };
   if (platform === "darwin") return { command: "open", args: [url] };
   return { command: "xdg-open", args: [url] };

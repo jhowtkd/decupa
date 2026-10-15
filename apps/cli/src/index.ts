@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { runGold } from "./gold.ts";
 import { runMark } from "./mark.ts";
@@ -63,7 +64,8 @@ const USAGE = `decupa — bancada de medição
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
       que não quer, exporta MP4, EDL, legendas ou transcrição.
 
-  decupa montar --project <pasta> [--input <arquivo>] [--port 7788] [--bind 127.0.0.1]
+  decupa montar --project <pasta> [--input <arquivo>] [--projects-root <pasta>] [--port 7788]
+           [--bind 127.0.0.1]
            [--allow-paid-model] [--allow-paid-visual]
       Abre o fluxo de montagem multiarquivo. --input acrescenta uma fonte;
       omitir --input reabre o projeto já gravado na pasta.
@@ -449,6 +451,7 @@ async function main(argv: string[]): Promise<number> {
       options: {
         project: { type: "string" },
         input: { type: "string" },
+        "projects-root": { type: "string" },
         port: { type: "string" },
         "allow-paid-model": { type: "boolean" },
         "allow-paid-visual": { type: "boolean" },
@@ -461,9 +464,14 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
     const { startApp } = await import("./app/server.ts");
+    const projectDir = resolve(values.project);
+    const projectId = basename(projectDir);
+    const projectsRoot = resolve(values["projects-root"] ?? dirname(projectDir));
     const app = await startApp({
       providerConfigDir: homedir(),
-      projectDir: values.project,
+      projectsRoot,
+      projectId,
+      projectDir,
       inputs: values.input ? [values.input] : undefined,
       port: values.port ? Number(values.port) : undefined,
       allowPaidModel: values["allow-paid-model"] === true,
@@ -472,7 +480,7 @@ async function main(argv: string[]): Promise<number> {
     });
     const appEnv = envWithNetworkFlags(values);
     const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
-    const url = `http://${host}:${app.port}`;
+    const url = `http://${host}:${app.port}/projects/${projectId}/`;
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     if (!appEnv.DECUPA_NO_BROWSER && isLoopbackBind(app.address)) openBrowser(url);

@@ -296,6 +296,27 @@ it("Não usar o Jev cancela notas da Montagem e descarta uma resposta que ignora
   expect(await readAssemblyFillerNotes(projectDir)).toBeNull(); expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
 
+it("Raiz de Projetos avisa todas as Montagens carregadas ao desligar o Jev", async () => {
+  const user = await folder(), root = await folder(), projectDir = join(root, "projeto");
+  await mkdir(projectDir);
+  await writeCredentials(user, { ...muse, typesafeApiKey: "stored-jev", typesafe: true });
+  await createProject(projectDir, fillerProject("é"));
+  const entered = deferred(), release = deferred(); let signal: AbortSignal | null | undefined;
+  const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+    signal = init?.signal; entered.resolve(); await release.promise;
+    const body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ model: body.model, answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0.9 }])) }));
+  });
+  const app = await startApp({ projectsRoot: root, projectId: "projeto", projectDir, providerConfigDir: user, env: {}, port: 0, fetchImpl });
+  cleanup.push(() => app.close());
+  cleanup.push(async () => { release.resolve(); });
+  const base = `http://127.0.0.1:${app.port}`;
+  expect((await fetch(base + "/projects/projeto/project")).status).toBe(200); await entered.promise;
+  const disabled = await fetch(base + "/provider/keys", { method: "POST", headers: { "content-type": "application/json" }, body: '{"section":"jev","typesafe":false}' });
+  expect(disabled.status).toBe(200); expect(signal?.aborted).toBe(true);
+  release.resolve();
+});
+
 it("troca de Luna captura transporte/cache antes dos frames e reaproveita fala e cache do texto", async () => {
   const user = await folder(), projectDir = await folder(); await writeCredentials(user, muse);
   await writeCredentials(projectDir, { ...muse, visualProvider: "text", openaiApiKey: "project-key" });

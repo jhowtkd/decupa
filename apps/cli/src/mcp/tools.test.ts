@@ -56,6 +56,11 @@ describe("MCP tools", () => {
     await expect(session().call("start", { mode: "montar" })).rejects.toThrow(/project/);
   });
 
+  it("start montar devolve a URL do Projeto na mesma Raiz", async () => {
+    const result = await session().call("start", { mode: "montar", project: "/tmp/minha-montagem" }) as { url: string };
+    expect(result.url).toBe("http://127.0.0.1:7788/projects/minha-montagem/");
+  });
+
   it("configure_provider grava em .decupa e não devolve a chave", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-mcp-"));
     const result = await session().call("configure_provider", {
