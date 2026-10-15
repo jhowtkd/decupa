@@ -214,3 +214,71 @@ it("chegada por #novo mostra a pasta no menu e no status", async () => {
   expect(ui.notice).toBe("Projeto novo em /tmp/decupa-novo");
   expect(history.replaceState).toHaveBeenCalled();
 });
+
+it("retomar após erro de rede conclui a mesma Mídia no Projeto", async () => {
+  const js = await pageJs();
+  const document = installDom('<div id="mediaUploads"></div>');
+  const call = vi.fn(async () => ({ res: { ok: true }, body: { project: { revision: 1 } } }));
+  const refreshMediaLibrary = vi.fn(async () => undefined);
+  const starts: boolean[] = [];
+  class UploadMock {
+    state = "parado";
+    paused = false;
+    async start() {
+      starts.push(true);
+      if (starts.length === 1) throw new Error("rede caiu");
+      this.state = "concluido";
+      return { mediaId: "e".repeat(64), deduplicado: false };
+    }
+    pause() { this.paused = true; }
+  }
+  class PausedMockError extends Error {}
+  const file = { name: "aula.mp4", size: 5 };
+  const uploadTeamFiles = runInNewContext(
+    "const mediaProgressText = () => '';\n" + slice(js, "async function uploadTeamFiles", "/* ---- Fiação ----") + "\n;uploadTeamFiles",
+    {
+      document, teamMode: true, mediaEnabled: true, importFiles: vi.fn(),
+      ResumableMediaUpload: UploadMock, UploadPausedError: PausedMockError,
+      call, project: () => ({ revision: 1 }), refreshMediaLibrary,
+    },
+  );
+  await uploadTeamFiles([file]);
+  const pause = document.getElementById("mediaUploads")!.children[0]!.children[3]!;
+  pause.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(starts).toHaveLength(2);
+  expect(call).toHaveBeenCalledWith("project/media", expect.objectContaining({ method: "POST" }));
+});
+
+it("permite repetir a adição ao Projeto sem reenviar Mídia já concluída", async () => {
+  const js = await pageJs();
+  const document = installDom('<div id="mediaUploads"></div>');
+  let additions = 0;
+  const call = vi.fn(async () => {
+    additions += 1;
+    if (additions === 1) throw new Error("POST do Projeto caiu");
+    return { res: { ok: true }, body: { project: { revision: 1 } } };
+  });
+  const starts: boolean[] = [];
+  class UploadMock {
+    state = "parado";
+    async start() { starts.push(true); this.state = "concluido"; return { mediaId: "1".repeat(64), deduplicado: false }; }
+    pause() { throw new Error("não deve pausar Mídia concluída"); }
+  }
+  const uploadTeamFiles = runInNewContext(
+    "const mediaProgressText = () => '';\n" + slice(js, "async function uploadTeamFiles", "/* ---- Fiação ----") + "\n;uploadTeamFiles",
+    {
+      document, teamMode: true, mediaEnabled: true, importFiles: vi.fn(),
+      ResumableMediaUpload: UploadMock, UploadPausedError: class extends Error {},
+      call, project: () => ({ revision: 1 }), refreshMediaLibrary: vi.fn(async () => undefined),
+    },
+  );
+  await uploadTeamFiles([{ name: "aula.mp4", size: 5 }]);
+  const pause = document.getElementById("mediaUploads")!.children[0]!.children[3]!;
+  pause.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(starts).toHaveLength(1);
+  expect(additions).toBe(2);
+});

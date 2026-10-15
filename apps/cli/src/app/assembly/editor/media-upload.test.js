@@ -49,3 +49,70 @@ it("retoma pelo estado persistido e envia partes sequenciais", async () => {
   await resumed.start(file());
   expect(resumedRanges).toEqual(["bytes 3-4/5"]);
 });
+
+it("usa o tamanho de parte informado pelo servidor ao retomar", async () => {
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  storage.setItem("decupa.uploads.v1", JSON.stringify({ ["aula.mp4\u00005\u0000123"]: { id: "upload-2", offset: 2 } }));
+  const ranges = [];
+  let patches = 0;
+  const upload = new ResumableMediaUpload({
+    storage,
+    fetchImpl: async (url, init = {}) => {
+      if (!init.method || init.method === "GET") return response({ offset: 2, tamanhoTotal: 5, tamanhoParte: 2, estado: "uploading" });
+      if (init.method === "PATCH") {
+        ranges.push(init.headers["Content-Range"]);
+        patches += 1;
+        return patches === 2 ? response({ mediaId: "c".repeat(64), deduplicado: false }, 201) : response({ offset: 4 });
+      }
+      throw new Error(`chamada inesperada: ${url}`);
+    },
+  });
+  await upload.start(file());
+  expect(ranges).toEqual(["bytes 2-3/5", "bytes 4-4/5"]);
+});
+
+it("distingue envio parado por erro de envio pausado e concluído", async () => {
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  let fail = true;
+  const upload = new ResumableMediaUpload({
+    storage,
+    fetchImpl: async (url, init = {}) => {
+      if (init.method === "POST") return response({ id: "upload-3", offset: 0, tamanhoParte: 5 }, 201);
+      if (!init.method || init.method === "GET") return response({ offset: 0, tamanhoTotal: 5, tamanhoParte: 5, estado: "uploading" });
+      if (init.method === "PATCH" && fail) { fail = false; throw new Error("rede caiu"); }
+      if (init.method === "PATCH") return response({ mediaId: "d".repeat(64), deduplicado: false }, 201);
+      throw new Error(`chamada inesperada: ${url}`);
+    },
+  });
+  await expect(upload.start(file())).rejects.toThrow("rede caiu");
+  expect(upload.paused).toBe(false);
+  expect(upload.state).toBe("parado");
+  await upload.start(file());
+  expect(upload.state).toBe("concluido");
+  upload.pause();
+  expect(upload.state).toBe("concluido");
+});
+
+it("marca como parado um erro no GET inicial e permite retry no primeiro clique", async () => {
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  storage.setItem("decupa.uploads.v1", JSON.stringify({ ["aula.mp4\u00005\u0000123"]: { id: "upload-4", offset: 0 } }));
+  let failed = true;
+  const upload = new ResumableMediaUpload({
+    storage,
+    fetchImpl: async (url, init = {}) => {
+      if (!init.method || init.method === "GET") {
+        if (failed) { failed = false; throw new Error("GET caiu"); }
+        return response({ offset: 0, tamanhoTotal: 5, tamanhoParte: 5, estado: "uploading" });
+      }
+      if (init.method === "PATCH") return response({ mediaId: "f".repeat(64), deduplicado: false }, 201);
+      throw new Error(`chamada inesperada: ${url}`);
+    },
+  });
+  await expect(upload.start(file())).rejects.toThrow("GET caiu");
+  expect(upload.state).toBe("parado");
+  await upload.start(file());
+  expect(upload.state).toBe("concluido");
+});
