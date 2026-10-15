@@ -287,9 +287,14 @@ class ResidentWorkerTest(unittest.TestCase):
         whisper.load_model.reset_mock()
         whisper.load_model.side_effect = [RuntimeError("cuda missing"), asr]
         worker = worker_mod.SpeechWorker()
-        worker.transcribe(task_id="gpu", wav="b.wav", device="cuda")
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            worker.transcribe(task_id="gpu", wav="b.wav", device="cuda")
         devices = [call.args[1] for call in whisper.load_model.call_args_list]
         self.assertEqual(devices, ["cuda", "cpu"])
+        # O recuo precisa aparecer no log do servidor; senão a GPU que não carregou fica invisível.
+        self.assertIn("usando cpu", stderr.getvalue())
+        self.assertIn("cuda missing", stderr.getvalue())
 
     def test_benchmark_loaded_models_not_cache_replay(self):
         whisper = Mock()

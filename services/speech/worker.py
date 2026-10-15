@@ -50,6 +50,13 @@ def stderr_progress(task_id: str, stage: str, percent: float | None = None) -> N
         sys.stderr.flush()
 
 
+def stderr_log(message: str) -> None:
+    """Linha de log no stderr: o cliente Node a repassa ao log do servidor."""
+    with _progress_lock:
+        sys.stderr.write("\n" + message + "\n")
+        sys.stderr.flush()
+
+
 # Enquanto um modelo carrega (o de alinhamento PT baixa mais de 1 GB na primeira
 # vez), nada sai do WhisperX. Uma thread repete a etapa corrente nesse ritmo para
 # o watchdog do cliente (10 min sem linha de progresso) não matar o worker com a
@@ -175,9 +182,11 @@ class SpeechWorker:
             tried = wanted
             try:
                 asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
-            except Exception:
+            except Exception as exc:
                 if tried == "cpu":
                     raise
+                # Sem este aviso, o recuo para CPU fica invisível no log do servidor.
+                stderr_log(f"fala: não carregou em {tried} ({exc}); usando cpu")
                 tried = "cpu"
                 key = (model, language, compute_type, tried)
                 cached = self._asr.get(key)

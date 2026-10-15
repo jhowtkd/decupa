@@ -471,3 +471,44 @@ describe("createResidentSpeechClient", () => {
     }
   }, 5_000);
 });
+
+// O falso devolve o device recebido como texto da palavra: prova o que chegou
+// ao worker sem depender do Python.
+function fakeEcoDevice(): string {
+  return `
+    const readline = require("node:readline");
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.on("line", (line) => {
+      const args = JSON.parse(line).args || {};
+      const payload = {
+        language: "pt",
+        words: [{ text: String(args.device ?? "sem-device"), startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+        unaligned: [],
+        taskId: args.task_id,
+      };
+      process.stdout.write(JSON.stringify(payload) + "\\n");
+    });
+  `;
+}
+
+describe("createResidentSpeechClient: dispositivo", () => {
+  it("device só entra no pedido quando o cliente foi configurado com ele", async () => {
+    const recebidos: string[] = [];
+    for (const device of [undefined, "cuda"] as const) {
+      const client = createResidentSpeechClient({
+        device,
+        spawn: (_command, _args, options) => spawn(process.execPath, ["-e", fakeEcoDevice()], {
+          cwd: options?.cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      });
+      try {
+        const result = await client.transcribe({ taskId: "t", wav: "a.wav", language: "pt" });
+        recebidos.push(result.words[0]?.text ?? "");
+      } finally {
+        await client.close();
+      }
+    }
+    expect(recebidos).toEqual(["sem-device", "cuda"]);
+  }, 5_000);
+});
