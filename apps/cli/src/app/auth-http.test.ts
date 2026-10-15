@@ -1,5 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -82,6 +83,7 @@ it("aceita somente next local, preservando query e hash", async () => {
   const { base } = await boot();
   const rejected = [
     "/\\evil.example/x", "\\\\evil.example", "/%5C", "//evil.example/x",
+    "/.//evil.example", "/a/..//evil.example",
     "https://evil.example/x", "javascript:alert(1)", "/\\t/evil", "/\t/evil",
   ];
   for (const next of rejected) {
@@ -97,6 +99,80 @@ it("aceita somente next local, preservando query e hash", async () => {
     body: JSON.stringify({ senha: "senha certa", nome: "Ana" }),
   });
   expect(local.headers.get("location")).toBe("/projeto?aba=texto#fim");
+});
+
+it("reserva o contador de falhas entre logins concorrentes", async () => {
+  const { base } = await boot();
+  const login = () => fetch(`${base}/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senha: "errada", nome: "Ana" }),
+  });
+  const parallel = await Promise.all(Array.from({ length: 20 }, login));
+  expect(parallel.filter(response => response.status === 429).length).toBeGreaterThan(0);
+  expect((await login()).status).toBe(429);
+});
+
+it("desligar o login não transforma POST /login em erro 500", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-auth-disabled-"));
+  const input = join(dir, "v.mp4");
+  await writeFile(input, "fonte", "utf8");
+  const app = await startApp({ input, workDir: join(dir, "work"), port: 0, autoStart: false, env: {} });
+  stops.push(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  const response = await fetch(`http://127.0.0.1:${app.port}/login`, {
+    method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senha: "qualquer", nome: "Ana" }),
+  });
+  expect(response.status).toBe(303);
+  expect(response.headers.get("location")).toBe("/");
+});
+
+it("recupera segredo de sessão vazio deixado por subida interrompida", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-auth-empty-secret-"));
+  const input = join(dir, "v.mp4");
+  await mkdir(join(dir, ".decupa"), { recursive: true });
+  await writeFile(join(dir, ".decupa", "session-secret"), "", "utf8");
+  await writeFile(input, "fonte", "utf8");
+  const app = await startApp({
+    input, workDir: join(dir, "work"), providerConfigDir: dir, port: 0, autoStart: false,
+    env: { DECUPA_AUTH_PASSWORD: "senha certa" },
+  });
+  stops.push(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  const response = await fetch(`http://127.0.0.1:${app.port}/login`, {
+    method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senha: "senha certa", nome: "Ana" }),
+  });
+  expect(response.status).toBe(303);
+  expect((await readFile(join(dir, ".decupa", "session-secret"), "utf8")).trim()).not.toBe("");
+});
+
+// O macOS só responde em 127.0.0.1 por padrão: 127.0.0.2 nem chega a abrir
+// (EADDRNOTAVAIL) sem um alias configurado na interface de loopback.
+const loopbackBinds = process.platform === "darwin" ? ["::1"] as const : ["127.0.0.2", "::1"] as const;
+it.each(loopbackBinds)("aceita Host e Origin do bind loopback %s", async bindHost => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-auth-bind-"));
+  const input = join(dir, "v.mp4");
+  await writeFile(input, "fonte", "utf8");
+  const app = await startApp({
+    input, workDir: join(dir, "work"), port: 0, autoStart: false,
+    env: { DECUPA_BIND_HOST: bindHost, DECUPA_AUTH_PASSWORD: "senha certa", DECUPA_SESSION_SECRET: "segredo" },
+  });
+  const authority = bindHost.includes(":") ? `[${bindHost}]:${app.port}` : `${bindHost}:${app.port}`;
+  const request = (path: string, method = "GET", headers: Record<string, string> = {}, body?: string) => new Promise<number>((resolve, reject) => {
+    const req = httpRequest({ host: bindHost, port: app.port, path, method, headers: { host: authority, ...headers } }, response => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode ?? 0));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+  try {
+    expect(await request("/healthz")).toBe(200);
+    expect(await request("/login", "POST", { origin: `http://${authority}`, "content-type": "application/json" }, JSON.stringify({ senha: "senha certa", nome: "Ana" }))).toBe(303);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 it("descarta next externo, não permite Range sem sessão e só marca Secure sob HTTPS efetivo", async () => {
@@ -182,6 +258,10 @@ it("relógio injetado governa o backoff por IP e login certo zera a sequência",
   const longerBlock = await login("errada");
   expect(longerBlock.status).toBe(429);
   expect(longerBlock.headers.get("retry-after")).toBe("2");
+  clock += 2_000;
+  const longestBlock = await login("errada");
+  expect(longestBlock.status).toBe(429);
+  expect(longestBlock.headers.get("retry-after")).toBe("4");
 });
 
 it("só usa X-Forwarded-For quando o proxy é confiável", async () => {

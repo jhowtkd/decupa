@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackBind } from "./http/origin.ts";
 
 /** apps/cli/src -> raiz do repositório, onde o setup cria work/engine-venv. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -23,14 +24,18 @@ export function enginePython(env = process.env, platform = process.platform, roo
 
 /**
  * Comando para abrir o navegador numa URL loopback, sem shell e sem
- * interpolação. Só 127.0.0.1 passa: é a única origem que o servidor local
- * produz; qualquer outra string volta `null` e nada é executado.
+ * interpolação. Só endereços loopback passam; qualquer outra string volta
+ * `null` e nada é executado.
  */
 export function browserCommand(
   url: string,
   platform = process.platform,
 ): { command: string; args: string[] } | null {
-  if (!/^http:\/\/127\.0\.0\.1:\d{1,5}(?:\/?|\/projects\/[A-Za-z0-9][A-Za-z0-9._-]*\/?)$/.test(url)) return null;
+  if (!/^http:\/\/(?:\[[^\]]+\]|[^/:]+):\d{1,5}(?:\/?|\/projects\/[A-Za-z0-9][A-Za-z0-9._-]*\/?)$/.test(url)) return null;
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return null; }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  if (!isLoopbackBind(parsed.hostname.replace(/^\[|\]$/g, ""))) return null;
   if (platform === "win32") return { command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] };
   if (platform === "darwin") return { command: "open", args: [url] };
   return { command: "xdg-open", args: [url] };

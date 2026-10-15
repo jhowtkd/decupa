@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, open, readFile } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, unlink } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -80,6 +80,7 @@ function localNext(value: string | null | undefined): string {
   try {
     const parsed = new URL(value, "http://x.invalid");
     if (parsed.origin !== "http://x.invalid") return "/";
+    if (parsed.pathname.startsWith("//")) return "/";
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch {
     return "/";
@@ -145,6 +146,44 @@ function systemName(): string {
   return process.env.USER?.trim() || process.env.USERNAME?.trim() || "usuário local";
 }
 
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
+async function acquireSecretLock(path: string): Promise<() => Promise<void>> {
+  const lockPath = `${path}.lock`;
+  for (let attempt = 0; attempt < 10_000; attempt += 1) {
+    const temporary = `${lockPath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      const handle = await open(temporary, "wx", 0o600);
+      try { await handle.writeFile(`${process.pid}\n`, "utf8"); }
+      finally { await handle.close(); }
+      try {
+        await link(temporary, lockPath);
+        return async () => { await unlink(lockPath).catch(() => {}); };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    } finally {
+      await unlink(temporary).catch(() => {});
+    }
+    const rawOwner = (await readFile(lockPath, "utf8").catch(() => "")).trim();
+    const owner = Number(rawOwner);
+    if (!rawOwner || !Number.isInteger(owner) || owner <= 0 || !processAlive(owner)) {
+      if (!rawOwner) {
+        // A publicação do lock é atômica; ausência significa que o candidato
+        // concorrente perdeu a disputa e o próximo loop pode tentar de novo.
+        continue;
+      }
+      await unlink(lockPath).catch(() => {});
+    } else {
+      await new Promise<void>(resolve => setTimeout(resolve, 1));
+    }
+  }
+  throw new Error("não foi possível reservar o segredo de sessão");
+}
+
 async function persistedSecret(configDir: string): Promise<Buffer> {
   const secretDir = join(configDir, ".decupa");
   const path = join(secretDir, SECRET_FILE);
@@ -158,23 +197,28 @@ async function persistedSecret(configDir: string): Promise<Buffer> {
     }
   } catch { /* primeira subida */ }
 
-  const generated = randomBytes(32).toString("base64url");
+  const release = await acquireSecretLock(path);
   try {
-    const handle = await open(path, "wx", 0o600);
-    try { await handle.writeFile(`${generated}\n`, "utf8"); }
-    finally { await handle.close(); }
-  } catch (error) {
-    // Dois processos podem subir o mesmo servidor ao mesmo tempo: quem
-    // perdeu a criação lê o segredo que o vencedor acabou de persistir.
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  await chmod(path, 0o600).catch(() => {});
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const current = (await readFile(path, "utf8")).trim();
+    const current = (await readFile(path, "utf8").catch(() => "")).trim();
     if (current) return Buffer.from(current, "base64url");
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    // Arquivo vazio é sobras de uma subida que caiu depois da criação. Só o
+    // dono do lock pode removê-lo e publicar a nova chave.
+    await unlink(path).catch(() => {});
+    const generated = randomBytes(32).toString("base64url");
+    const temporary = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      const handle = await open(temporary, "wx", 0o600);
+      try { await handle.writeFile(`${generated}\n`, "utf8"); }
+      finally { await handle.close(); }
+      await chmod(temporary, 0o600).catch(() => {});
+      await link(temporary, path);
+      return Buffer.from(generated, "base64url");
+    } finally {
+      await unlink(temporary).catch(() => {});
+    }
+  } finally {
+    await release();
   }
-  throw new Error("segredo de sessão persistido vazio");
 }
 
 async function readLoginBody(req: IncomingMessage): Promise<{ senha?: unknown; nome?: unknown }> {
@@ -297,6 +341,11 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
       return true;
     }
     if (url.pathname !== "/login" || req.method !== "POST") return false;
+    if (!enabled) {
+      res.writeHead(303, { location: "/", "cache-control": "no-store" });
+      res.end();
+      return true;
+    }
     const ip = requestIp(req, opts.network);
     const timestamp = now();
     pruneFailures(timestamp);
@@ -309,13 +358,23 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
     let body: { senha?: unknown; nome?: unknown };
     try { body = await readLoginBody(req); }
     catch (error) { sendJson(res, { error: error instanceof Error ? error.message : "body inválido" }, 400); return true; }
+    // Outra requisição pode ter terminado enquanto esta lia o corpo. Releia
+    // o estado para que tentativas paralelas não reutilizem o mesmo contador.
+    const checkedAt = now();
+    pruneFailures(checkedAt);
+    const currentState = failures.get(ip);
+    if (currentState && currentState.blockedUntil > checkedAt) {
+      res.setHeader("retry-after", String(Math.ceil((currentState.blockedUntil - checkedAt) / 1000)));
+      sendJson(res, { error: "tente novamente mais tarde" }, 429);
+      return true;
+    }
     const validPassword = typeof body.senha === "string" && constantTimeTextEqual(body.senha, password!);
     const nome = displayName(body.nome);
     if (!validPassword || !nome) {
-      const count = (state?.count ?? 0) + 1;
+      const count = (currentState?.count ?? 0) + 1;
       const delay = count >= 3 ? Math.min(30_000, 1_000 * 2 ** Math.min(count - 3, 5)) : 0;
-      failures.set(ip, { count, blockedUntil: timestamp + delay, lastFailureAt: timestamp });
-      pruneFailures(timestamp);
+      failures.set(ip, { count, blockedUntil: checkedAt + delay, lastFailureAt: checkedAt });
+      pruneFailures(checkedAt);
       if (delay) {
         res.setHeader("retry-after", String(Math.ceil(delay / 1000)));
         sendJson(res, { error: "tente novamente mais tarde" }, 429);
