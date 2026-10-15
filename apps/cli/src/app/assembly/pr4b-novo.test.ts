@@ -1,7 +1,7 @@
-import { access, copyFile, mkdtemp } from "node:fs/promises";
+import { copyFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { startApp } from "../server.ts";
 
@@ -25,28 +25,10 @@ function escapado(dir: string): string {
   return dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 }
 
-it("POST /project/new devolve a pasta criada, registra no log e na meta da página", async () => {
-  const logs: string[] = [];
-  const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    logs.push(args.map(String).join(" "));
-  });
-  try {
-    const { base } = await boot();
-    const res = await fetch(`${base}/project/new`, { method: "POST" });
-    expect(res.status).toBe(201);
-    const body = await res.json() as { url?: string; dir?: string };
-    let existe = false;
-    if (body.dir) existe = await access(body.dir).then(() => true, () => false);
-    const html = body.url ? await (await fetch(body.url)).text() : "";
-    expect({
-      // Comparação literal: o caminho do Windows traz `\`, que num RegExp vira escape.
-      log: body.dir !== undefined && logs.some((linha) => linha.includes(`novo projeto em ${body.dir}`)),
-      dirExiste: existe,
-      meta: body.dir ? html.includes(`name="decupa-project-dir" content="${escapado(body.dir)}"`) : false,
-    }).toEqual({ log: true, dirExiste: true, meta: true });
-  } finally {
-    spy.mockRestore();
-  }
+it("o modo legado não abre uma porta efêmera para Novo projeto", async () => {
+  const { base } = await boot();
+  const res = await fetch(`${base}/project/new`, { method: "POST" });
+  expect(res.status).toBe(404);
 });
 
 it("withProjectDir escapa a pasta na meta da página", async () => {

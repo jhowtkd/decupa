@@ -560,7 +560,9 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     newProject.disabled = true;
     try {
       const { res, body } = await api.call("project/new", {
-        method: "POST", body: "{}", label: "Criando projeto…",
+        method: "POST",
+        body: JSON.stringify({ nome: "Novo projeto", fluxo: "montagem" }),
+        label: "Criando projeto…",
       });
       // #novo: a página nova anuncia a pasta criada no status.
       if (res.ok) window.location.assign(body.url + "#novo");

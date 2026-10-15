@@ -1354,20 +1354,29 @@ it("edita apoio por HTTP, protege revisão e restaura por undo",async()=>{
 
 
 it("novo projeto abre vazio e preserva projeto e mídia anteriores", async () => {
-  const {base, dir} = await boot();
+  const root = await mkdtemp(join(tmpdir(), "assembly-new-root-"));
+  const dir = join(root, "anterior");
+  await mkdir(dir);
+  await createProject(dir, blankProject("anterior"));
+  const app = await startApp({ projectsRoot: root, projectId: "anterior", projectDir: dir, port: 0, executor: indexingExec() });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
   await fetch(`${base}/project/input`, {method: "POST", headers: {"content-type":"application/json"},
     body: JSON.stringify({baseRevision:0,kind:"brief",text:"Projeto anterior",targetSeconds:60})});
   const before = await readFile(join(dir, "project.json"), "utf8");
-  const res = await fetch(`${base}/project/new`, {method:"POST"});
+  const res = await fetch(`${base}/project/new`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "Projeto novo", fluxo: "montagem" }),
+  });
   expect(res.status).toBe(201);
   const {url} = await res.json() as {url:string};
-  const next = await (await fetch(new URL("project", url))).json() as {project:Project};
+  const next = await (await fetch(`${base}${url}project`)).json() as {project:Project};
   expect(next.project.revision).toBe(0);
   expect(next.project.assembly.sources).toEqual([]);
   expect(next.project.scenes).toEqual([]);
   expect(next.project.input.text).toBe("");
   expect(await readFile(join(dir,"project.json"),"utf8")).toBe(before);
-  const html = await (await fetch(url)).text();
+  const html = await (await fetch(`${base}${url}`)).text();
   expect(html).toContain('id="newProject"');
 });
 
