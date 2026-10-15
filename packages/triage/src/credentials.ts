@@ -1,8 +1,10 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, open, readFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { AssemblyTextProvider, Provider, StoredProvider, VisualProvider } from "./provider.ts";
+import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid, resolveSddlSid } from "./windows-acl.ts";
 
 export type Credentials = StoredProvider & {
   apiKey?: string;
@@ -18,24 +20,70 @@ export type Credentials = StoredProvider & {
 const FILE = "credentials";
 const run = promisify(execFile);
 
-// chmod não restringe ACLs no Windows. Nenhum segredo é enviado ao PowerShell.
-const RESTRICT_WINDOWS_FILE = `
-$ErrorActionPreference = 'Stop'
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($entry in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($entry) }
-$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow')
-$acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE -AclObject $acl
-$actual = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
-$rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-if (-not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or
-    $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or
-    ($rules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
-  throw 'ACL restrita não confirmada'
+const WINDOWS_COMMAND_OPTIONS: ExecFileOptions = {
+  shell: false,
+  windowsHide: true,
+  timeout: 30_000,
+  maxBuffer: 1024 * 1024,
+};
+
+export type WindowsCommandRunner = (executable: string, args: string[], options: ExecFileOptions) => Promise<{ stdout: string }>;
+
+const runWindowsCommand: WindowsCommandRunner = async (executable, args, options) => {
+  const result = await run(executable, args, { ...options, encoding: "utf8" });
+  return { stdout: result.stdout.toString() };
+};
+
+export async function readWindowsAcl(path: string, execute: WindowsCommandRunner = runWindowsCommand): Promise<ReturnType<typeof parseIcaclsSaveOutput>> {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "decupa-icacls-"));
+  const savePath = join(temporaryDirectory, "acl.txt");
+  try {
+    await execute("icacls.exe", [path, "/save", savePath], WINDOWS_COMMAND_OPTIONS);
+    const saved = await readFile(savePath);
+    try {
+      return parseIcaclsSaveOutput(saved);
+    } catch (error) {
+      // A SDDL não tem segredo; o trecho evita depurar o formato às cegas.
+      const sample = JSON.stringify(saved.subarray(0, 240).toString("latin1"));
+      throw new Error(`ACL do Windows não interpretável: ${sample}`, { cause: error });
+    }
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
-`;
+
+/**
+ * ACLs do Windows não são reduzidas por chmod. O arquivo já existe vazio para
+ * que nenhuma chave atravesse a janela entre criação e restrição.
+ */
+export async function restrictWindowsCredentials(path: string, execute: WindowsCommandRunner = runWindowsCommand): Promise<void> {
+  const { stdout: whoami } = await execute("whoami.exe", ["/user", "/fo", "csv", "/nh"], WINDOWS_COMMAND_OPTIONS);
+  const sid = parseWhoamiUserSid(whoami);
+  const grant = [path, "/inheritance:r", "/grant:r", `*${sid}:F`];
+  await execute("icacls.exe", grant, WINDOWS_COMMAND_OPTIONS);
+
+  let acl = await readWindowsAcl(path, execute);
+  if (!isRestrictedSddlAcl(acl, sid)) {
+    // /grant:r troca a concessão do SID informado, mas não remove outras
+    // entradas explícitas. A SDDL fornece os SIDs sem depender do idioma.
+    const removed = new Set<string>();
+    const removals = acl.entries.map(entry => {
+      const entrySid = resolveSddlSid(entry, sid);
+      if (!entrySid) throw new Error(`ACE SDDL sem SID não pode ser restringida: ${acl.sddl}`);
+      const operation = entry.type === "A" ? "/remove:g" : "/remove:d";
+      return { operation, identity: `*${entrySid}` };
+    });
+    for (const { operation, identity } of removals) {
+      const key = `${operation}\0${identity}`;
+      if (removed.has(key)) continue;
+      removed.add(key);
+      await execute("icacls.exe", [path, operation, identity], WINDOWS_COMMAND_OPTIONS);
+    }
+    await execute("icacls.exe", grant, WINDOWS_COMMAND_OPTIONS);
+    acl = await readWindowsAcl(path, execute);
+  }
+  if (!isRestrictedSddlAcl(acl, sid)) throw new Error(`ACL restrita não confirmada: ${acl.sddl}`);
+}
 
 
 export function credentialsPath(dir: string): string {
@@ -105,14 +153,7 @@ export async function writeCredentials(dir: string, creds: Credentials,
     const empty = await open(path, "a");
     await empty.close();
     try {
-      await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", RESTRICT_WINDOWS_FILE], {
-        env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path },
-        windowsHide: true,
-        // A partida a frio do PowerShell sem PSModulePath (removido de propósito,
-        // para não carregar módulos de um caminho adulterado) pode passar de 60 s
-        // numa máquina carregada; o limite só existe para não pendurar para sempre.
-        timeout: 120_000,
-      });
+      await restrictWindowsCredentials(path);
     } catch (cause) {
       throw new Error("não foi possível restringir a ACL das credenciais; chave não gravada", { cause });
     }

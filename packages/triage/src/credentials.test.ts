@@ -4,38 +4,23 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { credentialsPath, readCredentials, writeCredentials } from "./credentials.ts";
+import { credentialsPath, readCredentials, readWindowsAcl, writeCredentials } from "./credentials.ts";
+import { isRestrictedSddlAcl, parseWhoamiUserSid } from "./windows-acl.ts";
 
 const run = promisify(execFile);
-async function windowsAcl(path: string, script: string): Promise<string> {
-  const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath")), DECUPA_CREDENTIAL_FILE: path }, timeout: 120_000,
-  });
-  return stdout;
-}
+const windowsCommandOptions = { shell: false, windowsHide: true, timeout: 30_000 } as const;
 
 async function expectPrivate(path: string): Promise<void> {
   if (process.platform !== "win32") {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     return;
   }
-  const output = await windowsAcl(path, `
-$ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-@{ protected = $acl.AreAccessRulesProtected; count = $rules.Count;
-   onlyUser = @($rules | Where-Object { $_.IdentityReference.Value -ne $sid -or $_.AccessControlType -ne 'Allow' }).Count -eq 0;
-   fullControl = @($rules | Where-Object { ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl }).Count -eq 1
-} | ConvertTo-Json -Compress
-`);
-  expect(JSON.parse(output)).toEqual({ protected: true, count: 1, onlyUser: true, fullControl: true });
+  const { stdout } = await run("whoami.exe", ["/user", "/fo", "csv", "/nh"], windowsCommandOptions);
+  const sid = parseWhoamiUserSid(stdout);
+  expect(isRestrictedSddlAcl(await readWindowsAcl(path), sid)).toBe(true);
 }
 
-// No Windows cada gravação sobe um PowerShell para a ACL (até 120 s cada) e
-// alguns casos gravam e conferem mais de uma vez: o limite padrão de 60 s do
-// vitest derrubaria o teste antes do PowerShell.
-describe("credentials", { timeout: process.platform === "win32" ? 600_000 : undefined }, () => {
+describe("credentials", () => {
   it("conserva visão e Jev, inclusive o desligamento, ao regravar o texto", async () => {
     const dir = await mkdtemp(join(tmpdir(), "decupa-cred-keys-"));
     await writeCredentials(dir, { preset: "custom", apiKey: "muse", model: "muse", baseUrl: "https://meta.example/v1", openaiApiKey: "luna", visualProvider: "text", typesafeApiKey: "jev", typesafe: false });
@@ -98,13 +83,7 @@ describe("credentials", { timeout: process.platform === "win32" ? 600_000 : unde
     const path = credentialsPath(dir);
     await writeCredentials(dir, { preset: "zai" });
     if (process.platform === "win32") {
-      await windowsAcl(path, `
-$ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE
-$everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
-$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($everyone, 'Read', 'Allow'))
-Set-Acl -LiteralPath $env:DECUPA_CREDENTIAL_FILE -AclObject $acl
-`);
+      await run("icacls.exe", [path, "/grant", "*S-1-1-0:R"], windowsCommandOptions);
     } else {
       await chmod(path, 0o644);
     }
