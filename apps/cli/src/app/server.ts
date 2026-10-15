@@ -14,7 +14,7 @@ import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
+import { assertSafeBind, guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
@@ -32,6 +32,7 @@ import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
 import { createHeavyCoordinator } from "./heavy-work.ts";
 import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 import { projectUrl } from "./project-url.ts";
+import { createAuthRuntime } from "./auth.ts";
 
 export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
@@ -269,7 +270,10 @@ async function startCleanupApp(opts: {
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
-  const network = resolveHostConfig(hostConfig(opts.env));
+  const env = opts.env ?? process.env;
+  const network = resolveHostConfig(hostConfig(env));
+  assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -308,7 +312,7 @@ async function startCleanupApp(opts: {
   const tracer = createTracer();
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
-    env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored,
+    env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored,
     visual: () => maybeVisual(pipelineJob), flags: () => maybeInspectFlags(workDir) });
   const replan = cleanup.replan;
 
@@ -436,6 +440,8 @@ async function startCleanupApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
+      if (await auth.handlePublic(req, res, url)) return;
+      if (!auth.authorize(req, res, url)) return;
       if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => {
         cleanup.cancelNotes(); return cleanup.refreshNotes();
@@ -459,7 +465,7 @@ async function startCleanupApp(opts: {
 
   await new Promise<void>((resolve, reject) => {
     server.on("error", reject);
-    server.listen(opts.port ?? 7788, "127.0.0.1", resolve);
+    server.listen(opts.port ?? 7788, network.bindHost, resolve);
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
@@ -471,16 +477,17 @@ async function startCleanupApp(opts: {
   }
 
   return {
-    port, address: "127.0.0.1", jobId: job.id,
+    port, address: network.bindHost, jobId: job.id,
     close: async () => {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos recebem o sinal.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimeClosed = runtime.close();
       const mediaClosed = media?.close() ?? Promise.resolve();
+      const authClosed = auth.close();
       const speechClosed = closeSpeech();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, speechClosed, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, closed]);
     },
     killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };
@@ -519,7 +526,10 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
-  const network = resolveHostConfig(hostConfig(opts.env));
+  const env = opts.env ?? process.env;
+  const network = resolveHostConfig(hostConfig(env));
+  assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -604,6 +614,8 @@ async function startAssemblyApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
+      if (await auth.handlePublic(req, res, url)) return;
+      if (!auth.authorize(req, res, url)) return;
       if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
@@ -636,24 +648,25 @@ async function startAssemblyApp(opts: {
 
   await new Promise<void>((resolve, reject) => {
     server.on("error", reject);
-    server.listen(opts.port ?? 7788, "127.0.0.1", resolve);
+    server.listen(opts.port ?? 7788, network.bindHost, resolve);
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
   boundPort = port;
 
   return {
-    port, address: "127.0.0.1", jobId: project.id,
+    port, address: network.bindHost, jobId: project.id,
     close: async () => {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos e o worker de fala morrem.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimeClosed = runtime.close();
       const mediaClosed = media?.close() ?? Promise.resolve();
+      const authClosed = auth.close();
       const speechClosed = closeSpeech();
       const nested = Promise.all(newProjects.map(app => app.close()));
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, speechClosed, nested, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, nested, closed]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
