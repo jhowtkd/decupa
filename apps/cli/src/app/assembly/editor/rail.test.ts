@@ -373,7 +373,7 @@ it("preparationSteps: cancelada pelo usuário fica neutra; falha real continua F
     preparation,
   });
   expect(preparationSteps(running, true).map((step: { status: string; state: string }) => [step.status, step.state])).toEqual([
-    ["ready", "Concluída"], ["ready", "Concluída"], ["running", "Em andamento · fala.mp4"], ["pending", "Na fila"], ["pending", "Na fila"],
+    ["ready", "Concluída"], ["ready", "Concluída"], ["running", "Em andamento · fala.mp4"], ["pending", "Aguardando na fila"], ["pending", "Aguardando na fila"],
   ]);
   const stopped = (status: string) => ({ ...running, preparation: { ...preparation, status } });
   expect(preparationSteps(stopped("cancelled"), false)[2]).toMatchObject({ key: "visual", status: "cancelled", state: "Cancelada" });

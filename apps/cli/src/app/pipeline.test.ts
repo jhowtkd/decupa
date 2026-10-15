@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -874,6 +874,26 @@ describe("cancelamento do ingest", () => {
     expect(render.calls[0]?.signal).toBe(ac.signal);
   });
 
+  it("exportar a mesma Limpeza duas vezes executa o render duas vezes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-render-repeat-"));
+    const out = join(dir, "corte.mp4");
+    const coordinator = createFileCoordinator(join(dir, "global"), { pollMs: 5 });
+    let renders = 0;
+    const exec: Executor = {
+      async run(call) {
+        if (call.args.includes("render")) {
+          renders += 1;
+          await writeFile(out, `render-${renders}`);
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    await runRender({ ...job, workDir: dir }, out, exec, coordinator);
+    await runRender({ ...job, workDir: dir }, out, exec, coordinator);
+    expect(renders).toBe(2);
+    expect(await readFile(out, "utf8")).toBe("render-2");
+  });
+
   it("repassa o progresso do worker residente para onLine", async () => {
     // onLine é o que o servidor manda para setProgress.
     const dir = await mkdtemp(join(tmpdir(), "decupa-progresso-"));
@@ -894,6 +914,44 @@ describe("cancelamento do ingest", () => {
       { visual: false },
     );
     expect(linhas).toContain("transcrevendo 42%");
+  });
+  it("apagou transcript.json e reabriu: a etapa volta e recria o arquivo", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "decupa-transcript-reopen-"));
+    const video = join(dir, "aula.mp4");
+    await writeFile(video, "video");
+    const coordinator = createFileCoordinator(join(dir, ".decupa", "coordinator"), { pollMs: 5 });
+    let workerCalls = 0;
+    const speech = fala(async () => {
+      workerCalls += 1;
+      return { language: "pt", words: [palavra], unaligned: [] };
+    });
+    speech.coordinator = coordinator;
+    let indexCalls = 0;
+    const exec: Executor = {
+      async run(call) {
+        if (call.args.includes("index")) {
+          indexCalls += 1;
+          await mkdir(join(dir, "out"), { recursive: true });
+          await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({
+            units: [{ id: "u001", index: 0, start: 0, end: 1, duration: 1, text: "oi" }],
+          }));
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const abrir = () => runIngest(
+      { id: "j1", videoPath: video, workDir: dir }, exec, () => {}, undefined,
+      undefined, speech, undefined, { requireSpeech: true, visual: false },
+    );
+    await abrir();
+    await access(join(dir, "transcript.json"));
+    await unlink(join(dir, "transcript.json"));
+    await abrir();
+    await access(join(dir, "transcript.json"));
+    expect(indexCalls).toBe(2);
+    // A fila global não memoriza a etapa, mas o cache local por conteúdo ainda
+    // evita chamar o worker outra vez quando só o derivado foi apagado.
+    expect(workerCalls).toBe(1);
   });
 });
 

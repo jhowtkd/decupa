@@ -12,6 +12,8 @@ import { PREVIEW_CACHE_MARKER, pruneProject } from "./retention.ts";
 import type { Assembly, Source, Track } from "./types.ts";
 import { validateAssembly } from "./validate.ts";
 import { encoderFor, detectHardwareProfile, type HardwareProfile } from "./hardware.ts";
+import type { FileCoordinator } from "@decupa/coordinator";
+import { runHeavy } from "../heavy-work.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
 const RENDER_SCRIPT = join(REPO_ROOT, "scripts", "render-assembly.py");
@@ -215,7 +217,14 @@ export async function renderAssembly(
   a: Assembly,
   outDir: string,
   exec: Executor,
-  opts: { profile?: HardwareProfile; detectHardware?: boolean; signal?: AbortSignal } = {},
+  opts: {
+    profile?: HardwareProfile;
+    detectHardware?: boolean;
+    signal?: AbortSignal;
+    coordinator?: FileCoordinator;
+    onQueued?: () => void;
+    onStarted?: () => void;
+  } = {},
 ): Promise<string> {
   const valid = validateAssembly(a);
   for (const source of valid.sources) {
@@ -264,7 +273,7 @@ export async function renderAssembly(
     const { encoder, hwaccel } = encoderFor(profile);
     // Só o exec pesado entra na fila (sem chave: cada chamada roda a sua);
     // a detecção acima já liberou o slot. Cancelamento verificado ao sair.
-    const result = await mediaWork.run(async () => {
+    const renderWork = () => mediaWork.run(async () => {
       opts.signal?.throwIfAborted();
       return exec.run({
         command: "python3",
@@ -281,6 +290,15 @@ export async function renderAssembly(
         signal: opts.signal,
       });
     }, opts.signal ? { signal: opts.signal } : undefined);
+    // Adquire a fila global antes da fila local de mídia: quem espera entre
+    // Projetos já aparece como "aguardando na fila" e não ocupa o slot local.
+    const result = await runHeavy(opts.coordinator, {
+      stage: "rendering",
+      signal: opts.signal,
+      onQueued: opts.onQueued,
+      onStarted: opts.onStarted,
+      build: renderWork,
+    });
     if (result.code !== 0) {
       // O FFmpeg abre com cabeçalho de versão e configuração e diz o motivo
       // no fim: guarda o final da saída, não o começo.

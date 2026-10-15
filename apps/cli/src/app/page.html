@@ -273,7 +273,7 @@ let audioSrc = null;
 const api = (p, o) => fetch(projectPath(`jobs/${jobId}${p}`), o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
-const STEPS = [["queued","Na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
+const STEPS = [["queued","Aguardando na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
 const CHECK_SVG = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg>';
 const clock = (s) => { const w = Math.floor(Math.max(0, s || 0)); return Math.floor(w / 60) + ":" + String(w % 60).padStart(2, "0"); };
 const secs = (s) => Math.max(0, s || 0).toFixed(1).replace(".", ",") + " s";

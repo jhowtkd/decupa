@@ -29,6 +29,7 @@ import { claimWorkDir, cleanupWorkDir } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
+import { createHeavyCoordinator } from "./heavy-work.ts";
 import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 import { projectUrl } from "./project-url.ts";
 
@@ -140,10 +141,15 @@ export function attachResidentSpeech(opts: {
   speech?: IngestSpeech;
   executorInjected: boolean;
 }): { speech?: IngestSpeech; closeSpeech: () => Promise<void> } {
-  if (opts.speech) return { speech: opts.speech, closeSpeech: async () => undefined };
+  const memoCoordinator = () => createFileCoordinator(join(opts.dir, ".decupa", "coordinator"));
+  if (opts.speech) {
+    if (opts.speech.coordinator) {
+      return { speech: opts.speech, closeSpeech: async () => undefined };
+    }
+    return { speech: { ...opts.speech, coordinator: memoCoordinator() }, closeSpeech: async () => undefined };
+  }
   if (opts.executorInjected) return { closeSpeech: async () => undefined };
   const client = createResidentSpeechClient();
-  const coordinator = createFileCoordinator(join(opts.dir, ".decupa", "coordinator"), { limit: 1 });
   // O worker sobe com `uv run --no-sync`: sem o venv da fala sincronizado a
   // montagem (que não passa pelo preflight da limpeza) quebraria só na
   // primeira transcrição, com um ModuleNotFoundError cru. Confere uma vez;
@@ -155,7 +161,10 @@ export function attachResidentSpeech(opts: {
     return synced;
   };
   return {
-    speech: { worker: async (req) => { await ensureSynced(); return client.transcribe(req); }, coordinator },
+    speech: {
+      worker: async (req) => { await ensureSynced(); return client.transcribe(req); },
+      coordinator: memoCoordinator(),
+    },
     closeSpeech: () => client.close(),
   };
 }
@@ -166,6 +175,8 @@ export async function startApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  /** Diretório compartilhado do coordinator; injetado nos testes. */
+  coordinatorDir?: string;
   templatesRoot?: string;
   provider?: string;
   executor?: Executor;
@@ -240,6 +251,7 @@ async function startCleanupApp(opts: {
   input: string;
   port?: number;
   providerConfigDir?: string;
+  coordinatorDir?: string;
   templatesRoot?: string;
   provider?: string;
   executor?: Executor;
@@ -265,6 +277,9 @@ async function startCleanupApp(opts: {
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider;
   const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
   resolveAssemblyTextProvider(visualEnv); // Campo inválido falha na subida, antes de qualquer envio.
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
@@ -313,7 +328,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
-        { requireSpeech: true },
+        { requireSpeech: true, coordinator },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -406,6 +421,7 @@ async function startCleanupApp(opts: {
     audioReady: () => audioReady, loadStored,
     page: async () => withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
+    coordinator,
   });
   const media = await configuredMediaRuntime(opts.env, opts.now);
 
@@ -489,6 +505,7 @@ async function startAssemblyApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  coordinatorDir?: string;
   templatesRoot?: string;
   executor?: Executor;
   selectFn?: AssemblyDeps["selectFn"];
@@ -508,6 +525,9 @@ async function startAssemblyApp(opts: {
   }
   const dir = resolve(opts.projectDir);
   const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
@@ -570,6 +590,7 @@ async function startAssemblyApp(opts: {
     resolveOperationDeps,
     fillerFetchImpl: opts.fetchImpl,
     speech,
+    coordinator,
   });
   const media = await configuredMediaRuntime(opts.env, opts.now);
   const project = await runtime.ensureProject(opts.inputs);
