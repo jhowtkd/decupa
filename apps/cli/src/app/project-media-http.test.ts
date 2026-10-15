@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -41,7 +41,8 @@ it("adiciona uma Mídia do acervo ao Projeto da Raiz pelo hash e caminho do acer
     expect(body.source.id).toMatch(/^src-/);
     expect(body.project.assembly.sources).toEqual([
       expect.objectContaining({
-        path: join(mediaRoot, "pool", mediaId), sha256: mediaId, name: "aula.mp4",
+        // O servidor guarda o caminho real (`/var` vira `/private/var` no macOS).
+        path: await realpath(join(mediaRoot, "pool", mediaId)), sha256: mediaId, name: "aula.mp4",
       }),
     ]);
     expect((await loadProject(projectDir)).assembly.sources[0]).toMatchObject({ sha256: mediaId });

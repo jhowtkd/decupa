@@ -61,12 +61,22 @@ function effectiveHttps(req: IncomingMessage, network: ResolvedHostConfig): bool
   return Boolean((req.socket as { encrypted?: boolean }).encrypted);
 }
 
+/** Barra invertida ou caractere de controle: navegadores normalizam ambos de
+ *  formas que podem tirar o `next` do site. */
+function unsafeNextChar(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (char === "\\" || code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function localNext(value: string | null | undefined): string {
-  if (!value || /[\\\u0000-\u001f\u007f]/.test(value)) return "/";
+  if (!value || unsafeNextChar(value)) return "/";
   let decodedValue: string;
   try { decodedValue = decodeURIComponent(value); }
   catch { return "/"; }
-  if (/[\\\u0000-\u001f\u007f]/.test(decodedValue)) return "/";
+  if (unsafeNextChar(decodedValue)) return "/";
   try {
     const parsed = new URL(value, "http://x.invalid");
     if (parsed.origin !== "http://x.invalid") return "/";

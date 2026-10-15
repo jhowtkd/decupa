@@ -109,7 +109,7 @@ export function createProjectRuntimeRegistry(opts: {
       }
     },
     async notifyJevDisabled(): Promise<void> {
-      const loaded = await Promise.all([...runtimes.values()]);
+      const loaded = await Promise.all(runtimes.values());
       await Promise.all(loaded.filter((runtime): runtime is ProjectRuntime => runtime !== null)
         .map((runtime) => runtime.onJevDisabled?.()));
     },

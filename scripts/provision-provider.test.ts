@@ -9,11 +9,17 @@ import { afterEach, expect, it } from "vitest";
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
-it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", async () => {
+// Três processos Node com type-stripping: no runner Windows de 2 núcleos, com a
+// suíte inteira em paralelo, leva de 40 a 60 s. O limite padrão (60 s) era apertado.
+it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", { timeout: 180_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "provision-keys-")); dirs.push(dir);
   const script = fileURLToPath(new URL("./provision-provider.ts", import.meta.url));
   // O processo filho não herda segredos, nem o diretório real do usuário.
-  const env = { PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
+  // As variáveis de sistema do Windows não são segredo, e sem elas o PowerShell
+  // que restringe a ACL das credenciais leva dezenas de segundos para subir.
+  const windowsSystem = Object.fromEntries(["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+    .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+  const env = { ...windowsSystem, PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
   const run = (extra = {}) => promisify(execFile)(process.execPath, ["--experimental-strip-types", script], { env: { ...env, ...extra } });
   const absent = await run();
   expect(absent.stdout).toContain("DECUPA_COMPANY_OPENAI_API_KEY");
