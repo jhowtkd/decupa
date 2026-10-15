@@ -52,13 +52,18 @@ export function parseWhoamiUserSid(output: string): string {
   return sid;
 }
 
+/**
+ * O `icacls /save` grava UTF-16LE, mas o BOM não é garantido. Sem BOM, o
+ * UTF-16LE aparece pelo byte nulo depois do primeiro caractere ASCII. A
+ * validação estrita da SDDL logo depois mantém a falha fechada.
+ */
 function decodeIcaclsSave(output: Uint8Array): string {
-  if (output.byteLength < 2 || output[0] !== 0xff || output[1] !== 0xfe || output.byteLength % 2 !== 0) {
-    throw new Error("saída icacls /save não está em UTF-16LE");
-  }
-  const text = Buffer.from(output).toString("utf16le");
-  if (!text.startsWith("\uFEFF")) throw new Error("saída icacls /save sem BOM");
-  return text.slice(1);
+  const bytes = Buffer.from(output);
+  const utf16 = bytes.byteLength >= 2 && bytes.byteLength % 2 === 0
+    && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] !== 0 && bytes[1] === 0));
+  if (utf16) return bytes.toString("utf16le").replace(/^\uFEFF/, "");
+  if (bytes.byteLength > 0 && !bytes.includes(0)) return bytes.toString("utf8").replace(/^\uFEFF/, "");
+  throw new Error(`saída icacls /save em codificação desconhecida (início: ${bytes.subarray(0, 8).toString("hex") || "vazio"})`);
 }
 
 function parseAce(raw: string): SddlAclEntry {

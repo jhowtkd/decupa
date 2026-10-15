@@ -39,7 +39,14 @@ export async function readWindowsAcl(path: string, execute: WindowsCommandRunner
   const savePath = join(temporaryDirectory, "acl.txt");
   try {
     await execute("icacls.exe", [path, "/save", savePath], WINDOWS_COMMAND_OPTIONS);
-    return parseIcaclsSaveOutput(await readFile(savePath));
+    const saved = await readFile(savePath);
+    try {
+      return parseIcaclsSaveOutput(saved);
+    } catch (error) {
+      // A SDDL não tem segredo; o trecho evita depurar o formato às cegas.
+      const sample = JSON.stringify(saved.subarray(0, 240).toString("latin1"));
+      throw new Error(`ACL do Windows não interpretável: ${sample}`, { cause: error });
+    }
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }

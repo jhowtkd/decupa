@@ -11,7 +11,7 @@ async function fixture(name: string): Promise<Buffer> {
 }
 
 // Capturas de `icacls <arquivo> /save <arquivo-temporário>`: o primeiro registro
-// é o nome do arquivo e o seguinte é a SDDL, gravados em UTF-16LE com BOM e CRLF.
+// é o nome do arquivo e o seguinte é a SDDL, gravados em UTF-16LE (com ou sem BOM) e CRLF.
 describe("parsing das saídas nativas de ACL do Windows", () => {
   it("extrai SID de usuário de domínio e local do CSV de whoami", async () => {
     expect(parseWhoamiUserSid((await fixture("windows-whoami-domain.csv")).toString("utf8"))).toBe(domainSid);
@@ -39,6 +39,18 @@ describe("parsing das saídas nativas de ACL do Windows", () => {
     ["windows-icacls-save-other-sid.txt", "um SID diferente"],
   ])("recusa %s (%s)", async name => {
     expect(isRestrictedSddlAcl(parseIcaclsSaveOutput(await fixture(name)), localSid)).toBe(false);
+  });
+
+  it("aceita a mesma SDDL em UTF-16LE sem BOM e em UTF-8", async () => {
+    const text = (await fixture("windows-icacls-save-fa.txt")).toString("utf16le").replace(/^﻿/, "");
+    const expected = parseIcaclsSaveOutput(await fixture("windows-icacls-save-fa.txt"));
+    expect(parseIcaclsSaveOutput(Buffer.from(text, "utf16le"))).toEqual(expected);
+    expect(parseIcaclsSaveOutput(Buffer.from(text, "utf8"))).toEqual(expected);
+  });
+
+  it("recusa saída vazia ou em codificação desconhecida", () => {
+    expect(() => parseIcaclsSaveOutput(Buffer.alloc(0))).toThrow(/codificação desconhecida/);
+    expect(() => parseIcaclsSaveOutput(Buffer.from([0x00, 0x43, 0x00]))).toThrow(/codificação desconhecida/);
   });
 
   it("falha fechado para SDDL ausente, truncada ou com ACE não interpretável", async () => {
