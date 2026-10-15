@@ -170,7 +170,7 @@ function emptyTracks(): Project["assembly"]["tracks"] {
   ];
 }
 
-export function blankProject(id: string): Project {
+export function blankProject(id: string, displayName = id): Project {
   return {
     version: 2,
     id,
@@ -179,7 +179,7 @@ export function blankProject(id: string): Project {
     assembly: {
       version: 1,
       revision: 0,
-      name: id,
+      name: displayName,
       fps: { num: 25, den: 1 },
       width: 320,
       height: 240,
@@ -736,6 +736,20 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     const requestSignal = () => requestController.signal;
     try {
       if (parts[0] === "editor" && req.method === "GET" && (await serveEditor(res, parts[1] ?? ""))) return true;
+
+      if (parts[0] === "project" && (parts[1] === "rename" || parts[1] === "name") && req.method === "POST") {
+        const body = await readLimitedBody(req);
+        const displayName = typeof body.nome === "string" ? body.nome.trim() : "";
+        if (!displayName) throw new HttpError(400, "nome precisa ser um texto não vazio");
+        const current = await loadProject(dir);
+        const baseRevision = body.baseRevision === undefined ? current.revision : requireRevision(body);
+        const project = await mutate(baseRevision, (loaded) => bump({
+          ...loaded,
+          assembly: { ...loaded.assembly, name: displayName },
+        }));
+        await sendSnapshot(res, { project, ...snapshot() });
+        return true;
+      }
 
       const readSpeechProposal = async (): Promise<SpeechProposal | null> => {
         try {

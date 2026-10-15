@@ -8,8 +8,8 @@ import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
 import { operationResolver } from "./analysis-operation.ts";
 import { cancelAssemblyFillerNotes } from "./assembly/filler-observe.ts";
-import { access, readFile, mkdir, mkdtemp, stat } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { access, readFile, mkdir, stat } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertSafeBind, guardLocalRequest, hostConfig, isLoopbackBind, originAllowed, resolveHostConfig } from "../http/origin.ts";
@@ -80,9 +80,51 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(payload);
 }
 
-async function createAssemblyInProjectsRoot(projectsRoot: string): Promise<{ id: string; dir: string; url: string }> {
+function projectSlug(name: string): string {
+  const slug = name.normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "projeto";
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = "";
+  let size = 0;
+  for (const character of value) {
+    const characterSize = Buffer.byteLength(character, "utf8");
+    if (size + characterSize > maxBytes) break;
+    result += character;
+    size += characterSize;
+  }
+  return result.replace(/-+$/, "");
+}
+
+async function readProjectCreationBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > 1024 * 1024) throw new Error("corpo do pedido excede 1 MiB");
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error();
+    return body as Record<string, unknown>;
+  } catch {
+    throw new Error("corpo do pedido inválido");
+  }
+}
+
+async function createAssemblyInProjectsRoot(projectsRoot: string, displayName: string): Promise<{ id: string; url: string }> {
+  // Mantém folga para o hífen e os quatro caracteres aleatórios do sufixo.
+  const slug = truncateUtf8(projectSlug(displayName), 240);
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const id = `projeto-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
+    const id = `${slug}-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
     const dir = join(projectsRoot, id);
     try {
       await mkdir(dir);
@@ -90,8 +132,8 @@ async function createAssemblyInProjectsRoot(projectsRoot: string): Promise<{ id:
       if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw error;
     }
-    await createProject(dir, blankProject(randomUUID()));
-    return { id, dir, url: `/projects/${id}/` };
+    await createProject(dir, blankProject(randomUUID(), displayName));
+    return { id, url: `/projects/${encodeURIComponent(id)}/` };
   }
   throw new Error("não foi possível reservar uma pasta para o novo Projeto");
 }
@@ -378,8 +420,28 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
               identity: requestIdentity,
             })) return;
         }
-        const created = await createAssemblyInProjectsRoot(projectsRoot);
-        sendJson(res, { url: created.url, dir: created.dir }, 201);
+        let body: Record<string, unknown>;
+        try {
+          body = await readProjectCreationBody(req);
+        } catch (error) {
+          sendJson(res, { error: error instanceof Error ? error.message : String(error) }, 400);
+          return;
+        }
+        const displayName = typeof body.nome === "string" ? body.nome.trim() : "";
+        if (!displayName) {
+          sendJson(res, { error: "nome precisa ser um texto não vazio" }, 400);
+          return;
+        }
+        if (body.fluxo === "limpeza") {
+          sendJson(res, { error: "Limpeza precisa de uma Mídia" }, 400);
+          return;
+        }
+        if (body.fluxo !== "montagem") {
+          sendJson(res, { error: "fluxo precisa ser montagem ou limpeza" }, 400);
+          return;
+        }
+        const created = await createAssemblyInProjectsRoot(projectsRoot, displayName);
+        sendJson(res, { id: created.id, url: created.url }, 201);
         return;
       }
       if (url.pathname === "/" && opts.projectId) {
@@ -963,8 +1025,6 @@ async function startAssemblyApp(opts: {
     resolveAnalysis:transports.resolveAnalysis,
     allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
-  const newProjects: AppHandle[] = [];
-
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
       await speechRuntime.sweep();
@@ -979,20 +1039,6 @@ async function startAssemblyApp(opts: {
       if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
-      if (url.pathname === "/project/new" && req.method === "POST") {
-        const nextDir = await mkdtemp(join(dirname(dir), "projeto-"));
-        const next = await startAssemblyApp({
-          ...opts, projectDir: nextDir, inputs: undefined, port: 0,
-        }, media);
-        newProjects.push(next);
-        const nextUrl = `http://127.0.0.1:${next.port}/`;
-        // A pasta nova precisa ser achável depois: vai no log e na resposta.
-        console.log(`novo projeto em ${nextDir}: ${nextUrl}`);
-        sendJson(res, { url: nextUrl, dir: nextDir }, 201);
-        return;
-      }
-
-
       if(await templates.handleTemplates(req,res))return;
       const handled = await runtime.handle(req, res);
       if (handled) return;
@@ -1025,14 +1071,12 @@ async function startAssemblyApp(opts: {
       const authClosed = auth.close();
       const speechClosed = closeSpeech();
       const serverSpeechClosed = speechRuntime.close();
-      const nested = Promise.all(newProjects.map(app => app.close()));
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, nested, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, closed]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
       speechRuntime.killChildren();
-      for (const app of newProjects) app.killChildren();
     },
   };
 }

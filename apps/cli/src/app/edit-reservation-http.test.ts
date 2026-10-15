@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { hashFile } from "@decupa/media";
@@ -11,6 +11,30 @@ import { cleanupWorkDir } from "./session.ts";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
+
+async function seedHeavyAssembly(): Promise<{ root: string; dir: string; mediaPath: string }> {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-heavy-root-"));
+  const dir = join(root, "alpha");
+  const mediaPath = join(FIXTURES, "clip.mp4");
+  await mkdir(dir);
+  const mediaSha = await hashFile(mediaPath);
+  const project = blankProject("alpha-project");
+  project.revision = 1;
+  const assembly = fixtureAssembly();
+  project.assembly = {
+    ...assembly,
+    sources: assembly.sources.map((source) => ({ ...source, path: mediaPath, sha256: mediaSha })),
+    tracks: assembly.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => track.kind === "Audio" || track.name === "V1"
+        ? { ...clip, durationFrames: 75 } : clip),
+    })),
+  };
+  await createProject(dir, project);
+  await mkdir(join(dir, "hardware-proof"));
+  await writeFile(join(dir, "hardware-proof", "profile.json"), JSON.stringify({ version: 2, profile: "software" }));
+  return { root, dir, mediaPath };
+}
 
 it("a primeira aba obtém a Reserva de Edição e ela fica persistida no Projeto", async () => {
   const root = await mkdtemp(join(tmpdir(), "edit-reservation-http-"));
@@ -237,6 +261,43 @@ it("o portão recusa alterações, a Reserva expira e outra aba pode assumi-la",
   }
 });
 
+it("não deixa os caminhos não canônicos de renomear contornarem a Reserva", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-rename-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir);
+  await createProject(dir, blankProject("alpha-project"));
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    for (const path of ["editor/rename", "editor/name"]) {
+      const response = await fetch(`${base}/projects/alpha/${path}`, {
+        method: "POST",
+        headers: { "x-decupa-tab": "tab-b", "content-type": "application/json" },
+        body: JSON.stringify({ nome: "não deve gravar" }),
+      });
+      expect(response.status).toBe(404);
+    }
+
+    const blocked = await fetch(`${base}/projects/alpha/project/rename`, {
+      method: "POST",
+      headers: { "x-decupa-tab": "tab-b", "content-type": "application/json" },
+      body: JSON.stringify({ nome: "não deve gravar" }),
+    });
+    expect(blocked.status).toBe(409);
+
+    expect(await (await fetch(`${base}/projects/alpha/project`)).json()).toMatchObject({
+      project: { assembly: { name: "alpha-project" }, revision: 0 },
+    });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("aplica a mesma Reserva ao runtime legado de Limpeza", async () => {
   const root = await mkdtemp(join(tmpdir(), "edit-reservation-cleanup-"));
   let agora = 2_000_000;
@@ -285,6 +346,116 @@ it("a Reserva vale para a Limpeza servida sob /projects/:id no modo Raiz", async
     // Modo Leitura: a outra aba continua lendo o job e a página.
     expect((await fetch(`${project}/jobs/${jobId}`, { headers: { "x-decupa-tab": "B" } })).status).toBe(200);
     expect((await fetch(`${project}/edit-reservation-ui.js`)).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("prévia já iniciada termina e grava depois que outra aba assume a Reserva", async () => {
+  const { root, dir, mediaPath } = await seedHeavyAssembly();
+
+  let started!: () => void;
+  const heavyStarted = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const heavyGate = new Promise<void>((resolve) => { release = resolve; });
+  const executor = {
+    async run(call: { command: string; cwd?: string; env?: Record<string, string | undefined> }) {
+      if (call.command === "python3") {
+        started();
+        await heavyGate;
+        await copyFile(mediaPath, join(call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? dir, "reference.mp4"));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const app = await startApp({
+    projectsRoot: root, port: 0, coordinatorDir: join(root, "coordinator"), executor, env: {},
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    const preview = fetch(`${base}/projects/alpha/project/preview`, {
+      method: "POST",
+      headers: { "x-decupa-tab": "tab-a", "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: 1 }),
+    });
+    await heavyStarted;
+
+    const taken = await fetch(`${base}/projects/alpha/reservation/take`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-b" },
+    });
+    expect(taken.status).toBe(200);
+    release();
+
+    const previewResponse = await preview;
+    expect(previewResponse.status, await previewResponse.text()).toBe(200);
+    const completed = await (await fetch(`${base}/projects/alpha/project`, {
+      headers: { "x-decupa-tab": "tab-b" },
+    })).json() as { project: { previewArtifact: { revision: number; relativePath: string } | null } };
+    expect(completed.project.previewArtifact).toMatchObject({ revision: 1, relativePath: join("rev-1", "reference.mp4") });
+    await expect(access(join(dir, "rev-1", "reference.mp4"))).resolves.toBeUndefined();
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("a aba que assume a Reserva pode cancelar a prévia em curso", async () => {
+  const { root, dir, mediaPath } = await seedHeavyAssembly();
+  let started!: () => void;
+  const heavyStarted = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const heavyGate = new Promise<void>((resolve) => { release = resolve; });
+  const executor = {
+    async run(call: { command: string; cwd?: string; env?: Record<string, string | undefined>; signal?: AbortSignal }) {
+      if (call.command === "python3") {
+        started();
+        const aborted = new Promise<never>((_, reject) => {
+          call.signal?.addEventListener("abort", () => reject(new Error("render cancelado")), { once: true });
+        });
+        await Promise.race([heavyGate, aborted]);
+        if (call.signal?.aborted) throw new Error("render cancelado");
+        await copyFile(mediaPath, join(call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? dir, "reference.mp4"));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  const app = await startApp({
+    projectsRoot: root, port: 0, coordinatorDir: join(root, "coordinator"), executor, env: {},
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+    const preview = fetch(`${base}/projects/alpha/project/preview`, {
+      method: "POST",
+      headers: { "x-decupa-tab": "tab-a", "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: 1 }),
+    });
+    await heavyStarted;
+
+    expect((await fetch(`${base}/projects/alpha/reservation/take`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-b" },
+    })).status).toBe(200);
+    const cancel = await fetch(`${base}/projects/alpha/project/cancel`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-b" },
+    });
+    expect(cancel.status).toBe(200);
+    release();
+    await preview;
+
+    const snapshot = await (await fetch(`${base}/projects/alpha/project`, {
+      headers: { "x-decupa-tab": "tab-b" },
+    })).json() as { project: { previewArtifact: unknown; revision: number }; operation: { stage: string } };
+    expect(snapshot.project.previewArtifact).toBeNull();
+    expect(snapshot.project.revision).toBe(1);
+    expect(snapshot.operation.stage).toBe("cancelled");
+    await expect(access(join(dir, "rev-1", "reference.mp4"))).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
