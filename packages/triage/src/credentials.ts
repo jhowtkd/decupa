@@ -4,7 +4,7 @@ import { chmod, mkdtemp, mkdir, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { AssemblyTextProvider, Provider, StoredProvider, VisualProvider } from "./provider.ts";
-import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid } from "./windows-acl.ts";
+import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid, resolveSddlSid } from "./windows-acl.ts";
 
 export type Credentials = StoredProvider & {
   apiKey?: string;
@@ -68,9 +68,10 @@ export async function restrictWindowsCredentials(path: string, execute: WindowsC
     // entradas explícitas. A SDDL fornece os SIDs sem depender do idioma.
     const removed = new Set<string>();
     const removals = acl.entries.map(entry => {
-      if (!entry.sid) throw new Error("ACE SDDL sem SID não pode ser restringida");
+      const entrySid = resolveSddlSid(entry, sid);
+      if (!entrySid) throw new Error(`ACE SDDL sem SID não pode ser restringida: ${acl.sddl}`);
       const operation = entry.type === "A" ? "/remove:g" : "/remove:d";
-      return { operation, identity: `*${entry.sid}` };
+      return { operation, identity: `*${entrySid}` };
     });
     for (const { operation, identity } of removals) {
       const key = `${operation}\0${identity}`;
@@ -81,7 +82,7 @@ export async function restrictWindowsCredentials(path: string, execute: WindowsC
     await execute("icacls.exe", grant, WINDOWS_COMMAND_OPTIONS);
     acl = await readWindowsAcl(path, execute);
   }
-  if (!isRestrictedSddlAcl(acl, sid)) throw new Error("ACL restrita não confirmada");
+  if (!isRestrictedSddlAcl(acl, sid)) throw new Error(`ACL restrita não confirmada: ${acl.sddl}`);
 }
 
 

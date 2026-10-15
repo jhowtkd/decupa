@@ -1,7 +1,7 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { restrictWindowsCredentials, type WindowsCommandRunner } from "./credentials.ts";
-import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid } from "./windows-acl.ts";
+import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid, resolveSddlSid } from "./windows-acl.ts";
 
 const domainSid = "S-1-5-21-111111111-222222222-333333333-1104";
 const localSid = "S-1-5-21-444444444-555555555-666666666-1001";
@@ -46,6 +46,21 @@ describe("parsing das saídas nativas de ACL do Windows", () => {
     const expected = parseIcaclsSaveOutput(await fixture("windows-icacls-save-fa.txt"));
     expect(parseIcaclsSaveOutput(Buffer.from(text, "utf16le"))).toEqual(expected);
     expect(parseIcaclsSaveOutput(Buffer.from(text, "utf8"))).toEqual(expected);
+  });
+
+  it("resolve apelidos SDDL: fixos pela tabela e LA pelo domínio do usuário", () => {
+    const save = (dacl: string) => parseIcaclsSaveOutput(Buffer.from(`\uFEFFcredenciais.json\r\n${dacl}\r\n`, "utf16le"));
+    const builtinAdmin = "S-1-5-21-444444444-555555555-666666666-500";
+    const own = save("D:PAI(A;;FA;;;LA)");
+    expect(own.entries[0]).toMatchObject({ alias: "LA" });
+    expect(resolveSddlSid(own.entries[0]!, builtinAdmin)).toBe(builtinAdmin);
+    expect(isRestrictedSddlAcl(own, builtinAdmin)).toBe(true);
+    expect(isRestrictedSddlAcl(own, localSid)).toBe(false);
+    expect(resolveSddlSid(own.entries[0]!, "S-1-5-18")).toBeUndefined();
+    const system = save("O:BAG:SYD:PAI(A;;FA;;;SY)(A;;FA;;;BA)");
+    expect(system.entries.map(entry => entry.sid)).toEqual(["S-1-5-18", "S-1-5-32-544"]);
+    expect(system.sddl).toBe("O:BAG:SYD:PAI(A;;FA;;;SY)(A;;FA;;;BA)");
+    expect(resolveSddlSid(save("D:PAI(A;;FA;;;ZZ)").entries[0]!, localSid)).toBeUndefined();
   });
 
   it("recusa saída vazia ou em codificação desconhecida", () => {
@@ -103,5 +118,27 @@ describe("parsing das saídas nativas de ACL do Windows", () => {
     expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", `*${localSid}`]);
     expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", "*S-1-1-0"]);
     expect(calls.some(call => call.includes("DESKTOP\\x") || call.includes("Administrators"))).toBe(false);
+  });
+
+  it("restringe o Administrador embutido, que a SDDL mostra como LA", async () => {
+    const path = "C:\\Users\\Administrador\\credenciais.json";
+    const builtinAdmin = "S-1-5-21-444444444-555555555-666666666-500";
+    const calls: string[][] = [];
+    let saves = 0;
+    const execute: WindowsCommandRunner = async (executable, args) => {
+      calls.push([executable, ...args]);
+      if (executable === "whoami.exe") return { stdout: `"DESKTOP\\\\Administrador","${builtinAdmin}"\n` };
+      if (args[1] === "/save") {
+        saves++;
+        const dacl = saves === 1 ? "D:PAI(A;;FA;;;LA)(A;;FA;;;SY)" : "D:PAI(A;;FA;;;LA)";
+        await writeFile(args[2]!, Buffer.from(`credenciais.json\r\n${dacl}\r\n`, "utf16le"));
+      }
+      return { stdout: "" };
+    };
+
+    await restrictWindowsCredentials(path, execute);
+
+    expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", `*${builtinAdmin}`]);
+    expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", "*S-1-5-18"]);
   });
 });

@@ -8,12 +8,15 @@ export type SddlAclEntry = {
   flags: string[];
   rights: string;
   sid?: string;
+  /** Apelido SDDL que só vira SID relativo ao domínio (ex.: `LA`). */
+  alias?: string;
   inherited: boolean;
   fullControl: boolean;
 };
 
 export type ParsedSddlAcl = {
   fileName: string;
+  sddl: string;
   protected: boolean;
   entries: SddlAclEntry[];
 };
@@ -66,6 +69,37 @@ function decodeIcaclsSave(output: Uint8Array): string {
   throw new Error(`saída icacls /save em codificação desconhecida (início: ${bytes.subarray(0, 8).toString("hex") || "vazio"})`);
 }
 
+// A SDDL abrevia SIDs conhecidos. Os fixos viram SID direto; os relativos ao
+// domínio dependem do prefixo da conta e são resolvidos em `resolveSddlSid`.
+const WELL_KNOWN_SDDL_SIDS: Record<string, string> = {
+  AN: "S-1-5-7", AU: "S-1-5-11", BA: "S-1-5-32-544", BG: "S-1-5-32-546",
+  BO: "S-1-5-32-551", BU: "S-1-5-32-545", CG: "S-1-3-1", CO: "S-1-3-0",
+  ED: "S-1-5-9", IU: "S-1-5-4", LS: "S-1-5-19", NS: "S-1-5-20",
+  NU: "S-1-5-2", OW: "S-1-3-4", PS: "S-1-5-10", PU: "S-1-5-32-547",
+  RC: "S-1-5-12", RD: "S-1-5-32-555", RU: "S-1-5-32-554", SO: "S-1-5-32-549",
+  SU: "S-1-5-6", SY: "S-1-5-18", WD: "S-1-1-0", WR: "S-1-5-33",
+  AC: "S-1-15-2-1", AO: "S-1-5-32-548", PO: "S-1-5-32-550", RE: "S-1-5-32-552",
+  NO: "S-1-5-32-556", MU: "S-1-5-32-558", LU: "S-1-5-32-559", IS: "S-1-5-32-568",
+  RM: "S-1-5-32-580",
+};
+const DOMAIN_RELATIVE_SDDL_RIDS: Record<string, number> = {
+  LA: 500, LG: 501, DA: 512, DU: 513, DG: 514, DC: 515, DD: 516, CA: 517,
+  SA: 518, EA: 519, PA: 520, RS: 553, RO: 498, CN: 522, AP: 525,
+};
+
+/**
+ * SID efetivo da ACE. Apelidos de domínio usam o prefixo do SID do usuário:
+ * cobre a conta local (o Administrador embutido aparece como `LA`). Para outro
+ * domínio o SID resolvido não bate e a verificação continua falhando fechada.
+ */
+export function resolveSddlSid(entry: SddlAclEntry, userSid: string): string | undefined {
+  if (entry.sid) return entry.sid;
+  const rid = entry.alias ? DOMAIN_RELATIVE_SDDL_RIDS[entry.alias] : undefined;
+  if (rid === undefined) return undefined;
+  const domain = userSid.toUpperCase().replace(/-\d+$/, "");
+  return /^S-1-5-21-\d+-\d+-\d+$/.test(domain) ? `${domain}-${rid}` : undefined;
+}
+
 function parseAce(raw: string): SddlAclEntry {
   const fields = raw.split(";");
   if (fields.length !== 6 || (fields[0] !== "A" && fields[0] !== "D")) {
@@ -75,11 +109,13 @@ function parseAce(raw: string): SddlAclEntry {
   if (objectGuid || inheritObjectGuid) throw new Error("ACE SDDL não interpretável");
   const flags: string[] = rawFlags ? rawFlags.match(/.{2}/g) ?? [] : [];
   if (flags.join("") !== rawFlags) throw new Error("ACE SDDL não interpretável");
-  const sid = SID_RE.test(rawSid) ? rawSid.toUpperCase() : undefined;
+  const upperSid = rawSid.toUpperCase();
+  const sid = SID_RE.test(rawSid) ? upperSid : WELL_KNOWN_SDDL_SIDS[upperSid];
+  const alias = !sid && /^[A-Z]{2}$/.test(upperSid) ? upperSid : undefined;
   const normalizedRights = rights.toUpperCase();
   const fullControl = normalizedRights === "FA" ||
     (/^0X[0-9A-F]+$/.test(normalizedRights) && Number.parseInt(normalizedRights.slice(2), 16) === FULL_CONTROL_MASK);
-  return { type, flags, rights: normalizedRights, ...(sid ? { sid } : {}), inherited: flags.includes("ID"), fullControl };
+  return { type, flags, rights: normalizedRights, ...(sid ? { sid } : {}), ...(alias ? { alias } : {}), inherited: flags.includes("ID"), fullControl };
 }
 
 export function parseIcaclsSaveOutput(output: Uint8Array): ParsedSddlAcl {
@@ -111,11 +147,11 @@ export function parseIcaclsSaveOutput(output: Uint8Array): ParsedSddlAcl {
   }
   if (cursor < dacl.length && !dacl.slice(cursor).startsWith("S:")) throw new Error("DACL SDDL não interpretável");
   if (entries.length === 0) throw new Error("DACL SDDL sem ACE");
-  return { fileName: lines[0], protected: controls.includes("P"), entries };
+  return { fileName: lines[0], sddl, protected: controls.includes("P"), entries };
 }
 
 export function isRestrictedSddlAcl(acl: ParsedSddlAcl, sid: string): boolean {
   const expectedSid = sid.toUpperCase();
   return acl.protected && acl.entries.length === 1 && acl.entries[0].type === "A" &&
-    acl.entries[0].sid === expectedSid && !acl.entries[0].inherited && acl.entries[0].fullControl;
+    resolveSddlSid(acl.entries[0], expectedSid) === expectedSid && !acl.entries[0].inherited && acl.entries[0].fullControl;
 }
