@@ -75,41 +75,51 @@ export class ResumableMediaUpload {
     this.total = file.size;
     let saved = this.readSaved(file);
     let result;
-    if (saved?.id) {
-      const stateResponse = await this.fetchImpl(`/api/uploads/${encodeURIComponent(saved.id)}`);
-      if (stateResponse.ok) {
-        const state = await stateResponse.json();
-        if (state.mediaId) {
-          this.state = "concluido";
-          this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: state.deduplicado ? "deduped" : "ready" });
-          this.forget(file);
-          return state;
+    try {
+      if (saved?.id) {
+        const stateResponse = await this.fetchImpl(`/api/uploads/${encodeURIComponent(saved.id)}`);
+        if (stateResponse.ok) {
+          const state = await stateResponse.json();
+          if (state.mediaId) {
+            this.state = "concluido";
+            this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: state.deduplicado ? "deduped" : "ready" });
+            this.forget(file);
+            return state;
+          }
+          this.uploadId = saved.id;
+          this.offset = Math.min(Number(state.offset) || 0, file.size);
+          this.partSize = Math.max(1, Number(state.tamanhoParte) || Number(saved.tamanhoParte) || this.partSize);
+          this.writeSaved(file, { ...saved, id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
+        } else {
+          saved = null;
         }
-        this.uploadId = saved.id;
-        this.offset = Math.min(Number(state.offset) || 0, file.size);
-        this.partSize = Math.max(1, Number(state.tamanhoParte) || Number(saved.tamanhoParte) || this.partSize);
-        this.writeSaved(file, { ...saved, id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
-      } else {
-        saved = null;
       }
-    }
-    if (!saved) {
-      const created = await this.fetchImpl("/api/uploads", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ nome: file.name, tamanho: file.size }),
-      });
-      result = await created.json().catch(() => ({}));
-      if (!created.ok) throw new Error(result.error || `erro ${created.status}`);
-      if (result.mediaId) {
-        this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
-        this.forget(file);
-        return result;
+      if (!saved) {
+        const created = await this.fetchImpl("/api/uploads", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nome: file.name, tamanho: file.size }),
+        });
+        result = await created.json().catch(() => ({}));
+        if (!created.ok) throw new Error(result.error || `erro ${created.status}`);
+        if (result.mediaId) {
+          this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
+          this.state = "concluido";
+          this.forget(file);
+          return result;
+        }
+        this.uploadId = result.id;
+        this.offset = Number(result.offset) || 0;
+        this.partSize = Math.max(1, Number(result.tamanhoParte) || this.partSize);
+        this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
       }
-      this.uploadId = result.id;
-      this.offset = Number(result.offset) || 0;
-      this.partSize = Math.max(1, Number(result.tamanhoParte) || this.partSize);
-      this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
+    } catch (error) {
+      if (this.paused || error?.name === "AbortError") {
+        this.state = "pausado";
+        throw new UploadPausedError();
+      }
+      this.state = "parado";
+      throw error;
     }
 
     const partSize = Math.max(1, Number(result?.tamanhoParte) || this.partSize);

@@ -475,6 +475,7 @@ async function uploadTeamFiles(files) {
     pause.textContent = "Pausar";
     row.append(title, progress, status, pause);
     uploads?.append(row);
+    let completedResult = null;
     const showUploadError = (error) => {
       pause.hidden = false;
       pause.disabled = false;
@@ -484,11 +485,15 @@ async function uploadTeamFiles(files) {
         : (error?.message || String(error));
     };
     const completeUpload = async (result) => {
+      // O envio já terminou: se o POST do Projeto falhar, o retry só repete
+      // esta etapa e não reabre o envio nem manda os bytes de novo.
+      completedResult = result;
       await call("project/media", {
         method: "POST",
         body: JSON.stringify({ baseRevision: project().revision, mediaId: result.mediaId }),
         label: "Adicionando Mídia…",
       });
+      completedResult = null;
       pause.hidden = true;
       pause.disabled = true;
       status.textContent = result.deduplicado ? "Pronto · Mídia reaproveitada" : "Pronto";
@@ -513,7 +518,10 @@ async function uploadTeamFiles(files) {
       },
     });
     pause.onclick = () => {
-      if (upload.state === "concluido") return;
+      if (upload.state === "concluido") {
+        if (completedResult) void completeUpload(completedResult).catch(showUploadError);
+        return;
+      }
       if (upload.state === "enviando") {
         upload.pause();
         pause.textContent = "Retomar";

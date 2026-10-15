@@ -94,3 +94,25 @@ it("distingue envio parado por erro de envio pausado e concluído", async () => 
   upload.pause();
   expect(upload.state).toBe("concluido");
 });
+
+it("marca como parado um erro no GET inicial e permite retry no primeiro clique", async () => {
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  storage.setItem("decupa.uploads.v1", JSON.stringify({ ["aula.mp4\u00005\u0000123"]: { id: "upload-4", offset: 0 } }));
+  let failed = true;
+  const upload = new ResumableMediaUpload({
+    storage,
+    fetchImpl: async (url, init = {}) => {
+      if (!init.method || init.method === "GET") {
+        if (failed) { failed = false; throw new Error("GET caiu"); }
+        return response({ offset: 0, tamanhoTotal: 5, tamanhoParte: 5, estado: "uploading" });
+      }
+      if (init.method === "PATCH") return response({ mediaId: "f".repeat(64), deduplicado: false }, 201);
+      throw new Error(`chamada inesperada: ${url}`);
+    },
+  });
+  await expect(upload.start(file())).rejects.toThrow("GET caiu");
+  expect(upload.state).toBe("parado");
+  await upload.start(file());
+  expect(upload.state).toBe("concluido");
+});
