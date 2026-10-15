@@ -1,6 +1,5 @@
 const form = document.querySelector("#loginForm");
 const error = document.querySelector("#error");
-const params = new URLSearchParams(location.search);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -11,8 +10,11 @@ form.addEventListener("submit", async (event) => {
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ nome: data.get("nome"), senha: data.get("senha") }),
   });
-  if (response.redirected) { location.assign(response.url); return; }
-  if (response.ok) { location.assign(params.get("next") || "/"); return; }
+  if (response.redirected) {
+    location.assign(response.url);
+    return;
+  }
+  if (response.ok) { location.assign("/"); return; }
   error.textContent = (await response.json().catch(() => null))?.error || "Não foi possível entrar.";
   error.hidden = false;
 });

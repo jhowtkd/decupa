@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -45,6 +46,10 @@ it("protege HTML e API, autentica com nome aparado e serve os estáticos do logi
   expect(submitted.headers.get("location")).toBe("/jobs/um");
   const session = cookieFrom(submitted);
   expect(session).toContain("decupa_session=");
+  const encodedPayload = session.slice("decupa_session=".length).split(".")[0]!;
+  const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as { geração: string };
+  expect(payload.geração).not.toBe(createHash("sha256").update("senha certa").digest("hex"));
+  expect(JSON.stringify(payload)).not.toContain("senha certa");
   expect(submitted.headers.get("set-cookie")).toMatch(/HttpOnly/);
   expect(submitted.headers.get("set-cookie")).toMatch(/SameSite=Lax/);
   expect(submitted.headers.get("set-cookie")).toMatch(/Path=\//);
@@ -53,6 +58,27 @@ it("protege HTML e API, autentica com nome aparado e serve os estáticos do logi
   const logout = await fetch(`${base}/logout`, { method: "POST", headers: { cookie: session } });
   expect(logout.status).toBe(200);
   expect(logout.headers.get("set-cookie")).toMatch(/Max-Age=0/);
+});
+
+it("aceita somente next local, preservando query e hash", async () => {
+  const { base } = await boot();
+  const rejected = [
+    "/\\evil.example/x", "\\\\evil.example", "/%5C", "//evil.example/x",
+    "https://evil.example/x", "javascript:alert(1)", "/\\t/evil", "/\t/evil",
+  ];
+  for (const next of rejected) {
+    const response = await fetch(`${base}/login?next=${encodeURIComponent(next)}`, {
+      method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ senha: "senha certa", nome: "Ana" }),
+    });
+    expect(response.status, next).toBe(303);
+    expect(response.headers.get("location"), next).toBe("/");
+  }
+  const local = await fetch(`${base}/login?next=${encodeURIComponent("/projeto?aba=texto#fim")}`, {
+    method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senha: "senha certa", nome: "Ana" }),
+  });
+  expect(local.headers.get("location")).toBe("/projeto?aba=texto#fim");
 });
 
 it("descarta next externo, não permite Range sem sessão e só marca Secure sob HTTPS efetivo", async () => {

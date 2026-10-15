@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -10,6 +10,8 @@ export const MAX_DISPLAY_NAME_LENGTH = 80;
 const DEFAULT_SESSION_DAYS = 14;
 const SECRET_FILE = "session-secret";
 const LOGIN_BODY_BYTES = 64 * 1024;
+const FAILURE_RETENTION_MS = 60 * 60 * 1000;
+const MAX_FAILURE_ENTRIES = 10_000;
 
 type SessionPayload = {
   nome: string;
@@ -60,8 +62,18 @@ function effectiveHttps(req: IncomingMessage, network: ResolvedHostConfig): bool
 }
 
 function localNext(value: string | null | undefined): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
-  return value;
+  if (!value || /[\\\u0000-\u001f\u007f]/.test(value)) return "/";
+  let decodedValue: string;
+  try { decodedValue = decodeURIComponent(value); }
+  catch { return "/"; }
+  if (/[\\\u0000-\u001f\u007f]/.test(decodedValue)) return "/";
+  try {
+    const parsed = new URL(value, "http://x.invalid");
+    if (parsed.origin !== "http://x.invalid") return "/";
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "/";
+  }
 }
 
 function acceptsHtml(req: IncomingMessage): boolean {
@@ -137,18 +149,22 @@ async function persistedSecret(configDir: string): Promise<Buffer> {
   } catch { /* primeira subida */ }
 
   const generated = randomBytes(32).toString("base64url");
-  const partial = `${path}.${process.pid}.partial`;
   try {
-    await writeFile(partial, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
-    await rename(partial, path);
+    const handle = await open(path, "wx", 0o600);
+    try { await handle.writeFile(`${generated}\n`, "utf8"); }
+    finally { await handle.close(); }
   } catch (error) {
-    await rm(partial, { force: true });
     // Dois processos podem subir o mesmo servidor ao mesmo tempo: quem
-    // perdeu a criação usa o segredo que o vencedor acabou de persistir.
+    // perdeu a criação lê o segredo que o vencedor acabou de persistir.
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
   await chmod(path, 0o600).catch(() => {});
-  return Buffer.from((await readFile(path, "utf8")).trim(), "base64url");
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const current = (await readFile(path, "utf8")).trim();
+    if (current) return Buffer.from(current, "base64url");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("segredo de sessão persistido vazio");
 }
 
 async function readLoginBody(req: IncomingMessage): Promise<{ senha?: unknown; nome?: unknown }> {
@@ -190,10 +206,22 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
       ? Buffer.from(opts.env.DECUPA_SESSION_SECRET.trim(), "utf8")
       : await persistedSecret(configDir))
     : Buffer.alloc(0);
-  const generation = enabled ? createHash("sha256").update(password!, "utf8").digest("hex") : "";
+  const generation = enabled
+    ? createHmac("sha256", secret).update(`decupa-session-generation:${password!}`, "utf8").digest("hex").slice(0, 32)
+    : "";
   const daysValue = Number(opts.env.DECUPA_SESSION_DAYS);
   const sessionMs = (Number.isFinite(daysValue) && daysValue > 0 ? daysValue : DEFAULT_SESSION_DAYS) * 24 * 60 * 60 * 1000;
-  const failures = new Map<string, { count: number; blockedUntil: number }>();
+  const failures = new Map<string, { count: number; blockedUntil: number; lastFailureAt: number }>();
+
+  function pruneFailures(timestamp: number): void {
+    for (const [ip, state] of failures) {
+      if (state.blockedUntil <= timestamp && timestamp - state.lastFailureAt > FAILURE_RETENTION_MS) failures.delete(ip);
+    }
+    if (failures.size <= MAX_FAILURE_ENTRIES) return;
+    const oldest = [...failures.entries()]
+      .sort(([, left], [, right]) => left.lastFailureAt - right.lastFailureAt);
+    for (const [ip] of oldest.slice(0, failures.size - MAX_FAILURE_ENTRIES)) failures.delete(ip);
+  }
 
   function validSession(req: IncomingMessage): string | null {
     if (!enabled) return systemName();
@@ -260,9 +288,11 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
     }
     if (url.pathname !== "/login" || req.method !== "POST") return false;
     const ip = requestIp(req, opts.network);
+    const timestamp = now();
+    pruneFailures(timestamp);
     const state = failures.get(ip);
-    if (state && state.blockedUntil > now()) {
-      res.setHeader("retry-after", String(Math.ceil((state.blockedUntil - now()) / 1000)));
+    if (state && state.blockedUntil > timestamp) {
+      res.setHeader("retry-after", String(Math.ceil((state.blockedUntil - timestamp) / 1000)));
       sendJson(res, { error: "tente novamente mais tarde" }, 429);
       return true;
     }
@@ -274,7 +304,8 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
     if (!validPassword || !nome) {
       const count = (state?.count ?? 0) + 1;
       const delay = count >= 3 ? Math.min(30_000, 1_000 * 2 ** Math.min(count - 3, 5)) : 0;
-      failures.set(ip, { count, blockedUntil: now() + delay });
+      failures.set(ip, { count, blockedUntil: timestamp + delay, lastFailureAt: timestamp });
+      pruneFailures(timestamp);
       if (delay) {
         res.setHeader("retry-after", String(Math.ceil(delay / 1000)));
         sendJson(res, { error: "tente novamente mais tarde" }, 429);
