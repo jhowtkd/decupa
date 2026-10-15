@@ -4,14 +4,14 @@
 	{$DECUPA_CADDY_GLOBAL}
 }
 
-{$DECUPA_DOMAIN} {
+# No modo off o site precisa do esquema http://; sem ele o Caddy continua
+# servindo só na porta 443. O endereço vem pronto do entrypoint.
+{$DECUPA_CADDY_SITE} {
 	{$DECUPA_CADDY_TLS}
 
+	# O padrão do reverse_proxy já repassa o Host original (com a porta, que o
+	# Decupa confere) e gera X-Forwarded-* descartando os valores do cliente.
 	reverse_proxy decupa:7788 {
-		header_up Host {http.request.host}
-		header_up X-Forwarded-Host {http.request.host}
-		header_up X-Forwarded-Proto {http.request.scheme}
-		header_up X-Forwarded-For {http.request.remote.host}
 		transport http {
 			read_timeout 30m
 			write_timeout 30m
