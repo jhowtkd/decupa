@@ -97,3 +97,99 @@ it("POST /truth acima de 1 MiB responde 413", async () => {
     await finish(ctx);
   }
 });
+
+it("modo equipe exige os mesmos portões de Host, origem e sessão", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mark-team-"));
+  let saved!: Promise<MarkWebResult>;
+  const port = await new Promise<number>((resolvePort) => {
+    saved = runMarkWeb({
+      input: join(FIXTURES, "tone-gap.wav"),
+      outPath: join(dir, "truth.json"),
+      cacheDir: join(dir, "proxy"),
+      port: 0,
+      env: {
+        DECUPA_AUTH_PASSWORD: "senha da equipe",
+        DECUPA_SESSION_SECRET: "segredo do teste",
+        DECUPA_ALLOWED_HOSTS: "marcador.decupa.test",
+      },
+      onListen: resolvePort,
+    });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const host = "marcador.decupa.test";
+  const sameOrigin = `http://${host}`;
+  let finished = false;
+
+  try {
+    const attacker = await raw(port, "/", "attacker.example");
+    expect(attacker.status).toBe(403);
+
+    const page = await fetch(`${base}/`, {
+      headers: { host, accept: "text/html" },
+      redirect: "manual",
+    });
+    expect(page.status).toBe(302);
+    expect(page.headers.get("location")).toBe("/login?next=%2F");
+
+    const badOrigin = await fetch(`${base}/truth`, {
+      method: "POST",
+      headers: {
+        host,
+        origin: "http://attacker.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ boundariesMs: [1] }),
+    });
+    expect(badOrigin.status).toBe(403);
+
+    const login = await fetch(`${base}/login`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { host, origin: sameOrigin, "content-type": "application/json" },
+      body: JSON.stringify({ senha: "senha da equipe", nome: "Ana" }),
+    });
+    expect(login.status).toBe(303);
+    const session = login.headers.get("set-cookie")?.split(";")[0];
+    expect(session).toBeTruthy();
+
+    const authenticated = await fetch(`${base}/`, { headers: { host, cookie: session! } });
+    expect(authenticated.status).toBe(200);
+    const savedResponse = await fetch(`${base}/truth`, {
+      method: "POST",
+      headers: {
+        host,
+        origin: sameOrigin,
+        cookie: session!,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ boundariesMs: [100] }),
+    });
+    expect(savedResponse.status).toBe(200);
+    await expect(saved).resolves.toMatchObject({ outPath: join(dir, "truth.json") });
+    finished = true;
+  } finally {
+    if (!finished) {
+      const cleanupLogin = await fetch(`${base}/login`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { host, origin: sameOrigin, "content-type": "application/json" },
+        body: JSON.stringify({ senha: "senha da equipe", nome: "limpeza" }),
+      }).catch(() => undefined);
+      const cleanupSession = cleanupLogin?.headers.get("set-cookie")?.split(";")[0];
+      if (cleanupSession) {
+        await fetch(`${base}/truth`, {
+          method: "POST",
+          headers: {
+            host,
+            origin: sameOrigin,
+            cookie: cleanupSession,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ boundariesMs: [1] }),
+        }).catch(() => undefined);
+      }
+    }
+    await Promise.race([saved, new Promise((resolve) => setTimeout(resolve, 3_000))]);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
