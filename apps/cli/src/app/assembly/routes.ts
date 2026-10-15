@@ -47,6 +47,8 @@ import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
+import { handleReservationRequest, requireEditReservation } from "../edit-reservation.ts";
+import type { IncomingMessage as ReservationRequest } from "node:http";
 
 const alignActive = new Set<string>();
 function alignKey(dir: string, correctionId: string): string {
@@ -95,6 +97,8 @@ export type AssemblyDeps = FillerObserveDeps & {
    */
   isTextConfigured?: () => Promise<boolean>;
   coordinator?: FileCoordinator;
+  now?: () => number;
+  identity?: (req: ReservationRequest) => string | undefined;
 };
 
 /**
@@ -648,6 +652,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     res: ServerResponse,
   ): Promise<boolean> {
     const url = new URL(req.url ?? "/", "http://localhost");
+    const reservationDeps = {
+      projeto: dir,
+      now: deps.now ?? Date.now,
+      identity: deps.identity ?? (() => undefined),
+    };
+    if (await handleReservationRequest(req, res, reservationDeps)) return true;
+    if (req.method !== "GET" && url.pathname.startsWith("/project")
+      && !await requireEditReservation(req, res, reservationDeps)) return true;
     if (url.pathname === "/" && deps.page) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(await deps.page());

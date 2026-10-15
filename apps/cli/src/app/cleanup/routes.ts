@@ -20,6 +20,7 @@ import { buildSrt, type SrtWord } from "../srt.ts";
 import { analysisClientOptions, type Credentials } from "@decupa/triage";
 import { JobStore, type Job } from "../jobs.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
+import { handleReservationRequest, requireEditReservation } from "../edit-reservation.ts";
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -83,6 +84,8 @@ export interface CleanupRuntimeDeps {
   triageRequestKey: () => Promise<string>;
   otioClipsForPlan: (clips: { start: number; end: number }[], fps: number, durationSeconds: number) => Assembly["tracks"][number]["clips"];
   coordinator?: FileCoordinator;
+  now?: () => number;
+  identity?: (req: IncomingMessage) => string | undefined;
 }
 
 export interface CleanupRuntime {
@@ -101,6 +104,14 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
     handle: async (req, res): Promise<boolean> => {
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return true; }
+      const reservationDeps = {
+        projeto: opts.workDir,
+        now: opts.now ?? Date.now,
+        identity: opts.identity ?? (() => undefined),
+      };
+      if (await handleReservationRequest(req, res, reservationDeps)) return true;
+      if (req.method !== "GET" && url.pathname.startsWith("/jobs")
+        && !await requireEditReservation(req, res, reservationDeps)) return true;
       const parts = url.pathname.split("/").filter(Boolean);
 
       if (url.pathname === "/") {

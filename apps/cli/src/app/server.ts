@@ -35,7 +35,8 @@ import { createHeavyCoordinator } from "./heavy-work.ts";
 import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 import { projectUrl } from "./project-url.ts";
 import { createProjectRuntimeRegistry, PROJECT_ID_PATTERN } from "./project-root.ts";
-import { createAuthRuntime } from "./auth.ts";
+import { createAuthRuntime, requestIdentity } from "./auth.ts";
+import { requireEditReservation } from "./edit-reservation.ts";
 
 export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
@@ -347,6 +348,16 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       if (await templates.handleTemplates(req, res)) return;
       const projectNew = req.method === "POST" && (url.pathname === "/project/new" || /^\/projects\/[^/]+\/project\/new$/.test(url.pathname));
       if (projectNew && (url.pathname === "/project/new" || await registry.isProjectPath(req.url))) {
+        if (url.pathname !== "/project/new") {
+          const id = /^\/projects\/([^/]+)\/project\/new$/.exec(url.pathname)?.[1];
+          const projectDir = id && PROJECT_ID_PATTERN.test(id) ? resolve(projectsRoot, id) : null;
+          if (!projectDir || dirname(projectDir) !== projectsRoot
+            || !await requireEditReservation(req, res, {
+              projeto: projectDir,
+              now: opts.now ?? Date.now,
+              identity: requestIdentity,
+            })) return;
+        }
         const created = await createAssemblyInProjectsRoot(projectsRoot);
         sendJson(res, { url: created.url, dir: created.dir }, 201);
         return;
@@ -600,7 +611,7 @@ async function startCleanupApp(opts: {
     audioReady: () => audioReady, loadStored,
     page: async () => withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
-    coordinator,
+    coordinator, now: opts.now, identity: requestIdentity,
   });
   const media = await configuredMediaRuntime(opts.env, opts.now);
 
@@ -763,6 +774,8 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
       fillerFetchImpl: opts.fetchImpl,
       speech: speech.speech,
       coordinator: opts.coordinator,
+      now: opts.now,
+      identity: requestIdentity,
     });
     const project = await runtime.ensureProject(opts.inputs);
     return { runtime, project, loadStored, transports, speech: speech.speech, closeSpeech: speech.closeSpeech };

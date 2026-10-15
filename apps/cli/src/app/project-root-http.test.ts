@@ -90,9 +90,21 @@ it("cria Montagem nova pelo caminho usado pelo editor na mesma Raiz", async () =
   const app = await startApp({ projectsRoot: root, projectId: "existente", port: 0, executor, env: {} });
   const base = `http://127.0.0.1:${app.port}`;
   try {
-    const response = await fetch(`${base}/projects/existente/project/new`, { method: "POST", body: "{}" });
-    expect(response.status).toBe(201);
-    const body = await response.json() as { url: string; dir: string };
+    const response = await fetch(`${base}/projects/existente/project/new`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-novo" }, body: "{}",
+    });
+    // Criar a partir de um Projeto também é uma alteração do Projeto atual;
+    // a aba precisa deter a Reserva de Edição.
+    expect(response.status).toBe(409);
+    const reservation = await fetch(`${base}/projects/existente/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-novo" },
+    });
+    expect(reservation.status).toBe(200);
+    const createdResponse = await fetch(`${base}/projects/existente/project/new`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-novo" }, body: "{}",
+    });
+    expect(createdResponse.status).toBe(201);
+    const body = await createdResponse.json() as { url: string; dir: string };
     const id = body.url.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9._-]*)\/$/)?.[1];
     expect(id).toMatch(/^projeto-[A-Za-z0-9]{4}$/);
     expect(body.dir).toBe(join(root, id!));

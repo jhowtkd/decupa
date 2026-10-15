@@ -10,7 +10,7 @@ import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
 import { singleFlight } from "./sequencia.js";
-import { projectPath } from "../../project-path.js";
+import { projectHeaders, projectPath } from "../../project-path.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -932,14 +932,14 @@ export function mountContexto({ state, api, player }) {
     let stopped=false;
     async function poll(){
       if(stopped)return;
-      try{const response=await fetch(projectPath("project/resolve-status"));const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
+      try{const response=await fetch(projectPath("project/resolve-status"),{headers:projectHeaders()});const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
       if(!stopped)setTimeout(poll,1000);
     }
     setTimeout(poll,500);
     try{
       const {res,body}=await api.call(exportDrp?"project/export-drp":"project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
       if(res.ok)resolveDelivery=body.delivery;
-      else {const response=await fetch(projectPath("project/resolve-status"));const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
+      else {const response=await fetch(projectPath("project/resolve-status"),{headers:projectHeaders()});const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
       if(res.ok){exportUi.status="done";exportUi.revision=project.revision;}
     }catch(error){resolveDelivery={status:"error",error:error.message};}
     finally{stopped=true;renderDelivery(state.get("project"));}
@@ -947,7 +947,7 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("export").onclick=()=>deliverResolve();
   document.getElementById("resolveNewCopy").onclick=()=>deliverResolve(true);
   document.getElementById("exportDrp").onclick=()=>deliverResolve(false,true);
-  fetch(projectPath("project/resolve-status")).then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
+  fetch(projectPath("project/resolve-status"),{headers:projectHeaders()}).then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
 
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));
