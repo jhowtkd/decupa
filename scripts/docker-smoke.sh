@@ -7,9 +7,11 @@ COMPOSE=(docker compose -f "$ROOT/docker-compose.yml" -p "decupa-smoke-$$")
 HTTP_PORT="${DECUPA_SMOKE_PORT:-17788}"
 BASE="http://localhost:${HTTP_PORT}"
 COOKIE="$(mktemp)"
+# Senha descartável por execução: não fica no repositório nem vale fora daqui.
+SMOKE_PASSWORD="$(openssl rand -hex 16)"
 WORK="$(mktemp -d)"
 COMPOSE_ENV=(
-  DECUPA_AUTH_PASSWORD=smoke-password
+  DECUPA_AUTH_PASSWORD="$SMOKE_PASSWORD"
   DECUPA_DOMAIN=localhost
   DECUPA_TLS_MODE=off
   DECUPA_HTTP_PORT="$HTTP_PORT"
@@ -52,7 +54,7 @@ grep -qi '^location: /login' "$headers"
 
 status="$(curl --silent --show-error --max-redirs 0 -D "$WORK/login.headers" -o /dev/null \
   -c "$COOKIE" -H "Origin: $BASE" -H 'Content-Type: application/json' \
-  --data '{"senha":"smoke-password","nome":"Smoke"}' -w '%{http_code}' "$BASE/login")"
+  --data "{\"senha\":\"$SMOKE_PASSWORD\",\"nome\":\"Smoke\"}" -w '%{http_code}' "$BASE/login")"
 [[ "$status" == 303 ]] || { echo "login respondeu $status" >&2; exit 1; }
 
 created="$(curl --fail --silent -b "$COOKIE" -H 'Content-Type: application/json' \
