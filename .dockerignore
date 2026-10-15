@@ -1,10 +1,12 @@
 .git
 .github
 node_modules
+**/node_modules
 work
 dist
 coverage
 .venv
+**/.venv
 services/speech/.venv
 services/vision/.venv
 services/vision/.models

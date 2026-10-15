@@ -25,7 +25,6 @@ WORKDIR /opt/decupa
 FROM base AS js-deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN mkdir -p apps/cli packages/{acoustics,bench,cache,coordinator,core,goldedit,media,metrics,queue,trace,transcript,triage,typesafe}
 COPY apps/cli/package.json apps/cli/package.json
 COPY packages/acoustics/package.json packages/acoustics/package.json
 COPY packages/bench/package.json packages/bench/package.json
@@ -94,7 +93,12 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
     && mkdir -p /home/decupa/.cache /home/decupa/.decupa /data/projects /data/media \
     && chown -R decupa:decupa /home/decupa /data /opt/decupa
 
+# O pnpm liga os pacotes do workspace em node_modules de cada pacote; sem
+# eles, `@decupa/*` não resolve. `packages/` desta etapa só tem package.json e
+# node_modules, e o código chega pelo `COPY . .` logo abaixo.
 COPY --from=js-deps --chown=decupa:decupa /opt/decupa/node_modules /opt/decupa/node_modules
+COPY --from=js-deps --chown=decupa:decupa /opt/decupa/apps/cli/node_modules /opt/decupa/apps/cli/node_modules
+COPY --from=js-deps --chown=decupa:decupa /opt/decupa/packages /opt/decupa/packages
 COPY --chown=decupa:decupa . .
 
 ENV HOME=/home/decupa \
