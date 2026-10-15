@@ -21,10 +21,14 @@ COMPOSE_ENV=(
 cleanup() {
   local status=$?
   set +e
-  env "${COMPOSE_ENV[@]}" "${COMPOSE[@]}" down --remove-orphans
+  # Logs e o histórico do healthcheck antes do `down`, que apaga os containers.
   if ((status != 0)); then
-    env "${COMPOSE_ENV[@]}" "${COMPOSE[@]}" logs --no-color || true
+    env "${COMPOSE_ENV[@]}" "${COMPOSE[@]}" logs --no-color
+    for container in $(env "${COMPOSE_ENV[@]}" "${COMPOSE[@]}" ps -aq); do
+      docker inspect --format '{{.Name}} {{json .State.Health}}' "$container"
+    done
   fi
+  env "${COMPOSE_ENV[@]}" "${COMPOSE[@]}" down --remove-orphans
   rm -f "$COOKIE"
   rm -rf "$WORK"
   exit "$status"
