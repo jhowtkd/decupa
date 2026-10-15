@@ -858,10 +858,17 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     resumeButton.setAttribute("aria-busy", String(view.busy));
   }
 
-  document.getElementById("select").onclick = () => api.call("project/select", {
-    method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
-    label: "Abrindo seleção…",
-  });
+  document.getElementById("select").onclick = () => {
+    const teamMode = document.querySelector('meta[name="decupa-team-mode"]')?.getAttribute("content") === "true";
+    if (teamMode) {
+      window.dispatchEvent(new CustomEvent("decupa:open-media"));
+      return;
+    }
+    return api.call("project/select", {
+      method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
+      label: "Abrindo seleção…",
+    });
+  };
   document.getElementById("batchSupport").onclick = () => api.call("project/source-role", {
     method: "POST",
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), role: "support" }),

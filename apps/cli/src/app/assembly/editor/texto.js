@@ -1199,7 +1199,9 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     if (!el) return;
     const importCta = ev.target.closest("[data-empty-import]");
     if (importCta && el.contains(importCta)) {
-      document.getElementById("filePicker")?.click();
+      const teamMode = document.querySelector('meta[name="decupa-team-mode"]')?.getAttribute("content") === "true";
+      if (teamMode) window.dispatchEvent(new CustomEvent("decupa:open-media"));
+      else document.getElementById("filePicker")?.click();
       return;
     }
     const sceneMenuBtn = ev.target.closest("[data-scene-menu]");

@@ -47,6 +47,7 @@ import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
+import type { MediaRuntime } from "../media-runtime.ts";
 
 const alignActive = new Set<string>();
 function alignKey(dir: string, correctionId: string): string {
@@ -95,6 +96,10 @@ export type AssemblyDeps = FillerObserveDeps & {
    */
   isTextConfigured?: () => Promise<boolean>;
   coordinator?: FileCoordinator;
+  /** Acervo global; ausente mantém o modo local sem diretório implícito. */
+  media?: Pick<MediaRuntime, "getMedia">;
+  /** Em equipe, o seletor do sistema não aponta para a máquina do editor. */
+  teamMode?: boolean;
 };
 
 /**
@@ -428,6 +433,38 @@ function addSource(project: Project, source: Source): Project {
       ...project.assembly,
       sources: [...project.assembly.sources, source],
     },
+  };
+}
+
+async function sourceFromMedia(
+  media: Pick<MediaRuntime, "getMedia">,
+  mediaId: string,
+  id: string,
+): Promise<Source> {
+  const record = await media.getMedia(mediaId);
+  if (!record) throw new HttpError(404, "Mídia não encontrada no acervo");
+  const info = await probe(record.path);
+  if ((!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
+    throw new HttpError(422, "Mídia do acervo sem vídeo ou áudio legível");
+  }
+  const file = await stat(record.path);
+  return {
+    id,
+    path: record.path,
+    sha256: record.id,
+    durationSeconds: Math.max(info.durationMs / 1000, 0.001),
+    hasVideo: info.hasVideo,
+    hasAudio: info.hasAudio,
+    fps: info.frameRate,
+    width: info.width,
+    height: info.height,
+    role: info.hasAudio ? "speech" : "support",
+    included: true,
+    name: record.nome,
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    timecode: info.timecode ? parseSourceTimecode(info.timecode, info.frameRate) : null,
+    rotation: info.rotation,
   };
 }
 
@@ -766,6 +803,36 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
+      if (parts[1] === "media" && req.method === "POST") {
+        if (!deps.media) throw new HttpError(503, "acervo de Mídias indisponível");
+        const body = await readLimitedBody(req);
+        const baseRevision = requireRevision(body);
+        const mediaId = typeof body.mediaId === "string" ? body.mediaId.toLowerCase() : "";
+        if (!/^[0-9a-f]{64}$/.test(mediaId)) throw new HttpError(400, "mediaId inválido");
+        const before = await loadProject(dir);
+        if (before.revision !== baseRevision) {
+          throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${before.revision}`);
+        }
+        const known = before.assembly.sources.find((source) => source.sha256 === mediaId);
+        if (known) {
+          await sendSnapshot(res, { project: before, source: known, reused: true });
+          return true;
+        }
+        const source = await sourceFromMedia(deps.media, mediaId, nextSourceId());
+        const project = await mutate(baseRevision, (loaded) => withCanvasPolicy(addSource(loaded, source)));
+        // A fonte já está disponível para o editor. A análise pesada começa
+        // depois da resposta e passa pelo coordinator global, sem prender o
+        // pedido nem exigir a Reserva de Edição durante o envio.
+        operation = { stage: "queued", sourceId: source.id };
+        await sendSnapshot(res, { project, source, ...snapshot() }, 202);
+        void analyzeSources(project, [source.id], false).catch((error: unknown) => {
+          if (stillCurrent(opGen)) {
+            operation = { stage: "error", sourceId: source.id, error: error instanceof Error ? error.message : String(error) };
+          }
+        });
+        return true;
+      }
+
       if (parts[1] === "media" && req.method === "GET") {
         const sourceId = decodeURIComponent(parts[2] ?? "");
         const project = await loadProject(dir);
@@ -963,6 +1030,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       const body = await readLimitedBody(req);
 
       if (parts[1] === "select" && req.method === "POST") {
+        if (deps.teamMode) throw new HttpError(409, "o seletor nativo fica indisponível no modo equipe; use envio ou acervo");
         const baseRevision = requireRevision(body);
         const picked = await pickFiles();
         if ("cancelled" in picked) {
@@ -1137,6 +1205,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
 
       if (parts[1] === "relink" && req.method === "POST") {
+        if (deps.teamMode) throw new HttpError(409, "o seletor nativo fica indisponível no modo equipe; use o acervo");
         const baseRevision = requireRevision(body);
         const sourceId = String(body.sourceId ?? "");
         const picked = await pickFiles();
