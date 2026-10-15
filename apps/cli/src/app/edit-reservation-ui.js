@@ -122,7 +122,8 @@ export function mountEditReservationUI({
 
   const notifyReadOnly = () => onReadOnly(currentOwner || (identityChanging ? { identityChanging: true } : null));
 
-  function setReadOnly(owner) {
+  function setReadOnly(owner, { confirmed = false } = {}) {
+    if (confirmed) identityChanging = false;
     currentOwner = owner;
     notifyReadOnly();
     if (reservationElement && reservationText) {
@@ -143,16 +144,18 @@ export function mountEditReservationUI({
   }
 
   async function acquire() {
+    const requestTabId = projectTabId();
     const response = await fetch(projectPath("reservation"), {
       method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
     });
     const body = await response.json().catch(() => ({}));
+    if (requestTabId !== projectTabId()) return false;
     if (response.status === 409) {
       handleConflict(body);
       return false;
     }
     if (response.ok) {
-      setReadOnly(null);
+      setReadOnly(null, { confirmed: true });
       return true;
     }
     return false;
@@ -167,12 +170,14 @@ export function mountEditReservationUI({
 
   async function heartbeat() {
     try {
+      const requestTabId = projectTabId();
       const response = await fetch(projectPath("reservation/heartbeat"), {
         method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
       });
       const body = await response.json().catch(() => ({}));
+      if (requestTabId !== projectTabId()) return;
       if (response.status === 409) handleConflict(body);
-      else if (response.ok) setReadOnly(null);
+      else if (response.ok) setReadOnly(null, { confirmed: true });
     } catch {
       // O próximo sinal tenta renovar ou revela que outra aba assumiu.
     }
@@ -194,12 +199,14 @@ export function mountEditReservationUI({
 
   reservationTake?.addEventListener("click", async () => {
     if (!currentOwner || !(await confirmEditTakeover(currentOwner))) return;
+    const requestTabId = projectTabId();
     const response = await fetch(projectPath("reservation/take"), {
       method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
     });
     const body = await response.json().catch(() => ({}));
+    if (requestTabId !== projectTabId()) return;
     if (response.ok) {
-      setReadOnly(null);
+      setReadOnly(null, { confirmed: true });
       await onTakeover();
     } else if (response.status === 409) handleConflict(body);
   });

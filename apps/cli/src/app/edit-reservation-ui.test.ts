@@ -50,22 +50,25 @@ it("reativa a Reserva depois de pagehide/pageShow persistido", async () => {
   expect(heartbeats).toBe(0);
 });
 
-it("bloqueia a edição enquanto reacquire após troca tardia do id da aba", async () => {
+it("desbloqueia a edição quando o heartbeat recupera após falha de reacquisição", async () => {
   const globals = globalThis as unknown as {
     document?: unknown;
     window?: unknown;
     MutationObserver?: unknown;
     fetch?: unknown;
+    setInterval?: unknown;
   };
   const previous = {
     document: globals.document,
     window: globals.window,
     MutationObserver: globals.MutationObserver,
     fetch: globals.fetch,
+    setInterval: globals.setInterval,
   };
-  let acquired = 0;
+  let requests = 0;
   let readOnly = false;
   let tabChanged: (() => void) | undefined;
+  let heartbeat: (() => void) | undefined;
   const body = { classList: { toggle() {} } };
   globals.document = {
     body,
@@ -78,12 +81,16 @@ it("bloqueia a edição enquanto reacquire após troca tardia do id da aba", asy
     observe() {}
   };
   globals.fetch = async () => {
-    acquired += 1;
-    return { ok: true, status: 200, json: async () => ({}) };
+    requests += 1;
+    const response = requests === 2
+      ? { ok: false, status: 500 }
+      : { ok: true, status: 200 };
+    return { ...response, json: async () => ({}) };
   };
+  globals.setInterval = (callback: () => void) => { heartbeat = callback; return 1; };
 
   try {
-    mountEditReservationUI({
+    const reservationUI = mountEditReservationUI({
       onReadOnly: (owner) => { readOnly = Boolean(owner); },
       tabIdentity: {
         ready: () => Promise.resolve(),
@@ -91,13 +98,20 @@ it("bloqueia a edição enquanto reacquire após troca tardia do id da aba", asy
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(acquired).toBe(1);
+    expect(requests).toBe(1);
 
     tabChanged?.();
     expect(readOnly).toBe(true);
+    expect(reservationUI.isReadOnly()).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(acquired).toBe(2);
+    expect(requests).toBe(2);
+    expect(readOnly).toBe(true);
+
+    heartbeat?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requests).toBe(3);
     expect(readOnly).toBe(false);
+    expect(reservationUI.isReadOnly()).toBe(false);
   } finally {
     if (previous.document === undefined) delete globals.document;
     else globals.document = previous.document;
@@ -107,5 +121,7 @@ it("bloqueia a edição enquanto reacquire após troca tardia do id da aba", asy
     else globals.MutationObserver = previous.MutationObserver;
     if (previous.fetch === undefined) delete globals.fetch;
     else globals.fetch = previous.fetch;
+    if (previous.setInterval === undefined) delete globals.setInterval;
+    else globals.setInterval = previous.setInterval;
   }
 });
