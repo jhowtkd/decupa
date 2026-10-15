@@ -47,6 +47,8 @@ import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
+import { handleReservationRequest, requireEditReservation } from "../edit-reservation.ts";
+import type { IncomingMessage as ReservationRequest } from "node:http";
 import type { MediaRuntime } from "../media-runtime.ts";
 
 const alignActive = new Set<string>();
@@ -79,6 +81,7 @@ export type AssemblyDeps = FillerObserveDeps & {
   pageCss?: string;
   pageJs?: string;
   projectPathJs?: string;
+  editReservationUiJs?: string;
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -96,6 +99,8 @@ export type AssemblyDeps = FillerObserveDeps & {
    */
   isTextConfigured?: () => Promise<boolean>;
   coordinator?: FileCoordinator;
+  now?: () => number;
+  identity?: (req: ReservationRequest) => string | undefined;
   /** Acervo global; ausente mantém o modo local sem diretório implícito. */
   media?: Pick<MediaRuntime, "getMedia">;
   /** Em equipe, o seletor do sistema não aponta para a máquina do editor. */
@@ -686,6 +691,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     res: ServerResponse,
   ): Promise<boolean> {
     const url = new URL(req.url ?? "/", "http://localhost");
+    const reservationDeps = {
+      projeto: dir,
+      now: deps.now ?? Date.now,
+      identity: deps.identity ?? (() => undefined),
+    };
+    if (await handleReservationRequest(req, res, reservationDeps)) return true;
+    if (req.method !== "GET" && url.pathname.startsWith("/project")
+      && !await requireEditReservation(req, res, reservationDeps)) return true;
     if (url.pathname === "/" && deps.page) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(await deps.page());
@@ -699,6 +712,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (url.pathname === "/project-path.js" && deps.projectPathJs !== undefined) {
       res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
       res.end(deps.projectPathJs);
+      return true;
+    }
+    if (url.pathname === "/edit-reservation-ui.js" && deps.editReservationUiJs !== undefined) {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(deps.editReservationUiJs);
       return true;
     }
     if (url.pathname === "/page.js" && deps.pageJs !== undefined) {

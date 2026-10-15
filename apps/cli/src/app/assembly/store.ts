@@ -53,6 +53,22 @@ function enqueue<T>(dir: string, work: () => Promise<T>): Promise<T> {
   return writerFor(dir).run(work);
 }
 
+/**
+ * Executa uma decisão que publica um artefato do Projeto sob o mesmo mutex
+ * das revisões. A Reserva de Edição usa este caminho sem precisar conhecer o
+ * formato do projeto nem duplicar a disciplina do escritor.
+ */
+export function withProjectWrite<T>(dir: string, work: () => Promise<T>): Promise<T> {
+  return enqueue(dir, async () => {
+    await acquireLock(dir);
+    try {
+      return await work();
+    } finally {
+      await releaseLock(dir);
+    }
+  });
+}
+
 async function acquireLock(dir: string): Promise<void> {
   const path = lockPath(dir);
   try {

@@ -214,6 +214,7 @@
     <a href="/settings" aria-label="Configurações" title="Configurações"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9.5 3-.7 2.2-2 .9-2.1-.5L2.6 9l1.5 1.7v2.6L2.6 15l2.1 3.4 2.1-.5 2 .9.7 2.2h5l.7-2.2 2-.9 2.1.5 2.1-3.4-1.5-1.7v-2.6L21.4 9l-2.1-3.4-2.1.5-2-.9-.7-2.2z"/><circle cx="12" cy="12" r="3"/></svg></a>
     <span id="stage" class="pill mono stats" hidden><b id="kept-count">0</b>/<span id="total-count">0</span> trechos<span class="sep" aria-hidden="true"></span><b id="out-sec">0</b> s de <span id="src-sec">0</span> s</span>
     <span id="aviso"></span>
+    <span id="editReservation" class="pill" hidden><span id="editReservationText"></span><button id="reservationTake" class="small primary" type="button">Assumir Edição</button></span>
     <button id="cancelar" class="danger">Cancelar</button>
     <button id="triar" disabled>Sugerir cortes</button>
     <div class="export-wrap">
@@ -262,7 +263,8 @@
 <video id="player" preload="auto" playsinline></video>
 <div id="toast"></div>
 <script type="module">
-import { projectPath as projectPathFromMeta } from "./project-path.js";
+import { mountEditReservationUI } from "./edit-reservation-ui.js";
+import { projectHeaders, projectPath as projectPathFromMeta } from "./project-path.js";
 const projectPath = projectPathFromMeta;
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
@@ -271,7 +273,13 @@ let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = nu
 // para o arquivo nunca trocar no meio de uma leitura por faixa.
 let audioSrc = null;
 
-const api = (p, o) => fetch(projectPath(`jobs/${jobId}${p}`), o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
+const api = (p, o = {}) => fetch(projectPath(`jobs/${jobId}${p}`), { ...o, headers: projectHeaders(o.headers) }).then(async (r) => {
+  const value = await r.json().catch(() => ({}));
+  if (r.status === 409 && value.dono) reservationUI.handleConflict(value);
+  return { ...value, _status: r.status, _ok: r.ok };
+});
+
+const reservationUI = mountEditReservationUI({ onTakeover: () => poll() });
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
 const STEPS = [["queued","Aguardando na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
@@ -306,7 +314,7 @@ async function changeFillers(patch) {
   const ticket = generations.submit();
   queuePoll(1000);
   try {
-    const response = await fetch(projectPath(`jobs/${jobId}/fillers`), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    const response = await fetch(projectPath(`jobs/${jobId}/fillers`), { method: "POST", headers: typeof projectHeaders === "function" ? projectHeaders({ "content-type": "application/json" }) : { "content-type": "application/json" }, body: JSON.stringify(patch) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.error) throw Error(result.error ?? `Erro ${response.status}`);
     if (generations.accept(result.review, ticket)) readyFrom({ review: result.review });
@@ -686,7 +694,7 @@ function schedule() {
     }
     try {
       const res = await fetch(projectPath(`jobs/${jobId}/keep`), {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST", headers: typeof projectHeaders === "function" ? projectHeaders({ "content-type": "application/json" }) : { "content-type": "application/json" },
         body: JSON.stringify({ keepList: list }),
       });
       const r = await res.json().catch(() => ({}));

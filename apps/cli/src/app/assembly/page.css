@@ -28,6 +28,11 @@
 
 /* == base == */
 * { box-sizing: border-box; }
+
+.edit-reservation { display: inline-flex; align-items: center; gap: 8px; max-width: min(420px, 35vw); padding: 4px 8px 4px 12px; border-radius: 999px; background: rgb(239 170 160 / .12); color: var(--red); }
+.edit-reservation[hidden] { display: none; }
+.edit-reservation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.modo-leitura .edit-reservation { box-shadow: inset 0 0 0 1px rgb(239 170 160 / .35); }
 html { background: var(--ground); }
 body {
   margin: 0; height: 100dvh; overflow: hidden; padding: var(--gap);

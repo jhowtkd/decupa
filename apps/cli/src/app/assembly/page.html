@@ -36,6 +36,10 @@
   <div class="topbar-actions">
     <a href="/settings" aria-label="Configurações" title="Configurações"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9.5 3-.7 2.2-2 .9-2.1-.5L2.6 9l1.5 1.7v2.6L2.6 15l2.1 3.4 2.1-.5 2 .9.7 2.2h5l.7-2.2 2-.9 2.1.5 2.1-3.4-1.5-1.7v-2.6L21.4 9l-2.1-3.4-2.1.5-2-.9-.7-2.2z"/><circle cx="12" cy="12" r="3"/></svg></a>
     <span id="transcriptNotice" class="pill pill-accent" hidden></span>
+    <span id="editReservation" class="edit-reservation" hidden role="status">
+      <span id="editReservationText"></span>
+      <button type="button" id="reservationTake" class="small primary">Assumir Edição</button>
+    </span>
     <span id="status" class="pill" role="status" aria-live="polite">carregando…</span>
     <button type="button" id="monitorToggle" class="only-narrow" aria-controls="monitor" aria-expanded="false">Monitor</button>
     <span id="primaryAction"></span>

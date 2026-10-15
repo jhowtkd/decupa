@@ -36,7 +36,7 @@ it("serve duas Montagens da mesma Raiz sob ids distintos", async () => {
     expect((await alphaProject.json() as { project: { id: string } }).project.id).toBe("alpha-project");
     expect((await betaProject.json() as { project: { id: string } }).project.id).toBe("beta-project");
     expect((await fetch(`${base}/templates`)).status).toBe(200);
-    for (const asset of ["page.css", "page.js", "project-path.js", "editor/rail.js"]) {
+    for (const asset of ["page.css", "page.js", "project-path.js", "edit-reservation-ui.js", "editor/rail.js"]) {
       const response = await fetch(`${base}/projects/alpha/${asset}`);
       expect(response.status, asset).toBe(200);
     }

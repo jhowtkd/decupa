@@ -1,7 +1,8 @@
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { projectPath } from "./project-path.js";
+import { mountEditReservationUI } from "./edit-reservation-ui.js";
+import { projectHeaders, projectPath } from "./project-path.js";
 
 const [
   { mountTemplates },
@@ -34,7 +35,7 @@ const state = createState({
 const teamMode = document.querySelector('meta[name="decupa-team-mode"]')?.getAttribute("content") === "true";
 const mediaEnabled = document.querySelector('meta[name="decupa-media-enabled"]')?.getAttribute("content") === "true";
 // errorFromPoll: o erro veio de pedido de fundo. notice: aviso até a primeira ação.
-const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null };
+const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null, readOnly: false, owner: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
 let previewInflight = false;
@@ -119,6 +120,11 @@ const client = createApi({
   },
 });
 
+const reservationUI = mountEditReservationUI({
+  onReadOnly: (owner) => { ui.readOnly = Boolean(owner); ui.owner = owner; },
+  onTakeover: () => call("project"),
+});
+
 // Resposta com projeto sincroniza o estado (era o corpo do api() antigo) e
 // dispara a auto-prévia; erro valida ui.error como o lastError de antes.
 // O erro de uma ação fica até a próxima ação (chamada com rótulo): pedido de
@@ -146,6 +152,7 @@ async function call(path, opts = {}) {
   };
   try {
     const { res, body } = await client.call(path, opts);
+    if (res.status === 409 && body.dono) reservationUI.handleConflict(body);
     if (res.status === 409) {
       // O 409 diz que a base desta aba está errada: a resposta de reconciliação
       // é a fonte da verdade, mesmo com revisão menor (servidor que voltou
@@ -336,6 +343,7 @@ const poller = createProjectPoller({
 });
 
 async function importFiles(files) {
+  if (ui.readOnly) return;
   if (ui.importing || ui.busy) {
     ui.error = "Aguarde a operação atual terminar antes de enviar mais arquivos.";
     ui.errorFromPoll = false;
@@ -358,7 +366,13 @@ async function importFiles(files) {
       try {
         const res = await fetch(
           "project/import?baseRevision=" + project().revision + "&name=" + encodeURIComponent(file.name),
-          { method: "POST", headers: { "x-file-size": String(file.size) }, body: file },
+          {
+            method: "POST",
+            headers: typeof projectHeaders === "function"
+              ? projectHeaders({ "x-file-size": String(file.size) })
+              : { "x-file-size": String(file.size) },
+            body: file,
+          },
         );
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {

@@ -1,4 +1,4 @@
-import { projectPath } from "../project-path.js";
+import { projectHeaders, projectPath } from "../project-path.js";
 
 // Cliente HTTP mínimo do editor texto-centrado (Task 4). Sem DOM:
 // o estado de carregamento sai via `onStatus({busy, label?, error?})`
@@ -25,7 +25,7 @@ export function createApi({ onStatus } = {}) {
     try {
       const res = await fetch(projectPath(path), {
         ...fetchOpts,
-        headers: { "content-type": "application/json", ...fetchOpts.headers },
+        headers: projectHeaders({ "content-type": "application/json", ...fetchOpts.headers }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) emit({ error: body.error || "erro " + res.status });
