@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 const FRONTEND = new URL(".", import.meta.url);
-const PROJECT_PATH = /["'`](\/)(?:project(?:[\/?#"'`]|$)|media(?:[\/?#"'`]|$)|editor\/(?:[^"'`]|$)|jobs(?:[\/?#"'`]|$))/;
+const PROJECT_PATH = /["'`](\/)(?:project(?:[/?#"'`]|$)|media(?:[/?#"'`]|$)|editor\/(?:[^"'`]|$)|jobs(?:[/?#"'`]|$))/;
 
 it("não espalha caminhos absolutos do Projeto pelo frontend", async () => {
   const entries = await readdir(FRONTEND, { recursive: true, withFileTypes: true });

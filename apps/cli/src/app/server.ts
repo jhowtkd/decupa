@@ -2,17 +2,16 @@ import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { createFileCoordinator } from "@decupa/coordinator";
-import { hashFile, probe } from "@decupa/media";
 import { createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
-import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, analysisClientOptions, assemblyTextClientOptions } from "@decupa/triage";
+import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
 import { operationResolver } from "./analysis-operation.ts";
 import { cancelAssemblyFillerNotes } from "./assembly/filler-observe.ts";
-import { access, readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { access, readFile, mkdir, mkdtemp, stat } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertSafeBind, guardLocalRequest, hostConfig, isLoopbackBind, originAllowed, resolveHostConfig } from "../http/origin.ts";
@@ -500,7 +499,7 @@ type CleanupProjectRuntimeSetup = {
 };
 
 async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): Promise<CleanupProjectRuntimeSetup> {
-  const { input, workDir, exec, provider, visualEnv, visualDir, readStored } = opts;
+  const { input, workDir, exec, provider, visualEnv, visualDir } = opts;
   // Antes do coordenador e de qualquer leitura: ele mora dentro da pasta, e
   // uma pasta de outra fonte vai inteira para o lado. O ingest roda uma vez
   // por processo, então conferir aqui cobre todo reuso da sessão.
