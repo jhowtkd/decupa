@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { expect, it } from "vitest";
 import { blankProject } from "./assembly/routes.ts";
 import { createProject } from "./assembly/store.ts";
@@ -76,6 +76,38 @@ it("deriva o Projeto inicial de projectDir e redireciona a raiz do site", async 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("/projects/inicial/");
     expect((await fetch(`${base}/projects/inicial/`)).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("cria Montagem nova pelo caminho usado pelo editor na mesma Raiz", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-new-"));
+  const existing = join(root, "existente");
+  await mkdir(existing);
+  await createProject(existing, blankProject("existing-project"));
+  const app = await startApp({ projectsRoot: root, projectId: "existente", port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const response = await fetch(`${base}/projects/existente/project/new`, { method: "POST", body: "{}" });
+    expect(response.status).toBe(201);
+    const body = await response.json() as { url: string; dir: string };
+    const id = body.url.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9._-]*)\/$/)?.[1];
+    expect(id).toMatch(/^projeto-[A-Za-z0-9]{4}$/);
+    expect(body.dir).toBe(join(root, id!));
+    expect(dirname(body.dir)).toBe(root);
+    expect(basename(body.dir)).toBe(id);
+    await access(join(body.dir, "project.json"));
+    expect(JSON.parse(await readFile(join(body.dir, "project.json"), "utf8"))).toMatchObject({ id: expect.any(String) });
+    expect((await fetch(`${base}${body.url}`)).status).toBe(200);
+    expect((await fetch(`${base}${body.url}project`)).status).toBe(200);
+
+    const rootResponse = await fetch(`${base}/project/new`, { method: "POST", body: "{}" });
+    expect(rootResponse.status).toBe(201);
+    const rootBody = await rootResponse.json() as { url: string; dir: string };
+    expect((await fetch(`${base}${rootBody.url}`)).status).toBe(200);
+    expect((await fetch(`${base}${rootBody.url}project`)).status).toBe(200);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

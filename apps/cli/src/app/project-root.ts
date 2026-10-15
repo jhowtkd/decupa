@@ -7,6 +7,7 @@ export const PROJECT_ID_PATTERN = /^(?!\.\.?$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
 type ProjectRuntime = {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
   close(): Promise<void>;
+  onJevDisabled?: () => void | Promise<void>;
 };
 
 type ProjectRuntimeFactory = (opts: {
@@ -34,6 +35,15 @@ function projectRequest(url: string | undefined): { id: string; prefix: string; 
   return { id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}` };
 }
 
+async function isProjectDirectory(root: string, id: string): Promise<boolean> {
+  const dir = resolve(root, id);
+  if (dirname(dir) !== root) return false;
+  const project = await lstat(dir).catch(() => null);
+  if (!project?.isDirectory()) return false;
+  const manifest = await lstat(join(dir, "project.json")).catch(() => null);
+  return Boolean(manifest?.isFile());
+}
+
 /** Registro dos runtimes de Montagem que vivem numa mesma Raiz. */
 export function createProjectRuntimeRegistry(opts: {
   projectsRoot: string;
@@ -46,12 +56,8 @@ export function createProjectRuntimeRegistry(opts: {
     const existing = runtimes.get(id);
     if (existing) return existing;
     const created = (async (): Promise<ProjectRuntime | null> => {
+      if (!await isProjectDirectory(root, id)) return null;
       const dir = resolve(root, id);
-      if (dirname(dir) !== root) return null;
-      const project = await lstat(dir).catch(() => null);
-      if (!project?.isDirectory()) return null;
-      const manifest = await lstat(join(dir, "project.json")).catch(() => null);
-      if (!manifest?.isFile()) return null;
       return opts.createRuntime({ id, dir, prefix });
     })().catch((error: unknown) => {
       runtimes.delete(id);
@@ -64,6 +70,10 @@ export function createProjectRuntimeRegistry(opts: {
   }
 
   return {
+    async isProjectPath(url: string | undefined): Promise<boolean> {
+      const route = projectRequest(url);
+      return route !== null && await isProjectDirectory(root, route.id);
+    },
     async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
       const route = projectRequest(req.url);
       if (!route) {
@@ -82,6 +92,11 @@ export function createProjectRuntimeRegistry(opts: {
       } finally {
         req.url = originalUrl;
       }
+    },
+    async notifyJevDisabled(): Promise<void> {
+      const loaded = await Promise.all([...runtimes.values()]);
+      await Promise.all(loaded.filter((runtime): runtime is ProjectRuntime => runtime !== null)
+        .map((runtime) => runtime.onJevDisabled?.()));
     },
     async close(): Promise<void> {
       const active = [...runtimes.values()];

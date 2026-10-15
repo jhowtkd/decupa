@@ -80,6 +80,22 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
   res.end(payload);
 }
 
+async function createAssemblyInProjectsRoot(projectsRoot: string): Promise<{ id: string; dir: string; url: string }> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const id = `projeto-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
+    const dir = join(projectsRoot, id);
+    try {
+      await mkdir(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw error;
+    }
+    await createProject(dir, blankProject(randomUUID()));
+    return { id, dir, url: `/projects/${id}/` };
+  }
+  throw new Error("não foi possível reservar uma pasta para o novo Projeto");
+}
+
 function parseRequestUrl(raw: string | undefined): URL | null {
   try {
     return new URL(raw ?? "/", "http://localhost");
@@ -254,10 +270,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
-  const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
-  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
-  const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
-  const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
+  const { page, projectPathJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -280,59 +293,33 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
     createRuntime: async ({ id, dir, prefix }) => {
-      const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
-      const stored = await loadStored();
-      const isTextConfigured = async (): Promise<boolean> => {
-        try {
-          const current = await loadStored();
-          assemblyTextClientOptions({ stored: current, env: visualEnv, selection: resolveAssemblyTextProvider(visualEnv, current) });
-          return true;
-        } catch { return false; }
-      };
-      const transports = resolveAppTransports({ ...opts, stored, loadStored });
-      const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
-        describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || allowPaidVisual || opts.providerConfigDir),
-        proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || allowPaidModel || opts.providerConfigDir) });
-      const { decision } = await resolveOperationDeps();
-      opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
-      const speech = attachResidentSpeech({
+      const setup = await createAssemblyProjectRuntime({
+        ...opts,
         dir,
-        speech: opts.speech,
-        executorInjected: Boolean(opts.executor),
+        prefix,
+        inputs: id === opts.projectId ? opts.inputs : undefined,
+        exec,
+        coordinator,
+        visualEnv,
+        visualDir,
+        readStored,
+        page,
+        projectPathJs,
+        pageCss,
+        pageJs,
+        templatesRoot,
+        port: () => boundPort,
+        allowPaidModel,
+        allowPaidVisual,
+        alwaysTextConfigured: true,
       });
-      try {
-        const runtime = createAssemblyRuntime(dir, {
-          page: async () => withVisualNotice(withProjectDir(page, dir, prefix), keyProviderState(visualEnv, await loadStored()).notice),
-          pageCss,
-          pageJs,
-          projectPathJs,
-          templatesRoot,
-          decision,
-          exec,
-          port: () => boundPort,
-          selectFn: opts.selectFn,
-          allowPaidModel,
-          allowPaidVisual,
-          isTextConfigured,
-          proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
-          describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
-          resolveOperationDeps,
-          fillerFetchImpl: opts.fetchImpl,
-          speech: speech.speech,
-          coordinator,
-        });
-        const inputs = id === opts.projectId ? opts.inputs : undefined;
-        await runtime.ensureProject(inputs);
-        return {
-          handle: runtime.handle,
-          close: async () => {
-            await Promise.all([runtime.close(), speech.closeSpeech()]);
-          },
-        };
-      } catch (error) {
-        await speech.closeSpeech();
-        throw error;
-      }
+      return {
+        handle: setup.runtime.handle,
+        onJevDisabled: () => cancelAssemblyFillerNotes(dir),
+        close: async () => {
+          await Promise.all([setup.runtime.close(), setup.closeSpeech()]);
+        },
+      };
     },
   });
   const media = await configuredMediaRuntime(opts.env, opts.now);
@@ -347,9 +334,15 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (media && await media.handle(req, res)) return;
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => registry.notifyJevDisabled() })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (await templates.handleTemplates(req, res)) return;
+      const projectNew = req.method === "POST" && (url.pathname === "/project/new" || /^\/projects\/[^/]+\/project\/new$/.test(url.pathname));
+      if (projectNew && (url.pathname === "/project/new" || await registry.isProjectPath(req.url))) {
+        const created = await createAssemblyInProjectsRoot(projectsRoot);
+        sendJson(res, { url: created.url, dir: created.dir }, 201);
+        return;
+      }
       if (url.pathname === "/" && opts.projectId) {
         res.writeHead(307, { location: `/projects/${opts.projectId}/`, "cache-control": "no-store" });
         res.end();
@@ -676,6 +669,94 @@ export function withProjectDir(page: string, dir: string, prefix = ""): string {
     .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js", prefix));
 }
 
+async function loadAssemblyPageAssets(): Promise<{
+  page: string;
+  projectPathJs: string;
+  pageCss: string;
+  pageJs: string;
+}> {
+  return {
+    page: await readFile(join(HERE, "assembly", "page.html"), "utf8"),
+    projectPathJs: await readFile(join(HERE, "project-path.js"), "utf8"),
+    pageCss: await readFile(join(HERE, "assembly", "page.css"), "utf8"),
+    pageJs: await readFile(join(HERE, "assembly", "page.js"), "utf8"),
+  };
+}
+
+async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> & {
+  dir: string;
+  prefix?: string;
+  exec: Executor;
+  coordinator?: ReturnType<typeof createHeavyCoordinator>;
+  visualEnv: Record<string, string | undefined>;
+  visualDir: string;
+  readStored: ReturnType<typeof createCredentialsReader>;
+  page: string;
+  projectPathJs: string;
+  pageCss: string;
+  pageJs: string;
+  templatesRoot: string;
+  port: () => number;
+  allowPaidModel: boolean;
+  allowPaidVisual: boolean;
+  alwaysTextConfigured?: boolean;
+}): Promise<{
+  runtime: ReturnType<typeof createAssemblyRuntime>;
+  project: Awaited<ReturnType<ReturnType<typeof createAssemblyRuntime>["ensureProject"]>>;
+  loadStored: () => ReturnType<typeof readAnalysisCredentials>;
+  transports: ReturnType<typeof resolveAppTransports>;
+  speech?: IngestSpeech;
+  closeSpeech: () => Promise<void>;
+}> {
+  const loadStored = () => readAnalysisCredentials(opts.dir, opts.visualDir, opts.readStored);
+  const stored = await loadStored();
+  const isTextConfigured = async (): Promise<boolean> => {
+    try {
+      const current = await loadStored();
+      assemblyTextClientOptions({ stored: current, env: opts.visualEnv, selection: resolveAssemblyTextProvider(opts.visualEnv, current) });
+      return true;
+    } catch { return false; }
+  };
+  const transports = resolveAppTransports({ ...opts, stored, loadStored });
+  const resolveOperationDeps = operationResolver({ dir: opts.dir, loadStored, env: opts.visualEnv, fetchImpl: opts.fetchImpl,
+    describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir),
+    proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || opts.allowPaidModel || opts.providerConfigDir) });
+  const { decision } = await resolveOperationDeps();
+  opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
+  const speech = attachResidentSpeech({
+    dir: opts.dir,
+    speech: opts.speech,
+    executorInjected: Boolean(opts.executor),
+  });
+  try {
+    const runtime = createAssemblyRuntime(opts.dir, {
+      page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix), keyProviderState(opts.visualEnv, await loadStored()).notice),
+      pageCss: opts.pageCss,
+      pageJs: opts.pageJs,
+      projectPathJs: opts.projectPathJs,
+      templatesRoot: opts.templatesRoot,
+      decision,
+      exec: opts.exec,
+      port: opts.port,
+      selectFn: opts.selectFn,
+      allowPaidModel: opts.allowPaidModel,
+      allowPaidVisual: opts.allowPaidVisual,
+      ...(opts.providerConfigDir || opts.alwaysTextConfigured ? { isTextConfigured } : {}),
+      proposeSend: opts.proposeSend ?? ((opts.allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
+      describeClient: opts.describeClient ?? ((opts.allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
+      resolveOperationDeps,
+      fillerFetchImpl: opts.fetchImpl,
+      speech: speech.speech,
+      coordinator: opts.coordinator,
+    });
+    const project = await runtime.ensureProject(opts.inputs);
+    return { runtime, project, loadStored, transports, speech: speech.speech, closeSpeech: speech.closeSpeech };
+  } catch (error) {
+    await speech.closeSpeech();
+    throw error;
+  }
+}
+
 async function startAssemblyApp(opts: {
   projectDir: string;
   inputs?: string[];
@@ -706,38 +787,30 @@ async function startAssemblyApp(opts: {
     : undefined;
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
-  const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
-  const stored = await loadStored();
-  // R3.1 sem-chave: o 428 das rotas de IA da Montar (prepare/adjust/propose/
-  // speech-proposal/template-proposal) usa o mesmo resolved do transporte —
-  // sem chave configurada, 428 explícito em vez de 500 via lazy-retry.
-  const isTextConfigured = async (): Promise<boolean> => {
-    try {
-      const current = await loadStored();
-      assemblyTextClientOptions({ stored: current, env: visualEnv, selection: resolveAssemblyTextProvider(visualEnv, current) });
-      return true;
-    } catch { return false; }
-  };
-  const transports = resolveAppTransports({ ...opts, stored, loadStored });
-  const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
-    describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || opts.allowPaidVisual || opts.providerConfigDir),
-    proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || opts.allowPaidModel || opts.providerConfigDir) });
-  const { decision } = await resolveOperationDeps();
-  opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
   const exec = opts.executor ?? new SpawnExecutor();
-  const { speech, closeSpeech } = attachResidentSpeech({
-    dir,
-    speech: opts.speech,
-    executorInjected: Boolean(opts.executor),
-  });
-  const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
-  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
-  const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
-  const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
+  const { page, projectPathJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
   const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
+  const setup = await createAssemblyProjectRuntime({
+    ...opts,
+    dir,
+    exec,
+    coordinator,
+    visualEnv,
+    visualDir,
+    readStored,
+    page,
+    projectPathJs,
+    pageCss,
+    pageJs,
+    templatesRoot,
+    port: () => boundPort,
+    allowPaidModel,
+    allowPaidVisual,
+  });
+  const { runtime, project, loadStored, transports, speech, closeSpeech } = setup;
   const templates=createTemplateRuntime(templatesRoot,{
     port:()=>boundPort,selectFn:opts.selectFn,exec,speech,
     send:transports.textSend,visualClient:transports.visualClient,
@@ -745,31 +818,7 @@ async function startAssemblyApp(opts: {
     resolveAnalysis:transports.resolveAnalysis,
     allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
-  const runtime = createAssemblyRuntime(dir, {
-    page: async () => withVisualNotice(withProjectDir(page, dir), keyProviderState(visualEnv, await loadStored()).notice),
-    pageCss,
-    pageJs,
-    projectPathJs,
-    templatesRoot,
-    decision,
-    exec,
-    port: () => boundPort,
-    selectFn: opts.selectFn,
-    allowPaidModel,
-    allowPaidVisual,
-    // O gate 428 só existe com providerConfigDir (produção), como a antiga
-    // barreira; sem ele (testes diretos do runtime) o dep fica ausente e o
-    // gate abre — mesma convenção do providerSetup.
-    ...(opts.providerConfigDir ? { isTextConfigured } : {}),
-    proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
-    describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
-    resolveOperationDeps,
-    fillerFetchImpl: opts.fetchImpl,
-    speech,
-    coordinator,
-  });
   const media = await configuredMediaRuntime(opts.env, opts.now);
-  const project = await runtime.ensureProject(opts.inputs);
   const newProjects: AppHandle[] = [];
 
   const server = createServer((req, res) => {
