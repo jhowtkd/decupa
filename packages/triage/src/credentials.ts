@@ -1,9 +1,10 @@
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, open, readFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { AssemblyTextProvider, Provider, StoredProvider, VisualProvider } from "./provider.ts";
-import { isRestrictedAcl, parseIcaclsOutput, parseWhoamiUserSid } from "./windows-acl.ts";
+import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid } from "./windows-acl.ts";
 
 export type Credentials = StoredProvider & {
   apiKey?: string;
@@ -33,9 +34,15 @@ const runWindowsCommand: WindowsCommandRunner = async (executable, args, options
   return { stdout: result.stdout.toString() };
 };
 
-async function readWindowsAcl(path: string, execute: WindowsCommandRunner): Promise<ReturnType<typeof parseIcaclsOutput>> {
-  const { stdout } = await execute("icacls.exe", [path], WINDOWS_COMMAND_OPTIONS);
-  return parseIcaclsOutput(stdout);
+export async function readWindowsAcl(path: string, execute: WindowsCommandRunner = runWindowsCommand): Promise<ReturnType<typeof parseIcaclsSaveOutput>> {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "decupa-icacls-"));
+  const savePath = join(temporaryDirectory, "acl.txt");
+  try {
+    await execute("icacls.exe", [path, "/save", savePath], WINDOWS_COMMAND_OPTIONS);
+    return parseIcaclsSaveOutput(await readFile(savePath));
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -48,23 +55,26 @@ export async function restrictWindowsCredentials(path: string, execute: WindowsC
   const grant = [path, "/inheritance:r", "/grant:r", `*${sid}:F`];
   await execute("icacls.exe", grant, WINDOWS_COMMAND_OPTIONS);
 
-  let entries = await readWindowsAcl(path, execute);
-  if (!isRestrictedAcl(entries, sid)) {
+  let acl = await readWindowsAcl(path, execute);
+  if (!isRestrictedSddlAcl(acl, sid)) {
     // /grant:r troca a concessão do SID informado, mas não remove outras
-    // entradas explícitas. Remova cada uma e aplique a concessão novamente.
+    // entradas explícitas. A SDDL fornece os SIDs sem depender do idioma.
     const removed = new Set<string>();
-    for (const entry of entries) {
-      const identity = entry.sid ? `*${entry.sid}` : entry.identity;
-      const operation = entry.allow ? "/remove:g" : "/remove:d";
+    const removals = acl.entries.map(entry => {
+      if (!entry.sid) throw new Error("ACE SDDL sem SID não pode ser restringida");
+      const operation = entry.type === "A" ? "/remove:g" : "/remove:d";
+      return { operation, identity: `*${entry.sid}` };
+    });
+    for (const { operation, identity } of removals) {
       const key = `${operation}\0${identity}`;
       if (removed.has(key)) continue;
       removed.add(key);
       await execute("icacls.exe", [path, operation, identity], WINDOWS_COMMAND_OPTIONS);
     }
     await execute("icacls.exe", grant, WINDOWS_COMMAND_OPTIONS);
-    entries = await readWindowsAcl(path, execute);
+    acl = await readWindowsAcl(path, execute);
   }
-  if (!isRestrictedAcl(entries, sid)) throw new Error("ACL restrita não confirmada");
+  if (!isRestrictedSddlAcl(acl, sid)) throw new Error("ACL restrita não confirmada");
 }
 
 

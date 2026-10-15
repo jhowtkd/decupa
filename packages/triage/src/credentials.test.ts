@@ -4,16 +4,11 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { credentialsPath, readCredentials, writeCredentials } from "./credentials.ts";
-import { isRestrictedAcl, parseIcaclsOutput, parseWhoamiUserSid } from "./windows-acl.ts";
+import { credentialsPath, readCredentials, readWindowsAcl, writeCredentials } from "./credentials.ts";
+import { isRestrictedSddlAcl, parseWhoamiUserSid } from "./windows-acl.ts";
 
 const run = promisify(execFile);
 const windowsCommandOptions = { shell: false, windowsHide: true, timeout: 30_000 } as const;
-
-async function windowsAcl(path: string): Promise<string> {
-  const { stdout } = await run("icacls.exe", [path], windowsCommandOptions);
-  return stdout;
-}
 
 async function expectPrivate(path: string): Promise<void> {
   if (process.platform !== "win32") {
@@ -22,7 +17,7 @@ async function expectPrivate(path: string): Promise<void> {
   }
   const { stdout } = await run("whoami.exe", ["/user", "/fo", "csv", "/nh"], windowsCommandOptions);
   const sid = parseWhoamiUserSid(stdout);
-  expect(isRestrictedAcl(parseIcaclsOutput(await windowsAcl(path)), sid)).toBe(true);
+  expect(isRestrictedSddlAcl(await readWindowsAcl(path), sid)).toBe(true);
 }
 
 describe("credentials", () => {

@@ -1,5 +1,0 @@
-C:\Users\José\Projetos\Meu Projeto\credenciais %.json
-CONTOSO\Ana Oliveira:(I)(F)
-BUILTIN\Administrators:(I)(OI)(CI)(F)
-S-1-5-21-111111111-222222222-333333333-1104:(F)
-Successfully processed 1 files; Failed processing 0 files

@@ -1,12 +1,21 @@
-const SID_RE = /^S-\d-\d+(?:-\d+)+$/i;
+import { Buffer } from "node:buffer";
 
-export type WindowsAclEntry = {
-  identity: string;
-  sid?: string;
+const SID_RE = /^S-\d-\d+(?:-\d+)+$/i;
+const FULL_CONTROL_MASK = 0x1f01ff;
+
+export type SddlAclEntry = {
+  type: "A" | "D";
   flags: string[];
+  rights: string;
+  sid?: string;
   inherited: boolean;
-  allow: boolean;
   fullControl: boolean;
+};
+
+export type ParsedSddlAcl = {
+  fileName: string;
+  protected: boolean;
+  entries: SddlAclEntry[];
 };
 
 function parseCsvLine(line: string): string[] {
@@ -43,41 +52,65 @@ export function parseWhoamiUserSid(output: string): string {
   return sid;
 }
 
-export function parseIcaclsOutput(output: string): WindowsAclEntry[] {
-  const entries: WindowsAclEntry[] = [];
-  let sawHeader = false;
-  for (const rawLine of output.replace(/^\uFEFF/, "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const match = /^(.+):((?:\([^)]*\))+)$/.exec(line);
-    if (!sawHeader) {
-      if (match) throw new Error("saída icacls inválida");
-      sawHeader = true;
-      continue;
-    }
-    if (!match) {
-      if (line.includes(":(")) throw new Error("saída icacls inválida");
-      continue;
-    }
-    const identity = match[1].trim().replace(/^\*/, "");
-    if (!identity) throw new Error("saída icacls inválida");
-    const flags = [...match[2].matchAll(/\(([^)]*)\)/g)].map(match => match[1].toUpperCase());
-    const sid = SID_RE.test(identity) ? identity.toUpperCase() : undefined;
-    entries.push({
-      identity,
-      ...(sid ? { sid } : {}),
-      flags,
-      inherited: flags.includes("I"),
-      allow: !flags.includes("DENY"),
-      fullControl: flags.includes("F"),
-    });
+function decodeIcaclsSave(output: Uint8Array): string {
+  if (output.byteLength < 2 || output[0] !== 0xff || output[1] !== 0xfe || output.byteLength % 2 !== 0) {
+    throw new Error("saída icacls /save não está em UTF-16LE");
   }
-  if (!sawHeader || entries.length === 0) throw new Error("ACL das credenciais não confirmada");
-  return entries;
+  const text = Buffer.from(output).toString("utf16le");
+  if (!text.startsWith("\uFEFF")) throw new Error("saída icacls /save sem BOM");
+  return text.slice(1);
 }
 
-export function isRestrictedAcl(entries: WindowsAclEntry[], sid: string): boolean {
+function parseAce(raw: string): SddlAclEntry {
+  const fields = raw.split(";");
+  if (fields.length !== 6 || (fields[0] !== "A" && fields[0] !== "D")) {
+    throw new Error("ACE SDDL não interpretável");
+  }
+  const [type, rawFlags, rights, objectGuid, inheritObjectGuid, rawSid] = fields;
+  if (objectGuid || inheritObjectGuid) throw new Error("ACE SDDL não interpretável");
+  const flags: string[] = rawFlags ? rawFlags.match(/.{2}/g) ?? [] : [];
+  if (flags.join("") !== rawFlags) throw new Error("ACE SDDL não interpretável");
+  const sid = SID_RE.test(rawSid) ? rawSid.toUpperCase() : undefined;
+  const normalizedRights = rights.toUpperCase();
+  const fullControl = normalizedRights === "FA" ||
+    (/^0X[0-9A-F]+$/.test(normalizedRights) && Number.parseInt(normalizedRights.slice(2), 16) === FULL_CONTROL_MASK);
+  return { type, flags, rights: normalizedRights, ...(sid ? { sid } : {}), inherited: flags.includes("ID"), fullControl };
+}
+
+export function parseIcaclsSaveOutput(output: Uint8Array): ParsedSddlAcl {
+  const lines = decodeIcaclsSave(output).split(/\r?\n/).filter(Boolean);
+  if (lines.length !== 2 || !lines[0] || !lines[1]) throw new Error("saída icacls /save incompleta");
+  const sddl = lines[1];
+  const daclStart = sddl.indexOf("D:");
+  if (daclStart < 0) throw new Error("DACL SDDL não confirmada");
+  const dacl = sddl.slice(daclStart + 2);
+  const firstAce = dacl.indexOf("(");
+  if (firstAce < 0) throw new Error("DACL SDDL sem ACE");
+  const controls = dacl.slice(0, firstAce);
+  const controlFlags = controls.match(/P|AI|AR|A/g) ?? [];
+  if (controlFlags.join("") !== controls) throw new Error("flags da DACL SDDL não interpretáveis");
+
+  const entries: SddlAclEntry[] = [];
+  let cursor = firstAce;
+  while (cursor < dacl.length && dacl[cursor] === "(") {
+    let depth = 0;
+    let end = cursor;
+    for (; end < dacl.length; end++) {
+      if (dacl[end] === "(") depth++;
+      else if (dacl[end] === ")" && --depth === 0) break;
+      else if (dacl[end] === ")" && depth < 0) throw new Error("ACE SDDL truncada");
+    }
+    if (end >= dacl.length || depth !== 0) throw new Error("ACE SDDL truncada");
+    entries.push(parseAce(dacl.slice(cursor + 1, end)));
+    cursor = end + 1;
+  }
+  if (cursor < dacl.length && !dacl.slice(cursor).startsWith("S:")) throw new Error("DACL SDDL não interpretável");
+  if (entries.length === 0) throw new Error("DACL SDDL sem ACE");
+  return { fileName: lines[0], protected: controls.includes("P"), entries };
+}
+
+export function isRestrictedSddlAcl(acl: ParsedSddlAcl, sid: string): boolean {
   const expectedSid = sid.toUpperCase();
-  return entries.length === 1 && entries[0].sid === expectedSid && entries[0].allow &&
-    entries[0].fullControl && !entries[0].inherited;
+  return acl.protected && acl.entries.length === 1 && acl.entries[0].type === "A" &&
+    acl.entries[0].sid === expectedSid && !acl.entries[0].inherited && acl.entries[0].fullControl;
 }
