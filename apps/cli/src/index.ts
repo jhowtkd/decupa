@@ -131,12 +131,17 @@ async function main(argv: string[]): Promise<number> {
   if (command === "models") {
     const [subcommand] = rest;
     if (subcommand !== "fetch") {
-      console.error("models precisa de fetch");
+      console.error("uso: decupa models fetch");
       return 1;
     }
     const { runModelsFetch } = await import("./models.ts");
-    await runModelsFetch();
-    return 0;
+    try {
+      await runModelsFetch();
+      return 0;
+    } catch (error) {
+      console.error(friendlyError(error));
+      return 1;
+    }
   }
 
   if (command === "bench") {
