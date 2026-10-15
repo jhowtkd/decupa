@@ -136,6 +136,44 @@ function systemName(): string {
   return process.env.USER?.trim() || process.env.USERNAME?.trim() || "usuário local";
 }
 
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
+async function acquireSecretLock(path: string): Promise<() => Promise<void>> {
+  const lockPath = `${path}.lock`;
+  for (let attempt = 0; attempt < 10_000; attempt += 1) {
+    const temporary = `${lockPath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      const handle = await open(temporary, "wx", 0o600);
+      try { await handle.writeFile(`${process.pid}\n`, "utf8"); }
+      finally { await handle.close(); }
+      try {
+        await link(temporary, lockPath);
+        return async () => { await unlink(lockPath).catch(() => {}); };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    } finally {
+      await unlink(temporary).catch(() => {});
+    }
+    const rawOwner = (await readFile(lockPath, "utf8").catch(() => "")).trim();
+    const owner = Number(rawOwner);
+    if (!rawOwner || !Number.isInteger(owner) || owner <= 0 || !processAlive(owner)) {
+      if (!rawOwner) {
+        // A publicação do lock é atômica; ausência significa que o candidato
+        // concorrente perdeu a disputa e o próximo loop pode tentar de novo.
+        continue;
+      }
+      await unlink(lockPath).catch(() => {});
+    } else {
+      await new Promise<void>(resolve => setTimeout(resolve, 1));
+    }
+  }
+  throw new Error("não foi possível reservar o segredo de sessão");
+}
+
 async function persistedSecret(configDir: string): Promise<Buffer> {
   const secretDir = join(configDir, ".decupa");
   const path = join(secretDir, SECRET_FILE);
@@ -149,12 +187,12 @@ async function persistedSecret(configDir: string): Promise<Buffer> {
     }
   } catch { /* primeira subida */ }
 
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  const release = await acquireSecretLock(path);
+  try {
     const current = (await readFile(path, "utf8").catch(() => "")).trim();
     if (current) return Buffer.from(current, "base64url");
     // Arquivo vazio é sobras de uma subida que caiu depois da criação. Só o
-    // arquivo temporário fica visível durante a escrita; `link` publica sem
-    // substituir a chave de outro processo que terminou primeiro.
+    // dono do lock pode removê-lo e publicar a nova chave.
     await unlink(path).catch(() => {});
     const generated = randomBytes(32).toString("base64url");
     const temporary = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
@@ -163,21 +201,14 @@ async function persistedSecret(configDir: string): Promise<Buffer> {
       try { await handle.writeFile(`${generated}\n`, "utf8"); }
       finally { await handle.close(); }
       await chmod(temporary, 0o600).catch(() => {});
-      try {
-        await link(temporary, path);
-        return Buffer.from(generated, "base64url");
-      } catch (error) {
-        // Dois processos podem publicar o mesmo servidor ao mesmo tempo:
-        // quem perdeu lê a chave que o vencedor acabou de publicar.
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const winner = (await readFile(path, "utf8")).trim();
-        if (winner) return Buffer.from(winner, "base64url");
-      }
+      await link(temporary, path);
+      return Buffer.from(generated, "base64url");
     } finally {
       await unlink(temporary).catch(() => {});
     }
+  } finally {
+    await release();
   }
-  throw new Error("segredo de sessão persistido vazio");
 }
 
 async function readLoginBody(req: IncomingMessage): Promise<{ senha?: unknown; nome?: unknown }> {
