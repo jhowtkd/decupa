@@ -75,6 +75,10 @@ const USAGE = `decupa — bancada de medição
       omitir --input reabre o projeto já gravado na pasta.
       Pagos ficam desligados; as flags só autorizam o cliente, não disparam chamada.
 
+  decupa serve --projects-root <pasta> [--port 7788] [--bind 127.0.0.1]
+           [--allowed-hosts <hostes>] [--allowed-origins <origens>] [--trust-proxy]
+      Sobe o servidor na Raiz de Projetos, sem abrir um Projeto nem o navegador.
+
   decupa mcp
       Servidor MCP stdio para o agente da pessoa (doctor, start, status, stop,
       configure_provider). Não imprime nada além de JSON-RPC.
@@ -494,6 +498,34 @@ async function main(argv: string[]): Promise<number> {
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     if (!appEnv.DECUPA_NO_BROWSER && isLoopbackBind(app.address)) openBrowser(url);
+    await serveUntilShutdown(app);
+    return 0;
+  }
+
+  if (command === "serve") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        "projects-root": { type: "string" },
+        port: { type: "string" },
+        bind: { type: "string" },
+        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
+      },
+    });
+    if (!values["projects-root"]) {
+      console.error("serve precisa de --projects-root");
+      return 1;
+    }
+    const { startApp } = await import("./app/server.ts");
+    const app = await startApp({
+      providerConfigDir: homedir(),
+      projectsRoot: resolve(values["projects-root"]),
+      port: values.port ? Number(values.port) : undefined,
+      env: envWithNetworkFlags(values),
+    });
+    const host = formatHostForUrl(app.address);
+    console.log(`servidor na Raiz de Projetos em http://${host}:${app.port}/`);
+    console.log("Ctrl+C para encerrar");
     await serveUntilShutdown(app);
     return 0;
   }
