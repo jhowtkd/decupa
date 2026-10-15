@@ -37,11 +37,11 @@
 - Consumes: `createAssemblyRuntime`, `AssemblyDeps`, opções atuais de `startApp`, `guardLocalRequest` e rotas globais existentes.
 - Produces: modo `startApp({ projectsRoot, projectId?, ... })`, registro que resolve `id` para pasta filha e roteia requests de Projeto com o prefixo removido.
 
-- [ ] **Step 1: Write the failing HTTP tests** para dois Projetos Montagem na mesma Raiz, criação lazy observável pela página, 404 de inexistente/sem manifesto e rejeição de ids maliciosos sem tocar fora da Raiz.
-- [ ] **Step 2: Run the focused test** com `pnpm -s vitest run apps/cli/src/app/project-root-http.test.ts` e confirmar falha por ausência do modo `projectsRoot`.
-- [ ] **Step 3: Implement the registry and root server seam** com validação antes de qualquer `stat/read`, resolução por filho direto, criação de runtime na primeira requisição, executor/coordinator compartilhados e fechamento dos runtimes criados.
-- [ ] **Step 4: Run the focused test** e confirmar PASS.
-- [ ] **Step 5: Commit** `feat: atende montagens por id na raiz de projetos`.
+- [x] **Step 1: Write the failing HTTP tests** para dois Projetos Montagem na mesma Raiz, criação lazy observável pela página, 404 de inexistente/sem manifesto e rejeição de ids maliciosos sem tocar fora da Raiz.
+- [x] **Step 2: Run the focused test** com `pnpm -s vitest run apps/cli/src/app/project-root-http.test.ts` e confirmar falha por ausência do modo `projectsRoot`.
+- [x] **Step 3: Implement the registry and root server seam** com validação antes de qualquer `stat/read`, resolução por filho direto, criação de runtime na primeira requisição, executor/coordinator compartilhados e fechamento dos runtimes criados.
+- [x] **Step 4: Run the focused test** e confirmar PASS.
+- [x] **Step 5: Commit** `feat: atende montagens por id na raiz de projetos`.
 
 ### Task 2: Prefixo completo para páginas e módulos do navegador
 
@@ -60,12 +60,12 @@
 - Consumes: prefixo `/projects/<id>` fornecido pelo registro.
 - Produces: HTML com meta correta, `projectUrl(path, prefix)` para respostas e todos os assets/imports de Montagem resolvidos sob o prefixo.
 
-- [ ] **Step 1: Extend the HTTP test** para buscar a página, extrair o prefixo/meta, buscar CSS, `page.js`, `project-path.js` e `editor/rail.js` através de `/projects/<id>/...`; verificar URL de download emitida com prefixo.
-- [ ] **Step 2: Run the focused test** e confirmar falha nos caminhos absolutos/rotas sem prefixo.
-- [ ] **Step 3: Implement prefix propagation** no runtime e no servidor, preservando âncoras e deixando links globais (`/settings`, `/templates`) na raiz.
-- [ ] **Step 4: Add/update the static guard** para rejeitar novos `/project`, `/media`, `/editor/` e `/jobs` absolutos fora do helper, sem falsos positivos para rotas globais.
-- [ ] **Step 5: Run focused HTTP/static tests** e confirmar PASS.
-- [ ] **Step 6: Commit** `fix: serve montagens com prefixo de projeto`.
+- [x] **Step 1: Extend the HTTP test** para buscar a página, extrair o prefixo/meta e buscar CSS, `page.js`, `project-path.js` e `editor/rail.js` através de `/projects/<id>/...`; a montagem já monta URLs de mídia pelo helper no navegador.
+- [x] **Step 2: Run the focused test** e confirmar falha nos caminhos absolutos/rotas sem prefixo.
+- [x] **Step 3: Implement prefix propagation** no runtime e no servidor, preservando âncoras e deixando links globais (`/settings`, `/templates`) na raiz.
+- [x] **Step 4: Add/update the static guard** para rejeitar novos `/project`, `/media`, `/editor/` e `/jobs` absolutos fora do helper, sem falsos positivos para rotas globais.
+- [x] **Step 5: Run focused HTTP/static tests** e confirmar PASS.
+- [x] **Step 6: Commit** `fix: serve montagens com prefixo de projeto`.
 
 ### Task 3: CLI, MCP e abertura do navegador
 
@@ -80,19 +80,19 @@
 - Consumes: `startApp` em modo `projectsRoot` e id derivado do basename do `--project`.
 - Produces: `decupa montar --projects-root ...` abrindo `/projects/<id>/`; MCP continua tentando a próxima porta livre e devolvendo URL prefixada.
 
-- [ ] **Step 1: Write failing tests** para `browserCommand` aceitar URL com `/projects/<id>/`, CLI/MCP devolverem URL prefixada e `--projects-root` sobrescrever a pasta-mãe.
-- [ ] **Step 2: Run focused tests** e confirmar falha.
-- [ ] **Step 3: Implement CLI/MCP option plumbing** sem adicionar `decupa serve` nem modificar Limpeza; manter erro amigável de `EADDRINUSE` na CLI e fallback existente no MCP.
-- [ ] **Step 4: Run focused tests** e confirmar PASS.
-- [ ] **Step 5: Commit** `feat: abre montagem na url do projeto`.
+- [x] **Step 1: Write failing tests** para `browserCommand` aceitar URL com `/projects/<id>/`, CLI/MCP devolverem URL prefixada e `--projects-root` sobrescrever a pasta-mãe.
+- [x] **Step 2: Run focused tests** e confirmar falha.
+- [x] **Step 3: Implement CLI/MCP option plumbing** sem adicionar `decupa serve` nem modificar Limpeza; manter erro amigável de `EADDRINUSE` na CLI e fallback existente no MCP.
+- [x] **Step 4: Run focused tests** e confirmar PASS.
+- [x] **Step 5: Commit** `feat: abre montagem na url do projeto`.
 
 ### Task 4: Regressão e verificação final
 
 **Files:**
 - Modify: somente testes que precisarem atualizar expectativas deliberadamente alteradas pelo ticket.
 
-- [ ] **Step 1: Run** `pnpm -s typecheck`.
-- [ ] **Step 2: Run** `pnpm -s vitest run apps/cli packages`.
-- [ ] **Step 3: Run** testes HTTP focados isoladamente se houver falha oscilante e distinguir regressão da mudança.
-- [ ] **Step 4: Inspect** `git diff`, confirmar que nenhum arquivo fora do worktree foi alterado e que o escopo excluído permanece intacto.
-- [ ] **Step 5: Commit** qualquer ajuste final pequeno em português, sempre incluindo `Co-Authored-By: ChatGPT gpt-5.6-luna <noreply@openai.com>`.
+- [x] **Step 1: Run** `pnpm -s typecheck`.
+- [x] **Step 2: Run** `pnpm -s vitest run apps/cli packages`.
+- [x] **Step 3: Run** testes HTTP focados isoladamente se houver falha oscilante e distinguir regressão da mudança.
+- [x] **Step 4: Inspect** `git diff`, confirmar que nenhum arquivo fora do worktree foi alterado e que o escopo excluído permanece intacto.
+- [x] **Step 5: Commit** qualquer ajuste final pequeno em português, sempre incluindo `Co-Authored-By: ChatGPT gpt-5.6-luna <noreply@openai.com>`.

@@ -48,7 +48,7 @@ it("serve duas Montagens da mesma Raiz sob ids distintos", async () => {
 
 it("recusa ids inválidos ou que não são Projetos sem sair da Raiz", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-root-security-"));
-  await mkdir(join(root, "arquivo")).then(() => undefined);
+  await mkdir(join(root, "arquivo"));
   const valid = join(root, "valido");
   await mkdir(valid);
   await createProject(valid, blankProject("valid-project"));

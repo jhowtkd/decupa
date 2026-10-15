@@ -306,7 +306,6 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           pageCss,
           pageJs,
           projectPathJs,
-          projectPrefix: prefix,
           templatesRoot,
           decision,
           exec,
@@ -323,13 +322,12 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           coordinator,
         });
         const inputs = id === opts.projectId ? opts.inputs : undefined;
-        const project = await runtime.ensureProject(inputs);
+        await runtime.ensureProject(inputs);
         return {
           handle: runtime.handle,
           close: async () => {
             await Promise.all([runtime.close(), speech.closeSpeech()]);
           },
-          project,
         };
       } catch (error) {
         await speech.closeSpeech();
@@ -752,7 +750,6 @@ async function startAssemblyApp(opts: {
     pageCss,
     pageJs,
     projectPathJs,
-    projectPrefix: "",
     templatesRoot,
     decision,
     exec,
