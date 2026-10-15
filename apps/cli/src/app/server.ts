@@ -29,6 +29,7 @@ import { claimWorkDir, cleanupWorkDir } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
+import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -78,6 +79,18 @@ function parseRequestUrl(raw: string | undefined): URL | null {
   } catch {
     return null;
   }
+}
+
+async function configuredMediaRuntime(
+  env: Record<string, string | undefined> | undefined,
+  now?: () => number,
+): Promise<MediaRuntime | undefined> {
+  // Sem raiz configurada, o app legado continua sem criar diretório implícito
+  // nem gravar Mídias na máquina de quem usa apenas a Limpeza local.
+  const source = env ?? process.env;
+  const root = source.DECUPA_MEDIA_ROOT;
+  if (!root) return undefined;
+  return createMediaRuntime({ root, env: source, now });
 }
 
 /** Os corpos da limpeza são um keep-list e um `kind`: 1 MiB sobra. Sem teto,
@@ -175,6 +188,8 @@ export async function startApp(opts: {
   /** Worker residente injetável; em produção o serviço cria um `worker.py --serve`. */
   speech?: IngestSpeech;
   env?: Record<string, string | undefined>;
+  /** Relógio do acervo; nos testes permite envelhecer envios sem esperar. */
+  now?: () => number;
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
@@ -229,6 +244,7 @@ async function startCleanupApp(opts: {
   workDir?: string;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
+  now?: () => number;
   speech?: IngestSpeech;
   triageFn?: (opts: {
     indexPath: string;
@@ -387,6 +403,7 @@ async function startCleanupApp(opts: {
     page: async () => withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
   });
+  const media = await configuredMediaRuntime(opts.env, opts.now);
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
@@ -397,6 +414,7 @@ async function startCleanupApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
+      if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => {
         cleanup.cancelNotes(); return cleanup.refreshNotes();
       } })) return;
@@ -437,9 +455,10 @@ async function startCleanupApp(opts: {
       // síncrono roda, e é nele que os filhos recebem o sinal.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimeClosed = runtime.close();
+      const mediaClosed = media?.close() ?? Promise.resolve();
       const speechClosed = closeSpeech();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, speechClosed, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, speechClosed, closed]);
     },
     killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
   };
@@ -470,6 +489,7 @@ async function startAssemblyApp(opts: {
   allowPaidVisual?: boolean;
   speech?: IngestSpeech;
   env?: Record<string, string | undefined>;
+  now?: () => number;
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
@@ -539,6 +559,7 @@ async function startAssemblyApp(opts: {
     fillerFetchImpl: opts.fetchImpl,
     speech,
   });
+  const media = await configuredMediaRuntime(opts.env, opts.now);
   const project = await runtime.ensureProject(opts.inputs);
   const newProjects: AppHandle[] = [];
 
@@ -550,6 +571,7 @@ async function startAssemblyApp(opts: {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
+      if (media && await media.handle(req, res)) return;
       if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (url.pathname === "/project/new" && req.method === "POST") {
@@ -594,10 +616,11 @@ async function startAssemblyApp(opts: {
       // síncrono roda, e é nele que os filhos e o worker de fala morrem.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimeClosed = runtime.close();
+      const mediaClosed = media?.close() ?? Promise.resolve();
       const speechClosed = closeSpeech();
       const nested = Promise.all(newProjects.map(app => app.close()));
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, speechClosed, nested, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, speechClosed, nested, closed]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
