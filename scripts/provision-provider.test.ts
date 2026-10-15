@@ -9,9 +9,9 @@ import { afterEach, expect, it } from "vitest";
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
-// Três processos Node com type-stripping: no runner Windows de 2 núcleos, com a
-// suíte inteira em paralelo, leva de 40 a 60 s. O limite padrão (60 s) era apertado.
-it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", { timeout: 180_000 }, async () => {
+// Três processos Node com type-stripping e um PowerShell para a ACL: no runner
+// Windows leva de 40 a 60 s, às vezes mais. Cabe o limite de 120 s do PowerShell.
+it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", { timeout: 300_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "provision-keys-")); dirs.push(dir);
   const script = fileURLToPath(new URL("./provision-provider.ts", import.meta.url));
   // O processo filho não herda segredos, nem o diretório real do usuário.
