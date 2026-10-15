@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -61,6 +61,55 @@ async function projectKind(root: string, id: string): Promise<"assembly" | "clea
   if (manifest?.isFile()) return "assembly";
   const source = await lstat(join(dir, "source.json")).catch(() => null);
   return source?.isFile() ? "cleanup" : null;
+}
+
+export type ProjectRootEntry = {
+  id: string;
+  displayName: string;
+  flow: "montagem" | "limpeza";
+};
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+async function readRecord(path: string): Promise<Record<string, unknown> | null> {
+  try { return record(JSON.parse(await readFile(path, "utf8")) as unknown); }
+  catch { return null; }
+}
+
+async function projectRootEntry(root: string, id: string): Promise<ProjectRootEntry | null> {
+  const flow = await projectKind(root, id);
+  if (!flow) return null;
+  const dir = join(root, id);
+  if (flow === "assembly") {
+    const project = await readRecord(join(dir, "project.json"));
+    const assembly = record(project?.assembly);
+    return {
+      id,
+      displayName: typeof assembly?.name === "string" && assembly.name.trim() ? assembly.name : id,
+      flow: "montagem",
+    };
+  }
+  const source = await readRecord(join(dir, "source.json"));
+  return {
+    id,
+    displayName: typeof source?.displayName === "string" && source.displayName.trim() ? source.displayName : id,
+    flow: "limpeza",
+  };
+}
+
+/** Lista somente Projetos diretos da Raiz; arquivos auxiliares ficam fora. */
+export async function listProjectRootEntries(root: string): Promise<ProjectRootEntry[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const projects = await Promise.all(entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => projectRootEntry(root, entry.name)));
+  return projects
+    .filter((project): project is ProjectRootEntry => project !== null)
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /** Registro dos runtimes de Projetos que vivem numa mesma Raiz. */

@@ -33,7 +33,7 @@ import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
 import { createHeavyCoordinator } from "./heavy-work.ts";
 import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 import { projectUrl } from "./project-url.ts";
-import { createProjectRuntimeRegistry, PROJECT_ID_PATTERN } from "./project-root.ts";
+import { createProjectRuntimeRegistry, listProjectRootEntries, PROJECT_ID_PATTERN } from "./project-root.ts";
 import { createAuthRuntime, requestIdentity } from "./auth.ts";
 import { requireEditReservation } from "./edit-reservation.ts";
 
@@ -79,6 +79,24 @@ function sendJson(res: ServerResponse, body: unknown, status = 200): void {
     "cache-control": "no-store",
   });
   res.end(payload);
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]!);
+}
+
+function sendProjectRootPage(res: ServerResponse, projects: Awaited<ReturnType<typeof listProjectRootEntries>>): void {
+  const items = projects.map(project => `<li><a href="/projects/${encodeURIComponent(project.id)}/">${escapeHtml(project.displayName)}</a></li>`).join("");
+  const content = items ? `<ul>${items}</ul>` : "<p>Nenhum Projeto na Raiz.</p>";
+  const page = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Projetos</title></head><body><main><h1>Projetos</h1>${content}</main></body></html>`;
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(page),
+    "cache-control": "no-store",
+  });
+  res.end(page);
 }
 
 function projectSlug(name: string): string {
@@ -406,6 +424,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
+      // `new URL` normaliza `%2e%2e` para `/`; não deixe um pedido de outro
+      // caminho ganhar a página da Raiz por causa dessa normalização.
+      const isRootRequest = url.pathname === "/" && (req.url ?? "/").split("?", 1)[0] === "/";
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
@@ -454,9 +475,13 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         sendJson(res, { id: created.id, url: created.url }, 201);
         return;
       }
-      if (url.pathname === "/" && opts.projectId) {
+      if (isRootRequest && opts.projectId) {
         res.writeHead(307, { location: `/projects/${encodeURIComponent(opts.projectId)}/`, "cache-control": "no-store" });
         res.end();
+        return;
+      }
+      if (isRootRequest && req.method === "GET") {
+        sendProjectRootPage(res, await listProjectRootEntries(projectsRoot));
         return;
       }
       if (await registry.handle(req, res)) return;

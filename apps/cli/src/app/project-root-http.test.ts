@@ -1,4 +1,5 @@
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -8,6 +9,18 @@ import { startApp } from "./server.ts";
 import { sourceManifestPath } from "./session.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
+
+function rawStatus(base: string, path: string): Promise<number> {
+  const url = new URL(base);
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({ hostname: url.hostname, port: url.port, path }, response => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
 
 it("serve duas Montagens da mesma Raiz sob ids distintos", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-root-http-"));
@@ -57,7 +70,9 @@ it("recusa ids inválidos ou que não são Projetos sem sair da Raiz", async () 
   const base = `http://127.0.0.1:${app.port}`;
   try {
     for (const id of ["ausente", "%2e%2e", "a%2fb", "a%2Fb", "%2e%2e%2fvalido", "%2Fetc", "%5Cetc", "%00", ".", ".."] ) {
-      expect((await fetch(`${base}/projects/${id}/`)).status, id).toBe(404);
+      // fetch normaliza `%2e%2e` para `/`; a requisição HTTP crua conserva o
+      // caminho que o roteador precisa recusar.
+      expect(await rawStatus(base, `/projects/${id}/`), id).toBe(404);
     }
     expect((await fetch(`${base}/projects/arquivo/`)).status).toBe(404);
     expect((await fetch(`${base}/projects/valido//`)).status).toBe(404);
@@ -134,6 +149,59 @@ it("deriva o Projeto inicial de projectDir e redireciona a raiz do site", async 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("/projects/inicial/");
     expect((await fetch(`${base}/projects/inicial/`)).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("lista os Projetos da Raiz com links codificados quando não há Projeto inicial", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-index-http-"));
+  const assembly = join(root, "Meu Projeto");
+  await mkdir(assembly);
+  await createProject(assembly, blankProject("assembly-project", "Montagem da equipe"));
+  const input = join(root, "aula.mp4");
+  const cleanup = join(root, ".decupa-aula.mp4");
+  await writeFile(input, "media fake", "utf8");
+  const source = await stat(input);
+  await mkdir(cleanup);
+  await writeFile(sourceManifestPath(cleanup), JSON.stringify({
+    path: input, size: source.size, mtimeMs: source.mtimeMs, displayName: "Aula da equipe",
+  }), "utf8");
+
+  const app = await startApp({ projectsRoot: root, port: 0, autoStart: false, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const response = await fetch(`${base}/`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/text\/html/);
+    const html = await response.text();
+    expect(html).toContain("Montagem da equipe");
+    expect(html).toContain("Aula da equipe");
+    expect(html).toContain(`/projects/${encodeURIComponent("Meu Projeto")}/`);
+    expect(html).toContain(`/projects/${encodeURIComponent(".decupa-aula.mp4")}/`);
+    expect(html).not.toContain("<style");
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("mantém /healthz aberto e sem dados da Raiz mesmo com login ligado", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-health-http-"));
+  const project = join(root, "segredo do Projeto");
+  await mkdir(project);
+  await createProject(project, blankProject("project-id", "Nome privado"));
+  const app = await startApp({
+    projectsRoot: root, providerConfigDir: root, port: 0, executor,
+    env: { DECUPA_AUTH_PASSWORD: "senha privada", DECUPA_SESSION_SECRET: "segredo" },
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${app.port}/healthz`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({ ok: true });
+    expect(body).not.toContain("senha privada");
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
