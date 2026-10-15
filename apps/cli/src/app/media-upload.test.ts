@@ -284,6 +284,89 @@ it("guarda a resposta final para uma retomada depois de resposta perdida", async
   expect(await state.json()).toMatchObject({ mediaId: sha256, estado: "ready" });
 });
 
+it("mantém a recuperação quando o registro durável falha antes da publicação", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-completion-failure-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  const base = await boot(root);
+  const upload = await (await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "registro-falho.mp4", tamanho: input.byteLength }),
+  })).json() as { id: string; tamanhoParte: number };
+  for (let offset = 0; offset < input.byteLength;) {
+    const end = Math.min(input.byteLength, offset + upload.tamanhoParte) - 1;
+    const final = end + 1 === input.byteLength;
+    if (final) await chmod(join(root, ".completed"), 0o555);
+    const response = await fetch(`${base}/api/uploads/${upload.id}`, {
+      method: "PATCH", headers: { "Content-Range": range(offset, end, input.byteLength) },
+      body: input.subarray(offset, end + 1),
+    });
+    if (final) {
+      await chmod(join(root, ".completed"), 0o755);
+      expect(response.status).toBe(500);
+    } else {
+      expect(response.status).toBe(200);
+    }
+    offset = end + 1;
+  }
+  const recovered = await fetch(`${base}/api/uploads/${upload.id}`);
+  expect(recovered.status).toBe(200);
+  expect(await recovered.json()).toMatchObject({ mediaId: sha256, estado: "ready" });
+});
+
+it("faz o GET esperar a publicação final dentro do lock do envio", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-get-publish-race-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  let entered!: () => void;
+  let release!: () => void;
+  const beforeRemove = new Promise<void>((resolve) => { entered = resolve; });
+  const allowRemove = new Promise<void>((resolve) => { release = resolve; });
+  const runtime = await createMediaRuntime({
+    root, env: { DECUPA_UPLOAD_PART_BYTES: "100000" },
+    beforeRemoveUpload: async () => { entered(); await allowRemove; },
+  });
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => { void runtime.handle(req, res); });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const upload = await (await fetch(`${base}/api/uploads`, {
+      method: "POST", body: JSON.stringify({ nome: "corrida.mp4", tamanho: input.byteLength }),
+    })).json() as { id: string };
+    const patch = fetch(`${base}/api/uploads/${upload.id}`, {
+      method: "PATCH", headers: { "Content-Range": range(0, input.byteLength - 1, input.byteLength) }, body: input,
+    });
+    await beforeRemove;
+    const get = fetch(`${base}/api/uploads/${upload.id}`);
+    release();
+    expect(await (await get).json()).toMatchObject({ mediaId: sha256, estado: "ready" });
+    expect((await patch).status).toBe(201);
+  } finally {
+    await runtime.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+it("repara um metadado JSON legível mas inválido com publicação atômica", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-corrupt-metadata-"));
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const sha256 = createHash("sha256").update(input).digest("hex");
+  await mkdir(join(root, "pool"), { recursive: true });
+  await writeFile(join(root, "pool", sha256), input);
+  await writeFile(join(root, "pool", `${sha256}.json`), JSON.stringify({ id: sha256 }));
+  const base = await boot(root);
+  const response = await fetch(`${base}/api/uploads`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "metadado-reparado.mp4", tamanho: input.byteLength, sha256 }),
+  });
+  expect(response.status).toBe(200);
+  const listed = await (await fetch(`${base}/api/media`)).json() as { id: string; nome: string }[];
+  expect(listed).toEqual([expect.objectContaining({ id: sha256, nome: "metadado-reparado.mp4" })]);
+});
+
 it("reusa o runtime de Mídias ao abrir um Projeto novo e reconstitui hash alterado em disco", async () => {
   const root = await mkdtemp(join(tmpdir(), "media-shared-runtime-"));
   const projectDir = join(root, "project");

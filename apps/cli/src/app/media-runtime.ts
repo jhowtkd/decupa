@@ -40,6 +40,17 @@ export interface MediaMetadata {
 
 export type MediaRecord = MediaMetadata & { path: string };
 
+function validMetadata(value: unknown, id: string): value is MediaMetadata {
+  if (typeof value !== "object" || value === null) return false;
+  const metadata = value as Partial<MediaMetadata>;
+  const tamanho = metadata.tamanho;
+  return metadata.id === id
+    && typeof metadata.nome === "string"
+    && typeof tamanho === "number" && Number.isSafeInteger(tamanho) && tamanho >= 0
+    && typeof metadata.duracao === "number" && Number.isFinite(metadata.duracao) && metadata.duracao >= 0
+    && typeof metadata.criadoEm === "number" && Number.isFinite(metadata.criadoEm);
+}
+
 class UploadHttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -143,6 +154,8 @@ export interface MediaRuntimeOptions {
   now?: () => number;
   log?: (message: string, error: unknown) => void;
   cleanupIntervalMs?: number;
+  /** Gancho dos testes para segurar a janela entre publicar e limpar. */
+  beforeRemoveUpload?: () => Promise<void>;
 }
 
 /** FileHandle.write pode aceitar menos bytes do que o buffer pede. */
@@ -265,6 +278,9 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         await rm(join(completed, `${id}.json`), { force: true });
         return null;
       }
+      // O registro pode ter sido escrito imediatamente antes do rename. Até o
+      // arquivo aparecer, ele ainda precisa ser recuperado pelo parcial.
+      if (!await stat(join(pool, value.mediaId)).then(() => true, () => false)) return null;
       return value;
     } catch {
       return null;
@@ -283,6 +299,18 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     const hash = await hashPartial(path);
     hashes.set(id, { hash, bytes: state.recebido });
     return hash;
+  }
+
+  async function writeMetadata(mediaId: string, metadata: MediaMetadata): Promise<void> {
+    const path = join(pool, `${mediaId}.json`);
+    const partial = `${path}.${randomUUID()}.partial`;
+    try {
+      await writeFile(partial, `${JSON.stringify(metadata)}\n`, "utf8");
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
   }
 
   async function publish(id: string, state: UploadState, hash: Hash): Promise<{ mediaId: string; deduplicado: boolean }> {
@@ -313,38 +341,29 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         id: mediaId, nome: state.nome, tamanho: state.tamanhoTotal,
         duracao: info.durationMs / 1000, criadoEm: now(),
       };
-      const metadataPath = join(pool, `${mediaId}.json`);
-      const writeMetadata = async (): Promise<void> => {
-        const metadataPartial = `${metadataPath}.${randomUUID()}.partial`;
-        try {
-          await writeFile(metadataPartial, `${JSON.stringify(metadata)}\n`, "utf8");
-          await rename(metadataPartial, metadataPath);
-        } catch (error) {
-          await rm(metadataPartial, { force: true });
-          throw error;
-        }
-      };
       if (exists) {
         try {
-          const current = JSON.parse(await readFile(metadataPath, "utf8")) as MediaMetadata;
-          if (current.id !== mediaId) throw new Error("metadado inválido");
+          const current = JSON.parse(await readFile(join(pool, `${mediaId}.json`), "utf8"));
+          if (!validMetadata(current, mediaId)) throw new Error("metadado inválido");
         } catch {
           // A publicação do arquivo é a fonte deduplicada; o metadado pode ser
           // reconstruído com a informação da tentativa que chegou agora.
-          await writeMetadata();
+          await writeMetadata(mediaId, metadata);
         }
-        await removeUpload(id);
         const result = { mediaId, deduplicado: true };
         await rememberCompletion(id, result);
+        await opts.beforeRemoveUpload?.();
+        await removeUpload(id);
         return result;
       }
       // O arquivo só fica visível no acervo depois que o metadado também está
       // pronto; assim uma falha não deixa uma Mídia deduplicável sem registro.
-      await writeMetadata();
-      await rename(source, destination);
-      await removeUpload(id);
+      await writeMetadata(mediaId, metadata);
       const result = { mediaId, deduplicado: false };
       await rememberCompletion(id, result);
+      await rename(source, destination);
+      await opts.beforeRemoveUpload?.();
+      await removeUpload(id);
       return result;
     });
   }
@@ -500,14 +519,15 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           const sha256 = optionalSha(body.sha256);
           if (sha256 && await stat(join(pool, sha256)).then(() => true, () => false)) {
             try {
-              await readFile(join(pool, `${sha256}.json`), "utf8");
+              const current = JSON.parse(await readFile(join(pool, `${sha256}.json`), "utf8"));
+              if (!validMetadata(current, sha256)) throw new Error("metadado inválido");
             } catch {
               const info = await probe(join(pool, sha256));
               const metadata: MediaMetadata = {
                 id: sha256, nome, tamanho: (await stat(join(pool, sha256))).size,
                 duracao: info.durationMs / 1000, criadoEm: now(),
               };
-              await writeFile(join(pool, `${sha256}.json`), `${JSON.stringify(metadata)}\n`, "utf8");
+              await writeMetadata(sha256, metadata);
             }
             sendJson(res, { mediaId: sha256, deduplicado: true });
             return true;
@@ -524,15 +544,15 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         if (parts[0] === "api" && parts[1] === "uploads" && parts[2] && uploadId(parts[2])) {
           const id = parts[2];
           if (req.method === "GET") {
-            const completedUpload = await readCompletion(id);
-            if (completedUpload) {
-              sendJson(res, {
-                mediaId: completedUpload.mediaId, deduplicado: completedUpload.deduplicado,
-                estado: completedUpload.deduplicado ? "deduped" : "ready" satisfies UploadClientState,
-              });
-              return true;
-            }
             await withUploadLock(id, async () => {
+              const completedUpload = await readCompletion(id);
+              if (completedUpload) {
+                sendJson(res, {
+                  mediaId: completedUpload.mediaId, deduplicado: completedUpload.deduplicado,
+                  estado: completedUpload.deduplicado ? "deduped" : "ready" satisfies UploadClientState,
+                });
+                return;
+              }
               const state = await readState(id);
               if (state.recebido === state.tamanhoTotal) {
                 const result = await recoverCompleted(id, state);
