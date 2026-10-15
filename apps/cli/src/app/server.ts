@@ -279,6 +279,7 @@ async function startCleanupApp(opts: {
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
   const page = await readFile(join(HERE, "page.html"), "utf8");
+  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
 
   const workDir = opts.workDir ?? cleanupWorkDir(input);
   // Antes do coordenador e de qualquer leitura: ele mora dentro da pasta, e
@@ -757,8 +758,11 @@ async function startCleanupApp(opts: {
 export function withProjectDir(page: string, dir: string): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
-  return page.replace('<meta name="decupa-project-dir" content="">',
-    () => `<meta name="decupa-project-dir" content="${escaped}">`);
+  return page
+    .replace('<meta name="decupa-project-dir" content="">',
+      () => `<meta name="decupa-project-dir" content="${escaped}">`)
+    .replace('<meta name="decupa-project-prefix" content="">',
+      '<meta name="decupa-project-prefix" content="">');
 }
 
 async function startAssemblyApp(opts: {
@@ -810,6 +814,7 @@ async function startAssemblyApp(opts: {
     executorInjected: Boolean(opts.executor),
   });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
   const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
   let boundPort = opts.port ?? 7788;
@@ -876,6 +881,11 @@ async function startAssemblyApp(opts: {
       if (url.pathname === "/page.css") {
         res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
         res.end(pageCss);
+        return;
+      }
+      if (url.pathname === "/project-path.js") {
+        res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+        res.end(projectPathJs);
         return;
       }
       if (url.pathname === "/page.js") {

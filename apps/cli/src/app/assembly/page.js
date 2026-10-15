@@ -1,15 +1,16 @@
-import { mountTemplates } from "/editor/templates.js";
+import { mountTemplates } from "./editor/templates.js";
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { createState } from "/editor/state.js";
-import { createApi, createProjectPoller } from "/editor/api.js";
-import { mountRail, preparationView } from "/editor/rail.js";
-import { mountContexto, mountStage } from "/editor/contexto.js";
-import { mountTexto } from "/editor/texto.js";
-import { mountSequencia } from "/editor/sequencia.js";
-import { idleStatus, stepperState, versionPill } from "/editor/topbar.js";
-import { ICON } from "/editor/icons.js";
+import { createState } from "./editor/state.js";
+import { createApi, createProjectPoller } from "./editor/api.js";
+import { mountRail, preparationView } from "./editor/rail.js";
+import { mountContexto, mountStage } from "./editor/contexto.js";
+import { mountTexto } from "./editor/texto.js";
+import { mountSequencia } from "./editor/sequencia.js";
+import { idleStatus, stepperState, versionPill } from "./editor/topbar.js";
+import { ICON } from "./editor/icons.js";
+import { projectPath } from "../project-path.js";
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
@@ -196,7 +197,7 @@ const player = {
   playOriginal(sourceId, start, end) {
     const el = this.el();
     if (!el) return;
-    el.src = "/project/media/" + encodeURIComponent(sourceId) + "?view=playback"
+    el.src = projectPath("project/media/" + encodeURIComponent(sourceId) + "?view=playback")
       + (start != null && end != null ? "#t=" + start.toFixed(2) + "," + end.toFixed(2) : "");
     el.removeAttribute("data-rev");
     el.dataset.source = sourceId;
@@ -211,7 +212,7 @@ const player = {
     el.removeAttribute("data-source");
     if (state.get("view") !== "montagem") state.set("view", "montagem");
     if (p && p.previewRevision != null) {
-      const src = "/project/output/" + p.previewRevision + "/mp4";
+      const src = projectPath("project/output/" + p.previewRevision + "/mp4");
       if (el.getAttribute("data-rev") !== String(p.previewRevision)) {
         el.src = src;
         el.setAttribute("data-rev", String(p.previewRevision));

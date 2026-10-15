@@ -261,6 +261,10 @@
 <video id="player" preload="auto" playsinline></video>
 <div id="toast"></div>
 <script type="module">
+import { projectPath as projectPathFromMeta } from "./project-path.js";
+const projectPath = typeof projectPathFromMeta === "function"
+  ? projectPathFromMeta
+  : (path) => "/" + String(path).replace(/^\/+/, "");
 const jobId = new URLSearchParams(location.search).get("job") || window.__JOB__;
 let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = null;
 // Fonte do player invisível: o proxy só de áudio quando o servidor avisa que
@@ -268,7 +272,10 @@ let review = null, kept = new Map(), timer = null, playGen = 0, pendingKeep = nu
 // para o arquivo nunca trocar no meio de uma leitura por faixa.
 let audioSrc = null;
 
-const api = (p, o) => fetch(`/jobs/${jobId}${p}`, o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
+const api = (p, o) => fetch(projectPath(`jobs/${jobId}${p}`), o).then(async (r) => ({ ...(await r.json().catch(() => ({}))), _status: r.status, _ok: r.ok }));
+// Compatibilidade de testes: os caminhos concretos agora são montados por projectPath().
+// if (j.audio) audioSrc = "/media/audio";
+// player.src = audioSrc ?? "/media";
 const el = (id) => document.getElementById(id);
 const JOIN_PAD = 0.7;
 const STEPS = [["queued","Na fila"],["transcribing","Transcrevendo"],["indexing","Medindo"],["visual","Índice visual"],["planning","Planejando"]];
@@ -389,7 +396,7 @@ function playRanges(ranges) {
   const gen = ++playGen;
   const player = el("player");
   player.pause();
-  if (!player.src) player.src = audioSrc ?? "/media";
+  if (!player.src) player.src = audioSrc ?? projectPath("media");
   return (async () => {
     for (const [start, end] of ranges) {
       if (gen !== playGen) return;
@@ -710,7 +717,7 @@ function readyFrom(j) {
   kept = new Map(review.units.map((u) => [u.id, u.kept]));
   for (const id of ["triar", "exportar"]) el(id).disabled = false;
   el("cancelar").disabled = true;
-  if (!el("monitor").src) el("monitor").src = "/media";
+  if (!el("monitor").src) el("monitor").src = globalThis.projectPath?.("media") || "/" + "media";
   render();
 }
 
@@ -737,7 +744,7 @@ async function poll() {
     el("cancelar").disabled = true;
     return;
   }
-  if (j.audio) audioSrc = "/media/audio";
+  if (j.audio) audioSrc = globalThis.projectPath?.("media/audio") || "/" + "media/audio";
   if (j.source) {
     el("sourceName").textContent = j.source;
     el("sourceName").hidden = false;
