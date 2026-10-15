@@ -71,3 +71,24 @@ it.skipIf(process.platform === "win32")("compartilha um worker e o recria depois
   expect(closeClient).toHaveBeenCalledTimes(3);
 });
 
+
+it("killChildren encerra o runtime: transcrição depois disso é recusada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "speech-runtime-kill-"));
+  dirs.push(dir);
+  const runtime = createServerSpeechRuntime({
+    executorInjected: false,
+    env: {},
+    syncExecutor: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+  });
+  const speech = runtime.attach(join(dir, "alpha")).speech!;
+  const request = { taskId: "t", wav: "audio.wav", language: "pt" };
+  await speech.worker(request);
+  expect(createClient).toHaveBeenCalledTimes(1);
+
+  runtime.killChildren();
+  expect(closeClient).toHaveBeenCalledTimes(1);
+  // O `exit` não espera; o que vier depois não pode reabrir nem usar o cliente morto.
+  await expect(speech.worker(request)).rejects.toThrow(/encerrou/);
+  expect(createClient).toHaveBeenCalledTimes(1);
+  await runtime.close();
+});
