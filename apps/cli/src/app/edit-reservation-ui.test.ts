@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createReservationLifecycle, paintReadOnlyControls } from "./edit-reservation-ui.js";
+import { createReservationLifecycle, mountEditReservationUI, paintReadOnlyControls } from "./edit-reservation-ui.js";
 
 function control({ disabled = false, dialog = false }: { disabled?: boolean; dialog?: boolean } = {}) {
   return {
@@ -48,4 +48,64 @@ it("reativa a Reserva depois de pagehide/pageShow persistido", async () => {
   expect(acquired).toBe(2);
   expect(timers.size).toBe(1);
   expect(heartbeats).toBe(0);
+});
+
+it("bloqueia a edição enquanto reacquire após troca tardia do id da aba", async () => {
+  const globals = globalThis as unknown as {
+    document?: unknown;
+    window?: unknown;
+    MutationObserver?: unknown;
+    fetch?: unknown;
+  };
+  const previous = {
+    document: globals.document,
+    window: globals.window,
+    MutationObserver: globals.MutationObserver,
+    fetch: globals.fetch,
+  };
+  let acquired = 0;
+  let readOnly = false;
+  let tabChanged: (() => void) | undefined;
+  const body = { classList: { toggle() {} } };
+  globals.document = {
+    body,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getElementById: () => null,
+  };
+  globals.window = { addEventListener() {} };
+  globals.MutationObserver = class {
+    observe() {}
+  };
+  globals.fetch = async () => {
+    acquired += 1;
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  try {
+    mountEditReservationUI({
+      onReadOnly: (owner) => { readOnly = Boolean(owner); },
+      tabIdentity: {
+        ready: () => Promise.resolve(),
+        onChange: (listener) => { tabChanged = listener; },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(acquired).toBe(1);
+
+    tabChanged?.();
+    expect(readOnly).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(acquired).toBe(2);
+    expect(readOnly).toBe(false);
+  } finally {
+    if (previous.document === undefined) delete globals.document;
+    else globals.document = previous.document;
+    if (previous.window === undefined) delete globals.window;
+    else globals.window = previous.window;
+    if (previous.MutationObserver === undefined) delete globals.MutationObserver;
+    else globals.MutationObserver = previous.MutationObserver;
+    if (previous.fetch === undefined) delete globals.fetch;
+    else globals.fetch = previous.fetch;
+  }
 });
