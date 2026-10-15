@@ -1,6 +1,6 @@
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
-import { createFileCoordinator } from "@decupa/coordinator";
+import type { FileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { createTracer } from "@decupa/trace";
 import { createResidentSpeechClient } from "@decupa/transcript";
@@ -29,6 +29,7 @@ import { claimWorkDir, cleanupWorkDir } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
+import { createHeavyCoordinator } from "./heavy-work.ts";
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -123,11 +124,16 @@ export function attachResidentSpeech(opts: {
   dir: string;
   speech?: IngestSpeech;
   executorInjected: boolean;
+  coordinator?: FileCoordinator;
 }): { speech?: IngestSpeech; closeSpeech: () => Promise<void> } {
-  if (opts.speech) return { speech: opts.speech, closeSpeech: async () => undefined };
+  if (opts.speech) {
+    if (!opts.coordinator || opts.speech.coordinator) {
+      return { speech: opts.speech, closeSpeech: async () => undefined };
+    }
+    return { speech: { ...opts.speech, coordinator: opts.coordinator }, closeSpeech: async () => undefined };
+  }
   if (opts.executorInjected) return { closeSpeech: async () => undefined };
   const client = createResidentSpeechClient();
-  const coordinator = createFileCoordinator(join(opts.dir, ".decupa", "coordinator"), { limit: 1 });
   // O worker sobe com `uv run --no-sync`: sem o venv da fala sincronizado a
   // montagem (que não passa pelo preflight da limpeza) quebraria só na
   // primeira transcrição, com um ModuleNotFoundError cru. Confere uma vez;
@@ -139,7 +145,10 @@ export function attachResidentSpeech(opts: {
     return synced;
   };
   return {
-    speech: { worker: async (req) => { await ensureSynced(); return client.transcribe(req); }, coordinator },
+    speech: {
+      worker: async (req) => { await ensureSynced(); return client.transcribe(req); },
+      ...(opts.coordinator ? { coordinator: opts.coordinator } : {}),
+    },
     closeSpeech: () => client.close(),
   };
 }
@@ -150,6 +159,8 @@ export async function startApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  /** Diretório compartilhado do coordinator; injetado nos testes. */
+  coordinatorDir?: string;
   templatesRoot?: string;
   provider?: string;
   executor?: Executor;
@@ -222,6 +233,7 @@ async function startCleanupApp(opts: {
   input: string;
   port?: number;
   providerConfigDir?: string;
+  coordinatorDir?: string;
   templatesRoot?: string;
   provider?: string;
   executor?: Executor;
@@ -245,6 +257,9 @@ async function startCleanupApp(opts: {
   const exec = opts.executor ?? new SpawnExecutor();
   const provider = opts.provider;
   const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
   resolveAssemblyTextProvider(visualEnv); // Campo inválido falha na subida, antes de qualquer envio.
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
@@ -262,6 +277,7 @@ async function startCleanupApp(opts: {
     dir: workDir,
     speech: opts.speech,
     executorInjected: Boolean(opts.executor),
+    coordinator,
   });
   const ingestAbort = new AbortController();
 
@@ -293,7 +309,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
-        { requireSpeech: true },
+        { requireSpeech: true, coordinator },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -386,6 +402,7 @@ async function startCleanupApp(opts: {
     audioReady: () => audioReady, loadStored,
     page: async () => withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
+    coordinator,
   });
 
   const server = createServer((req, res) => {
@@ -461,6 +478,7 @@ async function startAssemblyApp(opts: {
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
+  coordinatorDir?: string;
   templatesRoot?: string;
   executor?: Executor;
   selectFn?: AssemblyDeps["selectFn"];
@@ -478,6 +496,9 @@ async function startAssemblyApp(opts: {
   }
   const dir = resolve(opts.projectDir);
   const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
@@ -503,6 +524,7 @@ async function startAssemblyApp(opts: {
     dir,
     speech: opts.speech,
     executorInjected: Boolean(opts.executor),
+    coordinator,
   });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
@@ -538,6 +560,7 @@ async function startAssemblyApp(opts: {
     resolveOperationDeps,
     fillerFetchImpl: opts.fetchImpl,
     speech,
+    coordinator,
   });
   const project = await runtime.ensureProject(opts.inputs);
   const newProjects: AppHandle[] = [];

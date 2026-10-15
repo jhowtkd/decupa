@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { hashFile } from "@decupa/media";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
+import type { FileCoordinator } from "@decupa/coordinator";
 import { analyzeSource } from "./analysis.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource } from "./model.ts";
@@ -39,6 +40,8 @@ export type PreparationDeps = FillerObserveDeps & {
   proposeSend?: ModelTransport["send"];
   describeClient?: ModelTransport;
   speech?: IngestSpeech;
+  coordinator?: FileCoordinator;
+  onStage?: (stage: "queued" | "transcribing" | "indexing" | "visual") => void;
 };
 
 export type PreparationControl = {
@@ -140,8 +143,16 @@ async function renderPreview(
   project: Project,
   exec: Executor,
   signal?: AbortSignal,
+  coordinator?: FileCoordinator,
+  status?: { onQueued?: () => void; onStarted?: () => void },
 ): Promise<PreviewArtifact> {
-  const reference = await renderAssembly(project.assembly, dir, exec, { detectHardware: true, signal });
+  const reference = await renderAssembly(project.assembly, dir, exec, {
+    detectHardware: true,
+    signal,
+    coordinator,
+    onQueued: status?.onQueued,
+    onStarted: status?.onStarted,
+  });
   return {
     revision: project.revision,
     assemblySha256: createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),
@@ -389,6 +400,8 @@ export async function runPreparation(
             const analysis = await analyzeSource(source, dir, deps.exec, {
               signal,
               speech: deps.speech,
+              heavyCoordinator: deps.coordinator,
+              onStage: deps.onStage,
             });
             checkAlive();
             await save((p) => ({
@@ -431,6 +444,9 @@ export async function runPreparation(
               client: visualClient,
               exec: deps.exec,
               isCurrent: control.isCurrent,
+              coordinator: deps.coordinator,
+              onQueued: () => deps.onStage?.("queued"),
+              onStarted: () => deps.onStage?.("visual"),
             });
             checkAlive();
             const coverage = visualCoverage(spans, source.durationSeconds);
@@ -567,7 +583,10 @@ export async function runPreparation(
       await atStage("preview");
       checkAlive();
       try {
-        const artifact = await renderPreview(dir, current, deps.exec, signal);
+        const artifact = await renderPreview(dir, current, deps.exec, signal, deps.coordinator, {
+          onQueued: () => deps.onStage?.("queued"),
+          onStarted: () => deps.onStage?.("transcribing"),
+        });
         checkAlive();
         await save((p) => recordPreview(p, artifact));
       } catch (err) {

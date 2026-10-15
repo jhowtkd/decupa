@@ -8,7 +8,7 @@ import { singleFlight } from "./sequencia.js";
 // original do page.js monolítico, mantendo o comentário de comportamento.
 const ROLES = { speech: "Fala", support: "Apoio", both: "Fala + apoio" };
 const ROLE_META = { speech: "fala", support: "apoio", both: "fala + apoio" };
-const STAGE_LABEL = { pending: "Na fila", running: "Em andamento", ready: "Concluída", error: "Falhou", cancelled: "Cancelada" };
+const STAGE_LABEL = { pending: "Aguardando na fila", running: "Em andamento", ready: "Concluída", error: "Falhou", cancelled: "Cancelada" };
 const PREP_STAGES = { media: "Verificar arquivos", audio: "Transcrever áudio", visual: "Analisar imagens", proposal: "Montar cenas", preview: "Renderizar prévia" };
 
 export function sourceProgress(project, source) {
@@ -34,7 +34,7 @@ export function sourceProgress(project, source) {
     // Áudio já salvo: o rótulo é visível, não só o tooltip. A etapa visual
     // pode continuar; a transcrição não espera por ela.
     if (stages.audio === "ready") return { tone: "pending", label: "Transcrição disponível", detail: "" };
-    return { tone: "pending", label: "Na fila", detail: "" };
+    return { tone: "pending", label: "Aguardando na fila", detail: "" };
   }
   // Sem entrada em sources (a prévia manda sources vazio), cancelar segue sendo
   // o estado terminal: o erro antigo da análise fica só como diagnóstico.

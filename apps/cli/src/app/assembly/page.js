@@ -23,6 +23,7 @@ let previewInflight = false;
 let previewPending = false;
 
 const OP_LABEL = {
+  queued: "Aguardando na fila",
   analyzing: "Analisando mídia",
   preparing: "Preparando montagem",
   rendering: "Renderizando prévia",

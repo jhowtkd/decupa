@@ -16,6 +16,7 @@ import { runCondensePrep } from "../condense/run.ts";
 import { enginePython, killTreeNow, terminateTree, terminateTreeAndWait } from "../runtime.ts";
 import { parseSourceTimecode, sourceMediaStartSeconds } from "./assembly/timecode.ts";
 import type { FillerSpan } from "../condense/fillers.ts";
+import { heavyTaskId, runHeavy } from "./heavy-work.ts";
 
 export interface ExecResult {
   code: number;
@@ -65,6 +66,8 @@ export interface IngestOptions {
    * deixa desligado, porque fonte de apoio sem fala é válida lá.
    */
   requireSpeech?: boolean;
+  /** Fila global do servidor; ausente nos testes unitários do pipeline. */
+  coordinator?: FileCoordinator;
 }
 
 /** Fim da chave da transcrição da limpeza (`requireSpeech`); a montagem não leva. */
@@ -405,7 +408,7 @@ export async function assertSidecarSynced(
 export async function runIngest(
   job: PipelineJob,
   exec: Executor,
-  onStage: (stage: "transcribing" | "indexing" | "visual") => void,
+  onStage: (stage: "queued" | "transcribing" | "indexing" | "visual") => void,
   onLine?: (line: string) => void,
   tracer?: Tracer,
   speech?: IngestSpeech,
@@ -414,6 +417,7 @@ export async function runIngest(
 ): Promise<{ warning?: string }> {
   const wantsVisual = opts.visual ?? true;
   const activeTracer = tracer ?? createTracer();
+  const coordinator = opts.coordinator ?? speech?.coordinator;
   // Os dois cancelam: o do job (cancelar na tela) e o de quem chamou.
   const abort = eitherSignal(signal, job.signal);
   throwIfAborted(abort);
@@ -421,58 +425,70 @@ export async function runIngest(
   const hasTranscript = await access(transcriptPath(job)).then(() => true, () => false);
   if (!hasTranscript) {
     await activeTracer.run("transcribing", async () => {
-      onStage("transcribing");
-      if (speech?.worker) {
-        const worker = speech.worker;
-        await runCondensePrep(
-          { input: job.videoPath, out: transcriptPath(job) },
-          {
-            transcribe: async (o) => transcribe({
-              ...o,
-              signal: abort,
-              onProgress: onLine,
-              // Sempre pelo conteúdo: pelo caminho, o coordenador devolveria a
-              // transcrição antiga de um arquivo trocado no mesmo lugar. Com
-              // `requireSpeech`, o sufixo separa a chave da limpeza: um vazio
-              // já registrado como concluído (versão anterior) venceria a
-              // exigência de fala e o worker nunca seria chamado de novo.
-              taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language)
-                + (opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""),
-            }, {
-              // O vazio estoura dentro do build: o coordenador não marca a
-              // tarefa como concluída, e a próxima abertura transcreve de novo.
-              worker: opts.requireSpeech
-                ? async (req) => {
-                  const out = await worker(req);
-                  if (out.words.length === 0) throw new Error(NO_SPEECH_MESSAGE);
-                  return out;
-                }
-                : worker,
-              coordinator: speech.coordinator,
-              extract: speech.extract,
-            }),
-            detectSilence: speech.detectSilence ?? detectSilence,
-          },
-        );
-        return;
-      }
-      // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
-      // processo a menos na árvore para o cancelamento alcançar. Alternativa
-      // de processo único: `decupa condense-prep` → transcribe.py.
-      await must(exec, {
-        command: process.execPath,
-        args: [
-          "--experimental-strip-types",
-          join(REPO_ROOT, "apps", "cli", "src", "index.ts"),
-          "condense-prep",
-          "--input", job.videoPath,
-          "--out", transcriptPath(job),
-        ],
-        env: envFor(job),
-        cwd: REPO_ROOT,
-        signal: abort,
-        onLine,
-      }, "a transcrição");
+      const source = await stat(job.videoPath).catch(() => ({ size: 0, mtimeMs: 0 }));
+      // O resultado desta etapa também grava `transcript.json`; o diretório
+      // entra na chave para um cache concluído em outro Projeto não pular essa
+      // gravação local. A fila continua global, mesmo quando a Mídia é a mesma.
+      const id = heavyTaskId(
+        "transcribing",
+        `${job.workDir}:${source.size}:${source.mtimeMs}${opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""}`,
+      );
+      await runHeavy(coordinator, {
+        id, stage: "transcribing", signal: abort,
+        onQueued: () => onStage("queued"), onStarted: () => onStage("transcribing"),
+        build: async () => {
+          if (speech?.worker) {
+            const worker = speech.worker;
+            await runCondensePrep(
+              { input: job.videoPath, out: transcriptPath(job) },
+              {
+                transcribe: async (o) => transcribe({
+                  ...o,
+                  signal: abort,
+                  onProgress: onLine,
+                  // Sempre pelo conteúdo: pelo caminho, o coordenador devolveria a
+                  // transcrição antiga de um arquivo trocado no mesmo lugar. Com
+                  // `requireSpeech`, o sufixo separa a chave da limpeza: um vazio
+                  // já registrado como concluído (versão anterior) venceria a
+                  // exigência de fala e o worker nunca seria chamado de novo.
+                  taskId: transcriptTaskId(o.input, await stat(o.input), o.model, o.language)
+                    + (opts.requireSpeech ? TASK_ID_SPEECH_SUFFIX : ""),
+                }, {
+                  // O coordinator externo já guarda a etapa inteira; aninhar o
+                  // mesmo coordinator aqui travaria a fila consigo mesma.
+                  worker: opts.requireSpeech
+                    ? async (req) => {
+                      const out = await worker(req);
+                      if (out.words.length === 0) throw new Error(NO_SPEECH_MESSAGE);
+                      return out;
+                    }
+                    : worker,
+                  extract: speech.extract,
+                }),
+                detectSilence: speech.detectSilence ?? detectSilence,
+              },
+            );
+            return;
+          }
+          // Pelo próprio Node, sem subprocesso pnpm: um binário a menos no PATH, um
+          // processo a menos na árvore para o cancelamento alcançar. Alternativa
+          // de processo único: `decupa condense-prep` → transcribe.py.
+          await must(exec, {
+            command: process.execPath,
+            args: [
+              "--experimental-strip-types",
+              join(REPO_ROOT, "apps", "cli", "src", "index.ts"),
+              "condense-prep",
+              "--input", job.videoPath,
+              "--out", transcriptPath(job),
+            ],
+            env: envFor(job),
+            cwd: REPO_ROOT,
+            signal: abort,
+            onLine,
+          }, "a transcrição");
+        },
+      });
     });
   }
   throwIfAborted(abort);
@@ -509,9 +525,17 @@ export async function runIngest(
   if (!wantsVisual) return {};
 
   const warning = await activeTracer.run("visual", async () => {
-    onStage("visual");
-    if (emptySpeech) return undefined;
-    return runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin", abort);
+    if (emptySpeech) {
+      onStage("visual");
+      return undefined;
+    }
+    const source = await stat(job.videoPath).catch(() => ({ size: 0, mtimeMs: 0 }));
+    return runHeavy(coordinator, {
+      id: heavyTaskId("visual", `${job.workDir}:${source.size}:${source.mtimeMs}`),
+      stage: "visual", signal: abort,
+      onQueued: () => onStage("queued"), onStarted: () => onStage("visual"),
+      build: () => runVisualIndex(job, exec, onLine, opts.hwDecode ?? process.platform === "darwin", abort),
+    });
   });
   return warning ? { warning } : {};
 }
@@ -882,12 +906,25 @@ export async function probeSourceStartSeconds(job: PipelineJob, exec: Executor):
   return sourceMediaStartSeconds({ fps: rate, timecode: tc }) ?? 0;
 }
 
-export async function runRender(job: PipelineJob, outPath: string, exec: Executor): Promise<string> {
-  await must(exec, {
-    command: "python3",
-    args: [CONDENSE, "render", job.videoPath, outPath],
-    env: envFor(job),
+export async function runRender(
+  job: PipelineJob,
+  outPath: string,
+  exec: Executor,
+  coordinator?: FileCoordinator,
+  status?: { onQueued?: () => void; onStarted?: () => void },
+): Promise<string> {
+  await runHeavy(coordinator, {
+    id: heavyTaskId("rendering", `${job.workDir}:${outPath}`),
+    stage: "rendering",
     signal: job.signal,
-  }, "o render");
+    onQueued: status?.onQueued,
+    onStarted: status?.onStarted,
+    build: () => must(exec, {
+      command: "python3",
+      args: [CONDENSE, "render", job.videoPath, outPath],
+      env: envFor(job),
+      signal: job.signal,
+    }, "o render"),
+  });
   return outPath;
 }

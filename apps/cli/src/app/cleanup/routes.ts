@@ -18,6 +18,7 @@ import { parseSourceTimecode } from "../assembly/timecode.ts";
 import { buildSrt, type SrtWord } from "../srt.ts";
 import { analysisClientOptions, type Credentials } from "@decupa/triage";
 import { JobStore, type Job } from "../jobs.ts";
+import type { FileCoordinator } from "@decupa/coordinator";
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -80,6 +81,7 @@ export interface CleanupRuntimeDeps {
   triageReply: () => Promise<Record<string, unknown>>;
   triageRequestKey: () => Promise<string>;
   otioClipsForPlan: (clips: { start: number; end: number }[], fps: number, durationSeconds: number) => Assembly["tracks"][number]["clips"];
+  coordinator?: FileCoordinator;
 }
 
 export interface CleanupRuntime {
@@ -271,7 +273,10 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
         }
         if (kind === "mp4") {
           const out = join(workDir, "corte.mp4");
-          await runRender(pipelineJob, out, exec);
+          await runRender(pipelineJob, out, exec, opts.coordinator, {
+            onQueued: () => store.setStage(job.id, "queued"),
+            onStarted: () => store.setStage(job.id, "planning"),
+          });
           sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/mp4` });
           return true;
         }

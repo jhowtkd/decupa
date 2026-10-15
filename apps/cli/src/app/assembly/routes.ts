@@ -46,6 +46,7 @@ import type { Assembly, Project, Source } from "./types.ts";
 import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
+import type { FileCoordinator } from "@decupa/coordinator";
 
 const alignActive = new Set<string>();
 function alignKey(dir: string, correctionId: string): string {
@@ -92,6 +93,7 @@ export type AssemblyDeps = FillerObserveDeps & {
    * aberto; a produção (server.ts) sempre fornece.
    */
   isTextConfigured?: () => Promise<boolean>;
+  coordinator?: FileCoordinator;
 };
 
 /**
@@ -544,12 +546,25 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         progress: `${done + 1}/${sourceIds.length}`,
       };
       try {
-        const analysis = await analyzeSource(source, dir, deps.exec, { signal, speech: deps.speech });
+        const analysis = await analyzeSource(source, dir, deps.exec, {
+          signal,
+          speech: deps.speech,
+          heavyCoordinator: deps.coordinator,
+          onStage: (stage) => {
+            if (!stillCurrent(gen)) return;
+            operation = stage === "queued"
+              ? { stage: "queued", sourceId }
+              : { stage: "analyzing", sourceId, progress: `${done + 1}/${sourceIds.length}` };
+          },
+        });
         if (wantVisual && source.role !== "speech" && visualClient && source.hasVideo && !signal.aborted) {
           try {
             analysis.visual = await describeSource(source, dir, signal, {
               client: visualClient,
               exec: deps.exec,
+              coordinator: deps.coordinator,
+              onQueued: () => { if (stillCurrent(gen)) operation = { stage: "queued", sourceId }; },
+              onStarted: () => { if (stillCurrent(gen)) operation = { stage: "analyzing", sourceId }; },
             });
             analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
           } catch (err) {
@@ -1194,7 +1209,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           dir,
           baseRevision,
           { mode, request, modelOptIn, visualOptIn },
-          { ...deps },
+          {
+            ...deps,
+            onStage: (stage) => {
+              if (!stillCurrent(gen)) return;
+              operation = stage === "queued" ? { stage: "queued" } : { stage: "preparing" };
+            },
+          },
           { signal, isCurrent: () => stillCurrent(gen) },
         ).finally(() => {
           releaseHold();
@@ -1236,9 +1257,26 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
             operation={stage:"analyzing",sourceId:source.id};
             if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
-            const analysis=await analyzeSource(source,dir,deps.exec,{signal,speech:deps.speech});
+            const analysis=await analyzeSource(source,dir,deps.exec,{
+              signal,
+              speech:deps.speech,
+              heavyCoordinator:deps.coordinator,
+              onStage: (stage) => {
+                if (!stillCurrent(gen)) return;
+                operation = stage === "queued" ? { stage: "queued", sourceId: source.id } : { stage: "analyzing", sourceId: source.id };
+              },
+            });
             if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
-            if(source.hasVideo){analysis.visual=await describeSource(source,dir,signal,{exec:deps.exec,client:visualClient!});analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);}
+            if(source.hasVideo){
+              analysis.visual=await describeSource(source,dir,signal,{
+                exec:deps.exec,
+                client:visualClient!,
+                coordinator: deps.coordinator,
+                onQueued: () => { if (stillCurrent(gen)) operation = { stage: "queued", sourceId: source.id }; },
+                onStarted: () => { if (stillCurrent(gen)) operation = { stage: "analyzing", sourceId: source.id }; },
+              });
+              analysis.visualCoverage=visualCoverage(analysis.visual,source.durationSeconds);
+            }
             project=await mutate(expected,p=>({...p,analyses:mergeAnalyses(p.analyses,[analysis])}));
           }
           const proposal=await proposeScenes(project,String(body.request??"Aplicar a receita editorial ao material disponível."),signal,{send:operationDeps.proposeSend!,decision:operationDeps.decision,template});
@@ -1475,6 +1513,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!assembly) throw new HttpError(404, "amostra indisponível: a proposta não tem trecho com pausa");
         const rendered = await renderAssembly(assembly, join(dir, "rhythm-samples"), deps.exec, {
           profile: "software",
+          coordinator: deps.coordinator,
         });
         await serveMedia(req, res, rendered, "video/mp4");
         return true;
@@ -1631,7 +1670,13 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           const project = await mutate(baseRevision, async (project) => {
             let reference: string;
             try {
-              reference = await renderAssembly(project.assembly, dir, deps.exec, { detectHardware: true, signal });
+              reference = await renderAssembly(project.assembly, dir, deps.exec, {
+                detectHardware: true,
+                signal,
+                coordinator: deps.coordinator,
+                onQueued: () => { if (stillCurrent(gen)) operation = { stage: "queued" }; },
+                onStarted: () => { if (stillCurrent(gen)) operation = { stage: "rendering" }; },
+              });
             } catch (err) {
               // Sem isso a operação ficava presa em "rendering" e travava
               // a atualização automática mesmo após o erro (R2).

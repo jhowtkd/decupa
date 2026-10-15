@@ -20,6 +20,9 @@ export type AnalyzeOptions = {
   now?: () => number;
   ttlMs?: number;
   coordinator?: FileCoordinator;
+  /** Coordinator global só para a transcrição; a análise continua por Projeto. */
+  heavyCoordinator?: FileCoordinator;
+  onStage?: (stage: "queued" | "transcribing" | "indexing" | "visual") => void;
   speech?: IngestSpeech;
 };
 
@@ -282,7 +285,7 @@ async function buildAnalysis(
     await runIngest(
       { id: source.id, videoPath: source.path, workDir },
       exec,
-      () => undefined,
+      opts.onStage ?? (() => undefined),
       undefined,
       undefined,
       opts.speech,
@@ -290,7 +293,7 @@ async function buildAnalysis(
       // A análise da montagem é fala: unidades, palavras e cobertura. O índice
       // MediaPipe não entra em nada que ela grave (`visual` sai sempre vazio),
       // então o proxy a 4 fps e o sidecar só atrasariam a transcrição na tela.
-      { visual: false },
+      { visual: false, coordinator: opts.heavyCoordinator },
     );
     if (opts?.signal?.aborted) throw new CancelledError();
   } catch (err) {
