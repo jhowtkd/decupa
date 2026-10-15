@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { originAllowed } from "./origin.ts";
+import { hostAllowed, originAllowed } from "./origin.ts";
 
 describe("originAllowed", () => {
   it("aceita a própria página, nas duas formas de escrever o host", () => {
@@ -36,5 +36,41 @@ describe("hostAllowed", () => {
     expect(hostAllowed("127.0.0.1:9", 7788)).toBe(false);
     expect(hostAllowed("attacker.example:7788", 7788)).toBe(false);
     expect(hostAllowed(undefined, 7788)).toBe(false);
+  });
+
+  it("aceita host configurado sem porta na forma omitida, padrão e da porta do servidor", () => {
+    const config = { allowedHosts: "decupa.studio" };
+    expect(hostAllowed("decupa.studio", 7788, config)).toBe(true);
+    expect(hostAllowed("decupa.studio:80", 7788, config)).toBe(true);
+    expect(hostAllowed("decupa.studio:443", 7788, config)).toBe(true);
+    expect(hostAllowed("decupa.studio:7788", 7788, config)).toBe(true);
+    expect(hostAllowed("decupa.studio:7789", 7788, config)).toBe(false);
+  });
+
+  it("exige a porta exata quando ela foi declarada e trata IPv6", () => {
+    expect(hostAllowed("decupa.studio:8443", 7788, { allowedHosts: "decupa.studio:8443" })).toBe(true);
+    expect(hostAllowed("decupa.studio", 7788, { allowedHosts: "decupa.studio:8443" })).toBe(false);
+    expect(hostAllowed("[::1]", 7788, { allowedHosts: "[::1]" })).toBe(true);
+    expect(hostAllowed("[::1]:80", 7788, { allowedHosts: "[::1]" })).toBe(true);
+    expect(hostAllowed("[::1]:7788", 7788, { allowedHosts: "[::1]" })).toBe(true);
+    expect(hostAllowed("[::1]:7789", 7788, { allowedHosts: "[::1]" })).toBe(false);
+  });
+
+  it("deriva origens HTTP e HTTPS dos hosts e respeita o proxy", () => {
+    const config = { allowedHosts: "decupa.studio", trustProxy: true };
+    expect(originAllowed("https://decupa.studio", 7788, config, { headers: { "x-forwarded-proto": "https" } })).toBe(true);
+    expect(originAllowed("http://decupa.studio", 7788, config, { headers: { "x-forwarded-proto": "https" } })).toBe(false);
+    expect(originAllowed("http://decupa.studio", 7788, { allowedHosts: "decupa.studio" }, { headers: { "x-forwarded-proto": "https" } })).toBe(true);
+  });
+
+  it("não consulta process.env quando a configuração é injetada", () => {
+    const before = process.env.DECUPA_ALLOWED_HOSTS;
+    process.env.DECUPA_ALLOWED_HOSTS = "vazamento.example";
+    try {
+      expect(hostAllowed("outro.example", 7788, { allowedHosts: undefined })).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.DECUPA_ALLOWED_HOSTS;
+      else process.env.DECUPA_ALLOWED_HOSTS = before;
+    }
   });
 });
