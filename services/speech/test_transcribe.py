@@ -49,8 +49,11 @@ class PrepareModelsTest(unittest.TestCase):
             whisper.load_align_model.assert_called_once_with(language_code="pt", device="cpu")
             whisper.load_audio.assert_not_called()
             whisper.load_align_model.side_effect = RuntimeError("download interrompido")
-            with self.assertRaisesRegex(RuntimeError, "download interrompido"):
-                module.main()
+            error = io.StringIO()
+            with patch.object(sys, "stderr", error):
+                self.assertEqual(module.main(), 1)
+            self.assertEqual(error.getvalue().splitlines()[-1], "falha ao preparar modelos de fala: download interrompido")
+            self.assertNotIn("Traceback", error.getvalue())
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { browserCommand, enginePython } from "./runtime.ts";
+import { formatHostForUrl } from "./http/origin.ts";
 import { SpawnExecutor } from "./app/pipeline.ts";
 
 it("usa Python explícito e preserva caminhos com espaços", () => {
@@ -39,6 +40,15 @@ it("Windows aceita a URL prefixada de uma Montagem", () => {
   expect(browserCommand("http://127.0.0.1:7788/projects/alpha/", "win32")).toEqual({
     command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", "http://127.0.0.1:7788/projects/alpha/"],
   });
+});
+
+it.each(["::1", "127.0.0.2", "localhost"] as const)("abre URL gerada para bind loopback %s", bindHost => {
+  const url = `http://${formatHostForUrl(bindHost)}:7788/projects/alpha/`;
+  expect(browserCommand(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
+});
+
+it("não abre URL loopback com credenciais embutidas", () => {
+  expect(browserCommand("http://atacante@127.0.0.1:7788", "linux")).toBeNull();
 });
 
 // Lifecycle de verdade, não mock de plataforma: o mesmo teste vale no macOS e

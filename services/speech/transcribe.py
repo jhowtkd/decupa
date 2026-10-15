@@ -56,13 +56,17 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.prepare_models:
-        print("Preparando Whisper e detector de fala (CPU)...", file=sys.stderr, flush=True)
-        asr = load_asr(args)
-        del asr
-        print("Preparando alinhamento PT-BR...", file=sys.stderr, flush=True)
-        whisperx.load_align_model(language_code=args.language, device=args.device)
-        print("Modelos de fala carregados com sucesso.", file=sys.stderr, flush=True)
-        return 0
+        try:
+            print("Preparando Whisper e detector de fala (CPU)...", file=sys.stderr, flush=True)
+            asr = load_asr(args)
+            del asr
+            print("Preparando alinhamento PT-BR...", file=sys.stderr, flush=True)
+            whisperx.load_align_model(language_code=args.language, device=args.device)
+            print("Modelos de fala carregados com sucesso.", file=sys.stderr, flush=True)
+            return 0
+        except Exception as error:
+            print(f"falha ao preparar modelos de fala: {error}", file=sys.stderr, flush=True)
+            return 1
     if not args.wav:
         parser.error("--wav é obrigatório para transcrever")
     audio = whisperx.load_audio(args.wav)

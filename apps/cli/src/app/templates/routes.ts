@@ -5,7 +5,7 @@ import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {hashFile,probe} from "@decupa/media";
 import {serveMedia} from "../../http/media.ts";
-import {originAllowed} from "../../http/origin.ts";
+import {originAllowed,type HostConfig,type ResolvedHostConfig} from "../../http/origin.ts";
 import {selectLocalFiles,type SelectResult} from "../assembly/select.ts";
 import {analyzeRecipe,relinkRecipe,type RecipeAnalysisDeps} from "./analysis.ts";
 import {approveRecipe,listRecipes,loadRecipe,saveRecipe,validateRecipe,recipeId} from "./store.ts";
@@ -18,7 +18,7 @@ async function body(req:IncomingMessage):Promise<Record<string,unknown>>{
  const parts:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new HttpError(413,"pedido excede 1 MiB");parts.push(Buffer.from(chunk));}
  try{const value=JSON.parse(Buffer.concat(parts).toString()||"{}");if(!value||typeof value!=="object"||Array.isArray(value))throw Error();return value;}catch{throw new HttpError(400,"JSON inválido");}
 }
-type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;selectFn?:()=>Promise<SelectResult>};
+type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;originConfig?:HostConfig|ResolvedHostConfig;selectFn?:()=>Promise<SelectResult>};
 export function createTemplateRuntime(root:string,deps:Deps){
  // O player pede a referência em dezenas de Range requests: hash do vídeo
  // inteiro em cada uma travava a tela. Como verifySourceIdentity, o hash roda
@@ -40,7 +40,7 @@ export function createTemplateRuntime(root:string,deps:Deps){
  async function handleTemplates(req:IncomingMessage,res:ServerResponse):Promise<boolean>{
   const url=new URL(req.url??"/","http://localhost");if(url.pathname!=="/templates"&&!url.pathname.startsWith("/templates/"))return false;
   try{
-   if(req.method!=="GET"&&!originAllowed(req.headers.origin,deps.port()))throw new HttpError(403,"origem não permitida");
+   if(req.method!=="GET"&&!originAllowed(req.headers.origin,deps.port(),deps.originConfig))throw new HttpError(403,"origem não permitida");
    const staticFiles:Record<string,[string,string]>={"/templates":["page.html","text/html"],"/templates/":["page.html","text/html"],"/templates/page.js":["page.js","text/javascript"],"/templates/page.css":["page.css","text/css"]};
    const asset=staticFiles[url.pathname];if(req.method==="GET"&&asset){res.writeHead(200,{"content-type":asset[1]+"; charset=utf-8","cache-control":"no-store"});res.end(await readFile(join(HERE,asset[0]),"utf8"));return true;}
    const parts=url.pathname.split("/").filter(Boolean);if(parts[1]!=="api"||parts.length>4)throw new HttpError(404,"rota desconhecida");

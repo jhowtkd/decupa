@@ -1,5 +1,5 @@
 import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -174,6 +174,8 @@ it("modo equipe exige os mesmos portões de Host, origem e sessão", async () =>
     });
     expect(savedResponse.status).toBe(200);
     await expect(saved).resolves.toMatchObject({ outPath: join(dir, "truth.json") });
+    const truth = JSON.parse(await readFile(join(dir, "truth.json"), "utf8")) as { boundariesMs: number[] };
+    expect(truth.boundariesMs).toEqual([100]);
     finished = true;
   } finally {
     if (!finished) {
