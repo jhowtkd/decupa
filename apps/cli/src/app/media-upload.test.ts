@@ -349,7 +349,45 @@ it("registra erro da limpeza periódica sem rejeição não tratada", async () =
   });
   await rm(join(root, ".tmp"), { recursive: true, force: true });
   await vi.advanceTimersByTimeAsync(1);
-  expect(errors).toHaveLength(1);
-  await runtime.close();
+  // O timer dispara com o relógio falso, mas o erro vem de um `readdir` real:
+  // ele chega pelo disco, não pela fila de microtarefas. Espera de verdade.
   vi.useRealTimers();
+  await vi.waitFor(() => expect(errors).toHaveLength(1));
+  await runtime.close();
+});
+
+// Dois processos `decupa` com o mesmo DECUPA_MEDIA_ROOT: cada um tem o próprio
+// hash em memória. Se A reaproveitasse o seu depois de B gravar uma parte, o
+// tamanho em disco bateria com o estado e a Mídia seria publicada com um id
+// que não é o SHA-256 do arquivo.
+it("dois runtimes na mesma raiz alternando partes publicam o SHA-256 real", async () => {
+  const root = await mkdtemp(join(tmpdir(), "media-two-runtimes-"));
+  const clip = await readFile(join(FIXTURES, "clip.mp4"));
+  const expected = createHash("sha256").update(clip).digest("hex");
+  const { createServer } = await import("node:http");
+  const servers: Array<{ base: string; close: () => Promise<void> }> = [];
+  for (let i = 0; i < 2; i += 1) {
+    const runtime = await createMediaRuntime({ root, env: { DECUPA_UPLOAD_PART_BYTES: "16384" } });
+    const server = createServer((req, res) => { void runtime.handle(req, res); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    servers.push({ base: `http://127.0.0.1:${port}`, close: async () => {
+      await runtime.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    } });
+  }
+  const [a, b] = servers as [typeof servers[0], typeof servers[0]];
+  try {
+    const created = await (await fetch(`${a.base}/api/uploads`, { method: "POST", body: JSON.stringify({ nome: "x.mp4", tamanho: clip.length }) })).json() as { id: string };
+    const part = (base: string, start: number, end: number) => fetch(`${base}/api/uploads/${created.id}`, {
+      method: "PATCH", headers: { "content-range": range(start, end, clip.length) }, body: clip.subarray(start, end + 1),
+    });
+    expect((await part(a.base, 0, 16383)).status).toBe(200);
+    expect((await part(b.base, 16384, 32767)).status).toBe(200);
+    const last = await part(a.base, 32768, clip.length - 1);
+    expect(last.status).toBe(201);
+    expect((await last.json() as { mediaId: string }).mediaId).toBe(expected);
+  } finally {
+    for (const server of servers) await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

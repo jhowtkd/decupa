@@ -183,7 +183,10 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   await mkdir(completed, { recursive: true });
 
   const locks = new Map<string, Promise<unknown>>();
-  const hashes = new Map<string, Hash>();
+  // O hash em memória só vale para os bytes que ele próprio viu. Outro
+  // processo (ou outro runtime) pode ter gravado partes no mesmo envio:
+  // o tamanho do parcial bate com o estado, mas o hash ficou para trás.
+  const hashes = new Map<string, { hash: Hash; bytes: number }>();
 
   async function writeState(id: string, state: UploadState): Promise<void> {
     const path = join(temporary, id, "state.json");
@@ -272,13 +275,13 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     const known = hashes.get(id);
     const path = partialPath(id);
     const file = await stat(path).catch(() => null);
-    if (known && file?.size === state.recebido) return known;
+    if (known && known.bytes === state.recebido && file?.size === state.recebido) return known.hash;
     if (known) hashes.delete(id);
     if (!file || file.size !== state.recebido) {
       await open(path, "a").then(async (handle) => { await handle.truncate(state.recebido); await handle.close(); });
     }
     const hash = await hashPartial(path);
-    hashes.set(id, hash);
+    hashes.set(id, { hash, bytes: state.recebido });
     return hash;
   }
 
@@ -388,6 +391,8 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           if (received > length) throw new UploadHttpError(413, "parte do envio maior que Content-Range");
           await writeBufferFully(file, buffer, range.start + received - buffer.byteLength);
           hash.update(buffer);
+          const cached = hashes.get(id);
+          if (cached?.hash === hash) cached.bytes += buffer.byteLength;
         }
         if (received !== length) throw new UploadHttpError(400, "corpo menor que Content-Range");
       } catch (error) {
