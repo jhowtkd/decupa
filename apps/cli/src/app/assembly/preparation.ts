@@ -395,7 +395,6 @@ export async function runPreparation(
         for (const source of targets) {
           checkAlive();
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
-          await markSource(source.id, { audio: "running" });
           try {
             const analysis = await analyzeSource(source, dir, deps.exec, {
               signal,

@@ -22,11 +22,12 @@ export function jobConcurrency(env: Record<string, string | undefined>): number 
 /**
  * O coordinator fica fora do Projeto para que CLI e MCP locais compartilhem
  * os slots. `configDir` existe para os testes e para instalações que não usam
- * a home padrão; em produção a CLI passa a home do usuário.
+ * a home padrão; em produção a CLI passa a home do usuário. `queue` não pode
+ * coincidir com o cache de transcrição de um Projeto na própria home.
  */
 export function createHeavyCoordinator(opts: HeavyWorkOptions): FileCoordinator {
   const dir = opts.coordinatorDir
-    ?? join(opts.configDir ?? homedir(), ".decupa", "coordinator");
+    ?? join(opts.configDir ?? homedir(), ".decupa", "queue");
   return createFileCoordinator(dir, { limit: jobConcurrency(opts.env) });
 }
 

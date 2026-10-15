@@ -345,6 +345,8 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
           await sleep(pollMs, runOpts.signal);
         }
 
+        if (runOpts.signal?.aborted) throw cancelled(runOpts.signal.reason);
+
         const leaseId = slot.leaseId;
 
         if (liveClock) {
@@ -402,6 +404,8 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
           }
           await sleep(pollMs, slotOpts.signal);
         }
+
+        if (slotOpts.signal?.aborted) throw cancelled(slotOpts.signal.reason);
 
         const leaseId = slot.leaseId;
         if (liveClock) {

@@ -56,13 +56,14 @@ export function sourceStatusText(progress) {
 export function preparationView(project, operation) {
   const prep = project.preparation;
   const sources = project.assembly.sources.filter((source) => source.included);
+  const queued = operation?.stage === "queued";
   const busy = prep?.status === "running";
   const active = sources.find((source) => Object.values(prep?.sources[source.id] || {}).includes("running"));
   const failed = sources.find((source) => sourceProgress(project, source).tone === "error");
   const done = sources.filter((source) => sourceProgress(project, source).tone === "ready").length;
   const tone = busy ? "running" : prep && ["interrupted", "attention"].includes(prep.status) ? "error"
     : prep?.status === "cancelled" ? "cancelled" : "ready";
-  const title = busy ? PREP_STAGES[prep.stage] + "…"
+  const title = queued ? "Aguardando na fila" : busy ? PREP_STAGES[prep.stage] + "…"
     : tone === "error" ? "A montagem precisa de atenção"
     : prep?.status === "cancelled" ? "Preparação cancelada"
     : prep?.status === "ready" ? "Montagem pronta para revisar" : "Prepare seus materiais";
