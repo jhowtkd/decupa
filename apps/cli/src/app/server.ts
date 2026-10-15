@@ -88,7 +88,9 @@ function escapeHtml(value: string): string {
 }
 
 function sendProjectRootPage(res: ServerResponse, projects: Awaited<ReturnType<typeof listProjectRootEntries>>): void {
-  const items = projects.map(project => `<li><a href="/projects/${encodeURIComponent(project.id)}/">${escapeHtml(project.displayName)}</a></li>`).join("");
+  // O Fluxo vai ao lado do nome: dois Projetos podem ter o mesmo nome de exibição.
+  const flowLabel = { montagem: "Montagem", limpeza: "Limpeza" } as const;
+  const items = projects.map(project => `<li><a href="/projects/${encodeURIComponent(project.id)}/">${escapeHtml(project.displayName)}</a> — ${flowLabel[project.flow]}</li>`).join("");
   const content = items ? `<ul>${items}</ul>` : "<p>Nenhum Projeto na Raiz.</p>";
   const page = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Projetos</title></head><body><main><h1>Projetos</h1>${content}</main></body></html>`;
   res.writeHead(200, {

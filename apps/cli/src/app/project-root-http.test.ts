@@ -176,8 +176,8 @@ it("lista os Projetos da Raiz com links codificados quando não há Projeto inic
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/text\/html/);
     const html = await response.text();
-    expect(html).toContain("Montagem da equipe");
-    expect(html).toContain("Aula da equipe");
+    expect(html).toMatch(/Montagem da equipe<\/a> — Montagem</);
+    expect(html).toMatch(/Aula da equipe<\/a> — Limpeza</);
     expect(html).toContain(`/projects/${encodeURIComponent("Meu Projeto")}/`);
     expect(html).toContain(`/projects/${encodeURIComponent(".decupa-aula.mp4")}/`);
     expect(html).not.toContain("<style");

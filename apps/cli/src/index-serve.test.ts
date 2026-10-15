@@ -46,6 +46,9 @@ it("decupa serve sobe a Raiz sem abrir Projeto inicial", async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // Registrado já no spawn: se o processo sair antes do healthcheck (porta tomada,
+  // erro de subida), a limpeza não fica esperando um evento que já passou.
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   child.stdout.on("data", chunk => output.push(String(chunk)));
   child.stderr.on("data", chunk => output.push(String(chunk)));
   try {
@@ -56,7 +59,7 @@ it("decupa serve sobe a Raiz sem abrir Projeto inicial", async () => {
     expect(output.join("")).toContain("servidor na Raiz de Projetos");
   } finally {
     if (child.exitCode === null) child.kill("SIGTERM");
-    await new Promise<void>(resolve => child.once("close", () => resolve()));
+    await closed;
     await rm(home, { recursive: true, force: true });
   }
 });
