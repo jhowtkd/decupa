@@ -142,6 +142,14 @@ it("modo equipe exige os mesmos portões de Host, origem e sessão", async () =>
     });
     expect(badOrigin.status).toBe(403);
 
+    // Origem certa sem sessão: o POST sobrescreveria o truth-file da medição.
+    const noSession = await fetch(`${base}/truth`, {
+      method: "POST",
+      headers: { host, origin: sameOrigin, "content-type": "application/json" },
+      body: JSON.stringify({ boundariesMs: [1] }),
+    });
+    expect(noSession.status).toBe(401);
+
     const login = await fetch(`${base}/login`, {
       method: "POST",
       redirect: "manual",
