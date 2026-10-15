@@ -78,6 +78,7 @@ export type AssemblyDeps = FillerObserveDeps & {
   pageCss?: string;
   pageJs?: string;
   projectPathJs?: string;
+  projectPrefix?: string;
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;

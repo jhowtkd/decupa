@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { DoctorLine } from "../doctor.ts";
 import { assertStoredEndpoint, writeCredentials, type Credentials } from "@decupa/triage";
 
@@ -12,6 +12,8 @@ function isProviderName(value: string): value is Credentials["preset"] {
 export type StartFn = (opts: {
   input?: string;
   projectDir?: string;
+  projectsRoot?: string;
+  projectId?: string;
   port?: number;
   allowPaidModel?: boolean;
   allowPaidVisual?: boolean;
@@ -64,6 +66,7 @@ const TOOLS = [
         mode: { type: "string", enum: ["limpar", "montar"] },
         input: { type: "string" },
         project: { type: "string" },
+        projectsRoot: { type: "string" },
         port: { type: "number" },
         allowPaidModel: { type: "boolean" },
         allowPaidVisual: { type: "boolean" },
@@ -163,16 +166,20 @@ export function createMcpSession(deps: McpDeps) {
         } else {
           const project = String(args.project ?? "");
           if (!project) throw new Error("montar precisa de project");
+          const projectDir = resolve(project);
+          const projectId = basename(projectDir);
           const app = await startOnPort({
-            projectDir: resolve(project),
+            projectsRoot: resolve(String(args.projectsRoot ?? dirname(projectDir))),
+            projectId,
+            projectDir,
             allowPaidModel: args.allowPaidModel === true,
             allowPaidVisual: args.allowPaidVisual === true,
           }, preferred);
           running = {
-            url: `http://127.0.0.1:${app.port}`,
+            url: `http://127.0.0.1:${app.port}/projects/${projectId}/`,
             port: app.port,
             mode,
-            projectDir: resolve(project),
+            projectDir,
             close: () => app.close(),
           };
         }

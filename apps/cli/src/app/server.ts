@@ -1,5 +1,6 @@
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { createFileCoordinator } from "@decupa/coordinator";
 import { hashFile, probe } from "@decupa/media";
 import { createTracer } from "@decupa/trace";
@@ -10,7 +11,7 @@ import { providerSetup } from "./provider-setup.ts";
 import { keyProviderState, providerVisual, withVisualNotice } from "./provider-visual.ts";
 import { operationResolver } from "./analysis-operation.ts";
 import { cancelAssemblyFillerNotes } from "./assembly/filler-observe.ts";
-import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { access, readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,12 +27,14 @@ import { triageIdentity } from "../triage.ts";
 import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir } from "./session.ts";
-import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
+import { blankProject, createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
+import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
 import { createHeavyCoordinator } from "./heavy-work.ts";
 import { createMediaRuntime, type MediaRuntime } from "./media-runtime.ts";
 import { projectUrl } from "./project-url.ts";
+import { createProjectRuntimeRegistry, PROJECT_ID_PATTERN } from "./project-root.ts";
 
 export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
@@ -169,9 +172,11 @@ export function attachResidentSpeech(opts: {
   };
 }
 
-export async function startApp(opts: {
+type StartAppOptions = {
   input?: string;
   projectDir?: string;
+  projectsRoot?: string;
+  projectId?: string;
   inputs?: string[];
   port?: number;
   providerConfigDir?: string;
@@ -206,13 +211,183 @@ export async function startApp(opts: {
   now?: () => number;
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
-}): Promise<AppHandle> {
+};
+
+export async function startApp(opts: StartAppOptions): Promise<AppHandle> {
   resolveVisualProvider(opts.env ?? process.env);
+  if (opts.projectsRoot) {
+    return startProjectRootApp(opts as StartAppOptions & { projectsRoot: string });
+  }
   if (opts.projectDir && !opts.input) {
     return startAssemblyApp(opts as typeof opts & { projectDir: string });
   }
   if (!opts.input) throw new Error("startApp precisa de input ou projectDir");
   return startCleanupApp({ ...opts, input: opts.input });
+}
+
+async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: string }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
+  if (opts.providerConfigDir) {
+    await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
+  }
+  const projectsRoot = resolve(opts.projectsRoot);
+  await mkdir(projectsRoot, { recursive: true });
+  if (opts.projectId) {
+    if (!PROJECT_ID_PATTERN.test(opts.projectId)) throw new Error("id de Projeto inválido");
+    const initialDir = resolve(opts.projectDir ?? resolve(projectsRoot, opts.projectId));
+    if (dirname(initialDir) !== projectsRoot || basename(initialDir) !== opts.projectId) throw new Error("Projeto inicial fora da Raiz");
+    await mkdir(initialDir, { recursive: true });
+    try {
+      await access(join(initialDir, "project.json"));
+    } catch {
+      await createProject(initialDir, blankProject(randomUUID()));
+    }
+  }
+  const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
+  const exec = opts.executor ?? new SpawnExecutor();
+  const visualDir = opts.providerConfigDir ?? homedir();
+  const readStored = createCredentialsReader();
+  const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
+  const globalStored = await globalLoadStored();
+  const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
+  const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
+  const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
+  const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
+  let boundPort = opts.port ?? 7788;
+  const allowPaidModel = opts.allowPaidModel === true;
+  const allowPaidVisual = opts.allowPaidVisual === true;
+  const templatesRoot = opts.templatesRoot ?? join(opts.providerConfigDir ?? homedir(), ".decupa", "templates");
+  const templates = createTemplateRuntime(templatesRoot, {
+    port: () => boundPort,
+    selectFn: opts.selectFn,
+    exec,
+    speech: opts.speech,
+    send: globalTransports.textSend,
+    visualClient: globalTransports.visualClient,
+    modelKey: globalTransports.textKey,
+    legacyModelKey: globalTransports.legacyModelKey,
+    legacyVisualCompatible: globalTransports.legacyVisualCompatible,
+    resolveAnalysis: globalTransports.resolveAnalysis,
+    allowModel: allowPaidModel,
+    allowVisual: allowPaidVisual,
+  });
+
+  const registry = createProjectRuntimeRegistry({
+    projectsRoot,
+    createRuntime: async ({ id, dir, prefix }) => {
+      const loadStored = () => readAnalysisCredentials(dir, visualDir, readStored);
+      const stored = await loadStored();
+      const isTextConfigured = async (): Promise<boolean> => {
+        try {
+          const current = await loadStored();
+          assemblyTextClientOptions({ stored: current, env: visualEnv, selection: resolveAssemblyTextProvider(visualEnv, current) });
+          return true;
+        } catch { return false; }
+      };
+      const transports = resolveAppTransports({ ...opts, stored, loadStored });
+      const resolveOperationDeps = operationResolver({ dir, loadStored, env: visualEnv, fetchImpl: opts.fetchImpl,
+        describeClient: opts.describeClient, enableVisual: Boolean(opts.describeClient || allowPaidVisual || opts.providerConfigDir),
+        proposeSend: opts.proposeSend, enableText: Boolean(opts.proposeSend || allowPaidModel || opts.providerConfigDir) });
+      const { decision } = await resolveOperationDeps();
+      opts.decisionLog?.(`provider=typesafe model=${decision.model} elapsedMs=0 fallback=${decision.mode === "off" ? "off" : "not-run"}`);
+      const speech = attachResidentSpeech({
+        dir,
+        speech: opts.speech,
+        executorInjected: Boolean(opts.executor),
+      });
+      try {
+        const runtime = createAssemblyRuntime(dir, {
+          page: async () => withVisualNotice(withProjectDir(page, dir, prefix), keyProviderState(visualEnv, await loadStored()).notice),
+          pageCss,
+          pageJs,
+          projectPathJs,
+          projectPrefix: prefix,
+          templatesRoot,
+          decision,
+          exec,
+          port: () => boundPort,
+          selectFn: opts.selectFn,
+          allowPaidModel,
+          allowPaidVisual,
+          isTextConfigured,
+          proposeSend: opts.proposeSend ?? ((allowPaidModel || opts.providerConfigDir) ? transports.textSend : undefined),
+          describeClient: opts.describeClient ?? ((allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
+          resolveOperationDeps,
+          fillerFetchImpl: opts.fetchImpl,
+          speech: speech.speech,
+          coordinator,
+        });
+        const inputs = id === opts.projectId ? opts.inputs : undefined;
+        const project = await runtime.ensureProject(inputs);
+        return {
+          handle: runtime.handle,
+          close: async () => {
+            await Promise.all([runtime.close(), speech.closeSpeech()]);
+          },
+          project,
+        };
+      } catch (error) {
+        await speech.closeSpeech();
+        throw error;
+      }
+    },
+  });
+  const media = await configuredMediaRuntime(opts.env, opts.now);
+
+  const server = createServer((req, res) => {
+    const handle = async (): Promise<void> => {
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
+      const url = parseRequestUrl(req.url);
+      if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
+        sendJson(res, { error: "origem não permitida" }, 403);
+        return;
+      }
+      if (media && await media.handle(req, res)) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false })) return;
+      if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
+      if (await templates.handleTemplates(req, res)) return;
+      if (url.pathname === "/" && opts.projectId) {
+        res.writeHead(307, { location: `/projects/${opts.projectId}/`, "cache-control": "no-store" });
+        res.end();
+        return;
+      }
+      if (await registry.handle(req, res)) return;
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("não encontrado");
+    };
+    handle().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!res.headersSent) sendJson(res, { error: message }, 500);
+      else res.end();
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(opts.port ?? 7788, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
+  boundPort = port;
+
+  return {
+    port,
+    address: "127.0.0.1",
+    jobId: opts.projectId ?? "",
+    close: async () => {
+      const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
+      const runtimesClosed = registry.close();
+      const mediaClosed = media?.close() ?? Promise.resolve();
+      const closed = new Promise<void>((resolveClosed) => { server.close(() => resolveClosed()); server.closeAllConnections(); });
+      await Promise.all([killed, runtimesClosed, mediaClosed, closed]);
+    },
+    killChildren: () => { if (exec instanceof SpawnExecutor) exec.killNow(); },
+  };
 }
 
 /** Clipes OTIO a partir do plano: recusa o que passa da fonte e descarta
@@ -490,14 +665,16 @@ async function startCleanupApp(opts: {
  * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
  * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
  */
-export function withProjectDir(page: string, dir: string): string {
+export function withProjectDir(page: string, dir: string, prefix = ""): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
   return page
     .replace('<meta name="decupa-project-dir" content="">',
       () => `<meta name="decupa-project-dir" content="${escaped}">`)
-    .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css"))
-    .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js"));
+    .replace('<meta name="decupa-project-prefix" content="">',
+      () => `<meta name="decupa-project-prefix" content="${prefix}">`)
+    .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css", prefix))
+    .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js", prefix));
 }
 
 async function startAssemblyApp(opts: {
@@ -574,6 +751,7 @@ async function startAssemblyApp(opts: {
     pageCss,
     pageJs,
     projectPathJs,
+    projectPrefix: "",
     templatesRoot,
     decision,
     exec,
