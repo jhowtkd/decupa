@@ -14,7 +14,7 @@ import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { guardLocalRequest, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
@@ -241,6 +241,7 @@ async function startCleanupApp(opts: {
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -393,10 +394,12 @@ async function startCleanupApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
+      // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
+      // isso derrubava o processo inteiro.
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
@@ -479,6 +482,7 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -552,9 +556,9 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
