@@ -236,7 +236,11 @@ export async function requireEditReservation(
   req: IncomingMessage, res: ServerResponse, deps: ReservationHttpDeps,
 ): Promise<boolean> {
   const tabId = tabFromHeader(req);
-  const reserva = tabId ? await estado(deps.projeto, deps.now()) : null;
+  const reserva = await estado(deps.projeto, deps.now());
+  // Clientes sem aba (scripts, curl e MCP) continuam podendo alterar um
+  // Projeto livre. Eles não obtêm nem renovam a Reserva; quando há uma aba
+  // editando, passam pelo mesmo conflito para não contornar o portão.
+  if (!tabId && !reserva) return true;
   if (tabId && reserva?.tabId === tabId) return true;
   conflict(res, reserva, deps.identity(req) ?? "usuário local");
   return false;

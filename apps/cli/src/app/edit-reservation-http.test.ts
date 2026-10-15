@@ -36,6 +36,71 @@ it("a primeira aba obtém a Reserva de Edição e ela fica persistida no Projeto
   }
 });
 
+it("cliente sem aba altera Projeto livre, é bloqueado pela Reserva e volta após expiração", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-no-tab-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir);
+  await createProject(dir, blankProject("alpha-project"));
+  let agora = 1_000_000;
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {}, now: () => agora });
+  const base = `http://127.0.0.1:${app.port}`;
+  const mutation = (baseRevision = 1) => fetch(`${base}/projects/alpha/project/input`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision, kind: "brief", text: "cliente externo", targetSeconds: 60 }),
+  });
+  try {
+    expect((await mutation(0)).status).toBe(200);
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    const blocked = await mutation();
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ dono: { nome: expect.any(String), ultimoSinal: agora } });
+
+    agora += 90_001;
+    expect((await mutation()).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("Assumir Edição transfere a Reserva e a aba anterior descobre no sinal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-take-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir);
+  await createProject(dir, blankProject("alpha-project"));
+  let agora = 1_500_000;
+  const first = await startApp({ projectsRoot: root, port: 0, executor, env: {}, now: () => agora });
+  const second = await startApp({ projectsRoot: root, port: 0, executor, env: {}, now: () => agora });
+  const one = `http://127.0.0.1:${first.port}`;
+  const two = `http://127.0.0.1:${second.port}`;
+  try {
+    expect((await fetch(`${one}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    })).status).toBe(200);
+
+    agora += 12_000;
+    const taken = await fetch(`${two}/projects/alpha/reservation/take`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-b" },
+    });
+    expect(taken.status).toBe(200);
+    expect(await taken.json()).toMatchObject({ reserva: { tabId: "tab-b", ultimoSinal: agora } });
+
+    const oldHeartbeat = await fetch(`${one}/projects/alpha/reservation/heartbeat`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-a" },
+    });
+    expect(oldHeartbeat.status).toBe(409);
+    expect(await oldHeartbeat.json()).toMatchObject({ dono: { nome: expect.any(String), ultimoSinal: agora } });
+  } finally {
+    await first.close();
+    await second.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("o portão recusa alterações, a Reserva expira e outra aba pode assumi-la", async () => {
   const root = await mkdtemp(join(tmpdir(), "edit-reservation-gate-"));
   const dir = join(root, "alpha");

@@ -1,7 +1,7 @@
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { projectHeaders, projectPath, projectTabId } from "./project-path.js";
+import { confirmEditTakeover, projectHeaders, projectPath, projectTabId } from "./project-path.js";
 
 const [
   { mountTemplates },
@@ -196,8 +196,7 @@ window.addEventListener("pagehide", () => {
 
 reservationTake?.addEventListener("click", async () => {
   const owner = ui.owner;
-  if (!owner) return;
-  if (!window.confirm(`${owner.nome} está editando este Projeto ${reservationAge(owner.ultimoSinal)}. Assumir Edição?`)) return;
+  if (!owner || !(await confirmEditTakeover(owner))) return;
   const response = await fetch(projectPath("reservation/take"), {
     method: "POST", headers: projectHeaders({ "content-type": "application/json" }),
   });
@@ -452,7 +451,13 @@ async function importFiles(files) {
       try {
         const res = await fetch(
           "project/import?baseRevision=" + project().revision + "&name=" + encodeURIComponent(file.name),
-          { method: "POST", headers: projectHeaders({ "x-file-size": String(file.size) }), body: file },
+          {
+            method: "POST",
+            headers: typeof projectHeaders === "function"
+              ? projectHeaders({ "x-file-size": String(file.size) })
+              : { "x-file-size": String(file.size) },
+            body: file,
+          },
         );
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
