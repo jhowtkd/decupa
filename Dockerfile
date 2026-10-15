@@ -66,12 +66,13 @@ RUN uv python install 3.11 3.12 \
 # O lock da fala foi resolvido contra PyPI para as plataformas locais. Em
 # Linux, substituímos apenas os três pacotes PyTorch pela distribuição CPU e
 # removemos os artefatos CUDA antes de copiar o venv para a imagem final.
+# Só o índice CPU e `--no-deps`: as dependências já vieram do lock, e no uv um
+# --extra-index-url (PyPI) teria prioridade e esconderia as versões `+cpu`.
 RUN test "${DECUPA_VARIANT}" = cpu || test "${DECUPA_VARIANT}" = cuda \
     && if [ "${DECUPA_VARIANT}" = cpu ]; then \
       uv pip install --python services/speech/.venv/bin/python \
-      --force-reinstall \
+      --force-reinstall --no-deps \
       --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
       torch==2.8.0+cpu torchaudio==2.8.0+cpu torchvision==0.23.0+cpu \
       && for package in $(uv pip freeze --python services/speech/.venv/bin/python | \
       awk -F= '/^(nvidia-|triton==)/ { print $1 }'); do \
