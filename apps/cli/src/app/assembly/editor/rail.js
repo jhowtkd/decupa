@@ -2,7 +2,7 @@ import { clock } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedDuration } from "./montage.js";
 import { singleFlight } from "./sequencia.js";
-import { projectPath } from "../../project-path.js";
+import { projectPath } from "../project-path.js";
 
 // Região do projeto (Task 5): materiais, briefing, preparação e entrega.
 // Cada render assina `state.subscribe("project", ...)` e porta o bloco

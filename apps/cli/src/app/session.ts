@@ -51,7 +51,7 @@ export interface SourceManifest {
   size: number;
   mtimeMs: number;
   /** O manifesto também identifica o Projeto quando ele vive numa Raiz. */
-  flow?: "limpeza" | "cleanup";
+  flow?: "limpeza";
   displayName?: string;
   /**
    * sha256 de `tamanho + primeiro MiB + último MiB`. Desempata "só o mtime
@@ -60,6 +60,9 @@ export interface SourceManifest {
    */
   sample?: string;
 }
+
+/** Forma tolerante apenas para ler manifestos gravados pela versão anterior. */
+export type StoredSourceManifest = Omit<SourceManifest, "flow"> & { flow?: "limpeza" | "cleanup" };
 
 const SAMPLE_BYTES = 1024 * 1024;
 
@@ -94,9 +97,9 @@ export async function sourceSample(path: string, size: number): Promise<string> 
 
 export const sourceManifestPath = (workDir: string) => join(workDir, "source.json");
 
-export async function readSourceManifest(workDir: string): Promise<SourceManifest | null> {
+export async function readSourceManifest(workDir: string): Promise<StoredSourceManifest | null> {
   try {
-    return JSON.parse(await readFile(sourceManifestPath(workDir), "utf8")) as SourceManifest;
+    return JSON.parse(await readFile(sourceManifestPath(workDir), "utf8")) as StoredSourceManifest;
   } catch {
     return null;
   }
@@ -129,7 +132,7 @@ async function writeManifest(workDir: string, manifest: SourceManifest): Promise
  */
 async function sourceUnchanged(
   workDir: string,
-  saved: SourceManifest | null,
+  saved: StoredSourceManifest | null,
   current: SourceManifest,
 ): Promise<boolean> {
   if (!saved || saved.path !== current.path || saved.size !== current.size) return false;
@@ -139,7 +142,7 @@ async function sourceUnchanged(
   if (sample !== saved.sample) return false;
   await writeManifest(workDir, {
     ...current, sample,
-    ...(saved.flow ? { flow: saved.flow } : {}),
+    ...(saved.flow ? { flow: "limpeza" as const } : {}),
     ...(saved.displayName ? { displayName: saved.displayName } : {}),
   }).catch(() => undefined);
   return true;
@@ -176,7 +179,7 @@ export async function claimWorkDir(
   const saved = await readManifest(workDir);
   if (await sourceUnchanged(workDir, saved, current)) {
     if (saved && (saved.flow !== metadata.flow || saved.displayName !== metadata.displayName)) {
-      await writeManifest(workDir, { ...saved, ...metadata });
+      await writeManifest(workDir, { ...saved, flow: "limpeza", ...metadata });
     }
     return {};
   }

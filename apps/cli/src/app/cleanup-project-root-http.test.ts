@@ -9,6 +9,39 @@ import { startApp } from "./server.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
+function pageResources(html: string): string[] {
+  const resources = new Set<string>();
+  const attributes = /\b(?:src|href)=["']([^"']+)["']/g;
+  for (const match of html.matchAll(attributes)) resources.add(match[1]!);
+  const imports = /(?<![\w-])(?:import\b\s*(?:\(\s*)?|from\b\s+)(["'])([^"']+)\1/g;
+  for (const match of html.matchAll(imports)) resources.add(match[2]!);
+  const dynamicProjectImports = /\bimport\s*\(\s*projectPath\(\s*["']([^"']+)["']\s*\)\s*\)/g;
+  for (const match of html.matchAll(dynamicProjectImports)) resources.add(match[1]!);
+  return [...resources].filter((resource) => !resource.startsWith("data:") && !resource.startsWith("mailto:"));
+}
+
+async function expectPageResources(base: string, pageUrl: URL, html: string, id: string): Promise<void> {
+  const pending: Array<{ url: URL; body: string }> = [{ url: pageUrl, body: html }];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const current = pending.shift()!;
+    for (const resource of pageResources(current.body)) {
+      if (resource.startsWith("#")) continue;
+      const resourceUrl = new URL(resource, current.url);
+      if (resourceUrl.origin !== base) throw new Error(`${id}: recurso saiu da origem: ${resourceUrl}`);
+      const key = resourceUrl.href;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const response = await fetch(resourceUrl);
+      expect(response.status, `${id}: ${resource}`).toBe(200);
+      const type = response.headers.get("content-type") ?? "";
+      if (type.includes("javascript") || resourceUrl.pathname.endsWith(".js")) {
+        pending.push({ url: resourceUrl, body: await response.text() });
+      }
+    }
+  }
+}
+
 it("serve Montagem e Limpeza da mesma Raiz sob prefixos distintos", async () => {
   const root = await mkdtemp(join(tmpdir(), "cleanup-project-root-http-"));
   const assembly = join(root, "montagem");
@@ -75,6 +108,11 @@ it("limpeza local no modo Raiz cria e retoma o Projeto ao lado da Mídia", async
   const input = join(root, "aula.mp4");
   const workDir = join(root, `.decupa-${basename(input)}`);
   await writeFile(input, "media fake", "utf8");
+  const source = await stat(input);
+  await mkdir(workDir);
+  await writeFile(sourceManifestPath(workDir), JSON.stringify({
+    path: input, size: source.size, mtimeMs: source.mtimeMs, flow: "cleanup", displayName: "Aula antiga",
+  }), "utf8");
   const app = await startApp({
     input, projectsRoot: root, projectDir: workDir, projectId: basename(workDir),
     port: 0, autoStart: false, executor, env: {},
@@ -86,6 +124,39 @@ it("limpeza local no modo Raiz cria e retoma o Projeto ao lado da Mídia", async
     expect((await fetch(`${base}/projects/${basename(workDir)}/media`)).status).toBe(200);
     const manifest = JSON.parse(await readFile(sourceManifestPath(workDir), "utf8")) as { flow?: string };
     expect(manifest.flow).toBe("limpeza");
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("resolve todos os recursos das páginas pela URL do Projeto, com e sem barra final", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-page-resources-http-"));
+  const assembly = join(root, "montagem");
+  const cleanup = join(root, "limpeza");
+  const input = join(root, "aula.mp4");
+  await mkdir(assembly);
+  await createProject(assembly, blankProject("assembly-project"));
+  await mkdir(cleanup);
+  await writeFile(input, "media fake", "utf8");
+  const source = await stat(input);
+  await writeFile(sourceManifestPath(cleanup), JSON.stringify({
+    path: input, size: source.size, mtimeMs: source.mtimeMs,
+  }), "utf8");
+
+  const app = await startApp({ projectsRoot: root, port: 0, autoStart: false, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    for (const id of ["montagem", "limpeza"]) {
+      const query = "?aba=recursos";
+      const withoutSlash = await fetch(`${base}/projects/${id}${query}`, { redirect: "manual" });
+      expect(withoutSlash.status, id).toBe(308);
+      expect(withoutSlash.headers.get("location"), id).toBe(`/projects/${id}/${query}`);
+      const pageUrl = new URL(withoutSlash.headers.get("location")!, base);
+      const page = await fetch(pageUrl);
+      expect(page.status, id).toBe(200);
+      await expectPageResources(base, pageUrl, await page.text(), id);
+    }
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

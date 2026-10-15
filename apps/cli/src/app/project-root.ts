@@ -24,7 +24,7 @@ function notFound(res: ServerResponse): void {
   res.end("não encontrado");
 }
 
-function projectRequest(url: string | undefined): { id: string; prefix: string; rest: string } | null {
+function projectRequest(url: string | undefined): { id: string; prefix: string; rest: string; needsSlash: boolean; search: string } | null {
   let parsed: URL;
   try {
     parsed = new URL(url ?? "/", "http://localhost");
@@ -35,7 +35,10 @@ function projectRequest(url: string | undefined): { id: string; prefix: string; 
   if (!match || !PROJECT_ID_PATTERN.test(match[1]!)) return null;
   if (match[2]?.startsWith("//")) return null;
   const prefix = `/projects/${match[1]}`;
-  return { id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}` };
+  return {
+    id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}`,
+    needsSlash: match[2] === undefined, search: parsed.search,
+  };
 }
 
 async function projectKind(root: string, id: string): Promise<"assembly" | "cleanup" | null> {
@@ -86,6 +89,11 @@ export function createProjectRuntimeRegistry(opts: {
       if (!route) {
         if ((req.url ?? "/").startsWith("/projects/")) notFound(res);
         return (req.url ?? "/").startsWith("/projects/");
+      }
+      if (route.needsSlash && await projectKind(root, route.id) !== null) {
+        res.writeHead(308, { location: `${route.prefix}/${route.search}`, "cache-control": "no-store" });
+        res.end();
+        return true;
       }
       const runtime = await runtimeFor(route.id, route.prefix);
       if (!runtime) {
