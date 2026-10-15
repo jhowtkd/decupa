@@ -88,7 +88,7 @@ source_id="$(node -e 'console.log(JSON.parse(process.argv[1]).source.id)' "$adde
 range_headers="$WORK/range.headers"
 status="$(curl --fail --silent --show-error -D "$range_headers" -o "$WORK/range.bin" \
   -b "$COOKIE" -H 'Range: bytes=0-15' -w '%{http_code}' \
-  "${BASE}/projects/${project_id}/media/${source_id}")"
+  "${project_url}project/media/${source_id}")"
 [[ "$status" == 206 ]] || { echo "Range respondeu $status" >&2; exit 1; }
 grep -qi '^content-range: bytes 0-15/' "$range_headers"
 [[ "$(wc -c < "$WORK/range.bin")" -eq 16 ]]
