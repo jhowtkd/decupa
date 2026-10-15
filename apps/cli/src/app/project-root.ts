@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estado, type EditReservation } from "./edit-reservation.ts";
-import { keepPath, readKeepList, sourceManifestPath } from "./session.ts";
+import { keepPath, sourceManifestPath } from "./session.ts";
 
 // O id é um nome de pasta, não um identificador de linguagem: espaços, acentos
 // e pontuação são válidos. O roteador já separa o primeiro componente; aqui
@@ -101,7 +101,8 @@ async function editorialMtime(
   if (flow === "assembly") {
     if (manifestReadable) candidates.push(join(dir, "project.json"));
   } else {
-    if (await readKeepList(dir) !== null) candidates.push(keepPath(dir));
+    // Sem keep-list, o `stat` abaixo falha e o candidato é ignorado.
+    candidates.push(keepPath(dir));
     if (manifestReadable) candidates.push(sourceManifestPath(dir));
   }
   const mtimes = await Promise.all(candidates.map(async (path) => (await stat(path).catch(() => null))?.mtimeMs ?? null));

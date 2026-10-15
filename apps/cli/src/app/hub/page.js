@@ -1,4 +1,4 @@
-const state = { projects: [], timer: null };
+const state = { projects: [], timer: null, loadToken: 0 };
 const projectsElement = document.getElementById("projects");
 const statusElement = document.getElementById("status");
 const emptyElement = document.getElementById("empty");
@@ -59,20 +59,26 @@ function render() {
   }).join("");
   const isEmpty = projects.length === 0;
   emptyElement.hidden = !isEmpty;
+  // O erro da última carga fica visível até uma carga dar certo.
+  if (statusElement.classList.contains("error")) return;
   if (state.projects.length > 0 && isEmpty) statusElement.textContent = "Nenhum Projeto corresponde aos filtros.";
   else statusElement.textContent = state.projects.length === 1 ? "1 Projeto" : `${state.projects.length} Projetos`;
 }
 
 async function load() {
+  // Uma sondagem lenta não pode sobrescrever a lista de uma mais nova.
+  const token = ++state.loadToken;
   try {
     const response = await fetch(rootPath("api", "projects"), { cache: "no-store" });
     if (!response.ok) throw new Error("Não foi possível carregar os Projetos.");
     const projects = await response.json();
+    if (token !== state.loadToken) return;
     if (!Array.isArray(projects)) throw new Error("Resposta inválida do servidor.");
     state.projects = projects;
     statusElement.classList.remove("error");
     render();
   } catch (error) {
+    if (token !== state.loadToken) return;
     statusElement.classList.add("error");
     statusElement.textContent = error instanceof Error ? error.message : "Não foi possível carregar os Projetos.";
   }

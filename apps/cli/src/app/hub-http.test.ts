@@ -62,6 +62,7 @@ it("lista Projetos da Raiz com ordenação, Reserva e problema sem carregar runt
       id: "ilegivel", fluxo: "montagem", reserva: null, problema: expect.any(String),
     });
     expect(projects.some(project => project.id === "nao-e-projeto")).toBe(false);
+    expect((await fetch(`${base}/api/projects`, { method: "POST" })).status).toBe(405);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
