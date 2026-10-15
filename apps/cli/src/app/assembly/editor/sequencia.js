@@ -9,6 +9,7 @@
 import { clock, clockPrecise } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
+import { projectPath } from "../../project-path.js";
 
 /**
  * Bloco sob o playhead (puro): `{sceneId, kind} | null`. A camada de apoio
@@ -225,7 +226,7 @@ export function mountSequencia({ state, api, player }) {
   const undoEdit = singleFlight(() => {
     const p = state.get("project");
     if (!p || undoView(p, state.get("undoRevision"), false).disabled) return undefined;
-    return api.call("/project/undo", {
+    return api.call("project/undo", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
       label: "Desfazendo…",
@@ -329,7 +330,7 @@ export function mountSequencia({ state, api, player }) {
       const scene = p.scenes.find((item) => item.id === block.sceneId);
       const source = p.assembly.sources.find((item) => item.id === scene?.takes[0]?.sourceId);
       const thumb = block.kind === "scene" && source?.hasVideo
-        ? '<img class="timeline-thumb" alt="" loading="lazy" src="/project/thumbnail/' + encodeURIComponent(source.id) + '">' : "";
+        ? '<img class="timeline-thumb" alt="" loading="lazy" src="' + projectPath("project/thumbnail/" + encodeURIComponent(source.id)) + '">' : "";
       return '<div class="seq-bloco' + (block.kind === "support" ? " seq-apoio" : "") + '"'
         + ' data-scene="' + esc(block.sceneId) + '" data-kind="' + esc(block.kind) + '"'
         + ' data-group="' + esc(block.groupId || '') + '"'
@@ -372,7 +373,7 @@ export function mountSequencia({ state, api, player }) {
     if (peaksCache.has(sourceId)) return peaksCache.get(sourceId);
     let peaks = null;
     try {
-      const res = await fetch("/project/waveform/" + encodeURIComponent(sourceId));
+      const res = await fetch(projectPath("project/waveform/" + encodeURIComponent(sourceId)));
       const body = res.ok && res.status !== 204 ? await res.json() : null;
       if (body && Array.isArray(body.peaks) && body.peaks.length > 0) {
         peaks = body;

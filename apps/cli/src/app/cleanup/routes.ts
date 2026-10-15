@@ -14,6 +14,7 @@ import {
   runRender, transcriptPath, SpawnExecutor, type Executor, type PipelineJob,
 } from "../pipeline.ts";
 import { sourceMismatch } from "../session.ts";
+import { projectUrl } from "../project-url.ts";
 import { parseSourceTimecode } from "../assembly/timecode.ts";
 import { buildSrt, type SrtWord } from "../srt.ts";
 import { analysisClientOptions, type Credentials } from "@decupa/triage";
@@ -106,7 +107,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
         return true;
       }
 
-      if (["/keeplist.js", "/fillers-ui.js", "/review-generation.js"].includes(url.pathname)) {
+      if (["/keeplist.js", "/fillers-ui.js", "/review-generation.js", "/project-path.js"].includes(url.pathname)) {
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
         res.end(await readFile(new URL(`../${url.pathname.slice(1)}`, import.meta.url), "utf8"));
         return true;
@@ -234,7 +235,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
             clips: plan.clips, fps, title: basename(input),
             sourceStartFrames: Math.round(startSeconds * fps),
           }), "utf8");
-          sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/edl` });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/edl`) });
           return true;
         }
         if (kind === "otio") {
@@ -266,13 +267,13 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
           };
           const out = join(workDir, "corte.otio");
           await writeFile(out, `${buildOtio(assembly)}\n`, "utf8");
-          sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/otio` });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/otio`) });
           return true;
         }
         if (kind === "mp4") {
           const out = join(workDir, "corte.mp4");
           await runRender(pipelineJob, out, exec);
-          sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/mp4` });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/mp4`) });
           return true;
         }
         if (kind === "srt") {
@@ -288,11 +289,11 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
             });
           const out = join(workDir, "corte.srt");
           await writeFile(out, buildSrt({ clips: plan.clips, words }), "utf8");
-          sendJson(res, { path: out, downloadUrl: `/jobs/${current.id}/download/srt` });
+          sendJson(res, { path: out, downloadUrl: projectUrl(`jobs/${current.id}/download/srt`) });
           return true;
         }
         if (kind === "transcript") {
-          sendJson(res, { path: join(workDir, "out", "condensed_transcript.json"), downloadUrl: `/jobs/${current.id}/download/transcript` });
+          sendJson(res, { path: join(workDir, "out", "condensed_transcript.json"), downloadUrl: projectUrl(`jobs/${current.id}/download/transcript`) });
           return true;
         }
         sendJson(res, { error: `kind desconhecido: ${kind}` }, 400);

@@ -1,3 +1,5 @@
+import { projectPath } from "../../project-path.js";
+
 // Cliente HTTP mínimo do editor texto-centrado (Task 4). Sem DOM:
 // o estado de carregamento sai via `onStatus({busy, label?, error?})`
 // injetado pela página. Mantém o espírito de trackStart/trackEnd do
@@ -21,7 +23,7 @@ export function createApi({ onStatus } = {}) {
       emit({ error: null });
     }
     try {
-      const res = await fetch(path, {
+      const res = await fetch(projectPath(path), {
         ...fetchOpts,
         headers: { "content-type": "application/json", ...fetchOpts.headers },
       });
@@ -42,7 +44,6 @@ export function createApi({ onStatus } = {}) {
 
   return { call };
 }
-
 /** Um timer e uma consulta em voo, inclusive se refresh notificar o estado. */
 export function createProjectPoller({ refresh, isBusy, interval = 1000 }) {
   let timer = null;
@@ -64,3 +65,4 @@ export function createProjectPoller({ refresh, isBusy, interval = 1000 }) {
   }
   return { schedule };
 }
+//

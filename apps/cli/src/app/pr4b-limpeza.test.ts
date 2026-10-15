@@ -32,7 +32,7 @@ function ligar(source: string, extras: Record<string, unknown> = {}) {
     document, generations: reviewGeneration(), renderFillerCard: vi.fn(), changeFillers: vi.fn(), playRanges: vi.fn(),
     el: (id: string) => document.getElementById(id),
     toast, render, renderMessage, renderProcessing, api, fetch: fetchMock,
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, projectPath: (path: string) => "/" + path,
     keepList: () => [{ id: "u1" }],
     ...extras,
   };

@@ -10,6 +10,7 @@ import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
 import { singleFlight } from "./sequencia.js";
+import { projectPath } from "../../project-path.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.
@@ -218,7 +219,7 @@ export function mountStage({ state, api, player }) {
     };
     const current = project.previewRevision != null && project.previewRevision === project.revision;
     if (project.previewRevision != null) {
-      const src = "/project/output/" + project.previewRevision + "/mp4";
+      const src = projectPath("project/output/" + project.previewRevision + "/mp4");
       if (previewPlayer.getAttribute("data-rev") !== String(project.previewRevision)) {
         const time = previewPlayer.currentTime;
         previewPlayer.src = src;
@@ -282,7 +283,7 @@ export function mountStage({ state, api, player }) {
     if (!status.watched && !window.confirm(
       "Você ainda não assistiu à prévia inteira. Aprovar mesmo assim?",
     )) return;
-    void api.call("/project/approve-final", {
+    void api.call("project/approve-final", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: project.revision,
@@ -353,11 +354,11 @@ export function refreshPreviewAction({ state, api, onStale, onChange }) {
   return singleFlight(() => {
     const p = state.get("project");
     if (!p) return undefined;
-    return api.call("/project/preview", {
+    return api.call("project/preview", {
       method: "POST", body: JSON.stringify({ baseRevision: p.revision }),
       label: "Renderizando prévia…",
     }).then(({ res }) => {
-      if (!res.ok) return api.call("/project").then(onStale);
+      if (!res.ok) return api.call("project").then(onStale);
       return undefined;
     }).catch(() => {});
   }, onChange);
@@ -381,7 +382,7 @@ export function adjustAction({ state, api, readRequest, onChange }) {
       api.notifyError(EMPTY_ADJUST_MESSAGE);
       return undefined;
     }
-    return api.call("/project/adjust", {
+    return api.call("project/adjust", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: p.revision,
@@ -511,7 +512,7 @@ export function mountContexto({ state, api, player }) {
       const c=(state.get("brollCandidates")||[]).find(c=>c.id===field("supportCandidate").value);
       const entries=remove?[]:candidateEntries(c,Math.round(Number(field("supportStart").value)*fps),Math.round(Number(field("supportDuration").value)*fps));
       const support=replaceSupportGroup(p,scene,field("supportGroup").value,entries);
-      const result=await api.call("/project/edit",{method:"POST",body:JSON.stringify({baseRevision:p.revision,action:{type:"set-support",sceneId:scene.id,support}}),label:remove?"Removendo apoio…":"Aplicando apoio…"});
+      const result=await api.call("project/edit",{method:"POST",body:JSON.stringify({baseRevision:p.revision,action:{type:"set-support",sceneId:scene.id,support}}),label:remove?"Removendo apoio…":"Aplicando apoio…"});
       // Salvo: o formulário volta a espelhar o servidor.
       if(result.res.ok) { supportEdit.key=null; state.set("selectedSupport",entries[0]?entries[0].visualId+":"+entries[0].offsetFrames:null); }
     } catch(error) {api.notifyError(error.message||String(error));}
@@ -623,7 +624,7 @@ export function mountContexto({ state, api, player }) {
         button.onclick = () => {
           const current = state.get("project");
           if (!current) return;
-          void api.call("/project/rhythm-proposal", {
+          void api.call("project/rhythm-proposal", {
             method: "POST",
             body: JSON.stringify({ baseRevision: current.revision, profileId: profile.id }),
             label: `Comparando ritmo ${profile.name}…`,
@@ -655,7 +656,7 @@ export function mountContexto({ state, api, player }) {
       : "";
     for (const which of ["antes", "depois"]) {
       const el = document.getElementById(which === "antes" ? "rhythmAntes" : "rhythmDepois");
-      const src = proposal.sample ? `/project/rhythm-sample/${proposal.id}/${which}` : "";
+      const src = proposal.sample ? projectPath(`project/rhythm-sample/${proposal.id}/${which}`) : "";
       // Mesmo src de novo recarregaria a amostra no meio da escuta.
       if ((el.getAttribute("src") || "") !== src) el.src = src;
       el.style.visibility = proposal.sample ? "visible" : "hidden";
@@ -675,7 +676,7 @@ export function mountContexto({ state, api, player }) {
     const p = state.get("project");
     const proposal = state.get("rhythmProposal");
     if (!p || !proposal) return;
-    void api.call("/project/rhythm-accept", {
+    void api.call("project/rhythm-accept", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, proposalId: proposal.id }),
       label: "Aplicando ritmo…",
@@ -684,7 +685,7 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("rejectRhythm").onclick = () => {
     const proposal = state.get("rhythmProposal");
     if (!proposal) return;
-    void api.call("/project/rhythm-reject", {
+    void api.call("project/rhythm-reject", {
       method: "POST",
       body: JSON.stringify({ proposalId: proposal.id }),
       label: "Rejeitando ritmo…",
@@ -723,7 +724,7 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("confirmImport").onclick = () => {
     const p = state.get("project");
     if (!p) return;
-    void api.call("/project/verify-import", {
+    void api.call("project/verify-import", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision }),
       label: "Confirmando conferência…",
@@ -749,7 +750,7 @@ export function mountContexto({ state, api, player }) {
         fps,
       };
     }
-    const { res } = await api.call("/project/settings", {
+    const { res } = await api.call("project/settings", {
       method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
     });
     if (res.ok) formatDialog.close();
@@ -848,7 +849,7 @@ export function mountContexto({ state, api, player }) {
     };
     downloads.replaceChildren();
     for (const f of formats) addFile(f.file, f.label, f.href);
-    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", "/project/resolve-drp");
+    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", projectPath("project/resolve-drp"));
     document.getElementById("deliveryFiles").hidden = downloads.childElementCount === 0;
     document.getElementById("filesPath").textContent = formats.length ? "exports/" + project.finalApprovedRevision + "/" : "";
     const history = document.getElementById("versionHistory");
@@ -891,7 +892,7 @@ export function mountContexto({ state, api, player }) {
   }
 
   document.getElementById("cancelPrep").onclick = () => api.call(
-    "/project/cancel",
+    "project/cancel",
     { method: "POST", body: "{}", label: "Cancelando…" },
   );
   const requestAdjust = adjustAction({
@@ -907,7 +908,7 @@ export function mountContexto({ state, api, player }) {
     exportUi.revision = null;
     renderDelivery(project);
     try {
-      const { res, body } = await api.call("/project/export", {
+      const { res, body } = await api.call("project/export", {
         method: "POST", body: JSON.stringify({ baseRevision: project.revision }),
         label: "Exportando…",
       });
@@ -931,14 +932,14 @@ export function mountContexto({ state, api, player }) {
     let stopped=false;
     async function poll(){
       if(stopped)return;
-      try{const response=await fetch("/project/resolve-status");const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
+      try{const response=await fetch(projectPath("project/resolve-status"));const body=await response.json();if(!stopped&&body.delivery){resolveDelivery=body.delivery;renderDelivery(state.get("project"));}}catch{/* next poll retries */}
       if(!stopped)setTimeout(poll,1000);
     }
     setTimeout(poll,500);
     try{
-      const {res,body}=await api.call(exportDrp?"/project/export-drp":"/project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
+      const {res,body}=await api.call(exportDrp?"project/export-drp":"project/deliver-resolve",{method:"POST",body:JSON.stringify({baseRevision:project.revision,newCopy}),label:"Entregando ao DaVinci…"});
       if(res.ok)resolveDelivery=body.delivery;
-      else {const response=await fetch("/project/resolve-status");const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
+      else {const response=await fetch(projectPath("project/resolve-status"));const status=await response.json();resolveDelivery=status.delivery?{...status.delivery,error:body.error}:{status:"error",created:false,error:body.error};}
       if(res.ok){exportUi.status="done";exportUi.revision=project.revision;}
     }catch(error){resolveDelivery={status:"error",error:error.message};}
     finally{stopped=true;renderDelivery(state.get("project"));}
@@ -946,7 +947,7 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("export").onclick=()=>deliverResolve();
   document.getElementById("resolveNewCopy").onclick=()=>deliverResolve(true);
   document.getElementById("exportDrp").onclick=()=>deliverResolve(false,true);
-  fetch("/project/resolve-status").then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
+  fetch(projectPath("project/resolve-status")).then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
 
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));
