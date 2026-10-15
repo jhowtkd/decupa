@@ -15,9 +15,13 @@ it("provisionamento cita as chaves opcionais e grava três chaves falsas só no 
   const dir = await mkdtemp(join(tmpdir(), "provision-keys-")); dirs.push(dir);
   const script = fileURLToPath(new URL("./provision-provider.ts", import.meta.url));
   // O processo filho não herda segredos, nem o diretório real do usuário.
-  // As variáveis de sistema do Windows não são segredo, e sem elas o PowerShell
-  // que restringe a ACL das credenciais leva dezenas de segundos para subir.
-  const windowsSystem = Object.fromEntries(["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+  // As variáveis de sistema do Windows não são segredo. Sem elas o PowerShell
+  // que restringe a ACL das credenciais fica lento a ponto de estourar o limite:
+  // sem LOCALAPPDATA ele não guarda o cache de módulos e varre todos a cada
+  // chamada para achar o Get-Acl. O decupa grava só em HOME/USERPROFILE, que
+  // continuam apontando para o diretório temporário.
+  const windowsSystem = Object.fromEntries(["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP",
+    "LOCALAPPDATA", "APPDATA", "PSModulePath", "ProgramFiles", "ProgramData"]
     .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
   const env = { ...windowsSystem, PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
   const run = (extra = {}) => promisify(execFile)(process.execPath, ["--experimental-strip-types", script], { env: { ...env, ...extra } });
