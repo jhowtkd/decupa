@@ -8,6 +8,7 @@ import { runMarkWeb } from "./mark-web/server.ts";
 import { GATE_P90_MS, runMeasure } from "./measure.ts";
 import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
 import { openBrowser } from "./runtime.ts";
+import { isLoopbackBind } from "./http/origin.ts";
 
 const USAGE = `decupa — bancada de medição
 
@@ -59,11 +60,12 @@ const USAGE = `decupa — bancada de medição
       antes da resposta: quando ele come tudo, o orçamento dobra sozinho até
       64k; --max-tokens sobe o ponto de partida.
 
-  decupa limpar --input <vídeo> [--port 7788] [--provider zai|gemini|minimax|custom]
+  decupa limpar --input <vídeo> [--port 7788] [--bind 127.0.0.1] [--provider zai|gemini|minimax|custom]
       Abre a tela de limpeza no navegador: lê o corte como prosa, desliga o
       que não quer, exporta MP4, EDL, legendas ou transcrição.
 
   decupa montar --project <pasta> [--input <arquivo>] [--projects-root <pasta>] [--port 7788]
+           [--bind 127.0.0.1]
            [--allow-paid-model] [--allow-paid-visual]
       Abre o fluxo de montagem multiarquivo. --input acrescenta uma fonte;
       omitir --input reabre o projeto já gravado na pasta.
@@ -75,6 +77,7 @@ const USAGE = `decupa — bancada de medição
 `;
 
 type NetworkFlagValues = {
+  bind?: string;
   "allowed-hosts"?: string;
   "allowed-origins"?: string;
   "trust-proxy"?: boolean;
@@ -83,6 +86,7 @@ type NetworkFlagValues = {
 function envWithNetworkFlags(values: NetworkFlagValues): Record<string, string | undefined> {
   return {
     ...process.env,
+    ...(values.bind !== undefined ? { DECUPA_BIND_HOST: values.bind } : {}),
     ...(values["allowed-hosts"] !== undefined ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}),
     ...(values["allowed-origins"] !== undefined ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}),
     ...(values["trust-proxy"] === true ? { DECUPA_TRUST_PROXY: "1" } : {}),
@@ -274,6 +278,7 @@ async function main(argv: string[]): Promise<number> {
         start: { type: "string" },
         web: { type: "boolean" },
         port: { type: "string" },
+        bind: { type: "string" },
         "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
@@ -413,6 +418,7 @@ async function main(argv: string[]): Promise<number> {
         input: { type: "string" },
         port: { type: "string" },
         provider: { type: "string" },
+        bind: { type: "string" },
         "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
@@ -428,11 +434,13 @@ async function main(argv: string[]): Promise<number> {
       provider: values.provider,
       env: envWithNetworkFlags(values),
     });
-    const url = `http://127.0.0.1:${app.port}`;
+    const appEnv = envWithNetworkFlags(values);
+    const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
+    const url = `http://${host}:${app.port}`;
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.
-    openBrowser(url);
+    if (!appEnv.DECUPA_NO_BROWSER && isLoopbackBind(app.address)) openBrowser(url);
     await serveUntilShutdown(app);
     return 0;
   }
@@ -447,6 +455,7 @@ async function main(argv: string[]): Promise<number> {
         port: { type: "string" },
         "allow-paid-model": { type: "boolean" },
         "allow-paid-visual": { type: "boolean" },
+        bind: { type: "string" },
         "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
@@ -469,10 +478,12 @@ async function main(argv: string[]): Promise<number> {
       allowPaidVisual: values["allow-paid-visual"] === true,
       env: envWithNetworkFlags(values),
     });
-    const url = `http://127.0.0.1:${app.port}/projects/${projectId}/`;
+    const appEnv = envWithNetworkFlags(values);
+    const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
+    const url = `http://${host}:${app.port}/projects/${projectId}/`;
     console.log(`tela de montagem aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
-    openBrowser(url);
+    if (!appEnv.DECUPA_NO_BROWSER && isLoopbackBind(app.address)) openBrowser(url);
     await serveUntilShutdown(app);
     return 0;
   }

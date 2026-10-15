@@ -113,3 +113,32 @@ it("cria Montagem nova pelo caminho usado pelo editor na mesma Raiz", async () =
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// O modo Raiz é o que a CLI sobe: o login e o bind valem para ele como para
+// os modos legados, senão a equipe acessaria os Projetos sem senha.
+it("modo Raiz exige sessão com senha e recusa bind exposto sem senha", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-root-auth-"));
+  await mkdir(join(root, "alpha"));
+  await createProject(join(root, "alpha"), blankProject("alpha-project"));
+  await expect(startApp({ projectsRoot: root, port: 0, executor, env: { DECUPA_BIND_HOST: "0.0.0.0" } }))
+    .rejects.toThrow(/DECUPA_AUTH_PASSWORD/);
+
+  const app = await startApp({ projectsRoot: root, port: 0, executor, providerConfigDir: root,
+    env: { DECUPA_AUTH_PASSWORD: "senha", DECUPA_SESSION_SECRET: "segredo" } });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/project`)).status).toBe(401);
+    const page = await fetch(`${base}/projects/alpha/`, { redirect: "manual", headers: { accept: "text/html" } });
+    expect(page.status).toBe(302);
+    expect(page.headers.get("location")).toBe(`/login?next=${encodeURIComponent("/projects/alpha/")}`);
+    expect((await fetch(`${base}/project/new`, { method: "POST", headers: { origin: base } })).status).toBe(401);
+
+    const login = await fetch(`${base}/login`, { method: "POST", redirect: "manual",
+      headers: { origin: base, "content-type": "application/json" }, body: JSON.stringify({ senha: "senha", nome: "Ana" }) });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    expect((await fetch(`${base}/projects/alpha/project`, { headers: { cookie } })).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

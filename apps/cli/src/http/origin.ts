@@ -1,12 +1,15 @@
 import type { ServerResponse } from "node:http";
+import { isIP } from "node:net";
 
 export interface HostConfig {
+  bindHost?: string;
   allowedHosts?: string;
   allowedOrigins?: string;
   trustProxy?: boolean;
 }
 
 export interface ResolvedHostConfig {
+  bindHost: string;
   hosts: string[];
   origins: string[];
   trustProxy: boolean;
@@ -15,6 +18,7 @@ export interface ResolvedHostConfig {
 /** Lê somente o ambiente recebido pelo chamador; não consulta o ambiente global depois. */
 export function hostConfig(env: Record<string, string | undefined> = process.env): HostConfig {
   return {
+    bindHost: env.DECUPA_BIND_HOST,
     allowedHosts: env.DECUPA_ALLOWED_HOSTS,
     allowedOrigins: env.DECUPA_ALLOWED_ORIGINS,
     trustProxy: env.DECUPA_TRUST_PROXY === "1" || env.DECUPA_TRUST_PROXY === "true",
@@ -23,10 +27,27 @@ export function hostConfig(env: Record<string, string | undefined> = process.env
 
 export function resolveHostConfig(config: HostConfig): ResolvedHostConfig {
   return {
+    bindHost: config.bindHost?.trim() || "127.0.0.1",
     hosts: splitList(config.allowedHosts),
     origins: splitList(config.allowedOrigins),
     trustProxy: config.trustProxy === true,
   };
+}
+
+/** `127.0.0.1` é o padrão seguro; nomes locais e toda a faixa 127/8 também
+ *  continuam sendo loopback. `0.0.0.0` e `::` são exposição deliberada. */
+export function isLoopbackBind(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  if (value === "localhost") return true;
+  if (isIP(value) === 4) return value.startsWith("127.");
+  if (isIP(value) === 6) return value === "::1" || value.startsWith("::ffff:127.");
+  return false;
+}
+
+export function assertSafeBind(config: ResolvedHostConfig, authPasswordConfigured: boolean): void {
+  if (!isLoopbackBind(config.bindHost) && !authPasswordConfigured) {
+    throw new Error("DECUPA_BIND_HOST fora do loopback exige DECUPA_AUTH_PASSWORD");
+  }
 }
 
 function splitList(value: string | undefined): string[] {
