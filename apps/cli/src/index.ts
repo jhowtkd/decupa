@@ -69,6 +69,21 @@ const USAGE = `decupa — bancada de medição
       configure_provider). Não imprime nada além de JSON-RPC.
 `;
 
+type NetworkFlagValues = {
+  "allowed-hosts"?: string;
+  "allowed-origins"?: string;
+  "trust-proxy"?: boolean;
+};
+
+function envWithNetworkFlags(values: NetworkFlagValues): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    ...(values["allowed-hosts"] !== undefined ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}),
+    ...(values["allowed-origins"] !== undefined ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}),
+    ...(values["trust-proxy"] === true ? { DECUPA_TRUST_PROXY: "1" } : {}),
+  };
+}
+
 /**
  * Segura o servidor até um sinal de encerramento. Ctrl+C, `kill` e fechar a
  * janela do terminal (SIGHUP) passam pelo mesmo shutdown; `process.on` com a
@@ -238,6 +253,7 @@ async function main(argv: string[]): Promise<number> {
         start: { type: "string" },
         web: { type: "boolean" },
         port: { type: "string" },
+        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
       },
     });
     if (!values.input || !values.out) {
@@ -249,6 +265,7 @@ async function main(argv: string[]): Promise<number> {
         input: values.input,
         outPath: values.out,
         port: values.port ? Number(values.port) : undefined,
+        env: envWithNetworkFlags(values),
       });
       console.log(
         `${result.boundariesMs.length} fronteiras marcadas às cegas · ` +
@@ -326,7 +343,6 @@ async function main(argv: string[]): Promise<number> {
         target: { type: "string" },
         model: { type: "string" },
         provider: { type: "string" },
-        "allowed-hosts": { type: "string" }, "allowed-origins": { type: "string" }, "trust-proxy": { type: "boolean" },
         "max-tokens": { type: "string" },
         route: { type: "string" },
       },
@@ -389,7 +405,7 @@ async function main(argv: string[]): Promise<number> {
       input: values.input,
       port: values.port ? Number(values.port) : undefined,
       provider: values.provider,
-      env: { ...process.env, ...(values["allowed-hosts"] ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}), ...(values["allowed-origins"] ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}), ...(values["trust-proxy"] ? { DECUPA_TRUST_PROXY: "1" } : {}) },
+      env: envWithNetworkFlags(values),
     });
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de limpeza aberta em ${url}`);
@@ -424,7 +440,7 @@ async function main(argv: string[]): Promise<number> {
       port: values.port ? Number(values.port) : undefined,
       allowPaidModel: values["allow-paid-model"] === true,
       allowPaidVisual: values["allow-paid-visual"] === true,
-      env: { ...process.env, ...(values["allowed-hosts"] ? { DECUPA_ALLOWED_HOSTS: values["allowed-hosts"] } : {}), ...(values["allowed-origins"] ? { DECUPA_ALLOWED_ORIGINS: values["allowed-origins"] } : {}), ...(values["trust-proxy"] ? { DECUPA_TRUST_PROXY: "1" } : {}) },
+      env: envWithNetworkFlags(values),
     });
     const url = `http://127.0.0.1:${app.port}`;
     console.log(`tela de montagem aberta em ${url}`);

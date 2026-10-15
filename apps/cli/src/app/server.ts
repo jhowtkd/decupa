@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { serveMedia } from "../http/media.ts";
-import { guardLocalRequest, hostConfig, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import { buildEdl } from "./edl.ts";
 import { buildOtio } from "./assembly/otio.ts";
 import type { Assembly } from "./assembly/types.ts";
@@ -267,6 +267,7 @@ async function startCleanupApp(opts: {
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -416,7 +417,6 @@ async function startCleanupApp(opts: {
   let boundPort = opts.port ?? 7788;
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      const network = hostConfig(opts.env);
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
       // isso derrubava o processo inteiro.
@@ -779,6 +779,7 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -847,7 +848,6 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      const network = hostConfig(opts.env);
       if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {

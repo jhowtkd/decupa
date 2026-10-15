@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
-import { guardLocalRequest, hostConfig, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -48,6 +48,7 @@ export async function runMarkWeb(opts: {
   env?: Record<string, string | undefined>;
 }): Promise<MarkWebResult> {
   const cacheDir = opts.cacheDir ?? resolve("work/proxy");
+  const network = resolveHostConfig(hostConfig(opts.env));
   const info = await probe(opts.input);
 
   const [proxyPath, pcm, page] = await Promise.all([
@@ -72,7 +73,6 @@ export async function runMarkWeb(opts: {
     let boundPort = opts.port ?? 7777;
     const server = createServer((req, res) => {
       const handle = async (): Promise<void> => {
-        const network = hostConfig(opts.env);
         if (!guardLocalRequest(req, res, boundPort, network)) return;
         // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
         // isso derrubava o marcador no meio da medição.
