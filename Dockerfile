@@ -67,6 +67,8 @@ RUN uv python install 3.11 3.12 \
 # removemos os artefatos CUDA antes de copiar o venv para a imagem final.
 # Só o índice CPU e `--no-deps`: as dependências já vieram do lock, e no uv um
 # --extra-index-url (PyPI) teria prioridade e esconderia as versões `+cpu`.
+# Na variante cuda o torch do lock já é a build CUDA do PyPI (com as rodas
+# nvidia-*-cu12); a conferência no fim falha o build se ele vier sem CUDA.
 RUN test "${DECUPA_VARIANT}" = cpu || test "${DECUPA_VARIANT}" = cuda \
     && if [ "${DECUPA_VARIANT}" = cpu ]; then \
       uv pip install --python services/speech/.venv/bin/python \
@@ -77,6 +79,9 @@ RUN test "${DECUPA_VARIANT}" = cpu || test "${DECUPA_VARIANT}" = cuda \
       awk -F= '/^(nvidia-|triton==)/ { print $1 }'); do \
       uv pip uninstall --python services/speech/.venv/bin/python "$package"; \
       done; \
+    fi \
+    && if [ "${DECUPA_VARIANT}" = cuda ]; then \
+      services/speech/.venv/bin/python -c 'import sys, torch; print(torch.__version__, torch.version.cuda); sys.exit(torch.version.cuda is None)'; \
     fi \
     && rm -rf /root/.cache/uv
 
