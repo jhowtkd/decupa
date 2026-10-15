@@ -45,7 +45,9 @@ it("Projeto na home não usa o mesmo diretório da fila global", async () => {
   );
   const outcome = await Promise.race([
     promise.then(() => "done", () => "error"),
-    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    // O travamento que este teste pega é infinito; 10 s só dá folga ao disco
+    // lento do runner Windows, onde dois coordinators em arquivo passam de 500 ms.
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 10_000)),
   ]);
   if (outcome === "timeout") controller.abort();
   await promise.catch(() => undefined);
