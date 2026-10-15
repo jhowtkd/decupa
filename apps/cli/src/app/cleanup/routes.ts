@@ -101,19 +101,28 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
     loadStored, page, replan, triageReply, triageRequestKey, otioClipsForPlan,
   } = opts;
   let triageFlight: { key: string; reply: Promise<Record<string, unknown>> } | null = null;
-  let mp4ExportTail = Promise.resolve();
-
-  async function serializeMp4Export<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = mp4ExportTail;
-    let release!: () => void;
-    mp4ExportTail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
+  /** Fila de uma vaga: cada chamada espera a anterior terminar. */
+  function serialQueue(): <T>(fn: () => Promise<T>) => Promise<T> {
+    let tail = Promise.resolve();
+    return async <T>(fn: () => Promise<T>): Promise<T> => {
+      const previous = tail;
+      let release!: () => void;
+      tail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await fn();
+      } finally {
+        release();
+      }
+    };
   }
+  const serializeMp4Export = serialQueue();
+  // O plano em disco é um só por Limpeza. Regerar e ler precisam ser atômicos
+  // em relação a outro /keep: um keep entre o replan do export e a leitura
+  // trocaria o corte que o export entrega. Os cacoetes ficam fora de propósito:
+  // a fila do planejamento funde keep e cacoetes sobrepostos, e um cacoete
+  // decidido no meio não muda o keep-list pedido pelo export.
+  const withPlan = serialQueue();
 
   return {
     handle: async (req, res): Promise<boolean> => {
@@ -201,7 +210,7 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
         }
         const invalid = keepListError(body.keepList);
         if (invalid) { sendJson(res, { error: invalid }, 400); return true; }
-        await replan(body.keepList);
+        await withPlan(() => replan(body.keepList as string));
         sendJson(res, { review: store.get(current.id)!.review });
         return true;
       }
@@ -252,8 +261,10 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
           const invalid = keepListError(body.keepList);
           if (invalid) { sendJson(res, { error: invalid }, 400); return true; }
         }
-        if (typeof body.keepList === "string") await replan(body.keepList);
-        const plan = await JSON.parse(await readFile(planPath(pipelineJob), "utf8")) as Record<string, any>;
+        const plan = await withPlan(async () => {
+          if (typeof body.keepList === "string") await replan(body.keepList);
+          return JSON.parse(await readFile(planPath(pipelineJob), "utf8")) as Record<string, any>;
+        });
 
         if (kind === "edl") {
           const fps = await probeFps(pipelineJob, exec, { allowDropFrame: true });
