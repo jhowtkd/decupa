@@ -1,0 +1,5 @@
+C:\Users\José\Projetos\Meu Projeto\credenciais %.json
+S-1-5-21-444444444-555555555-666666666-1001:(OI)(CI)(F)
+S-1-1-0:(DENY)(R)
+S-1-5-32-544:(OI)(CI)(F)
+Processados com êxito 1 arquivos; falha ao processar 0 arquivos

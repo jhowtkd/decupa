@@ -9,19 +9,14 @@ import { afterEach, expect, it } from "vitest";
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
-// Três processos Node com type-stripping e um PowerShell para a ACL: no runner
-// Windows leva de 40 a 60 s, às vezes mais. Cabe o limite de 120 s do PowerShell.
-it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", { timeout: 300_000 }, async () => {
+it("provisionamento cita as chaves opcionais e grava três chaves falsas só no usuário temporário", async () => {
   const dir = await mkdtemp(join(tmpdir(), "provision-keys-")); dirs.push(dir);
   const script = fileURLToPath(new URL("./provision-provider.ts", import.meta.url));
   // O processo filho não herda segredos, nem o diretório real do usuário.
-  // As variáveis de sistema do Windows não são segredo. Sem elas o PowerShell
-  // que restringe a ACL das credenciais fica lento a ponto de estourar o limite:
-  // sem LOCALAPPDATA ele não guarda o cache de módulos e varre todos a cada
-  // chamada para achar o Get-Acl. O decupa grava só em HOME/USERPROFILE, que
-  // continuam apontando para o diretório temporário.
+  // As variáveis de sistema do Windows não são segredo. O decupa grava só em
+  // HOME/USERPROFILE, que continuam apontando para o diretório temporário.
   const windowsSystem = Object.fromEntries(["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "TEMP", "TMP",
-    "LOCALAPPDATA", "APPDATA", "PSModulePath", "ProgramFiles", "ProgramData"]
+    "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramData"]
     .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
   const env = { ...windowsSystem, PATH: process.env.PATH, HOME: dir, USERPROFILE: dir };
   const run = (extra = {}) => promisify(execFile)(process.execPath, ["--experimental-strip-types", script], { env: { ...env, ...extra } });
