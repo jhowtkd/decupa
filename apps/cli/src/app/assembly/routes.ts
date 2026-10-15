@@ -242,16 +242,25 @@ function withCanvasPolicy(project: Project): Project {
   return applyCanvas(project, { fps, width, height, canvasSourceId, canvasManual });
 }
 
-async function sourceFromFile(path: string, id: string, displayName?: string): Promise<Source> {
+type SourceFileOptions = {
+  sha256?: string;
+  displayName?: string;
+  requirePlayable?: boolean;
+};
+
+async function sourceFromFile(path: string, id: string, options: SourceFileOptions = {}): Promise<Source> {
   if (!isAbsolute(path)) throw new HttpError(400, `fonte precisa de caminho absoluto: ${path}`);
   const resolved = await realpath(path);
   const info = await probe(resolved);
+  if (options.requirePlayable && ((!info.hasVideo && !info.hasAudio) || info.durationMs <= 0)) {
+    throw new HttpError(422, "Mídia do acervo sem vídeo ou áudio legível");
+  }
   const durationSeconds = Math.max(info.durationMs / 1000, 0.001);
   const { size, mtimeMs } = await stat(resolved);
   return {
     id,
     path: resolved,
-    sha256: await hashFile(resolved),
+    sha256: options.sha256 ?? await hashFile(resolved),
     durationSeconds,
     hasVideo: info.hasVideo,
     hasAudio: info.hasAudio,
@@ -260,7 +269,7 @@ async function sourceFromFile(path: string, id: string, displayName?: string): P
     height: info.height,
     role: info.hasAudio ? "speech" : "support",
     included: true,
-    name: displayName ?? basename(resolved),
+    name: options.displayName ?? basename(resolved),
     size,
     mtimeMs,
     timecode: info.timecode ? parseSourceTimecode(info.timecode, info.frameRate) : null,
@@ -443,29 +452,11 @@ async function sourceFromMedia(
 ): Promise<Source> {
   const record = await media.getMedia(mediaId);
   if (!record) throw new HttpError(404, "Mídia não encontrada no acervo");
-  const info = await probe(record.path);
-  if ((!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
-    throw new HttpError(422, "Mídia do acervo sem vídeo ou áudio legível");
-  }
-  const file = await stat(record.path);
-  return {
-    id,
-    path: record.path,
+  return sourceFromFile(record.path, id, {
     sha256: record.id,
-    durationSeconds: Math.max(info.durationMs / 1000, 0.001),
-    hasVideo: info.hasVideo,
-    hasAudio: info.hasAudio,
-    fps: info.frameRate,
-    width: info.width,
-    height: info.height,
-    role: info.hasAudio ? "speech" : "support",
-    included: true,
-    name: record.nome,
-    size: file.size,
-    mtimeMs: file.mtimeMs,
-    timecode: info.timecode ? parseSourceTimecode(info.timecode, info.frameRate) : null,
-    rotation: info.rotation,
-  };
+    displayName: record.nome,
+    requirePlayable: true,
+  });
 }
 
 export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
@@ -501,6 +492,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
   function snapshot() {
     return { operation };
+  }
+
+  function hasActiveOperation(): boolean {
+    return (operation !== null && ["queued", "analyzing", "preparing", "rendering", "proposing"].includes(operation.stage))
+      || (preparationSignal !== null && !preparationSignal.aborted);
   }
 
   async function sendSnapshot(res: ServerResponse, body: Record<string, unknown>, status?: number, includeStale = false): Promise<void> {
@@ -570,9 +566,14 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
 
   // Classificar como fala antecipa somente a transcrição local. A montagem
   // completa a cobertura por imagens pelo percurso de preparação existente.
-  async function analyzeSources(project: Project, sourceIds: string[], wantVisual: boolean): Promise<Project> {
+  async function analyzeSources(
+    project: Project,
+    sourceIds: string[],
+    wantVisual: boolean,
+    current?: { gen: number; signal: AbortSignal },
+  ): Promise<Project> {
     const visualClient = wantVisual ? (await deps.resolveOperationDeps?.())?.describeClient ?? deps.describeClient : deps.describeClient;
-    const { gen, signal } = begin("analyzing");
+    const { gen, signal } = current ?? begin("analyzing");
     let done = 0;
     for (const sourceId of sourceIds) {
       if (!stillCurrent(gen)) break;
@@ -818,18 +819,30 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           await sendSnapshot(res, { project: before, source: known, reused: true });
           return true;
         }
+        const operationWasActive = hasActiveOperation();
         const source = await sourceFromMedia(deps.media, mediaId, nextSourceId());
         const project = await mutate(baseRevision, (loaded) => withCanvasPolicy(addSource(loaded, source)));
-        // A fonte já está disponível para o editor. A análise pesada começa
-        // depois da resposta e passa pelo coordinator global, sem prender o
-        // pedido nem exigir a Reserva de Edição durante o envio.
-        operation = { stage: "queued", sourceId: source.id };
-        await sendSnapshot(res, { project, source, ...snapshot() }, 202);
-        void analyzeSources(project, [source.id], false).catch((error: unknown) => {
-          if (stillCurrent(opGen)) {
-            operation = { stage: "error", sourceId: source.id, error: error instanceof Error ? error.message : String(error) };
-          }
-        });
+        // A fonte já está disponível para o editor. Se outra operação começou
+        // enquanto o arquivo era validado, a análise fica para o próximo
+        // Preparo; nunca substitui nem roda em paralelo com ela.
+        const pendingPreparation = operationWasActive || hasActiveOperation();
+        let analysisOperation: { gen: number; signal: AbortSignal } | undefined;
+        if (!pendingPreparation) {
+          analysisOperation = begin("queued", source.id);
+        }
+        await sendSnapshot(res, {
+          project,
+          source,
+          ...(pendingPreparation ? { pendingPreparation: true } : {}),
+          ...snapshot(),
+        }, 202);
+        if (analysisOperation) {
+          void analyzeSources(project, [source.id], false, analysisOperation).catch((error: unknown) => {
+            if (stillCurrent(analysisOperation!.gen)) {
+              operation = { stage: "error", sourceId: source.id, error: error instanceof Error ? error.message : String(error) };
+            }
+          });
+        }
         return true;
       }
 
@@ -1011,7 +1024,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         let project: Project;
         try {
           project = await mutate(baseRevision, async (loaded) => {
-            const source = await sourceFromFile(stored, nextSourceId(), name);
+            const source = await sourceFromFile(stored, nextSourceId(), { displayName: name });
             return withCanvasPolicy(addSource(loaded, source));
           });
         } catch (err) {

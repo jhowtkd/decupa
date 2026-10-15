@@ -271,8 +271,6 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
-    : teamMode
-      ? createHeavyCoordinator({ coordinatorDir: join(projectsRoot, ".decupa", "coordinator"), env: visualEnv })
     : undefined;
   const exec = opts.executor ?? new SpawnExecutor();
   const visualDir = opts.providerConfigDir ?? homedir();
@@ -824,9 +822,7 @@ async function startAssemblyApp(opts: {
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
-    : teamMode
-      ? createHeavyCoordinator({ coordinatorDir: join(dir, ".decupa", "coordinator"), env: visualEnv })
-      : undefined;
+    : undefined;
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const exec = opts.executor ?? new SpawnExecutor();
