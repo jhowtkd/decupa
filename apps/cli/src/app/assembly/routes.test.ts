@@ -1680,7 +1680,7 @@ it("adicionar Mídia durante análise mantém a operação e deixa o preparo pen
   const sourceId = opened.assembly.sources[0]!.id;
   const analyzing = postNoRuntime(runtime, dir, "/project/analyze", { sourceIds: [sourceId], visual: false });
   await workerReady;
-  const add = await postNoRuntime(runtime, dir, "/project/media", { baseRevision: opened.revision + 0, mediaId });
+  const add = await postNoRuntime(runtime, dir, "/project/media", { baseRevision: opened.revision, mediaId });
   expect(add.status).toBe(202);
   expect(add.corpo.pendingPreparation).toBe(true);
   expect((add.corpo.operation as { stage: string }).stage).toBe("analyzing");
