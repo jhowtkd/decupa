@@ -1,6 +1,6 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { restrictWindowsCredentials, type WindowsCommandRunner } from "./credentials.ts";
+import { readWindowsAcl, restrictWindowsCredentials, type WindowsCommandRunner } from "./credentials.ts";
 import { isRestrictedSddlAcl, parseIcaclsSaveOutput, parseWhoamiUserSid, resolveSddlSid } from "./windows-acl.ts";
 
 const domainSid = "S-1-5-21-111111111-222222222-333333333-1104";
@@ -118,6 +118,18 @@ describe("parsing das saídas nativas de ACL do Windows", () => {
     expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", `*${localSid}`]);
     expect(calls).toContainEqual(["icacls.exe", path, "/remove:g", "*S-1-1-0"]);
     expect(calls.some(call => call.includes("DESKTOP\\x") || call.includes("Administrators"))).toBe(false);
+  });
+
+  it("ACL ilegível falha com um trecho da saída e preserva a causa", async () => {
+    const execute: WindowsCommandRunner = async (_executable, args) => {
+      if (args[1] === "/save") await writeFile(args[2]!, Buffer.from("credenciais.json\r\nsem dacl aqui\r\n", "utf8"));
+      return { stdout: "" };
+    };
+    const error = await readWindowsAcl("C:\\credenciais.json", execute).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/^ACL do Windows não interpretável: ".*sem dacl aqui/);
+    expect((error as Error).cause).toBeInstanceOf(Error);
+    expect(((error as Error).cause as Error).message).toBe("DACL SDDL não confirmada");
   });
 
   it("restringe o Administrador embutido, que a SDDL mostra como LA", async () => {
