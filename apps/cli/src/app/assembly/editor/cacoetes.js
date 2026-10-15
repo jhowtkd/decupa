@@ -23,7 +23,7 @@ export function mountFillerContext({ state, api, player }, root) {
   const summary = document.createElement("summary");
   const content = document.createElement("div");
   section.append(summary, content); root.appendChild(section);
-  section.addEventListener("toggle", () => { if (section.open) void api.call("/project"); });
+  section.addEventListener("toggle", () => { if (section.open) void api.call("project"); });
   let busy = false;
   const button = (label, action) => {
     const element = document.createElement("button");
@@ -35,7 +35,7 @@ export function mountFillerContext({ state, api, player }, root) {
     if (busy || !project || !targets.length) return;
     busy = true; paint();
     try {
-      await api.call(`/project/fillers-${mode === "cut" ? "cut" : "restore"}`, {
+      await api.call(`project/fillers-${mode === "cut" ? "cut" : "restore"}`, {
         method: "POST", label: mode === "cut" ? "cortando cacoetes…" : "restaurando cacoetes…",
         body: JSON.stringify({ baseRevision: project.revision, targets }),
       });

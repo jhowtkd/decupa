@@ -29,6 +29,9 @@ import { claimWorkDir, cleanupWorkDir } from "./session.ts";
 import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
+import { projectUrl } from "./project-url.ts";
+
+export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -452,8 +455,11 @@ async function startCleanupApp(opts: {
 export function withProjectDir(page: string, dir: string): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
-  return page.replace('<meta name="decupa-project-dir" content="">',
-    () => `<meta name="decupa-project-dir" content="${escaped}">`);
+  return page
+    .replace('<meta name="decupa-project-dir" content="">',
+      () => `<meta name="decupa-project-dir" content="${escaped}">`)
+    .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css"))
+    .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js"));
 }
 
 async function startAssemblyApp(opts: {
@@ -505,6 +511,7 @@ async function startAssemblyApp(opts: {
     executorInjected: Boolean(opts.executor),
   });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
   const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
   let boundPort = opts.port ?? 7788;
@@ -522,6 +529,7 @@ async function startAssemblyApp(opts: {
     page: async () => withVisualNotice(withProjectDir(page, dir), keyProviderState(visualEnv, await loadStored()).notice),
     pageCss,
     pageJs,
+    projectPathJs,
     templatesRoot,
     decision,
     exec,

@@ -76,6 +76,7 @@ export type AssemblyDeps = FillerObserveDeps & {
   page?: () => Promise<string>;
   pageCss?: string;
   pageJs?: string;
+  projectPathJs?: string;
   templatesRoot?: string;
   decision?: AssemblyDecisionContext;
   exec: Executor;
@@ -640,6 +641,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (url.pathname === "/page.css" && deps.pageCss !== undefined) {
       res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
       res.end(deps.pageCss);
+      return true;
+    }
+    if (url.pathname === "/project-path.js" && deps.projectPathJs !== undefined) {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(deps.projectPathJs);
       return true;
     }
     if (url.pathname === "/page.js" && deps.pageJs !== undefined) {
