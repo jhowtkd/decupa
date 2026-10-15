@@ -1,0 +1,549 @@
+<!-- Copia de apps/cli/src/app/upload-prototype.html mantida em docs/prototypes para documentacao do ticket #115 -->
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Protótipo de Lógica · Ingestão e Upload Web (Decupa)</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --accent: #238636;
+      --accent-hover: #2ea043;
+      --accent-blue: #1f6feb;
+      --accent-blue-hover: #388bfd;
+      --warning: #d29922;
+      --danger: #f85149;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --font-mono: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    header {
+      max-width: 1040px;
+      margin: 0 auto 24px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 16px;
+    }
+    h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .tag { font-size: 11px; text-transform: uppercase; padding: 2px 8px; border-radius: 12px; background: #21262d; border: 1px solid var(--card-border); color: var(--accent-blue); font-weight: 600; }
+    .question { margin-top: 8px; font-size: 14px; color: var(--text-muted); }
+    main { max-width: 1040px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .panel h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    /* State display */
+    .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+    .metric { background: #0d1117; border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; }
+    .metric-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+    .metric-val { font-size: 16px; font-weight: 600; margin-top: 4px; font-family: var(--font-mono); }
+    
+    .session-card {
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .session-header { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 600; }
+    .progress-bar-bg { background: #21262d; border-radius: 4px; height: 8px; overflow: hidden; margin: 8px 0; }
+    .progress-bar-fill { background: var(--accent-blue); height: 100%; transition: width 0.2s ease; }
+    .session-meta { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); display: flex; justify-content: space-between; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .badge-uploading { background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb; }
+    .badge-paused { background: #d2992222; color: #e3b341; border: 1px solid #d29922; }
+    .badge-ready { background: #23863622; color: #3fb950; border: 1px solid #238636; }
+    .badge-ingesting { background: #a371f722; color: #bc8cff; border: 1px solid #a371f7; }
+    .badge-failed { background: #f8514922; color: #f85149; border: 1px solid #f85149; }
+    .badge-dedup { background: #e3b34122; color: #e3b341; border: 1px solid #e3b341; }
+
+    /* Action buttons */
+    .button-group { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    button {
+      background: #21262d;
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    button:hover { background: #30363d; border-color: #8b949e; }
+    button.primary { background: var(--accent); border-color: rgba(240, 246, 252, 0.1); color: #fff; }
+    button.primary:hover { background: var(--accent-hover); }
+    button.blue { background: var(--accent-blue); border-color: rgba(240, 246, 252, 0.1); color: #fff; }
+    button.blue:hover { background: var(--accent-blue-hover); }
+    button.warn { color: var(--warning); }
+    button.danger { color: var(--danger); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Tabs for guided walkthroughs */
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--card-border); margin-bottom: 16px; }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 8px 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent-blue); font-weight: 600; }
+    .walkthrough-step {
+      background: #0d1117;
+      border-left: 3px solid var(--accent-blue);
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      border-radius: 0 4px 4px 0;
+    }
+    .step-num { font-weight: 600; color: var(--accent-blue); margin-bottom: 4px; }
+    .step-desc { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+    
+    .log-terminal {
+      background: #090d13;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      height: 180px;
+      overflow-y: auto;
+      color: #7ee787;
+    }
+    .log-line { margin-bottom: 4px; word-break: break-all; }
+    .log-line.warn { color: #f2cc60; }
+    .log-line.err { color: #ff7b72; }
+    .log-line.info { color: #79c0ff; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Protótipo de Lógica: Ingestão e Upload Web <span class="tag">Ticket #115</span></h1>
+  <p class="question">
+    <strong>Pergunta em Prova:</strong> Como deve ser estruturada a API de upload web para mídias pesadas (resumable chunking) e como mapear os arquivos recebidos para o volume de mídias e para a fila de ingestão sem bloquear o processo Node.js nem esgotar a memória RAM?
+  </p>
+</header>
+
+<main>
+  <!-- LADO ESQUERDO: ESTADO RELEVANTE E MONITOR -->
+  <section class="panel">
+    <h2>Estado do Sistema <span id="clock" style="font-size:11px;font-family:var(--font-mono);">00:00:00</span></h2>
+    
+    <div class="metric-grid">
+      <div class="metric">
+        <div class="metric-label">RAM Usada (Buffer)</div>
+        <div class="metric-val" id="ramUsage">0 MB</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Volume /data/media</div>
+        <div class="metric-val" id="diskUsage">0.0 GB</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Fila de Ingestão</div>
+        <div class="metric-val" id="queueCount">0 jobs</div>
+      </div>
+    </div>
+
+    <h2>Sessões de Upload Ativas</h2>
+    <div id="sessionList">
+      <p style="color:var(--text-muted);font-size:13px;">Nenhum upload em andamento no momento.</p>
+    </div>
+
+    <h2>Pool de Mídias CAS (/data/media/pool)</h2>
+    <div id="poolList" style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">
+      (vazio)
+    </div>
+
+    <h2 style="margin-top:16px;">Log de Eventos do Servidor</h2>
+    <div class="log-terminal" id="eventLog"></div>
+  </section>
+
+  <!-- LADO DIREITO: CENÁRIOS E FREE-PLAY -->
+  <section class="panel">
+    <h2>Cenários Guiados (Walkthroughs)</h2>
+    
+    <div class="tabs">
+      <button class="tab-btn active" onclick="selectTab('happy')">1. Caminho Feliz (2.4 GB)</button>
+      <button class="tab-btn" onclick="selectTab('resume')">2. Queda e Retomada</button>
+      <button class="tab-btn" onclick="selectTab('dedup')">3. Deduplicação</button>
+      <button class="tab-btn" onclick="selectTab('corrupt')">4. Arquivo Inválido</button>
+    </div>
+
+    <div id="tabContent"></div>
+
+    <h2 style="margin-top:24px;">Ações Livres (Free-Play)</h2>
+    <div class="button-group">
+      <button class="primary" onclick="FreePlay.startNew('camera_a.mp4', 2400, 240)">+ Novo Upload (2.4 GB)</button>
+      <button class="blue" onclick="FreePlay.uploadNextChunk()">Enviar Próximo Chunk</button>
+      <button class="warn" onclick="FreePlay.simulateDisconnect()">Simular Queda de Rede</button>
+      <button onclick="FreePlay.resumeCurrent()">Retomar Upload</button>
+      <button class="danger" onclick="FreePlay.cancelCurrent()">Cancelar Upload</button>
+      <button onclick="FreePlay.resetAll()">Limpar Tudo</button>
+    </div>
+  </section>
+</main>
+
+<script>
+class UploadManager {
+  constructor(options = {}) {
+    this.chunkSizeMb = options.chunkSizeMb || 20;
+    this.sessions = new Map();
+    this.mediaPool = new Map();
+    this.ingestQueue = [];
+    this.activeRamBytes = 0;
+    this.listeners = [];
+  }
+
+  subscribe(fn) { this.listeners.push(fn); }
+  notify() { this.listeners.forEach(fn => fn(this.getState())); }
+
+  getState() {
+    return {
+      activeRamMb: (this.activeRamBytes / (1024 * 1024)).toFixed(1),
+      diskUsageGb: (Array.from(this.mediaPool.values()).reduce((acc, m) => acc + m.size, 0) / 1024).toFixed(2),
+      queueLength: this.ingestQueue.length,
+      sessions: Array.from(this.sessions.values()).map(s => ({ ...s, uploadedChunks: Array.from(s.uploadedChunks) })),
+      pool: Array.from(this.mediaPool.values()),
+      queue: [...this.ingestQueue]
+    };
+  }
+
+  createSession(filename, totalMb, customSha = null) {
+    const id = "upl_" + Math.random().toString(36).substring(2, 9);
+    const totalChunks = Math.ceil(totalMb / this.chunkSizeMb);
+    const session = {
+      id,
+      filename,
+      totalMb,
+      chunkSizeMb: this.chunkSizeMb,
+      totalChunks,
+      uploadedChunks: new Set(),
+      status: "uploading",
+      sha256: customSha || ("sha256_" + filename.replace(/[^a-z0-9]/gi, "") + "_" + totalMb),
+      error: null,
+      bytesReceivedMb: 0
+    };
+    this.sessions.set(id, session);
+    this.notify();
+    return session;
+  }
+
+  receiveChunk(sessionId, chunkIndex) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status === "paused" || s.status === "failed") return false;
+
+    const chunkBytes = this.chunkSizeMb * 1024 * 1024;
+    this.activeRamBytes += chunkBytes;
+    this.notify();
+
+    setTimeout(() => {
+      this.activeRamBytes -= chunkBytes;
+      s.uploadedChunks.add(chunkIndex);
+      s.bytesReceivedMb = s.uploadedChunks.size * this.chunkSizeMb;
+      if (s.bytesReceivedMb > s.totalMb) s.bytesReceivedMb = s.totalMb;
+
+      if (s.uploadedChunks.size >= s.totalChunks) {
+        this.finalizeUpload(s);
+      }
+      this.notify();
+    }, 50);
+
+    return true;
+  }
+
+  simulateNetworkDrop(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    s.status = "paused";
+    s.error = "Conexão interrompida pelo cliente (ERR_CONNECTION_RESET)";
+    this.activeRamBytes = 0;
+    this.notify();
+  }
+
+  resumeUpload(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status !== "paused") return;
+    s.status = "uploading";
+    s.error = null;
+    this.notify();
+  }
+
+  finalizeUpload(session) {
+    session.status = "verifying";
+    this.notify();
+
+    setTimeout(() => {
+      if (this.mediaPool.has(session.sha256)) {
+        session.status = "deduped";
+        session.mediaPath = this.mediaPool.get(session.sha256).path;
+        this.notify();
+        return;
+      }
+
+      if (session.filename.includes("corrupt")) {
+        session.status = "failed";
+        session.error = "ffprobe: falha de demuxing; cabeçalho MP4 corrompido ou truncado";
+        this.notify();
+        return;
+      }
+
+      const mediaPath = `/data/media/pool/${session.sha256}.mp4`;
+      const mediaItem = {
+        sha256: session.sha256,
+        filename: session.filename,
+        size: session.totalMb,
+        path: mediaPath,
+        registeredAt: new Date().toISOString()
+      };
+      this.mediaPool.set(session.sha256, mediaItem);
+      session.mediaPath = mediaPath;
+      session.status = "ready";
+
+      this.ingestQueue.push({
+        id: "ing_" + Math.random().toString(36).substring(2, 7),
+        mediaPath,
+        filename: session.filename,
+        stage: "enqueued"
+      });
+
+      this.notify();
+    }, 200);
+  }
+
+  cancelUpload(sessionId) {
+    this.sessions.delete(sessionId);
+    this.activeRamBytes = 0;
+    this.notify();
+  }
+
+  reset() {
+    this.sessions.clear();
+    this.mediaPool.clear();
+    this.ingestQueue = [];
+    this.activeRamBytes = 0;
+    this.notify();
+  }
+}
+
+const manager = new UploadManager({ chunkSizeMb: 200 });
+let currentActiveId = null;
+
+function log(msg, type = "info") {
+  const box = document.getElementById("eventLog");
+  const d = new Date().toLocaleTimeString();
+  const el = document.createElement("div");
+  el.className = "log-line " + type;
+  el.textContent = `[${d}] ${msg}`;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+manager.subscribe(state => {
+  document.getElementById("ramUsage").textContent = state.activeRamMb + " MB";
+  document.getElementById("diskUsage").textContent = state.diskUsageGb + " GB";
+  document.getElementById("queueCount").textContent = state.queueLength + " jobs";
+
+  const sessionList = document.getElementById("sessionList");
+  if (state.sessions.length === 0) {
+    sessionList.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Nenhum upload ativo.</p>';
+  } else {
+    sessionList.innerHTML = state.sessions.map(s => {
+      const pct = Math.round((s.uploadedChunks.length / s.totalChunks) * 100);
+      let badgeClass = "badge-uploading";
+      if (s.status === "paused") badgeClass = "badge-paused";
+      if (s.status === "ready") badgeClass = "badge-ready";
+      if (s.status === "deduped") badgeClass = "badge-dedup";
+      if (s.status === "failed") badgeClass = "badge-failed";
+
+      return `
+        <div class="session-card">
+          <div class="session-header">
+            <span>${s.filename} (${s.totalMb} MB)</span>
+            <span class="badge ${badgeClass}">${s.status}</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" style="width: ${pct}%"></div>
+          </div>
+          <div class="session-meta">
+            <span>Chunks: ${s.uploadedChunks.length} / ${s.totalChunks} (${pct}%)</span>
+            <span>${s.bytesReceivedMb} MB recebidos</span>
+          </div>
+          ${s.error ? `<div style="color:var(--danger);font-size:11px;margin-top:6px;">⚠️ ${s.error}</div>` : ''}
+          ${s.mediaPath ? `<div style="color:#3fb950;font-size:11px;margin-top:6px;">📁 ${s.mediaPath}</div>` : ''}
+        </div>
+      `;
+    }).join("");
+  }
+
+  const poolList = document.getElementById("poolList");
+  if (state.pool.length === 0) {
+    poolList.innerHTML = "(vazio)";
+  } else {
+    poolList.innerHTML = state.pool.map(p => `• ${p.filename} [${p.sha256.substring(0, 16)}...] (${p.size} MB)`).join("<br>");
+  }
+});
+
+const FreePlay = {
+  startNew(filename, sizeMb, chunkSize = 200) {
+    manager.chunkSizeMb = chunkSize;
+    const s = manager.createSession(filename, sizeMb);
+    currentActiveId = s.id;
+    log(`Sessão ${s.id} iniciada para ${filename} (${sizeMb} MB, ${s.totalChunks} chunks)`, "info");
+  },
+  uploadNextChunk() {
+    if (!currentActiveId) return;
+    const s = manager.sessions.get(currentActiveId);
+    if (!s) return;
+    for (let i = 0; i < s.totalChunks; i++) {
+      if (!s.uploadedChunks.has(i)) {
+        manager.receiveChunk(currentActiveId, i);
+        log(`Chunk ${i + 1}/${s.totalChunks} recebido e descarregado no disco`, "info");
+        return;
+      }
+    }
+  },
+  simulateDisconnect() {
+    if (!currentActiveId) return;
+    manager.simulateNetworkDrop(currentActiveId);
+    log(`Rede interrompida na sessão ${currentActiveId}`, "warn");
+  },
+  resumeCurrent() {
+    if (!currentActiveId) return;
+    manager.resumeUpload(currentActiveId);
+    log(`Sessão ${currentActiveId} retomada a partir do último chunk`, "info");
+  },
+  cancelCurrent() {
+    if (!currentActiveId) return;
+    manager.cancelUpload(currentActiveId);
+    log(`Sessão ${currentActiveId} cancelada e temporários expurgados`, "err");
+    currentActiveId = null;
+  },
+  resetAll() {
+    manager.reset();
+    currentActiveId = null;
+    log("Estado resetado", "info");
+  }
+};
+
+const scenarios = {
+  happy: {
+    title: "1. Caminho Feliz: Upload Chunked de 2.4 GB",
+    desc: "Envia arquivo grande em blocos de 200MB. Cada bloco entra no stream, grava no disco temporário e a RAM é descarregada imediatamente. Ao final, valida hash, move para o pool e despacha para a fila de ingestão.",
+    steps: [
+      { label: "1. Iniciar Sessão de 2.4 GB", action: () => { manager.reset(); FreePlay.startNew("podcast_entrevista.mp4", 2400, 400); } },
+      { label: "2. Enviar Chunks 1 a 3 (50%)", action: () => { for (let i = 0; i < 3; i++) FreePlay.uploadNextChunk(); } },
+      { label: "3. Enviar Chunks 4 a 6 (100%)", action: () => { for (let i = 3; i < 6; i++) FreePlay.uploadNextChunk(); } }
+    ]
+  },
+  resume: {
+    title: "2. Queda de Conexão e Retomada (Resumable)",
+    desc: "Simula o navegador enviando 60% do arquivo quando a rede cai. A sessão pausa com erro; ao reconectar, o cliente consulta o status da sessão e retoma exatamente do chunk faltante sem reenviar dados gravados.",
+    steps: [
+      { label: "1. Iniciar Upload (1.2 GB)", action: () => { manager.reset(); FreePlay.startNew("aula_modulo_1.mp4", 1200, 200); } },
+      { label: "2. Enviar Chunks 1 e 2", action: () => { FreePlay.uploadNextChunk(); FreePlay.uploadNextChunk(); } },
+      { label: "3. Simular Queda de Rede", action: () => { FreePlay.simulateDisconnect(); } },
+      { label: "4. Reconectar e Retomar", action: () => { FreePlay.resumeCurrent(); } },
+      { label: "5. Concluir Chunks Restantes", action: () => { for (let i = 2; i < 6; i++) FreePlay.uploadNextChunk(); } }
+    ]
+  },
+  dedup: {
+    title: "3. Deduplicação por Hash (CAS)",
+    desc: "Um editor envia um arquivo que já foi enviado por outro colega. O servidor valida o SHA-256 e, em vez de duplicar gigabytes em disco e reprocessar WhisperX, reaproveita a mídia e os artefatos existentes.",
+    steps: [
+      { label: "1. Cadastrar Mídia Existente no Pool", action: () => {
+        manager.reset();
+        const s = manager.createSession("depoimento_bruto.mp4", 1000, "sha256_depoimento_fixo_abc123");
+        for (let i = 0; i < s.totalChunks; i++) s.uploadedChunks.add(i);
+        manager.finalizeUpload(s);
+        log("Mídia preexistente inserida no pool com hash sha256_depoimento_fixo_abc123", "info");
+      } },
+      { label: "2. Novo Upload do Mesmo Arquivo", action: () => {
+        const s2 = manager.createSession("depoimento_copia.mp4", 1000, "sha256_depoimento_fixo_abc123");
+        currentActiveId = s2.id;
+        for (let i = 0; i < s2.totalChunks; i++) s2.uploadedChunks.add(i);
+        manager.finalizeUpload(s2);
+        log("Servidor detectou SHA-256 idêntico! Deduplicação imediata sem duplicar disco.", "warn");
+      } }
+    ]
+  },
+  corrupt: {
+    title: "4. Arquivo Truncado / Corrompido",
+    desc: "Arquivo que falha na validação de integridade do container (ffprobe). O servidor descarta os arquivos temporários, marca a sessão como falha e nunca insere lixo na fila de processamento.",
+    steps: [
+      { label: "1. Upload de Arquivo com Falha", action: () => {
+        manager.reset();
+        const s = manager.createSession("camera_corrupt_stream.mp4", 800, 200);
+        currentActiveId = s.id;
+        for (let i = 0; i < s.totalChunks; i++) s.uploadedChunks.add(i);
+        manager.finalizeUpload(s);
+      } }
+    ]
+  }
+};
+
+let currentTab = "happy";
+function selectTab(key) {
+  currentTab = key;
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+  renderTabContent();
+}
+
+function renderTabContent() {
+  const sc = scenarios[currentTab];
+  const container = document.getElementById("tabContent");
+  container.innerHTML = `
+    <h3 style="font-size:15px;margin-bottom:6px;">${sc.title}</h3>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">${sc.desc}</p>
+    <div>
+      ${sc.steps.map((st, idx) => `
+        <div class="walkthrough-step">
+          <div class="step-num">Passo ${idx + 1}</div>
+          <button class="primary" onclick="scenarios['${currentTab}'].steps[${idx}].action()">${st.label}</button>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+renderTabContent();
+setInterval(() => {
+  document.getElementById("clock").textContent = new Date().toTimeString().split(" ")[0];
+}, 1000);
+</script>
+
+</body>
+</html>
