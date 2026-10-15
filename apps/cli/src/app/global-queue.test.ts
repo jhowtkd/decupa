@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -108,5 +108,44 @@ it("duas Limpezas usam uma fila global FIFO para transcrição", async () => {
     await Promise.all([appA.close(), appB.close()]);
     if (previousEngine === undefined) delete process.env.VE_PLUGIN_ROOT;
     else process.env.VE_PLUGIN_ROOT = previousEngine;
+  }
+});
+
+it("export de MP4 passa pela fila global sem mudar o estágio do job", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "decupa-global-queue-export-"));
+  // Fonte, manifesto e plano antes da subida, como numa sessão real: o export
+  // confere a fonte contra o manifesto.
+  await writeFile(join(dir, "v.mp4"), "não é vídeo", "utf8");
+  const { size, mtimeMs } = await stat(join(dir, "v.mp4"));
+  await writeFile(join(dir, "source.json"), JSON.stringify({ path: join(dir, "v.mp4"), size, mtimeMs }), "utf8");
+  await mkdir(join(dir, "out"), { recursive: true });
+  await writeFile(join(dir, "out", "speech_index.json"), JSON.stringify({ units: [{ id: "u001", index: 0, text: "t0" }] }), "utf8");
+  await writeFile(join(dir, "out", "condense_plan.json"), JSON.stringify({
+    source_duration: 30, output_duration: 20, clips: [{ unit_ids: ["u001"], start: 10, end: 30 }], joins: [],
+  }), "utf8");
+  const renders: string[] = [];
+  const executor: Executor = { run: async (call) => {
+    if (call.args.includes("render")) renders.push(call.args.at(-1)!);
+    return { code: 0, stdout: "", stderr: "" };
+  } };
+  const app = await startApp({
+    input: join(dir, "v.mp4"), port: 0, autoStart: false, executor, workDir: dir,
+    coordinatorDir: join(dir, "coordinator"),
+  });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const stage = async () => ((await (await fetch(`${base}/jobs/${app.jobId}`)).json()) as { stage: string }).stage;
+    const before = await stage();
+    for (let i = 0; i < 2; i += 1) {
+      const res = await fetch(`${base}/jobs/${app.jobId}/export`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "mp4" }),
+      });
+      expect(res.status).toBe(200);
+    }
+    // A fila não memoriza: o segundo export renderiza de novo.
+    expect(renders).toHaveLength(2);
+    expect(await stage()).toBe(before);
+  } finally {
+    await app.close();
   }
 });

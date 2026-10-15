@@ -2,6 +2,7 @@ import { clock } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedDuration } from "./montage.js";
 import { singleFlight } from "./sequencia.js";
+import { projectPath } from "../../project-path.js";
 
 // Região do projeto (Task 5): materiais, briefing, preparação e entrega.
 // Cada render assina `state.subscribe("project", ...)` e porta o bloco
@@ -186,7 +187,7 @@ export function exportView(ui, approved, formats = null) {
 export function deliveryFormats(project, verificacao, manifest = null) {
   const rev = project?.finalApprovedRevision;
   if (rev == null || rev !== project.revision || !verificacao || verificacao.revision !== rev) return [];
-  const href = (kind) => "/project/output/" + rev + "/" + kind;
+  const href = (kind) => projectPath("project/output/" + rev + "/" + kind);
   const files = [
     { id: "otio", file: "timeline.otio", label: "Timeline para importar no Resolve", href: href("otio") },
     { id: "mp4", file: "reference.mp4", label: "Vídeo de referência da v" + rev, href: href("mp4") },
@@ -518,7 +519,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       setField(targetField, hasTarget ? String(input.targetSeconds) : "60");
     },
     save: async (values) => {
-      const { res } = await api.call("/project/input", {
+      const { res } = await api.call("project/input", {
         method: "POST",
         body: JSON.stringify({ baseRevision: state.get("project").revision, ...values }),
         label: "Guardando briefing…",
@@ -557,7 +558,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
   newProject.onclick = async () => {
     newProject.disabled = true;
     try {
-      const { res, body } = await api.call("/project/new", {
+      const { res, body } = await api.call("project/new", {
         method: "POST", body: "{}", label: "Criando projeto…",
       });
       // #novo: a página nova anuncia a pasta criada no status.
@@ -582,7 +583,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
   prepare.className = "primary";
   prepare.textContent = "Montar vídeo";
   document.getElementById("primaryAction").appendChild(prepare);
-  document.getElementById("stopPreparation").onclick = () => api.call("/project/cancel", {
+  document.getElementById("stopPreparation").onclick = () => api.call("project/cancel", {
     method: "POST", body: "{}", label: "Cancelando preparação…",
   });
 
@@ -628,7 +629,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       const thumb = document.createElement("img");
       thumb.alt = "";
       thumb.loading = "lazy";
-      if (source.hasVideo) thumb.src = "/project/thumbnail/" + encodeURIComponent(source.id);
+      if (source.hasVideo) thumb.src = projectPath("project/thumbnail/" + encodeURIComponent(source.id));
       const placeholder = document.createElement("span");
       placeholder.className = "thumbnail-placeholder";
       placeholder.textContent = source.hasVideo ? "" : "Áudio";
@@ -668,7 +669,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
         button.type = "button";
         button.textContent = ROLES[value];
         button.setAttribute("aria-pressed", String(source.role === value));
-        button.onclick = () => api.call("/project/source-role", {
+      button.onclick = () => api.call("project/source-role", {
           method: "POST",
           body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], role: value }),
           label: value === "speech" ? "Transcrevendo áudio…" : "Atualizando categoria…",
@@ -678,7 +679,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.textContent = source.included ? "Deixar fora da montagem" : "Incluir na montagem";
-      toggle.addEventListener("click", () => api.call("/project/source-selection", {
+      toggle.addEventListener("click", () => api.call("project/source-selection", {
         method: "POST",
         body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: [source.id], included: !source.included }),
         label: source.included ? "Tirando da montagem…" : "Incluindo material…",
@@ -686,7 +687,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       const relink = document.createElement("button");
       relink.type = "button";
       relink.textContent = "Religar arquivo";
-      relink.addEventListener("click", () => api.call("/project/relink", {
+      relink.addEventListener("click", () => api.call("project/relink", {
         method: "POST",
         body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
         label: "Religando arquivo…",
@@ -701,7 +702,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       remove.textContent = "Remover do projeto";
       remove.addEventListener("click", () => {
         if (!window.confirm('Remover "' + source.name + '" do projeto? O arquivo original será mantido.')) return;
-        return api.call("/project/source-remove", {
+        return api.call("project/source-remove", {
           method: "POST",
           body: JSON.stringify({ baseRevision: state.get("project").revision, sourceId: source.id }),
           label: "Removendo material…",
@@ -857,21 +858,21 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     resumeButton.setAttribute("aria-busy", String(view.busy));
   }
 
-  document.getElementById("select").onclick = () => api.call("/project/select", {
+  document.getElementById("select").onclick = () => api.call("project/select", {
     method: "POST", body: JSON.stringify({ baseRevision: state.get("project").revision }),
     label: "Abrindo seleção…",
   });
-  document.getElementById("batchSupport").onclick = () => api.call("/project/source-role", {
+  document.getElementById("batchSupport").onclick = () => api.call("project/source-role", {
     method: "POST",
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), role: "support" }),
     label: "Categorizando como apoio…",
   });
-  document.getElementById("batchInclude").onclick = () => api.call("/project/source-selection", {
+  document.getElementById("batchInclude").onclick = () => api.call("project/source-selection", {
     method: "POST",
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), included: true }),
     label: "Incluindo seleção…",
   });
-  document.getElementById("batchExclude").onclick = () => api.call("/project/source-selection", {
+  document.getElementById("batchExclude").onclick = () => api.call("project/source-selection", {
     method: "POST",
     body: JSON.stringify({ baseRevision: state.get("project").revision, sourceIds: checkedSourceIds(), included: false }),
     label: "Excluindo seleção…",
@@ -888,7 +889,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     }
     prepareMontage();
   };
-  const callPrepare = () => api.call("/project/prepare", {
+  const callPrepare = () => api.call("project/prepare", {
     method: "POST",
     body: JSON.stringify({
       baseRevision: state.get("project").revision,

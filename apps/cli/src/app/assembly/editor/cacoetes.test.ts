@@ -21,7 +21,7 @@ it("seção agrupa cenas, corta/restaura em um pedido e Ouvir inclui vizinhos/fo
   cutAll.click();
   await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
   expect(JSON.parse(call.mock.calls[0]![1].body).targets).toHaveLength(2);
-  expect(call.mock.calls[0]![0]).toBe("/project/fillers-cut");
+  expect(call.mock.calls[0]![0]).toBe("project/fillers-cut");
   buttons.find(b => b.textContent === "Ouvir")!.click();
   expect(playOriginal).toHaveBeenCalledWith("a", 0, 2);
   const target = report.occurrences[0]!;
@@ -31,7 +31,7 @@ it("seção agrupa cenas, corta/restaura em um pedido e Ouvir inclui vizinhos/fo
   await vi.waitFor(() => expect(restoreAll.disabled).toBe(false));
   restoreAll.click();
   await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
-  expect(call.mock.calls[1]![0]).toBe("/project/fillers-restore");
+  expect(call.mock.calls[1]![0]).toBe("project/fillers-restore");
   expect(JSON.parse(call.mock.calls[1]![1].body).targets).toEqual([{ candidateId: "ambiguous:w2", sceneId: "s1", takeId: "t1" }]);
   const link = mountFillerReview({ state }, dom.getElementById("review"));
   expect(link.textContent).toBe("2 cacoetes para revisar"); link.click(); expect(section.open).toBe(true);

@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
-import { guardLocalRequest, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -45,8 +45,10 @@ export async function runMarkWeb(opts: {
   /** Avisa em que porta o bind caiu — com `port: 0` só o servidor sabe, e o
    * retorno só resolve depois de a página salvar. */
   onListen?: (port: number) => void;
+  env?: Record<string, string | undefined>;
 }): Promise<MarkWebResult> {
   const cacheDir = opts.cacheDir ?? resolve("work/proxy");
+  const network = resolveHostConfig(hostConfig(opts.env));
   const info = await probe(opts.input);
 
   const [proxyPath, pcm, page] = await Promise.all([
@@ -71,7 +73,7 @@ export async function runMarkWeb(opts: {
     let boundPort = opts.port ?? 7777;
     const server = createServer((req, res) => {
       const handle = async (): Promise<void> => {
-        if (!guardLocalRequest(req, res, boundPort)) return;
+        if (!guardLocalRequest(req, res, boundPort, network)) return;
         // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
         // isso derrubava o marcador no meio da medição.
         let url: URL;
@@ -83,7 +85,7 @@ export async function runMarkWeb(opts: {
         }
         // Mesmo portão do app limpar: bind em 127.0.0.1 protege da rede, não
         // do navegador — e aqui o POST sobrescreve o truth-file da medição.
-        if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+        if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
           sendJson(res, { error: "origem não permitida" }, 403);
           return;
         }

@@ -14,7 +14,7 @@ import { readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { guardLocalRequest, originAllowed } from "../http/origin.ts";
+import { guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
@@ -30,6 +30,9 @@ import { createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import type { VisualClient } from "./assembly/model.ts";
 import { BodyTooLargeError, createCleanupRuntime } from "./cleanup/routes.ts";
 import { createHeavyCoordinator } from "./heavy-work.ts";
+import { projectUrl } from "./project-url.ts";
+
+export { projectUrl };
 export { MAX_BODY_BYTES } from "./cleanup/routes.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -250,6 +253,7 @@ async function startCleanupApp(opts: {
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -406,10 +410,12 @@ async function startCleanupApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
+      // Dentro do handle: `GET //` faz o `new URL` estourar, e fora do catch
+      // isso derrubava o processo inteiro.
       const url = parseRequestUrl(req.url);
       if (!url) { sendJson(res, { error: "URL inválida" }, 400); return; }
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }
@@ -468,8 +474,11 @@ async function startCleanupApp(opts: {
 export function withProjectDir(page: string, dir: string): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
-  return page.replace('<meta name="decupa-project-dir" content="">',
-    () => `<meta name="decupa-project-dir" content="${escaped}">`);
+  return page
+    .replace('<meta name="decupa-project-dir" content="">',
+      () => `<meta name="decupa-project-dir" content="${escaped}">`)
+    .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css"))
+    .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js"));
 }
 
 async function startAssemblyApp(opts: {
@@ -490,6 +499,7 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
 }): Promise<AppHandle> {
+  const network = resolveHostConfig(hostConfig(opts.env));
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -525,6 +535,7 @@ async function startAssemblyApp(opts: {
     executorInjected: Boolean(opts.executor),
   });
   const page = await readFile(join(HERE, "assembly", "page.html"), "utf8");
+  const projectPathJs = await readFile(join(HERE, "project-path.js"), "utf8");
   const pageCss = await readFile(join(HERE, "assembly", "page.css"), "utf8");
   const pageJs = await readFile(join(HERE, "assembly", "page.js"), "utf8");
   let boundPort = opts.port ?? 7788;
@@ -542,6 +553,7 @@ async function startAssemblyApp(opts: {
     page: async () => withVisualNotice(withProjectDir(page, dir), keyProviderState(visualEnv, await loadStored()).notice),
     pageCss,
     pageJs,
+    projectPathJs,
     templatesRoot,
     decision,
     exec,
@@ -565,9 +577,9 @@ async function startAssemblyApp(opts: {
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
-      if (!guardLocalRequest(req, res, boundPort)) return;
+      if (!guardLocalRequest(req, res, boundPort, network)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
-      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort)) {
+      if (req.method !== "GET" && !originAllowed(req.headers.origin, boundPort, network, req)) {
         sendJson(res, { error: "origem não permitida" }, 403);
         return;
       }

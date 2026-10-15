@@ -1,15 +1,29 @@
-import { mountTemplates } from "/editor/templates.js";
 // Bootstrap da casca de 4 regiões (Tasks 5-6): importa os módulos, cria
 // state/api/player e monta cada região — o centro (texto.js) renderiza os
 // dois documentos do spec com os gestos de edição no ponto.
-import { createState } from "/editor/state.js";
-import { createApi, createProjectPoller } from "/editor/api.js";
-import { mountRail, preparationView } from "/editor/rail.js";
-import { mountContexto, mountStage } from "/editor/contexto.js";
-import { mountTexto } from "/editor/texto.js";
-import { mountSequencia } from "/editor/sequencia.js";
-import { idleStatus, stepperState, versionPill } from "/editor/topbar.js";
-import { ICON } from "/editor/icons.js";
+import { projectPath } from "../project-path.js";
+
+const [
+  { mountTemplates },
+  { createState },
+  { createApi, createProjectPoller },
+  { mountRail, preparationView },
+  { mountContexto, mountStage },
+  { mountTexto },
+  { mountSequencia },
+  { idleStatus, stepperState, versionPill },
+  { ICON },
+] = await Promise.all([
+  import(projectPath("editor/templates.js")),
+  import(projectPath("editor/state.js")),
+  import(projectPath("editor/api.js")),
+  import(projectPath("editor/rail.js")),
+  import(projectPath("editor/contexto.js")),
+  import(projectPath("editor/texto.js")),
+  import(projectPath("editor/sequencia.js")),
+  import(projectPath("editor/topbar.js")),
+  import(projectPath("editor/icons.js")),
+]);
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
@@ -132,7 +146,7 @@ async function call(path, opts = {}) {
       // O 409 diz que a base desta aba está errada: a resposta de reconciliação
       // é a fonte da verdade, mesmo com revisão menor (servidor que voltou
       // à cópia anterior). Só poll e POST passam pela guarda de revisão velha.
-      const latest = await client.call("/project");
+      const latest = await client.call("project");
       if (latest.res.ok && latest.body.project) {
         if (latest.body.fillerReport) state.set("fillerReport", latest.body.fillerReport);
         state.set("project", latest.body.project);
@@ -167,7 +181,7 @@ async function call(path, opts = {}) {
     } else if (!body.project && body.operation !== undefined) {
       state.set("operation", body.operation);
     }
-    if (res.ok && res.status !== 202 && method !== "GET") await call("/project");
+    if (res.ok && res.status !== 202 && method !== "GET") await call("project");
     renderStatus();
     return { res, body };
   } catch (err) {
@@ -197,7 +211,7 @@ const player = {
   playOriginal(sourceId, start, end) {
     const el = this.el();
     if (!el) return;
-    el.src = "/project/media/" + encodeURIComponent(sourceId) + "?view=playback"
+    el.src = projectPath("project/media/" + encodeURIComponent(sourceId) + "?view=playback")
       + (start != null && end != null ? "#t=" + start.toFixed(2) + "," + end.toFixed(2) : "");
     el.removeAttribute("data-rev");
     el.dataset.source = sourceId;
@@ -212,7 +226,7 @@ const player = {
     el.removeAttribute("data-source");
     if (state.get("view") !== "montagem") state.set("view", "montagem");
     if (p && p.previewRevision != null) {
-      const src = "/project/output/" + p.previewRevision + "/mp4";
+      const src = projectPath("project/output/" + p.previewRevision + "/mp4");
       if (el.getAttribute("data-rev") !== String(p.previewRevision)) {
         el.src = src;
         el.setAttribute("data-rev", String(p.previewRevision));
@@ -278,7 +292,7 @@ function scheduleAutoPreview() {
     renderStatus();
     let ok = false;
     try {
-      const result = await call("/project/preview", {
+      const result = await call("project/preview", {
         method: "POST",
         body: JSON.stringify({ baseRevision: base }),
       });
@@ -293,7 +307,7 @@ function scheduleAutoPreview() {
       // Conflito por nova edição (409 sem corpo) ou erro real: reconcilia
       // com o servidor antes de decidir — a operação local pode estar
       // obsoleta e travar o reagendamento (R2).
-      await call("/project").catch(() => {});
+      await call("project").catch(() => {});
     }
     // Reagenda só se a revisão andou (edição durante o render); erro real
     // de render não entra em loop: fica para o botão manual.
@@ -306,7 +320,7 @@ function scheduleAutoPreview() {
 }
 
 const poller = createProjectPoller({
-  refresh: () => call("/project"),
+  refresh: () => call("project"),
   isBusy: () => {
     const p = project();
     const op = state.get("operation");
@@ -339,7 +353,7 @@ async function importFiles(files) {
       renderStatus();
       try {
         const res = await fetch(
-          "/project/import?baseRevision=" + project().revision + "&name=" + encodeURIComponent(file.name),
+          "project/import?baseRevision=" + project().revision + "&name=" + encodeURIComponent(file.name),
           { method: "POST", headers: { "x-file-size": String(file.size) }, body: file },
         );
         const body = await res.json().catch(() => ({}));
@@ -551,6 +565,6 @@ textoEl.addEventListener("drop", (ev) => {
 });
 
 renderStatus();
-call("/project", { label: "Carregando…" }).then(() => {
+call("project", { label: "Carregando…" }).then(() => {
   scheduleAutoPreview();
 });

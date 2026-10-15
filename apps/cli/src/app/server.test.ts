@@ -420,8 +420,8 @@ describe("startApp", () => {
 
   it("a página toca o proxy de áudio só quando o servidor avisa", async () => {
     const page = await readFile(join(dirname(fileURLToPath(import.meta.url)), "page.html"), "utf8");
-    expect(page).toContain('if (j.audio) audioSrc = "/media/audio";');
-    expect(page).toContain('player.src = audioSrc ?? "/media";');
+    expect(page).toContain('if (j.audio) audioSrc = projectPath("media/audio");');
+    expect(page).toContain('if (!player.src) player.src = audioSrc ?? projectPath("media");');
   });
 
   it("keep anexa visual_in_point quando visual_index.json existe", async () => {

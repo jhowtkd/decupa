@@ -153,7 +153,7 @@ it("Atualizar prévia trava no primeiro clique e o 409 reconcilia", async () => 
   let release: (value: { res: { ok: boolean; status: number }; body: Record<string, unknown> }) => void = () => {};
   const api = {
     call: vi.fn((path: string) => {
-      if (path === "/project/preview") return new Promise((resolve) => { release = resolve; });
+      if (path === "project/preview") return new Promise((resolve) => { release = resolve; });
       return Promise.resolve({ res: { ok: true, status: 200 }, body: { project: state.get("project") } });
     }),
     notifyError: vi.fn(),
@@ -166,7 +166,7 @@ it("Atualizar prévia trava no primeiro clique e o 409 reconcilia", async () => 
   const button = document.getElementById("refreshPreview")!;
   button.click();
   button.click();
-  const previews = api.call.mock.calls.filter((call) => call[0] === "/project/preview").length;
+  const previews = api.call.mock.calls.filter((call) => call[0] === "project/preview").length;
   expect({ text: button.textContent, disabled: button.disabled, previews }).toEqual({
     text: "Atualizando prévia…",
     disabled: true,
@@ -175,6 +175,6 @@ it("Atualizar prévia trava no primeiro clique e o 409 reconcilia", async () => 
   release({ res: { ok: false, status: 409 }, body: {} });
   await Promise.resolve();
   await Promise.resolve();
-  expect(api.call.mock.calls.some((call) => call[0] === "/project")).toBe(true);
+  expect(api.call.mock.calls.some((call) => call[0] === "project")).toBe(true);
   expect(events).toEqual(["stale"]);
 });
