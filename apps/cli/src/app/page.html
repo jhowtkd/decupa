@@ -2,6 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
+<meta name="decupa-project-prefix" content="">
 <title>decupa · limpar fala</title>
 <style>
   :root {
@@ -296,9 +297,9 @@ function stripModel(units, keptMap, total) {
 // </strip-model>
 
 // keepList vem do módulo testado; não reimplementar — faixa errada corta sem erro.
-import { expandKeepList, keepListFrom } from "/keeplist.js";
-import { renderFillerCard, renderFillerCuts } from "/fillers-ui.js";
-import { reviewGeneration } from "/review-generation.js";
+import { expandKeepList, keepListFrom } from "./keeplist.js";
+import { renderFillerCard, renderFillerCuts } from "./fillers-ui.js";
+import { reviewGeneration } from "./review-generation.js";
 const generations = reviewGeneration();
 let fillerNotes = [], keepTicket = null, pollTimer = null;
 async function changeFillers(patch) {

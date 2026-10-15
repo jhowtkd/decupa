@@ -10,7 +10,7 @@ import { ICON } from "./icons.js";
 import { approveButtonView, reviewView, watchProgress } from "./progress.js";
 import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
 import { singleFlight } from "./sequencia.js";
-import { projectPath } from "../../project-path.js";
+import { projectPath } from "../project-path.js";
 
 /**
  * Palco central da prévia (#stage): player único, frescor, aprovação.

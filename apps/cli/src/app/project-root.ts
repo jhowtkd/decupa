@@ -2,7 +2,9 @@ import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-export const PROJECT_ID_PATTERN = /^(?!\.\.?$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// A Limpeza local mantém a pasta histórica `.decupa-<mídia>`; ela é segura
+// porque o prefixo é fixo. Os demais ids continuam começando por alfanumérico.
+export const PROJECT_ID_PATTERN = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.decupa-[A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
 type ProjectRuntime = {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
@@ -14,6 +16,7 @@ type ProjectRuntimeFactory = (opts: {
   id: string;
   dir: string;
   prefix: string;
+  kind: "assembly" | "cleanup";
 }) => Promise<ProjectRuntime>;
 
 function notFound(res: ServerResponse): void {
@@ -21,7 +24,7 @@ function notFound(res: ServerResponse): void {
   res.end("não encontrado");
 }
 
-function projectRequest(url: string | undefined): { id: string; prefix: string; rest: string } | null {
+function projectRequest(url: string | undefined): { id: string; prefix: string; rest: string; needsSlash: boolean; search: string } | null {
   let parsed: URL;
   try {
     parsed = new URL(url ?? "/", "http://localhost");
@@ -32,19 +35,25 @@ function projectRequest(url: string | undefined): { id: string; prefix: string; 
   if (!match || !PROJECT_ID_PATTERN.test(match[1]!)) return null;
   if (match[2]?.startsWith("//")) return null;
   const prefix = `/projects/${match[1]}`;
-  return { id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}` };
+  return {
+    id: match[1]!, prefix, rest: `${match[2] ?? "/"}${parsed.search}`,
+    needsSlash: match[2] === undefined, search: parsed.search,
+  };
 }
 
-async function isProjectDirectory(root: string, id: string): Promise<boolean> {
+async function projectKind(root: string, id: string): Promise<"assembly" | "cleanup" | null> {
+  if (id.startsWith(".decupa-") && id.includes(".stale-")) return null;
   const dir = resolve(root, id);
-  if (dirname(dir) !== root) return false;
+  if (dirname(dir) !== root) return null;
   const project = await lstat(dir).catch(() => null);
-  if (!project?.isDirectory()) return false;
+  if (!project?.isDirectory()) return null;
   const manifest = await lstat(join(dir, "project.json")).catch(() => null);
-  return Boolean(manifest?.isFile());
+  if (manifest?.isFile()) return "assembly";
+  const source = await lstat(join(dir, "source.json")).catch(() => null);
+  return source?.isFile() ? "cleanup" : null;
 }
 
-/** Registro dos runtimes de Montagem que vivem numa mesma Raiz. */
+/** Registro dos runtimes de Projetos que vivem numa mesma Raiz. */
 export function createProjectRuntimeRegistry(opts: {
   projectsRoot: string;
   createRuntime: ProjectRuntimeFactory;
@@ -56,9 +65,10 @@ export function createProjectRuntimeRegistry(opts: {
     const existing = runtimes.get(id);
     if (existing) return existing;
     const created = (async (): Promise<ProjectRuntime | null> => {
-      if (!await isProjectDirectory(root, id)) return null;
+      const kind = await projectKind(root, id);
+      if (!kind) return null;
       const dir = resolve(root, id);
-      return opts.createRuntime({ id, dir, prefix });
+      return opts.createRuntime({ id, dir, prefix, kind });
     })().catch((error: unknown) => {
       runtimes.delete(id);
       throw error;
@@ -72,13 +82,18 @@ export function createProjectRuntimeRegistry(opts: {
   return {
     async isProjectPath(url: string | undefined): Promise<boolean> {
       const route = projectRequest(url);
-      return route !== null && await isProjectDirectory(root, route.id);
+      return route !== null && await projectKind(root, route.id) !== null;
     },
     async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
       const route = projectRequest(req.url);
       if (!route) {
         if ((req.url ?? "/").startsWith("/projects/")) notFound(res);
         return (req.url ?? "/").startsWith("/projects/");
+      }
+      if (route.needsSlash && await projectKind(root, route.id) !== null) {
+        res.writeHead(308, { location: `${route.prefix}/${route.search}`, "cache-control": "no-store" });
+        res.end();
+        return true;
       }
       const runtime = await runtimeFor(route.id, route.prefix);
       if (!runtime) {
