@@ -202,6 +202,8 @@ type StartAppOptions = {
   allowPaidVisual?: boolean;
   /** Worker residente injetável; em produção o serviço cria um `worker.py --serve`. */
   speech?: IngestSpeech;
+  /** Runtime de fala compartilhado; usado pela fronteira HTTP e pelos testes. */
+  speechRuntime?: ServerSpeechRuntime;
   env?: Record<string, string | undefined>;
   /** Relógio do acervo; nos testes permite envelhecer envios sem esperar. */
   now?: () => number;
@@ -259,7 +261,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
     : undefined;
   const exec = opts.executor ?? new SpawnExecutor();
-  const speechRuntime = createServerSpeechRuntime({
+  const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
   const visualDir = opts.providerConfigDir ?? homedir();
@@ -665,6 +667,7 @@ async function startCleanupApp(opts: {
   env?: Record<string, string | undefined>;
   now?: () => number;
   speech?: IngestSpeech;
+  speechRuntime?: ServerSpeechRuntime;
   triageFn?: CleanupProjectRuntimeOptions["triageFn"];
 }): Promise<AppHandle> {
   const env = opts.env ?? process.env;
@@ -674,7 +677,7 @@ async function startCleanupApp(opts: {
   if (opts.providerConfigDir) await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
-  const speechRuntime = createServerSpeechRuntime({
+  const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
   const visualEnv = { ...(opts.env ?? process.env) };
@@ -903,6 +906,7 @@ async function startAssemblyApp(opts: {
   now?: () => number;
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
+  speechRuntime?: ServerSpeechRuntime;
 }, sharedMedia?: MediaRuntime): Promise<AppHandle> {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
@@ -920,7 +924,7 @@ async function startAssemblyApp(opts: {
   const visualDir = opts.providerConfigDir ?? homedir();
   const readStored = createCredentialsReader();
   const exec = opts.executor ?? new SpawnExecutor();
-  const speechRuntime = createServerSpeechRuntime({
+  const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
   const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
