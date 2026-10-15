@@ -20,7 +20,6 @@ import { serveMedia } from "../../http/media.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
-import { SpawnExecutor } from "../pipeline.ts";
 import { analyzeSource } from "./analysis.ts";
 import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
 import { describeSource, type VisualClient } from "./model.ts";
@@ -962,7 +961,6 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         cancelled = true;
         abortOperations();
         livePreviews.clear();
-        if (deps.exec instanceof SpawnExecutor) deps.exec.killAll();
         operation = { stage: "cancelled" };
         await sendSnapshot(res, { ok: true, ...snapshot() });
         return true;

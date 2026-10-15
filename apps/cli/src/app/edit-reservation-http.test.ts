@@ -40,6 +40,30 @@ it("a primeira aba obtém a Reserva de Edição e ela fica persistida no Projeto
   }
 });
 
+it("GET da Reserva não devolve o tabId persistido para outro cliente", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-public-http-"));
+  const dir = join(root, "alpha");
+  await mkdir(dir); await createProject(dir, blankProject("alpha-project"));
+  const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    expect((await fetch(`${base}/projects/alpha/reservation`, {
+      method: "POST", headers: { "x-decupa-tab": "tab-secreta" },
+    })).status).toBe(200);
+    const body = await (await fetch(`${base}/projects/alpha/reservation`)).json() as {
+      dono: Record<string, unknown>; minha: boolean;
+    };
+    expect(body).not.toHaveProperty("reserva");
+    expect(body).not.toHaveProperty("reservation");
+    expect(body.dono).not.toHaveProperty("tabId");
+    expect(body.dono).toMatchObject({ nome: expect.any(String), ultimoSinal: expect.any(Number) });
+    expect(body.minha).toBe(false);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("cliente sem aba altera Projeto livre, é bloqueado pela Reserva e volta após expiração", async () => {
   const root = await mkdtemp(join(tmpdir(), "edit-reservation-no-tab-"));
   const dir = join(root, "alpha");

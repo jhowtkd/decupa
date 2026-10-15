@@ -197,10 +197,9 @@ export async function handleReservationRequest(
 
   if (pathname === "/reservation" && req.method === "GET") {
     const reserva = await estado(deps.projeto, agora);
+    const dono = owner(reserva);
     sendJson(res, {
-      reserva,
-      reservation: reserva,
-      dono: owner(reserva),
+      dono,
       minha: Boolean(tabId && reserva?.tabId === tabId),
       mesmaPessoa: Boolean(reserva && reserva.nome === identidade),
     });
