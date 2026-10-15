@@ -153,6 +153,15 @@ textarea, input[type="text"], input[type="number"] { width: 100%; }
 #dropzone { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: var(--bg-0); }
 #dropzone.over { outline: 2px dashed var(--accent); outline-offset: -12px; }
 #dropzone[aria-disabled="true"] { opacity: .55; cursor: progress; }
+dialog#mediaDialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px); border: 1px solid var(--hairline); border-radius: var(--radius-card); padding: 20px; color: var(--ink); background: var(--card); box-shadow: 0 18px 60px rgb(0 0 0 / .35); }
+dialog#mediaDialog::backdrop { background: rgb(0 0 0 / .45); }
+.media-dialog-actions, .media-upload-item, .media-library-item { display: flex; align-items: center; gap: 10px; }
+.media-dialog-actions { margin: 14px 0; }
+#mediaUploads { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.media-upload-item, .media-library-item { justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--hairline); }
+.media-upload-item progress { flex: 1; min-width: 100px; }
+.media-upload-item strong, .media-library-item span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-error { color: var(--red); }
 body.is-empty { grid-template: "topbar topbar" 48px "center monitor" minmax(0, 1fr) / minmax(0, 1fr) 420px; }
 body.is-empty #rail, body.is-empty #textoHead, body.is-empty #center::after { display: none; }
 /* O fechar da gaveta fica: na tela estreita o briefing do vazio mora nela. */

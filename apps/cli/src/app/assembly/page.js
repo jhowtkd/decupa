@@ -14,6 +14,7 @@ const [
   { mountSequencia },
   { idleStatus, stepperState, versionPill },
   { ICON },
+  { ResumableMediaUpload, UploadPausedError },
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -24,12 +25,15 @@ const [
   import(projectPath("editor/sequencia.js")),
   import(projectPath("editor/topbar.js")),
   import(projectPath("editor/icons.js")),
+  import(projectPath("editor/media-upload.js")),
 ]);
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,
   watched: { revision: null, ended: false }, stage: "materiais", transcriptNotice: "",
 });
+const teamMode = document.querySelector('meta[name="decupa-team-mode"]')?.getAttribute("content") === "true";
+const mediaEnabled = document.querySelector('meta[name="decupa-media-enabled"]')?.getAttribute("content") === "true";
 // errorFromPoll: o erro veio de pedido de fundo. notice: aviso até a primeira ação.
 const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null, readOnly: false, owner: null };
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
@@ -400,6 +404,113 @@ async function importFiles(files) {
   }
 }
 
+function mediaDialog() {
+  return document.getElementById("mediaDialog");
+}
+
+function mediaProgressText(progress) {
+  const bytes = Number(progress.bytes || 0).toLocaleString("pt-BR");
+  const total = Number(progress.total || 0).toLocaleString("pt-BR");
+  return `${Math.round(progress.percent || 0)}% · ${bytes} / ${total} bytes`;
+}
+
+async function refreshMediaLibrary() {
+  const list = document.getElementById("mediaLibrary");
+  if (!list) return;
+  list.replaceChildren();
+  try {
+    const response = await fetch("/api/media");
+    const media = await response.json().catch(() => []);
+    if (!response.ok) throw new Error(media.error || `erro ${response.status}`);
+    if (!media.length) {
+      const empty = document.createElement("li");
+      empty.className = "muted";
+      empty.textContent = "O acervo ainda não tem Mídias.";
+      list.append(empty);
+      return;
+    }
+    for (const item of media) {
+      const row = document.createElement("li");
+      row.className = "media-library-item";
+      const info = document.createElement("span");
+      info.textContent = `${item.nome} · ${Number(item.tamanho).toLocaleString("pt-BR")} bytes`;
+      const add = document.createElement("button");
+      add.type = "button";
+      add.textContent = "Adicionar";
+      add.onclick = async () => {
+        add.disabled = true;
+        await call("project/media", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: project().revision, mediaId: item.id }),
+          label: "Adicionando Mídia…",
+        });
+        add.disabled = false;
+      };
+      row.append(info, add);
+      list.append(row);
+    }
+  } catch (error) {
+    const message = document.createElement("li");
+    message.className = "media-error";
+    message.textContent = error?.message || String(error);
+    list.append(message);
+  }
+}
+
+async function uploadTeamFiles(files) {
+  if (!teamMode || !mediaEnabled) return importFiles(files);
+  const uploads = document.getElementById("mediaUploads");
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "media-upload-item";
+    const title = document.createElement("strong");
+    title.textContent = file.name;
+    const progress = document.createElement("progress");
+    progress.max = 100;
+    progress.value = 0;
+    const status = document.createElement("span");
+    status.className = "muted";
+    const pause = document.createElement("button");
+    pause.type = "button";
+    pause.textContent = "Pausar";
+    row.append(title, progress, status, pause);
+    uploads?.append(row);
+    const upload = new ResumableMediaUpload({
+      onProgress: (value) => {
+        progress.value = value.percent || 0;
+        status.textContent = mediaProgressText(value) + (value.state === "verifying" ? " · verificando" : "");
+        pause.textContent = value.state === "uploading" ? "Pausar" : "Retomar";
+      },
+    });
+    pause.onclick = () => {
+      if (!upload.paused) {
+        upload.pause();
+        pause.textContent = "Retomar";
+        return;
+      }
+      void upload.start(file).catch((error) => {
+        pause.textContent = "Retomar";
+        status.textContent = error.message;
+      });
+    };
+    try {
+      const result = await upload.start(file);
+      await call("project/media", {
+        method: "POST",
+        body: JSON.stringify({ baseRevision: project().revision, mediaId: result.mediaId }),
+        label: "Adicionando Mídia…",
+      });
+      status.textContent = result.deduplicado ? "Pronto · Mídia reaproveitada" : "Pronto";
+      await refreshMediaLibrary();
+    } catch (error) {
+      pause.textContent = "Retomar";
+      status.textContent = error instanceof UploadPausedError
+        ? "Pausado — escolha o mesmo arquivo para retomar depois"
+        : (error?.message || String(error));
+    }
+  }
+}
+
 /* ---- Fiação ---- */
 
 mountStage({ state, api, player });
@@ -544,11 +655,21 @@ document.addEventListener("decupa:schedule-preview", () => scheduleAutoPreview()
 
 const dropzone = document.getElementById("dropzone");
 const filePicker = document.getElementById("filePicker");
-dropzone.addEventListener("click", () => filePicker.click());
+function chooseFiles() {
+  filePicker.click();
+}
+function openMediaDialog() {
+  if (!teamMode || !mediaEnabled) return chooseFiles();
+  const dialog = mediaDialog();
+  if (dialog?.showModal && !dialog.open) dialog.showModal();
+  else if (dialog) dialog.hidden = false;
+  void refreshMediaLibrary();
+}
+dropzone.addEventListener("click", openMediaDialog);
 dropzone.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" || ev.key === " ") {
     ev.preventDefault();
-    filePicker.click();
+    openMediaDialog();
   }
 });
 dropzone.addEventListener("dragover", (ev) => {
@@ -559,10 +680,10 @@ dropzone.addEventListener("dragleave", () => dropzone.classList.remove("over"));
 dropzone.addEventListener("drop", (ev) => {
   ev.preventDefault();
   dropzone.classList.remove("over");
-  if (ev.dataTransfer.files.length) void importFiles([...ev.dataTransfer.files]);
+  if (ev.dataTransfer.files.length) void (teamMode ? uploadTeamFiles([...ev.dataTransfer.files]) : importFiles([...ev.dataTransfer.files]));
 });
 filePicker.addEventListener("change", () => {
-  if (filePicker.files.length) void importFiles([...filePicker.files]);
+  if (filePicker.files.length) void (teamMode ? uploadTeamFiles([...filePicker.files]) : importFiles([...filePicker.files]));
   filePicker.value = "";
 });
 
@@ -574,8 +695,17 @@ textoEl.addEventListener("dragover", (ev) => {
 textoEl.addEventListener("drop", (ev) => {
   if (ev.dataTransfer.files.length) {
     ev.preventDefault();
-    void importFiles([...ev.dataTransfer.files]);
+    void (teamMode ? uploadTeamFiles([...ev.dataTransfer.files]) : importFiles([...ev.dataTransfer.files]));
   }
+});
+
+window.addEventListener("decupa:open-media", openMediaDialog);
+document.getElementById("mediaUpload")?.addEventListener("click", chooseFiles);
+document.getElementById("mediaRefresh")?.addEventListener("click", () => { void refreshMediaLibrary(); });
+document.getElementById("mediaClose")?.addEventListener("click", () => {
+  const dialog = mediaDialog();
+  if (dialog?.close) dialog.close();
+  else if (dialog) dialog.hidden = true;
 });
 
 renderStatus();

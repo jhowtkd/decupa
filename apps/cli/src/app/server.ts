@@ -15,7 +15,7 @@ import { access, readFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promi
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertSafeBind, guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
+import { assertSafeBind, guardLocalRequest, hostConfig, isLoopbackBind, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import type { Assembly } from "./assembly/types.ts";
 import { JobStore } from "./jobs.ts";
 import { createCleanupPlanning } from "../condense/cleanup-planning.ts";
@@ -26,7 +26,7 @@ import {
 import { triageIdentity } from "../triage.ts";
 import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
-import { claimWorkDir, cleanupWorkDir } from "./session.ts";
+import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
 import { blankProject, createAssemblyRuntime, type AssemblyDeps } from "./assembly/routes.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
@@ -251,6 +251,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   // escutar fora do loopback sem senha não sobe.
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
   const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  const media = await configuredMediaRuntime(opts.env, opts.now);
+  const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -260,11 +262,18 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     if (!PROJECT_ID_PATTERN.test(opts.projectId)) throw new Error("id de Projeto inválido");
     const initialDir = resolve(opts.projectDir ?? resolve(projectsRoot, opts.projectId));
     if (dirname(initialDir) !== projectsRoot || basename(initialDir) !== opts.projectId) throw new Error("Projeto inicial fora da Raiz");
-    await mkdir(initialDir, { recursive: true });
-    try {
-      await access(join(initialDir, "project.json"));
-    } catch {
-      await createProject(initialDir, blankProject(randomUUID()));
+    if (opts.input) {
+      await mkdir(initialDir, { recursive: true });
+      await claimWorkDir(initialDir, resolve(opts.input), opts.now, {
+        flow: "limpeza", displayName: basename(resolve(opts.input)),
+      });
+    } else {
+      await mkdir(initialDir, { recursive: true });
+      try {
+        await access(join(initialDir, "project.json"));
+      } catch {
+        await createProject(initialDir, blankProject(randomUUID()));
+      }
     }
   }
   const visualEnv = { ...(opts.env ?? process.env) };
@@ -278,6 +287,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
   const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const cleanupPage = await readFile(join(HERE, "page.html"), "utf8");
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -299,7 +309,22 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
 
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
-    createRuntime: async ({ id, dir, prefix }) => {
+    createRuntime: async ({ id, dir, prefix, kind }) => {
+      if (kind === "cleanup") {
+        const manifest = await readSourceManifest(dir);
+        if (!manifest?.path) throw new Error("manifesto da Limpeza sem caminho da Mídia");
+        const cleanupSetup = await createCleanupProjectRuntime({
+          input: resolve(manifest.path), workDir: dir, prefix, displayName: manifest.displayName, provider: opts.provider,
+          providerConfigDir: opts.providerConfigDir, fetchImpl: opts.fetchImpl, env,
+          now: opts.now, speech: opts.speech, triageFn: opts.triageFn, autoStart: opts.autoStart,
+          exec, coordinator, visualEnv, visualDir, readStored, loadStored: globalLoadStored,
+          page: cleanupPage,
+        });
+        return {
+          handle: async (req, res) => { cleanupSetup.startIngest(); return cleanupSetup.runtime.handle(req, res); },
+          close: async () => { await Promise.all([cleanupSetup.runtime.close(), cleanupSetup.closeSpeech()]); },
+        };
+      }
       const setup = await createAssemblyProjectRuntime({
         ...opts,
         dir,
@@ -315,6 +340,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         editReservationUiJs,
         pageCss,
         pageJs,
+        media,
+        teamMode,
         templatesRoot,
         port: () => boundPort,
         allowPaidModel,
@@ -330,7 +357,6 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       };
     },
   });
-  const media = await configuredMediaRuntime(opts.env, opts.now);
 
   const server = createServer((req, res) => {
     const handle = async (): Promise<void> => {
@@ -435,16 +461,14 @@ export function otioClipsForPlan(
   return videoClips;
 }
 
-async function startCleanupApp(opts: {
+type CleanupProjectRuntimeOptions = {
   input: string;
-  port?: number;
+  workDir: string;
+  prefix?: string;
+  displayName?: string;
   providerConfigDir?: string;
-  coordinatorDir?: string;
-  templatesRoot?: string;
   provider?: string;
   executor?: Executor;
-  autoStart?: boolean;
-  workDir?: string;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
   now?: () => number;
@@ -456,32 +480,33 @@ async function startCleanupApp(opts: {
     provider?: string;
     signal?: AbortSignal;
   }) => Promise<{ keepList: string }>;
-}): Promise<AppHandle> {
-  const env = opts.env ?? process.env;
-  const network = resolveHostConfig(hostConfig(env));
-  assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
-  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
-  if (opts.providerConfigDir) {
-    await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
-  }
-  const input = resolve(opts.input);
-  const exec = opts.executor ?? new SpawnExecutor();
-  const provider = opts.provider;
-  const visualEnv = { ...(opts.env ?? process.env) };
-  const coordinator = opts.coordinatorDir || opts.providerConfigDir
-    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
-    : undefined;
-  resolveAssemblyTextProvider(visualEnv); // Campo inválido falha na subida, antes de qualquer envio.
-  const visualDir = opts.providerConfigDir ?? homedir();
-  const readStored = createCredentialsReader();
-  const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
-  const page = await readFile(join(HERE, "page.html"), "utf8");
+  exec: Executor;
+  autoStart?: boolean;
+  coordinator?: ReturnType<typeof createHeavyCoordinator>;
+  visualEnv: Record<string, string | undefined>;
+  visualDir: string;
+  readStored: ReturnType<typeof createCredentialsReader>;
+  loadStored: () => ReturnType<typeof readAnalysisCredentials>;
+  page: string;
+};
 
-  const workDir = opts.workDir ?? cleanupWorkDir(input);
+type CleanupProjectRuntimeSetup = {
+  runtime: ReturnType<typeof createCleanupRuntime>;
+  jobId: string;
+  exec: Executor;
+  closeSpeech: () => Promise<void>;
+  startIngest: () => void;
+  onJevDisabled: () => void | Promise<void>;
+};
+
+async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): Promise<CleanupProjectRuntimeSetup> {
+  const { input, workDir, exec, provider, visualEnv, visualDir, readStored } = opts;
   // Antes do coordenador e de qualquer leitura: ele mora dentro da pasta, e
   // uma pasta de outra fonte vai inteira para o lado. O ingest roda uma vez
   // por processo, então conferir aqui cobre todo reuso da sessão.
-  const { staleDir } = await claimWorkDir(workDir, input);
+  const { staleDir } = await claimWorkDir(workDir, input, opts.now, {
+    flow: "limpeza", displayName: opts.displayName ?? basename(input),
+  });
   if (staleDir) console.log(`a fonte mudou desde a última sessão; os arquivos antigos foram para ${staleDir}`);
   await mkdir(join(workDir, "out"), { recursive: true });
   const { speech, closeSpeech } = attachResidentSpeech({
@@ -499,7 +524,7 @@ async function startCleanupApp(opts: {
   const tracer = createTracer();
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
-    env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored,
+    env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored: opts.loadStored,
     visual: () => maybeVisual(pipelineJob), flags: () => maybeInspectFlags(workDir) });
   const replan = cleanup.replan;
 
@@ -519,7 +544,7 @@ async function startCleanupApp(opts: {
         tracer,
         speech,
         ingestAbort.signal,
-        { requireSpeech: true, coordinator },
+        { requireSpeech: true, coordinator: opts.coordinator },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -537,7 +562,7 @@ async function startCleanupApp(opts: {
    * O proxy é gerado aqui dentro: só uma triagem por vez chega nele.
    */
   async function triageReply(): Promise<Record<string, unknown>> {
-    const stored = await loadStored();
+    const stored = await opts.loadStored();
     const suggested = await runTriage(pipelineJob, exec, provider, opts.triageFn, {
       env: visualEnv, fetchImpl: opts.fetchImpl, credentialsDir: visualDir, stored,
     });
@@ -591,7 +616,7 @@ async function startCleanupApp(opts: {
     const index = await stat(indexPath(pipelineJob)).catch(() => null);
     let providerId: string;
     try {
-      providerId = (await triageIdentity({ provider, projectDir: process.cwd(), credentialsDir: visualDir, env: visualEnv })).providerId;
+      providerId = (await triageIdentity({ provider, projectDir: workDir, credentialsDir: visualDir, env: visualEnv })).providerId;
     } catch (error) {
       providerId = `sem provedor: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -604,16 +629,62 @@ async function startCleanupApp(opts: {
     });
   }
 
-  let initialIngestStarted = false;
-  let boundPort = opts.port ?? 7788;
   const runtime = createCleanupRuntime({
-    input, workDir, provider: opts.provider, providerConfigDir: opts.providerConfigDir,
+    input, workDir, displayName: opts.displayName, provider: opts.provider, providerConfigDir: opts.providerConfigDir,
     fetchImpl: opts.fetchImpl, visualEnv, exec, pipelineJob, job, store, cleanup, ingestAbort,
-    audioReady: () => audioReady, loadStored,
-    page: async () => withVisualNotice(page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await loadStored(), false).notice),
+    audioReady: () => audioReady, loadStored: opts.loadStored,
+    prefix: opts.prefix,
+    page: async () => withCleanupProject(withVisualNotice(opts.page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await opts.loadStored(), false).notice), opts.prefix ?? ""),
     replan, triageReply, triageRequestKey, otioClipsForPlan,
-    coordinator, now: opts.now, identity: requestIdentity,
+    coordinator: opts.coordinator, now: opts.now, identity: requestIdentity,
   });
+  let initialIngestStarted = false;
+  const startIngest = (): void => {
+    if (opts.autoStart === false || initialIngestStarted) return;
+    initialIngestStarted = true;
+    void ingest();
+  };
+  return { runtime, jobId: job.id, exec, closeSpeech, startIngest,
+    onJevDisabled: () => { cleanup.cancelNotes(); return cleanup.refreshNotes(); } };
+}
+
+async function startCleanupApp(opts: {
+  input: string;
+  port?: number;
+  providerConfigDir?: string;
+  coordinatorDir?: string;
+  templatesRoot?: string;
+  provider?: string;
+  executor?: Executor;
+  autoStart?: boolean;
+  workDir?: string;
+  fetchImpl?: typeof fetch;
+  env?: Record<string, string | undefined>;
+  now?: () => number;
+  speech?: IngestSpeech;
+  triageFn?: CleanupProjectRuntimeOptions["triageFn"];
+}): Promise<AppHandle> {
+  const env = opts.env ?? process.env;
+  const network = resolveHostConfig(hostConfig(env));
+  assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  if (opts.providerConfigDir) await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
+  const input = resolve(opts.input);
+  const exec = opts.executor ?? new SpawnExecutor();
+  const visualEnv = { ...(opts.env ?? process.env) };
+  const coordinator = opts.coordinatorDir || opts.providerConfigDir
+    ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
+    : undefined;
+  resolveAssemblyTextProvider(visualEnv); // Campo inválido falha na subida, antes de qualquer envio.
+  const visualDir = opts.providerConfigDir ?? homedir();
+  const readStored = createCredentialsReader();
+  const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
+  const page = await readFile(join(HERE, "page.html"), "utf8");
+  const workDir = opts.workDir ?? cleanupWorkDir(input);
+  const setup = await createCleanupProjectRuntime({ ...opts, input, workDir, exec, coordinator,
+    visualEnv, visualDir, readStored, loadStored, page });
+  const { runtime, jobId, closeSpeech, startIngest } = setup;
+  let boundPort = opts.port ?? 7788;
   const media = await configuredMediaRuntime(opts.env, opts.now);
 
   const server = createServer((req, res) => {
@@ -630,14 +701,9 @@ async function startCleanupApp(opts: {
       if (await auth.handlePublic(req, res, url)) return;
       if (!auth.authorize(req, res, url)) return;
       if (media && await media.handle(req, res)) return;
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => {
-        cleanup.cancelNotes(); return cleanup.refreshNotes();
-      } })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: setup.onJevDisabled })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
-      if (opts.autoStart !== false && !initialIngestStarted) {
-        initialIngestStarted = true;
-        void ingest();
-      }
+      startIngest();
       const handled = await runtime.handle(req, res);
       if (handled) return;
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -658,13 +724,10 @@ async function startCleanupApp(opts: {
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
   boundPort = port;
 
-  if (opts.autoStart !== false && !opts.providerConfigDir) {
-    initialIngestStarted = true;
-    void ingest();
-  }
+  if (opts.autoStart !== false && !opts.providerConfigDir) startIngest();
 
   return {
-    port, address: network.bindHost, jobId: job.id,
+    port, address: network.bindHost, jobId,
     close: async () => {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos recebem o sinal.
@@ -684,7 +747,12 @@ async function startCleanupApp(opts: {
  * Página da montagem com a pasta do projeto na meta `decupa-project-dir`
  * (o menu do projeto a mostra). O caminho entra escapado para atributo HTML.
  */
-export function withProjectDir(page: string, dir: string, prefix = ""): string {
+export function withProjectDir(
+  page: string,
+  dir: string,
+  prefix = "",
+  opts: { teamMode?: boolean; mediaEnabled?: boolean } = {},
+): string {
   const escaped = dir.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   // Substituição por função: uma pasta com `$&`, `$$` ou `$\`` não é padrão de replace.
   return page
@@ -692,8 +760,18 @@ export function withProjectDir(page: string, dir: string, prefix = ""): string {
       () => `<meta name="decupa-project-dir" content="${escaped}">`)
     .replace('<meta name="decupa-project-prefix" content="">',
       () => `<meta name="decupa-project-prefix" content="${prefix}">`)
+    .replace('<meta name="decupa-team-mode" content="">',
+      () => `<meta name="decupa-team-mode" content="${opts.teamMode === true ? "true" : "false"}">`)
+    .replace('<meta name="decupa-media-enabled" content="">',
+      () => `<meta name="decupa-media-enabled" content="${opts.mediaEnabled === true ? "true" : "false"}">`)
     .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css", prefix))
     .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js", prefix));
+}
+
+/** Injeta no app de Limpeza o mesmo prefixo que o registro usa para rotear. */
+export function withCleanupProject(page: string, prefix = ""): string {
+  return page.replace('<meta name="decupa-project-prefix" content="">',
+    () => `<meta name="decupa-project-prefix" content="${prefix}">`);
 }
 
 async function loadAssemblyPageAssets(): Promise<{
@@ -729,6 +807,8 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   port: () => number;
   allowPaidModel: boolean;
   allowPaidVisual: boolean;
+  media?: MediaRuntime;
+  teamMode?: boolean;
   alwaysTextConfigured?: boolean;
 }): Promise<{
   runtime: ReturnType<typeof createAssemblyRuntime>;
@@ -760,7 +840,10 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   });
   try {
     const runtime = createAssemblyRuntime(opts.dir, {
-      page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix), keyProviderState(opts.visualEnv, await loadStored()).notice),
+      page: async () => withVisualNotice(withProjectDir(opts.page, opts.dir, opts.prefix, {
+        teamMode: opts.teamMode === true,
+        mediaEnabled: Boolean(opts.media),
+      }), keyProviderState(opts.visualEnv, await loadStored()).notice),
       pageCss: opts.pageCss,
       pageJs: opts.pageJs,
       projectPathJs: opts.projectPathJs,
@@ -781,6 +864,8 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
       coordinator: opts.coordinator,
       now: opts.now,
       identity: requestIdentity,
+      media: opts.media,
+      teamMode: opts.teamMode,
     });
     const project = await runtime.ensureProject(opts.inputs);
     return { runtime, project, loadStored, transports, speech: speech.speech, closeSpeech: speech.closeSpeech };
@@ -817,6 +902,7 @@ async function startAssemblyApp(opts: {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
   const dir = resolve(opts.projectDir);
+  const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
     ? createHeavyCoordinator({ coordinatorDir: opts.coordinatorDir, configDir: opts.providerConfigDir, env: visualEnv })
@@ -828,6 +914,7 @@ async function startAssemblyApp(opts: {
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
+  const media = await configuredMediaRuntime(opts.env, opts.now);
   const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
   const setup = await createAssemblyProjectRuntime({
     ...opts,
@@ -842,6 +929,8 @@ async function startAssemblyApp(opts: {
     editReservationUiJs,
     pageCss,
     pageJs,
+    media,
+    teamMode,
     templatesRoot,
     port: () => boundPort,
     allowPaidModel,
@@ -855,7 +944,6 @@ async function startAssemblyApp(opts: {
     resolveAnalysis:transports.resolveAnalysis,
     allowModel:allowPaidModel,allowVisual:allowPaidVisual,
   });
-  const media = await configuredMediaRuntime(opts.env, opts.now);
   const newProjects: AppHandle[] = [];
 
   const server = createServer((req, res) => {

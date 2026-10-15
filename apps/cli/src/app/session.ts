@@ -50,6 +50,9 @@ export interface SourceManifest {
   path: string;
   size: number;
   mtimeMs: number;
+  /** O manifesto também identifica o Projeto quando ele vive numa Raiz. */
+  flow?: "limpeza";
+  displayName?: string;
   /**
    * sha256 de `tamanho + primeiro MiB + último MiB`. Desempata "só o mtime
    * mudou": cópia, sincronização de nuvem, `touch` e antivírus mexem na data
@@ -57,6 +60,9 @@ export interface SourceManifest {
    */
   sample?: string;
 }
+
+/** Forma tolerante apenas para ler manifestos gravados pela versão anterior. */
+export type StoredSourceManifest = Omit<SourceManifest, "flow"> & { flow?: "limpeza" | "cleanup" };
 
 const SAMPLE_BYTES = 1024 * 1024;
 
@@ -91,13 +97,15 @@ export async function sourceSample(path: string, size: number): Promise<string> 
 
 export const sourceManifestPath = (workDir: string) => join(workDir, "source.json");
 
-async function readManifest(workDir: string): Promise<SourceManifest | null> {
+export async function readSourceManifest(workDir: string): Promise<StoredSourceManifest | null> {
   try {
-    return JSON.parse(await readFile(sourceManifestPath(workDir), "utf8")) as SourceManifest;
+    return JSON.parse(await readFile(sourceManifestPath(workDir), "utf8")) as StoredSourceManifest;
   } catch {
     return null;
   }
 }
+
+const readManifest = readSourceManifest;
 
 /**
  * Grava o manifesto por parcial e rename: ele decide o que é reusado. O nome
@@ -124,7 +132,7 @@ async function writeManifest(workDir: string, manifest: SourceManifest): Promise
  */
 async function sourceUnchanged(
   workDir: string,
-  saved: SourceManifest | null,
+  saved: StoredSourceManifest | null,
   current: SourceManifest,
 ): Promise<boolean> {
   if (!saved || saved.path !== current.path || saved.size !== current.size) return false;
@@ -132,7 +140,11 @@ async function sourceUnchanged(
   if (!saved.sample) return false;
   const sample = await sourceSample(current.path, current.size).catch(() => null);
   if (sample !== saved.sample) return false;
-  await writeManifest(workDir, { ...current, sample }).catch(() => undefined);
+  await writeManifest(workDir, {
+    ...current, sample,
+    ...(saved.flow ? { flow: "limpeza" as const } : {}),
+    ...(saved.displayName ? { displayName: saved.displayName } : {}),
+  }).catch(() => undefined);
   return true;
 }
 
@@ -159,12 +171,18 @@ export async function claimWorkDir(
   workDir: string,
   input: string,
   now: () => number = Date.now,
+  metadata: Pick<SourceManifest, "flow" | "displayName"> = { flow: "limpeza", displayName: basename(input) },
 ): Promise<{ staleDir?: string }> {
   const source = await stat(input).catch(() => null);
   if (!source) return {};
   const current: SourceManifest = { path: input, size: source.size, mtimeMs: source.mtimeMs };
   const saved = await readManifest(workDir);
-  if (await sourceUnchanged(workDir, saved, current)) return {};
+  if (await sourceUnchanged(workDir, saved, current)) {
+    if (saved && (saved.flow !== metadata.flow || saved.displayName !== metadata.displayName)) {
+      await writeManifest(workDir, { ...saved, flow: "limpeza", ...metadata });
+    }
+    return {};
+  }
 
   let staleDir: string | undefined;
   const entries = await readdir(workDir).catch(() => []);
@@ -174,7 +192,7 @@ export async function claimWorkDir(
   }
   await mkdir(workDir, { recursive: true });
   const sample = await sourceSample(input, source.size).catch(() => undefined);
-  await writeManifest(workDir, sample ? { ...current, sample } : current);
+  await writeManifest(workDir, sample ? { ...current, ...metadata, sample } : { ...current, ...metadata });
   return staleDir ? { staleDir } : {};
 }
 

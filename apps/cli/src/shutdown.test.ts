@@ -111,7 +111,8 @@ ${ignoraSinais ? "while :; do sleep 1; done" : "exec sleep 60"}
       // vem logo depois ainda tem de esperar o grupo que ignora TERM.
       const jobId = /get\("job"\)\s*\|\|\s*("(?:[^"\\]|\\.)*")/.exec(html)?.[1];
       expect(jobId, `sem __JOB__ no HTML:\n${html.slice(0, 300)}`).toBeDefined();
-      const res = await fetch(`http://127.0.0.1:${port}/jobs/${JSON.parse(jobId!) as string}/cancel`, { method: "POST" });
+      const prefix = /meta name="decupa-project-prefix" content="([^"]*)"/.exec(html)?.[1] ?? "";
+      const res = await fetch(`http://127.0.0.1:${port}${prefix}/jobs/${JSON.parse(jobId!) as string}/cancel`, { method: "POST" });
       expect(res.status, saida).toBeLessThan(300);
     }
     process.kill(child.pid!, sinal);

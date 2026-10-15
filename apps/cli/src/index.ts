@@ -9,6 +9,7 @@ import { GATE_P90_MS, runMeasure } from "./measure.ts";
 import { BLIND_METHODS, isBlindMethod, runReport } from "./report.ts";
 import { openBrowser } from "./runtime.ts";
 import { isLoopbackBind } from "./http/origin.ts";
+import { cleanupWorkDir } from "./app/session.ts";
 
 const USAGE = `decupa — bancada de medição
 
@@ -427,16 +428,22 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
     const { startApp } = await import("./app/server.ts");
+    const input = resolve(values.input);
+    const workDir = cleanupWorkDir(input);
+    const projectId = basename(workDir);
     const app = await startApp({
       providerConfigDir: homedir(),
-      input: values.input,
+      input,
+      projectsRoot: dirname(input),
+      projectDir: workDir,
+      projectId,
       port: values.port ? Number(values.port) : undefined,
       provider: values.provider,
       env: envWithNetworkFlags(values),
     });
     const appEnv = envWithNetworkFlags(values);
     const host = isLoopbackBind(app.address) ? "127.0.0.1" : app.address;
-    const url = `http://${host}:${app.port}`;
+    const url = `http://${host}:${app.port}/projects/${projectId}/`;
     console.log(`tela de limpeza aberta em ${url}`);
     console.log("Ctrl+C para encerrar");
     // Abre o navegador; falhar aqui não é motivo para derrubar o servidor.

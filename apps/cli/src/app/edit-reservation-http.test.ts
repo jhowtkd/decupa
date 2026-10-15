@@ -1,12 +1,14 @@
-import { access, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { hashFile } from "@decupa/media";
 import { expect, it } from "vitest";
 import { blankProject } from "./assembly/routes.ts";
 import { fixtureAssembly } from "./assembly/fixture.ts";
 import { createProject } from "./assembly/store.ts";
 import { startApp } from "./server.ts";
+import { cleanupWorkDir } from "./session.ts";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
@@ -232,6 +234,33 @@ it("aplica a mesma Reserva ao runtime legado de Limpeza", async () => {
     expect((await fetch(`${base}/reservation`, {
       method: "POST", headers: { "x-decupa-tab": "tab-b" },
     })).status).toBe(200);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("a Reserva vale para a Limpeza servida sob /projects/:id no modo Raiz", async () => {
+  const root = await mkdtemp(join(tmpdir(), "edit-reservation-cleanup-root-"));
+  const input = join(root, "aula.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), input);
+  const workDir = cleanupWorkDir(input);
+  const id = basename(workDir);
+  const app = await startApp({ input, projectsRoot: root, projectDir: workDir, projectId: id, port: 0, autoStart: false, executor });
+  const base = `http://127.0.0.1:${app.port}`;
+  const project = `${base}/projects/${id}`;
+  const tab = (tabId: string) => ({ origin: base, "x-decupa-tab": tabId, "content-type": "application/json" });
+  try {
+    // No modo Raiz, `app.jobId` é o id do Projeto; o job da Limpeza vem na página.
+    const jobId = /get\("job"\)\s*\|\|\s*"([^"]+)"/.exec(await (await fetch(`${project}/`)).text())?.[1];
+    expect(jobId).toBeTruthy();
+    expect((await fetch(`${project}/reservation`, { method: "POST", headers: tab("A") })).status).toBe(200);
+    const cancel = await fetch(`${project}/jobs/${jobId}/cancel`, { method: "POST", headers: tab("B") });
+    expect(cancel.status).toBe(409);
+    expect((await cancel.json() as { dono: { nome: string } }).dono.nome).toBeTruthy();
+    // Modo Leitura: a outra aba continua lendo o job e a página.
+    expect((await fetch(`${project}/jobs/${jobId}`, { headers: { "x-decupa-tab": "B" } })).status).toBe(200);
+    expect((await fetch(`${project}/edit-reservation-ui.js`)).status).toBe(200);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

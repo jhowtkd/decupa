@@ -4,7 +4,7 @@ import {
   mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile,
 } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { probe } from "@decupa/media";
 
 /** Estados que a interface do navegador usa para acompanhar um envio. */
@@ -28,13 +28,15 @@ interface UploadState {
   sha256?: string;
 }
 
-interface MediaMetadata {
+export interface MediaMetadata {
   id: string;
   nome: string;
   tamanho: number;
   duracao: number;
   criadoEm: number;
 }
+
+export type MediaRecord = MediaMetadata & { path: string };
 
 class UploadHttpError extends Error {
   readonly status: number;
@@ -129,6 +131,7 @@ async function hashPartial(path: string): Promise<Hash> {
 
 export interface MediaRuntime {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
+  getMedia(mediaId: string): Promise<MediaRecord | null>;
   close(): Promise<void>;
 }
 
@@ -145,7 +148,7 @@ export interface MediaRuntimeOptions {
 export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<MediaRuntime> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const root = opts.root;
+  const root = resolve(opts.root);
   const pool = join(root, "pool");
   const temporary = join(root, ".tmp");
   const maxBytes = positiveNumber(env.DECUPA_UPLOAD_MAX_GB, DEFAULT_MAX_GB) * 1024 ** 3;
@@ -340,6 +343,18 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     return result.sort((a, b) => a.nome.localeCompare(b.nome));
   }
 
+  async function getMedia(mediaId: string): Promise<MediaRecord | null> {
+    if (!/^[0-9a-f]{64}$/i.test(mediaId)) return null;
+    const id = mediaId.toLowerCase();
+    try {
+      const metadata = JSON.parse(await readFile(join(pool, `${id}.json`), "utf8")) as MediaMetadata;
+      if (metadata.id !== id || !await stat(join(pool, id)).then(() => true, () => false)) return null;
+      return { ...metadata, path: join(pool, id) };
+    } catch {
+      return null;
+    }
+  }
+
   async function cleanExpired(): Promise<void> {
     const cutoff = now() - ttlMs;
     for (const entry of await readdir(temporary, { withFileTypes: true })) {
@@ -362,6 +377,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   interval.unref?.();
 
   const runtime: MediaRuntime = {
+    getMedia,
     handle: async (req, res): Promise<boolean> => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const parts = url.pathname.split("/").filter(Boolean);
