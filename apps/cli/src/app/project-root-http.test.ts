@@ -1,6 +1,6 @@
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { blankProject } from "./assembly/routes.ts";
 import { createProject } from "./assembly/store.ts";
@@ -148,22 +148,29 @@ it("cria Montagem nova pelo caminho usado pelo editor na mesma Raiz", async () =
   const app = await startApp({ projectsRoot: root, projectId: "existente", port: 0, executor, env: {} });
   const base = `http://127.0.0.1:${app.port}`;
   try {
-    const response = await fetch(`${base}/projects/existente/project/new`, { method: "POST", body: "{}" });
+    const response = await fetch(`${base}/projects/existente/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Outra Montagem", fluxo: "montagem" }),
+    });
     expect(response.status).toBe(201);
-    const body = await response.json() as { url: string; dir: string };
+    const body = await response.json() as { id: string; url: string };
     const id = body.url.match(/^\/projects\/([A-Za-z0-9][A-Za-z0-9._-]*)\/$/)?.[1];
-    expect(id).toMatch(/^projeto-[A-Za-z0-9]{4}$/);
-    expect(body.dir).toBe(join(root, id!));
-    expect(dirname(body.dir)).toBe(root);
-    expect(basename(body.dir)).toBe(id);
-    await access(join(body.dir, "project.json"));
-    expect(JSON.parse(await readFile(join(body.dir, "project.json"), "utf8"))).toMatchObject({ id: expect.any(String) });
+    expect(id).toMatch(/^outra-montagem-[a-z0-9]{4}$/);
+    expect(body.id).toBe(id);
+    const dir = join(root, id!);
+    await access(join(dir, "project.json"));
+    expect(JSON.parse(await readFile(join(dir, "project.json"), "utf8")))
+      .toMatchObject({ assembly: { name: "Outra Montagem" } });
     expect((await fetch(`${base}${body.url}`)).status).toBe(200);
     expect((await fetch(`${base}${body.url}project`)).status).toBe(200);
 
-    const rootResponse = await fetch(`${base}/project/new`, { method: "POST", body: "{}" });
+    const rootResponse = await fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Raiz", fluxo: "montagem" }),
+    });
     expect(rootResponse.status).toBe(201);
-    const rootBody = await rootResponse.json() as { url: string; dir: string };
+    const rootBody = await rootResponse.json() as { id: string; url: string };
+    expect(rootBody).toEqual({ id: rootBody.id, url: `/projects/${rootBody.id}/` });
     expect((await fetch(`${base}${rootBody.url}`)).status).toBe(200);
     expect((await fetch(`${base}${rootBody.url}project`)).status).toBe(200);
   } finally {

@@ -45,7 +45,7 @@ function montar(confirm = vi.fn(() => false)) {
   );
   const state = createState({});
   const api = {
-    call: vi.fn(async (_path: string) => ({ res: { ok: true, status: 201 }, body: { url: "http://127.0.0.1:9/" } })),
+    call: vi.fn(async (_path: string, _opts?: { body?: string }) => ({ res: { ok: true, status: 201 }, body: { url: "http://127.0.0.1:9/" } })),
     notifyError: vi.fn(),
   };
   mountRail({ state, api, player: { previewBusy: () => false, seek: vi.fn() }, confirm });
@@ -77,6 +77,7 @@ it("Novo projeto abre a página com #novo", async () => {
   await Promise.resolve();
   await Promise.resolve();
   expect(api.call.mock.calls[0]?.[0]).toBe("project/new");
+  expect(JSON.parse(api.call.mock.calls[0]?.[1]?.body as string)).toEqual({ nome: "Novo projeto", fluxo: "montagem" });
   expect(domWindow().location.assign).toHaveBeenCalledWith("http://127.0.0.1:9/#novo");
 });
 

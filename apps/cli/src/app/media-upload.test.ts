@@ -379,7 +379,7 @@ it("reusa o runtime de Mídias ao abrir um Projeto novo e reconstitui hash alter
   const sha256 = createHash("sha256").update(input).digest("hex");
   await mkdir(projectDir, { recursive: true });
   const app = await startApp({
-    projectDir, port: 0, executor,
+    projectsRoot: root, projectId: "project", projectDir, port: 0, executor,
     env: { DECUPA_MEDIA_ROOT: mediaRoot, DECUPA_UPLOAD_PART_BYTES: "20000" },
   });
   apps.push(app);
@@ -393,11 +393,15 @@ it("reusa o runtime de Mídias ao abrir um Projeto novo e reconstitui hash alter
     method: "PATCH", headers: { "Content-Range": range(0, firstEnd, input.byteLength) }, body: input.subarray(0, firstEnd + 1),
   })).status).toBe(200);
 
-  const created = await fetch(`${base}/project/new`, { method: "POST" });
+  const created = await fetch(`${base}/project/new`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nome: "Projeto compartilhado", fluxo: "montagem" }),
+  });
   expect(created.status).toBe(201);
   const child = await created.json() as { url: string };
+  expect((await fetch(`${base}${child.url}`)).status).toBe(200);
   const secondEnd = Math.min(input.byteLength, upload.tamanhoParte * 2) - 1;
-  expect((await fetch(`${child.url}api/uploads/${upload.id}`, {
+  expect((await fetch(`${base}/api/uploads/${upload.id}`, {
     method: "PATCH", headers: { "Content-Range": range(upload.tamanhoParte, secondEnd, input.byteLength) },
     body: input.subarray(upload.tamanhoParte, secondEnd + 1),
   })).status).toBe(200);
