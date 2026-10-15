@@ -28,6 +28,8 @@ interface UploadState {
   sha256?: string;
 }
 
+type CompletedUpload = { mediaId: string; deduplicado: boolean; expiraEm: number };
+
 export interface MediaMetadata {
   id: string;
   nome: string;
@@ -37,6 +39,17 @@ export interface MediaMetadata {
 }
 
 export type MediaRecord = MediaMetadata & { path: string };
+
+function validMetadata(value: unknown, id: string): value is MediaMetadata {
+  if (typeof value !== "object" || value === null) return false;
+  const metadata = value as Partial<MediaMetadata>;
+  const tamanho = metadata.tamanho;
+  return metadata.id === id
+    && typeof metadata.nome === "string"
+    && typeof tamanho === "number" && Number.isSafeInteger(tamanho) && tamanho >= 0
+    && typeof metadata.duracao === "number" && Number.isFinite(metadata.duracao) && metadata.duracao >= 0
+    && typeof metadata.criadoEm === "number" && Number.isFinite(metadata.criadoEm);
+}
 
 class UploadHttpError extends Error {
   readonly status: number;
@@ -139,6 +152,24 @@ export interface MediaRuntimeOptions {
   root: string;
   env?: Record<string, string | undefined>;
   now?: () => number;
+  log?: (message: string, error: unknown) => void;
+  cleanupIntervalMs?: number;
+  /** Gancho dos testes para segurar a janela entre publicar e limpar. */
+  beforeRemoveUpload?: () => Promise<void>;
+}
+
+/** FileHandle.write pode aceitar menos bytes do que o buffer pede. */
+export async function writeBufferFully(
+  file: { write(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesWritten: number }> },
+  buffer: Uint8Array,
+  position: number,
+): Promise<void> {
+  let written = 0;
+  while (written < buffer.byteLength) {
+    const result = await file.write(buffer, written, buffer.byteLength - written, position + written);
+    if (result.bytesWritten <= 0) throw new Error("não foi possível escrever a parte inteira");
+    written += result.bytesWritten;
+  }
 }
 
 /**
@@ -148,9 +179,11 @@ export interface MediaRuntimeOptions {
 export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<MediaRuntime> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
+  const log = opts.log ?? ((message, error) => console.error(message, error));
   const root = resolve(opts.root);
   const pool = join(root, "pool");
   const temporary = join(root, ".tmp");
+  const completed = join(root, ".completed");
   const maxBytes = positiveNumber(env.DECUPA_UPLOAD_MAX_GB, DEFAULT_MAX_GB) * 1024 ** 3;
   const partBytes = Math.floor(positiveNumber(
     env.DECUPA_UPLOAD_PART_BYTES,
@@ -160,9 +193,13 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
 
   await mkdir(pool, { recursive: true });
   await mkdir(temporary, { recursive: true });
+  await mkdir(completed, { recursive: true });
 
   const locks = new Map<string, Promise<unknown>>();
-  const hashes = new Map<string, Hash>();
+  // O hash em memória só vale para os bytes que ele próprio viu. Outro
+  // processo (ou outro runtime) pode ter gravado partes no mesmo envio:
+  // o tamanho do parcial bate com o estado, mas o hash ficou para trás.
+  const hashes = new Map<string, { hash: Hash; bytes: number }>();
 
   async function writeState(id: string, state: UploadState): Promise<void> {
     const path = join(temporary, id, "state.json");
@@ -222,17 +259,58 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     await rm(join(temporary, id), { recursive: true, force: true });
   }
 
+  async function rememberCompletion(id: string, result: { mediaId: string; deduplicado: boolean }): Promise<void> {
+    const path = join(completed, `${id}.json`);
+    const partial = `${path}.${randomUUID()}.partial`;
+    try {
+      await writeFile(partial, `${JSON.stringify({ ...result, expiraEm: now() + ttlMs })}\n`, "utf8");
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
+  }
+
+  async function readCompletion(id: string): Promise<CompletedUpload | null> {
+    try {
+      const value = JSON.parse(await readFile(join(completed, `${id}.json`), "utf8")) as CompletedUpload;
+      if (!value.mediaId || value.expiraEm < now()) {
+        await rm(join(completed, `${id}.json`), { force: true });
+        return null;
+      }
+      // O registro pode ter sido escrito imediatamente antes do rename. Até o
+      // arquivo aparecer, ele ainda precisa ser recuperado pelo parcial.
+      if (!await stat(join(pool, value.mediaId)).then(() => true, () => false)) return null;
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
   async function ensureHash(id: string, state: UploadState): Promise<Hash> {
     const known = hashes.get(id);
-    if (known) return known;
     const path = partialPath(id);
     const file = await stat(path).catch(() => null);
+    if (known && known.bytes === state.recebido && file?.size === state.recebido) return known.hash;
+    if (known) hashes.delete(id);
     if (!file || file.size !== state.recebido) {
       await open(path, "a").then(async (handle) => { await handle.truncate(state.recebido); await handle.close(); });
     }
     const hash = await hashPartial(path);
-    hashes.set(id, hash);
+    hashes.set(id, { hash, bytes: state.recebido });
     return hash;
+  }
+
+  async function writeMetadata(mediaId: string, metadata: MediaMetadata): Promise<void> {
+    const path = join(pool, `${mediaId}.json`);
+    const partial = `${path}.${randomUUID()}.partial`;
+    try {
+      await writeFile(partial, `${JSON.stringify(metadata)}\n`, "utf8");
+      await rename(partial, path);
+    } catch (error) {
+      await rm(partial, { force: true });
+      throw error;
+    }
   }
 
   async function publish(id: string, state: UploadState, hash: Hash): Promise<{ mediaId: string; deduplicado: boolean }> {
@@ -259,31 +337,49 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     return withHashLock(mediaId, async () => {
       const destination = join(pool, mediaId);
       const exists = await stat(destination).then(() => true, () => false);
-      if (exists) {
-        await removeUpload(id);
-        return { mediaId, deduplicado: true };
-      }
-      await rename(source, destination);
       const metadata: MediaMetadata = {
         id: mediaId, nome: state.nome, tamanho: state.tamanhoTotal,
         duracao: info.durationMs / 1000, criadoEm: now(),
       };
-      const metadataPath = join(pool, `${mediaId}.json`);
-      const metadataPartial = `${metadataPath}.${randomUUID()}.partial`;
-      try {
-        await writeFile(metadataPartial, `${JSON.stringify(metadata)}\n`, "utf8");
-        await rename(metadataPartial, metadataPath);
-      } catch (error) {
-        await rm(metadataPartial, { force: true });
-        throw error;
+      if (exists) {
+        try {
+          const current = JSON.parse(await readFile(join(pool, `${mediaId}.json`), "utf8"));
+          if (!validMetadata(current, mediaId)) throw new Error("metadado inválido");
+        } catch {
+          // A publicação do arquivo é a fonte deduplicada; o metadado pode ser
+          // reconstruído com a informação da tentativa que chegou agora.
+          await writeMetadata(mediaId, metadata);
+        }
+        const result = { mediaId, deduplicado: true };
+        await rememberCompletion(id, result);
+        await opts.beforeRemoveUpload?.();
+        await removeUpload(id);
+        return result;
       }
+      // O arquivo só fica visível no acervo depois que o metadado também está
+      // pronto; assim uma falha não deixa uma Mídia deduplicável sem registro.
+      await writeMetadata(mediaId, metadata);
+      const result = { mediaId, deduplicado: false };
+      await rememberCompletion(id, result);
+      await rename(source, destination);
+      await opts.beforeRemoveUpload?.();
       await removeUpload(id);
-      return { mediaId, deduplicado: false };
+      return result;
     });
+  }
+
+  async function recoverCompleted(id: string, state: UploadState): Promise<{ mediaId: string; deduplicado: boolean }> {
+    return publish(id, state, await ensureHash(id, state));
   }
 
   async function patch(id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
     await withUploadLock(id, async () => {
+      const completedUpload = await readCompletion(id);
+      if (completedUpload) {
+        for await (const _chunk of req) { /* drena uma repetição depois da resposta perdida */ }
+        sendJson(res, { mediaId: completedUpload.mediaId, deduplicado: completedUpload.deduplicado }, 201);
+        return;
+      }
       const state = await readState(id);
       const range = parseRange(typeof req.headers["content-range"] === "string" ? req.headers["content-range"] : undefined);
       const length = range.end - range.start + 1;
@@ -291,7 +387,11 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       if (length > partBytes) throw new UploadHttpError(413, "parte do envio grande demais");
       if (range.end < state.recebido) {
         for await (const _chunk of req) { /* drena o reenvio sem segurá-lo na memória */ }
-        sendJson(res, { offset: state.recebido });
+        if (state.recebido === state.tamanhoTotal) {
+          sendJson(res, await recoverCompleted(id, state), 201);
+        } else {
+          sendJson(res, { offset: state.recebido });
+        }
         return;
       }
       if (range.start !== state.recebido) {
@@ -308,8 +408,10 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           const buffer = Buffer.from(chunk as Uint8Array);
           received += buffer.byteLength;
           if (received > length) throw new UploadHttpError(413, "parte do envio maior que Content-Range");
-          await file.write(buffer, 0, buffer.byteLength, range.start + received - buffer.byteLength);
+          await writeBufferFully(file, buffer, range.start + received - buffer.byteLength);
           hash.update(buffer);
+          const cached = hashes.get(id);
+          if (cached?.hash === hash) cached.bytes += buffer.byteLength;
         }
         if (received !== length) throw new UploadHttpError(400, "corpo menor que Content-Range");
       } catch (error) {
@@ -321,7 +423,18 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       }
 
       const next: UploadState = { ...state, recebido: range.end + 1, atualizadoEm: now() };
-      await writeState(id, next);
+      try {
+        await writeState(id, next);
+      } catch (error) {
+        // O parcial já foi escrito, mas o estado ainda aponta para o offset
+        // anterior. Não deixe o hash em memória representar bytes invisíveis.
+        hashes.delete(id);
+        const rollback = await open(partialPath(id), "r+").catch(() => null);
+        if (rollback) {
+          try { await rollback.truncate(state.recebido); } finally { await rollback.close(); }
+        }
+        throw error;
+      }
       if (next.recebido === next.tamanhoTotal) {
         sendJson(res, await publish(id, next, hash), 201);
       } else {
@@ -372,8 +485,20 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     }
   }
 
+  async function cleanCompleted(): Promise<void> {
+    for (const entry of await readdir(completed, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const item = await readFile(join(completed, entry.name), "utf8")
+        .then((raw) => JSON.parse(raw) as CompletedUpload, () => null);
+      if (item && item.expiraEm < now()) await rm(join(completed, entry.name), { force: true });
+    }
+  }
+
   await cleanExpired();
-  const interval = setInterval(() => { void cleanExpired(); }, Math.max(1_000, Math.min(60 * 60 * 1000, ttlMs / 2 || 1_000)));
+  const cleanupIntervalMs = opts.cleanupIntervalMs ?? Math.max(1_000, Math.min(60 * 60 * 1000, ttlMs / 2 || 1_000));
+  const interval = setInterval(() => {
+    void cleanExpired().then(cleanCompleted).catch((error) => log("falha na limpeza de envios", error));
+  }, cleanupIntervalMs);
   interval.unref?.();
 
   const runtime: MediaRuntime = {
@@ -390,8 +515,20 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           const body = await readJson(req);
           const nome = uploadName(body.nome);
           const tamanho = integer(body.tamanho, "tamanho inválido");
+          if (tamanho === 0) throw new UploadHttpError(400, "tamanho inválido");
           const sha256 = optionalSha(body.sha256);
           if (sha256 && await stat(join(pool, sha256)).then(() => true, () => false)) {
+            try {
+              const current = JSON.parse(await readFile(join(pool, `${sha256}.json`), "utf8"));
+              if (!validMetadata(current, sha256)) throw new Error("metadado inválido");
+            } catch {
+              const info = await probe(join(pool, sha256));
+              const metadata: MediaMetadata = {
+                id: sha256, nome, tamanho: (await stat(join(pool, sha256))).size,
+                duracao: info.durationMs / 1000, criadoEm: now(),
+              };
+              await writeMetadata(sha256, metadata);
+            }
             sendJson(res, { mediaId: sha256, deduplicado: true });
             return true;
           }
@@ -407,8 +544,23 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         if (parts[0] === "api" && parts[1] === "uploads" && parts[2] && uploadId(parts[2])) {
           const id = parts[2];
           if (req.method === "GET") {
-            const state = await readState(id);
-            sendJson(res, { offset: state.recebido, tamanhoTotal: state.tamanhoTotal, estado: "uploading" satisfies UploadClientState });
+            await withUploadLock(id, async () => {
+              const completedUpload = await readCompletion(id);
+              if (completedUpload) {
+                sendJson(res, {
+                  mediaId: completedUpload.mediaId, deduplicado: completedUpload.deduplicado,
+                  estado: completedUpload.deduplicado ? "deduped" : "ready" satisfies UploadClientState,
+                });
+                return;
+              }
+              const state = await readState(id);
+              if (state.recebido === state.tamanhoTotal) {
+                const result = await recoverCompleted(id, state);
+                sendJson(res, { ...result, offset: state.recebido, tamanhoTotal: state.tamanhoTotal, estado: result.deduplicado ? "deduped" : "ready" satisfies UploadClientState });
+              } else {
+                sendJson(res, { offset: state.recebido, tamanhoTotal: state.tamanhoTotal, tamanhoParte: partBytes, estado: "uploading" satisfies UploadClientState });
+              }
+            });
             return true;
           }
           if (req.method === "DELETE") {

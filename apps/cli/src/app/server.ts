@@ -896,7 +896,7 @@ async function startAssemblyApp(opts: {
   now?: () => number;
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
-}): Promise<AppHandle> {
+}, sharedMedia?: MediaRuntime): Promise<AppHandle> {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
@@ -917,7 +917,8 @@ async function startAssemblyApp(opts: {
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
-  const media = await configuredMediaRuntime(opts.env, opts.now);
+  const ownsMedia = !sharedMedia;
+  const media = sharedMedia ?? await configuredMediaRuntime(opts.env, opts.now);
   const templatesRoot=opts.templatesRoot??join(opts.providerConfigDir??homedir(),".decupa","templates");
   const setup = await createAssemblyProjectRuntime({
     ...opts,
@@ -966,7 +967,7 @@ async function startAssemblyApp(opts: {
         const nextDir = await mkdtemp(join(dirname(dir), "projeto-"));
         const next = await startAssemblyApp({
           ...opts, projectDir: nextDir, inputs: undefined, port: 0,
-        });
+        }, media);
         newProjects.push(next);
         const nextUrl = `http://127.0.0.1:${next.port}/`;
         // A pasta nova precisa ser achável depois: vai no log e na resposta.
@@ -1004,7 +1005,7 @@ async function startAssemblyApp(opts: {
       // síncrono roda, e é nele que os filhos e o worker de fala morrem.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimeClosed = runtime.close();
-      const mediaClosed = media?.close() ?? Promise.resolve();
+      const mediaClosed = ownsMedia ? (media?.close() ?? Promise.resolve()) : Promise.resolve();
       const authClosed = auth.close();
       const speechClosed = closeSpeech();
       const nested = Promise.all(newProjects.map(app => app.close()));

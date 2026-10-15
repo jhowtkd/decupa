@@ -475,38 +475,65 @@ async function uploadTeamFiles(files) {
     pause.textContent = "Pausar";
     row.append(title, progress, status, pause);
     uploads?.append(row);
-    const upload = new ResumableMediaUpload({
-      onProgress: (value) => {
-        progress.value = value.percent || 0;
-        status.textContent = mediaProgressText(value) + (value.state === "verifying" ? " · verificando" : "");
-        pause.textContent = value.state === "uploading" ? "Pausar" : "Retomar";
-      },
-    });
-    pause.onclick = () => {
-      if (!upload.paused) {
-        upload.pause();
-        pause.textContent = "Retomar";
-        return;
-      }
-      void upload.start(file).catch((error) => {
-        pause.textContent = "Retomar";
-        status.textContent = error.message;
-      });
+    let completedResult = null;
+    const showUploadError = (error) => {
+      pause.hidden = false;
+      pause.disabled = false;
+      pause.textContent = "Retomar";
+      status.textContent = error instanceof UploadPausedError
+        ? "Pausado — escolha o mesmo arquivo para retomar depois"
+        : (error?.message || String(error));
     };
-    try {
-      const result = await upload.start(file);
+    const completeUpload = async (result) => {
+      // O envio já terminou: se o POST do Projeto falhar, o retry só repete
+      // esta etapa e não reabre o envio nem manda os bytes de novo.
+      completedResult = result;
       await call("project/media", {
         method: "POST",
         body: JSON.stringify({ baseRevision: project().revision, mediaId: result.mediaId }),
         label: "Adicionando Mídia…",
       });
+      completedResult = null;
+      pause.hidden = true;
+      pause.disabled = true;
       status.textContent = result.deduplicado ? "Pronto · Mídia reaproveitada" : "Pronto";
       await refreshMediaLibrary();
+    };
+    const upload = new ResumableMediaUpload({
+      onProgress: (value) => {
+        progress.value = value.percent || 0;
+        status.textContent = mediaProgressText(value) + (value.state === "verifying" ? " · verificando" : "");
+        if (value.state === "uploading") {
+          pause.hidden = false;
+          pause.disabled = false;
+          pause.textContent = "Pausar";
+        } else if (value.state === "verifying") {
+          pause.hidden = false;
+          pause.disabled = true;
+          pause.textContent = "Verificando";
+        } else if (value.state === "ready" || value.state === "deduped") {
+          pause.hidden = true;
+          pause.disabled = true;
+        }
+      },
+    });
+    pause.onclick = () => {
+      if (upload.state === "concluido") {
+        if (completedResult) void completeUpload(completedResult).catch(showUploadError);
+        return;
+      }
+      if (upload.state === "enviando") {
+        upload.pause();
+        pause.textContent = "Retomar";
+        return;
+      }
+      void upload.start(file).then(completeUpload).catch(showUploadError);
+    };
+    try {
+      const result = await upload.start(file);
+      await completeUpload(result);
     } catch (error) {
-      pause.textContent = "Retomar";
-      status.textContent = error instanceof UploadPausedError
-        ? "Pausado — escolha o mesmo arquivo para retomar depois"
-        : (error?.message || String(error));
+      showUploadError(error);
     }
   }
 }

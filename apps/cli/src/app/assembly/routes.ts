@@ -617,12 +617,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         try {
           await saveProject(dir, project.revision, (current) => {
-            if (current.revision !== project.revision) {
-              throw new HttpError(
-                409,
-                `revisão desatualizada: base ${project.revision}, atual ${current.revision}`,
-              );
-            }
+            // A análise é um overlay: adicionar outra Mídia pode avançar a
+            // revisão enquanto o trabalho roda. Só descarte o resultado se a
+            // própria fonte tiver sido removida ou trocado de conteúdo.
+            const currentSource = current.assembly.sources.find((item) => item.id === source.id);
+            if (!currentSource || currentSource.sha256 !== source.sha256) return current;
             return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
           });
         } catch (err) {

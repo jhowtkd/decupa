@@ -31,10 +31,12 @@ export class ResumableMediaUpload {
     this.storage = storage;
     this.onProgress = onProgress;
     this.paused = false;
+    this.state = "parado";
     this.controller = null;
     this.uploadId = null;
     this.offset = 0;
     this.total = 0;
+    this.partSize = 20 * 1024 * 1024;
   }
 
   readSaved(file) {
@@ -55,6 +57,7 @@ export class ResumableMediaUpload {
 
   pause() {
     this.paused = true;
+    if (this.state !== "concluido") this.state = "pausado";
     this.controller?.abort();
   }
 
@@ -63,43 +66,63 @@ export class ResumableMediaUpload {
     if (this.uploadId) await this.fetchImpl(`/api/uploads/${encodeURIComponent(this.uploadId)}`, { method: "DELETE" }).catch(() => {});
     this.forget(file);
     this.uploadId = null;
+    this.state = "parado";
   }
 
   async start(file) {
     this.paused = false;
+    this.state = "enviando";
     this.total = file.size;
     let saved = this.readSaved(file);
     let result;
-    if (saved?.id) {
-      const stateResponse = await this.fetchImpl(`/api/uploads/${encodeURIComponent(saved.id)}`);
-      if (stateResponse.ok) {
-        const state = await stateResponse.json();
-        this.uploadId = saved.id;
-        this.offset = Math.min(Number(state.offset) || 0, file.size);
-        this.writeSaved(file, { ...saved, id: this.uploadId, offset: this.offset });
-      } else {
-        saved = null;
+    try {
+      if (saved?.id) {
+        const stateResponse = await this.fetchImpl(`/api/uploads/${encodeURIComponent(saved.id)}`);
+        if (stateResponse.ok) {
+          const state = await stateResponse.json();
+          if (state.mediaId) {
+            this.state = "concluido";
+            this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: state.deduplicado ? "deduped" : "ready" });
+            this.forget(file);
+            return state;
+          }
+          this.uploadId = saved.id;
+          this.offset = Math.min(Number(state.offset) || 0, file.size);
+          this.partSize = Math.max(1, Number(state.tamanhoParte) || Number(saved.tamanhoParte) || this.partSize);
+          this.writeSaved(file, { ...saved, id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
+        } else {
+          saved = null;
+        }
       }
-    }
-    if (!saved) {
-      const created = await this.fetchImpl("/api/uploads", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ nome: file.name, tamanho: file.size }),
-      });
-      result = await created.json().catch(() => ({}));
-      if (!created.ok) throw new Error(result.error || `erro ${created.status}`);
-      if (result.mediaId) {
-        this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
-        this.forget(file);
-        return result;
+      if (!saved) {
+        const created = await this.fetchImpl("/api/uploads", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nome: file.name, tamanho: file.size }),
+        });
+        result = await created.json().catch(() => ({}));
+        if (!created.ok) throw new Error(result.error || `erro ${created.status}`);
+        if (result.mediaId) {
+          this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
+          this.state = "concluido";
+          this.forget(file);
+          return result;
+        }
+        this.uploadId = result.id;
+        this.offset = Number(result.offset) || 0;
+        this.partSize = Math.max(1, Number(result.tamanhoParte) || this.partSize);
+        this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
       }
-      this.uploadId = result.id;
-      this.offset = Number(result.offset) || 0;
-      this.writeSaved(file, { id: this.uploadId, offset: this.offset });
+    } catch (error) {
+      if (this.paused || error?.name === "AbortError") {
+        this.state = "pausado";
+        throw new UploadPausedError();
+      }
+      this.state = "parado";
+      throw error;
     }
 
-    const partSize = Math.max(1, Number(result?.tamanhoParte) || 20 * 1024 * 1024);
+    const partSize = Math.max(1, Number(result?.tamanhoParte) || this.partSize);
     this.onProgress({ bytes: this.offset, total: file.size, percent: file.size ? this.offset / file.size * 100 : 100, state: "uploading" });
     while (this.offset < file.size) {
       if (this.paused) throw new UploadPausedError();
@@ -116,26 +139,32 @@ export class ResumableMediaUpload {
         const body = await response.json().catch(() => ({}));
         if (response.status === 409) {
           this.offset = Number(body.offset) || 0;
-          this.writeSaved(file, { id: this.uploadId, offset: this.offset });
+          this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
           continue;
         }
         if (!response.ok) throw new Error(body.error || `erro ${response.status}`);
         this.offset = end + 1;
-        this.writeSaved(file, { id: this.uploadId, offset: this.offset });
+        this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
         this.onProgress({ bytes: this.offset, total: file.size, percent: file.size ? this.offset / file.size * 100 : 100, state: this.offset === file.size ? "verifying" : "uploading" });
         if (body.mediaId) {
           this.forget(file);
+          this.state = "concluido";
           this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: body.deduplicado ? "deduped" : "ready" });
           return body;
         }
       } catch (error) {
-        if (this.paused || error?.name === "AbortError") throw new UploadPausedError();
-        this.writeSaved(file, { id: this.uploadId, offset: this.offset });
+        if (this.paused || error?.name === "AbortError") {
+          this.state = "pausado";
+          throw new UploadPausedError();
+        }
+        this.state = "parado";
+        this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
         throw error;
       } finally {
         this.controller = null;
       }
     }
+    this.state = "parado";
     throw new Error("o servidor encerrou o envio sem mediaId");
   }
 }
