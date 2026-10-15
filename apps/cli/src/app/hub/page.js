@@ -1,4 +1,7 @@
-const state = { projects: [], timer: null, loadToken: 0 };
+import { ResumableMediaUpload, uploadFingerprint } from "./media-upload.js";
+import { criarGaveta, formatarDuracao, textoDoResumo } from "./gaveta.js";
+
+const state = { projects: [], timer: null, loadToken: 0, acervo: [], acervoToken: 0 };
 const projectsElement = document.getElementById("projects");
 const statusElement = document.getElementById("status");
 const emptyElement = document.getElementById("empty");
@@ -7,6 +10,21 @@ const flowFilter = document.getElementById("flowFilter");
 const dialog = document.getElementById("newProjectDialog");
 const form = document.getElementById("newProjectForm");
 const formError = document.getElementById("formError");
+const nameInput = document.getElementById("projectName");
+const nameError = document.getElementById("projectNameError");
+const flowInputs = document.querySelectorAll('input[name="fluxo"]');
+const fileInput = document.getElementById("mediaFiles");
+const midiasRule = document.getElementById("midiasRule");
+const libraryStatus = document.getElementById("libraryStatus");
+const libraryElement = document.getElementById("library");
+const queueElement = document.getElementById("mediaQueue");
+const mediaEmpty = document.getElementById("mediaEmpty");
+const pauseButton = document.getElementById("pauseUploads");
+const uploadStatus = document.getElementById("uploadStatus");
+const createButton = document.getElementById("createProject");
+// Sem o acervo configurado, o servidor responde 404 aos envios: a gaveta avisa
+// antes de o usuário escolher um arquivo que não teria para onde ir.
+const mediaEnabled = document.querySelector('meta[name="decupa-media-enabled"]')?.getAttribute("content") === "true";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -92,38 +110,200 @@ function stopPolling() {
   if (state.timer !== null) { window.clearInterval(state.timer); state.timer = null; }
 }
 
+/* ---- Gaveta Novo Projeto ---- */
+
+// A lista da gaveta é refeita a cada progresso: o foco volta para o mesmo botão
+// pelo `data-foco`, ou cai na entrada de arquivos se o botão deixou de existir.
+function focoDentro(container) {
+  if (!container.contains(document.activeElement)) return null;
+  return document.activeElement.dataset.foco ?? "";
+}
+
+function restaurarFoco(container, foco) {
+  if (foco === null) return;
+  const alvo = [...container.querySelectorAll("[data-foco]")].find((element) => element.dataset.foco === foco);
+  (alvo ?? fileInput).focus();
+}
+
+function definirTexto(element, texto) {
+  // Regravar o mesmo texto reanuncia o alerta no leitor de tela a cada progresso.
+  if (element.textContent !== texto) element.textContent = texto;
+}
+
+function renderQueue(visao) {
+  const foco = focoDentro(queueElement);
+  queueElement.innerHTML = visao.itens.map((item) => {
+    const chave = escapeHtml(item.chave);
+    const nome = escapeHtml(item.nome);
+    const mostraProgresso = item.origem === "envio"
+      && (item.estado === "enviando" || item.estado === "pausado" || item.estado === "aguardando");
+    return `<li class="media-item">
+      <div class="media-item-top"><span class="media-item-name">${nome}</span><span class="media-item-state">${escapeHtml(item.texto)}</span></div>
+      ${mostraProgresso ? `<progress max="100" value="${Math.round(item.percent)}" aria-label="Progresso de ${nome}"></progress>` : ""}
+      ${item.mensagem ? `<p class="form-error">${escapeHtml(item.mensagem)}</p>` : ""}
+      <div class="media-item-actions">
+        ${item.estado === "erro" ? `<button type="button" data-acao="tentar" data-chave="${chave}" data-foco="tentar:${chave}">Tentar de novo</button>` : ""}
+        <button type="button" data-acao="remover" data-chave="${chave}" data-foco="remover:${chave}">Remover<span class="sr-only"> ${nome}</span></button>
+      </div>
+    </li>`;
+  }).join("");
+  restaurarFoco(queueElement, foco);
+}
+
+function renderLibrary(visao) {
+  const foco = focoDentro(libraryElement);
+  const noProjeto = new Set(visao.midiaIds);
+  libraryElement.innerHTML = state.acervo.map((midia) => {
+    const id = escapeHtml(midia.id);
+    const nome = escapeHtml(midia.nome);
+    const rotulo = noProjeto.has(midia.id) ? "Já no Projeto" : "Adicionar";
+    return `<li>
+      <span class="library-name">${nome}</span>
+      <span class="library-meta">${escapeHtml(formatarDuracao(midia.duracao))}</span>
+      <button type="button" data-acao="adicionar" data-midia="${id}" data-foco="adicionar:${id}">${rotulo}<span class="sr-only"> ${nome}</span></button>
+    </li>`;
+  }).join("");
+  restaurarFoco(libraryElement, foco);
+}
+
+function renderGaveta(visao) {
+  // O aviso de saída só vale enquanto há bytes indo para o servidor.
+  atualizarAvisoDeSaida(visao.emAndamento);
+  const erroDoNome = visao.erro?.campo === "nome" ? visao.erro.mensagem : "";
+  definirTexto(nameError, erroDoNome);
+  nameError.hidden = !erroDoNome;
+  nameInput.setAttribute("aria-invalid", String(Boolean(erroDoNome)));
+  const erroGeral = visao.erro?.campo === "aviso" ? visao.erro.mensagem : "";
+  definirTexto(formError, erroGeral);
+  formError.hidden = !erroGeral;
+  fileInput.multiple = visao.fluxo === "montagem";
+  midiasRule.textContent = visao.fluxo === "limpeza" ? "Exatamente uma Mídia." : "Uma ou mais Mídias.";
+  renderQueue(visao);
+  renderLibrary(visao);
+  mediaEmpty.hidden = visao.itens.length > 0;
+  definirTexto(uploadStatus, textoDoResumo(visao));
+  pauseButton.hidden = !(visao.emAndamento || visao.podeRetomar);
+  pauseButton.textContent = visao.emAndamento ? "Pausar envio" : "Retomar envio";
+  createButton.disabled = visao.criando || !mediaEnabled;
+  createButton.textContent = visao.criando ? "Criando…" : "Criar Projeto";
+}
+
+function avisarAoSair(event) {
+  event.preventDefault();
+  event.returnValue = "";
+}
+
+function atualizarAvisoDeSaida(emAndamento) {
+  if (emAndamento) window.addEventListener("beforeunload", avisarAoSair);
+  else window.removeEventListener("beforeunload", avisarAoSair);
+}
+
+async function enviarCriacao(corpo) {
+  const response = await fetch(rootPath("project", "new"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(corpo),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || typeof body.url !== "string") {
+    throw Object.assign(new Error(body.error || ""), { status: response.ok ? 500 : response.status });
+  }
+  return body;
+}
+
+async function carregarAcervo() {
+  if (!mediaEnabled) return;
+  const token = ++state.acervoToken;
+  try {
+    const response = await fetch(rootPath("api", "media"), { cache: "no-store" });
+    const media = await response.json().catch(() => null);
+    if (!response.ok || !Array.isArray(media)) throw new Error("Não foi possível carregar o acervo.");
+    if (token !== state.acervoToken) return;
+    state.acervo = media;
+    libraryStatus.textContent = media.length ? "" : "O acervo ainda não tem Mídias.";
+    renderLibrary(gaveta.instantanea());
+  } catch (error) {
+    if (token !== state.acervoToken) return;
+    libraryStatus.textContent = error instanceof Error ? error.message : "Não foi possível carregar o acervo.";
+  }
+}
+
+const gaveta = criarGaveta({
+  criarEnvio: ({ onProgress }) => new ResumableMediaUpload({ onProgress }),
+  chaveDoArquivo: uploadFingerprint,
+  enviarCriacao,
+  onCriado: (url) => window.location.assign(url),
+  onChange: renderGaveta,
+  onMidiaPublicada: () => { void carregarAcervo(); },
+});
+
 function openDialog() {
-  formError.hidden = true;
-  dialog.showModal();
-  document.getElementById("projectName").focus();
+  if (!dialog.open) dialog.showModal();
+  const visao = gaveta.instantanea();
+  nameInput.value = visao.nome;
+  for (const input of flowInputs) input.checked = input.value === visao.fluxo;
+  renderGaveta(visao);
+  nameInput.focus();
+  void carregarAcervo();
+}
+
+// Fechar com envio em andamento pede confirmação; a fila pausa ao fechar (ver `fechar` em gaveta.js).
+function pedirFechamento() {
+  const emAndamento = gaveta.instantanea().emAndamento;
+  if (emAndamento && !window.confirm("Há um envio em andamento. Ao fechar, ele é pausado e pode ser retomado depois.")) return;
+  dialog.close();
 }
 
 document.getElementById("newProject").addEventListener("click", openDialog);
 document.getElementById("emptyNewProject").addEventListener("click", openDialog);
-document.getElementById("closeDialog").addEventListener("click", () => dialog.close());
-document.getElementById("cancelDialog").addEventListener("click", () => dialog.close());
-nameFilter.addEventListener("input", render);
-flowFilter.addEventListener("change", render);
+document.getElementById("closeDialog").addEventListener("click", pedirFechamento);
+document.getElementById("cancelDialog").addEventListener("click", pedirFechamento);
+// Esc chega como `cancel`: com envio em andamento, passa pelo aviso antes de fechar.
+dialog.addEventListener("cancel", (event) => {
+  if (!gaveta.instantanea().emAndamento) return;
+  event.preventDefault();
+  pedirFechamento();
+});
+dialog.addEventListener("close", () => gaveta.fechar());
+for (const input of flowInputs) {
+  input.addEventListener("change", () => {
+    if (input.checked) gaveta.definirFluxo(input.value);
+  });
+}
+nameInput.addEventListener("input", () => gaveta.definirNome(nameInput.value));
+fileInput.addEventListener("change", () => {
+  const arquivos = [...fileInput.files];
+  // Zerar a entrada deixa escolher o mesmo arquivo de novo depois de removê-lo.
+  fileInput.value = "";
+  gaveta.adicionarArquivos(arquivos);
+});
+queueElement.addEventListener("click", (event) => {
+  const botao = event.target.closest("button[data-acao]");
+  if (botao?.dataset.acao === "remover") gaveta.remover(botao.dataset.chave);
+  if (botao?.dataset.acao === "tentar") gaveta.tentarDeNovo(botao.dataset.chave);
+});
+libraryElement.addEventListener("click", (event) => {
+  const botao = event.target.closest("button[data-acao='adicionar']");
+  const midia = state.acervo.find((item) => item.id === botao?.dataset.midia);
+  if (midia) gaveta.adicionarDoAcervo(midia);
+});
+pauseButton.addEventListener("click", () => {
+  if (gaveta.instantanea().emAndamento) gaveta.pausar();
+  else gaveta.retomar();
+});
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  gaveta.criar();
+  if (gaveta.instantanea().erro?.campo === "nome") nameInput.focus();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopPolling();
   else { void load(); startPolling(); }
 });
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  formError.hidden = true;
-  const data = new FormData(form);
-  const response = await fetch(rootPath("project", "new"), {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ nome: data.get("nome"), fluxo: data.get("fluxo") }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    formError.textContent = body.error || "Não foi possível criar o Projeto.";
-    formError.hidden = false;
-    return;
-  }
-  window.location.assign(body.url);
-});
+nameFilter.addEventListener("input", render);
+flowFilter.addEventListener("change", render);
 
+fileInput.disabled = !mediaEnabled;
+if (!mediaEnabled) libraryStatus.textContent = "O acervo de Mídias não está configurado neste servidor.";
 void load();
 startPolling();

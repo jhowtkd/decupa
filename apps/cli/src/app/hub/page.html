@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="decupa-media-enabled" content="">
   <title>Projetos · Decupa</title>
   <link rel="stylesheet" href="/hub/page.css">
 </head>
@@ -56,22 +57,44 @@
     </section>
   </main>
 
-  <dialog id="newProjectDialog" aria-labelledby="new-project-title">
-    <form id="newProjectForm" method="dialog">
-      <div class="dialog-head">
+  <dialog id="newProjectDialog" class="drawer" aria-labelledby="new-project-title" aria-describedby="new-project-copy">
+    <form id="newProjectForm" class="drawer-form" novalidate>
+      <div class="dialog-head drawer-head">
         <div><p class="eyebrow">Começar</p><h2 id="new-project-title">Novo Projeto</h2></div>
         <button id="closeDialog" class="icon" type="button" aria-label="Fechar">×</button>
       </div>
-      <p class="dialog-copy">Dê um nome ao Projeto e escolha o Fluxo. Você poderá adicionar Mídias dentro dele.</p>
-      <label for="projectName">Nome do Projeto</label>
-      <input id="projectName" name="nome" required maxlength="200" placeholder="Ex.: Podcast Ep. 14">
-      <fieldset>
-        <legend>Fluxo</legend>
-        <label class="flow-option"><input type="radio" name="fluxo" value="montagem" checked><span><strong>Montagem</strong><small>Componha um vídeo a partir de uma ou mais Mídias.</small></span></label>
-        <label class="flow-option"><input type="radio" name="fluxo" value="limpeza"><span><strong>Limpeza</strong><small>Remova repetições e cacoetes de uma Mídia.</small></span></label>
-      </fieldset>
-      <p id="formError" class="form-error" role="alert" hidden></p>
-      <div class="dialog-actions"><button id="cancelDialog" class="quiet" type="button">Cancelar</button><button class="primary" type="submit">Criar Projeto</button></div>
+      <div class="drawer-body">
+        <p id="new-project-copy" class="dialog-copy">Dê um nome, escolha o Fluxo e envie as Mídias. Quando o Projeto estiver pronto, ele abre sozinho.</p>
+        <label for="projectName">Nome do Projeto</label>
+        <input id="projectName" name="nome" maxlength="200" placeholder="Ex.: Podcast Ep. 14" autocomplete="off" aria-describedby="projectNameError">
+        <p id="projectNameError" class="form-error" role="alert" hidden></p>
+        <fieldset>
+          <legend>Fluxo</legend>
+          <label class="flow-option"><input type="radio" name="fluxo" value="montagem" checked><span><strong>Montagem</strong><small>Componha um vídeo a partir de uma ou mais Mídias.</small></span></label>
+          <label class="flow-option"><input type="radio" name="fluxo" value="limpeza"><span><strong>Limpeza</strong><small>Remova repetições e cacoetes de uma Mídia.</small></span></label>
+        </fieldset>
+        <section class="midias" aria-labelledby="midias-title">
+          <h3 id="midias-title">Mídias</h3>
+          <p id="midiasRule" class="field-copy">Uma ou mais Mídias.</p>
+          <label class="dropzone">
+            <span class="dropzone-title">Enviar do computador</span>
+            <small>Vídeo ou áudio. Se a conexão cair, o envio retoma daqui.</small>
+            <input id="mediaFiles" type="file" accept="video/*,audio/*" multiple>
+          </label>
+          <h4 id="libraryTitle" class="subhead">Do acervo</h4>
+          <p id="libraryStatus" class="field-copy" role="status">Carregando o acervo…</p>
+          <ul id="library" class="library" aria-labelledby="libraryTitle"></ul>
+          <h4 class="subhead">No Projeto</h4>
+          <p id="mediaEmpty" class="field-copy">Nenhuma Mídia escolhida ainda.</p>
+          <ul id="mediaQueue" class="media-queue" aria-label="Mídias do Projeto"></ul>
+          <button id="pauseUploads" class="quiet pause" type="button" hidden>Pausar envio</button>
+        </section>
+      </div>
+      <div class="drawer-foot">
+        <p id="uploadStatus" class="status" role="status" aria-live="polite"></p>
+        <p id="formError" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button id="cancelDialog" class="quiet" type="button">Cancelar</button><button id="createProject" class="primary" type="submit">Criar Projeto</button></div>
+      </div>
     </form>
   </dialog>
 
