@@ -6,9 +6,10 @@ import {
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { probe } from "@decupa/media";
+import { createR2Staging, type R2Staging, type StagingPart } from "./r2-staging.ts";
 
 /** Estados que a interface do navegador usa para acompanhar um envio. */
-export type UploadClientState = "uploading" | "paused" | "verifying" | "ready" | "deduped" | "failed";
+export type UploadClientState = "uploading" | "paused" | "importing" | "verifying" | "ready" | "deduped" | "failed";
 
 /** Snippet do protótipo: pausar retoma o mesmo envio, não cria outro. */
 export const UPLOAD_STATE_FLOW = "uploading ⇄ paused → verifying → ready | deduped | failed";
@@ -19,6 +20,15 @@ const DEFAULT_PART_BYTES = 20 * 1024 * 1024;
 const DEFAULT_TTL_HOURS = 24;
 const SPACE_MARGIN_BYTES = 64 * 1024 * 1024;
 
+interface R2Session {
+  key: string;
+  upload: string;
+  partBytes: number;
+  phase: "uploading" | "importing" | "failed" | "canceling";
+  error?: string;
+  status?: number;
+}
+
 interface UploadState {
   nome: string;
   tamanhoTotal: number;
@@ -26,9 +36,10 @@ interface UploadState {
   criadoEm: number;
   atualizadoEm: number;
   sha256?: string;
+  r2?: R2Session;
 }
 
-type CompletedUpload = { mediaId: string; deduplicado: boolean; expiraEm: number };
+type CompletedUpload = { mediaId: string; deduplicado: boolean; expiraEm: number; r2?: R2Session };
 
 export interface MediaMetadata {
   id: string;
@@ -156,6 +167,7 @@ export interface MediaRuntimeOptions {
   cleanupIntervalMs?: number;
   /** Gancho dos testes para segurar a janela entre publicar e limpar. */
   beforeRemoveUpload?: () => Promise<void>;
+  staging?: R2Staging;
 }
 
 /** FileHandle.write pode aceitar menos bytes do que o buffer pede. */
@@ -180,6 +192,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
   const log = opts.log ?? ((message, error) => console.error(message, error));
+  const staging = opts.staging ?? createR2Staging(env);
   const root = resolve(opts.root);
   const pool = join(root, "pool");
   const temporary = join(root, ".tmp");
@@ -200,6 +213,10 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   // processo (ou outro runtime) pode ter gravado partes no mesmo envio:
   // o tamanho do parcial bate com o estado, mas o hash ficou para trás.
   const hashes = new Map<string, { hash: Hash; bytes: number }>();
+  const imports = new Map<string, { task: Promise<void>; controller: AbortController }>();
+  let closing = false;
+  let cleanupTask: Promise<void> | undefined;
+  let cleanupRequested = false;
 
   async function writeState(id: string, state: UploadState): Promise<void> {
     const path = join(temporary, id, "state.json");
@@ -259,11 +276,11 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     await rm(join(temporary, id), { recursive: true, force: true });
   }
 
-  async function rememberCompletion(id: string, result: { mediaId: string; deduplicado: boolean }): Promise<void> {
+  async function rememberCompletion(id: string, result: { mediaId: string; deduplicado: boolean }, r2?: R2Session): Promise<void> {
     const path = join(completed, `${id}.json`);
     const partial = `${path}.${randomUUID()}.partial`;
     try {
-      await writeFile(partial, `${JSON.stringify({ ...result, expiraEm: now() + ttlMs })}\n`, "utf8");
+      await writeFile(partial, `${JSON.stringify({ ...result, expiraEm: now() + ttlMs, r2 })}\n`, "utf8");
       await rename(partial, path);
     } catch (error) {
       await rm(partial, { force: true });
@@ -274,7 +291,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   async function readCompletion(id: string): Promise<CompletedUpload | null> {
     try {
       const value = JSON.parse(await readFile(join(completed, `${id}.json`), "utf8")) as CompletedUpload;
-      if (!value.mediaId || value.expiraEm < now()) {
+      if (!value.mediaId || (!value.r2 && value.expiraEm < now())) {
         await rm(join(completed, `${id}.json`), { force: true });
         return null;
       }
@@ -319,18 +336,18 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     // precisa recalculá-lo a partir do parcial, não reaproveitar este.
     hashes.delete(id);
     if (state.sha256 && state.sha256 !== mediaId) {
-      await removeUpload(id);
+      if (!state.r2) await removeUpload(id);
       throw new UploadHttpError(422, "sha256 da mídia não confere");
     }
     const source = partialPath(id);
     let info;
     try { info = await probe(source); }
     catch (error) {
-      await removeUpload(id);
+      if (!state.r2) await removeUpload(id);
       throw new UploadHttpError(422, error instanceof Error ? error.message : "mídia ilegível");
     }
     if ((!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
-      await removeUpload(id);
+      if (!state.r2) await removeUpload(id);
       throw new UploadHttpError(422, "mídia sem vídeo ou áudio legível");
     }
 
@@ -351,7 +368,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           await writeMetadata(mediaId, metadata);
         }
         const result = { mediaId, deduplicado: true };
-        await rememberCompletion(id, result);
+        await rememberCompletion(id, result, state.r2);
         await opts.beforeRemoveUpload?.();
         await removeUpload(id);
         return result;
@@ -360,7 +377,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       // pronto; assim uma falha não deixa uma Mídia deduplicável sem registro.
       await writeMetadata(mediaId, metadata);
       const result = { mediaId, deduplicado: false };
-      await rememberCompletion(id, result);
+      await rememberCompletion(id, result, state.r2);
       await rename(source, destination);
       await opts.beforeRemoveUpload?.();
       await removeUpload(id);
@@ -381,6 +398,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         return;
       }
       const state = await readState(id);
+      if (state.r2) throw new UploadHttpError(409, "este envio usa R2");
       const range = parseRange(typeof req.headers["content-range"] === "string" ? req.headers["content-range"] : undefined);
       const length = range.end - range.start + 1;
       if (range.total !== state.tamanhoTotal) throw new UploadHttpError(409, "tamanho total não confere");
@@ -468,19 +486,198 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     }
   }
 
-  async function cleanExpired(): Promise<void> {
+  function requireStaging(): R2Staging {
+    if (!staging) throw new UploadHttpError(503, "configure R2 para retomar este envio");
+    return staging;
+  }
+
+  async function syncPath(path: string): Promise<void> {
+    const file = await open(path, "r");
+    try { await file.sync(); } finally { await file.close(); }
+  }
+
+  // O recibo precede o rename e sobrevive à pasta temporária. Nunca expire um
+  // recibo com exclusão pendente; uma indisponibilidade do R2 pode durar dias.
+  async function cleanRemote(id: string, receipt: CompletedUpload): Promise<void> {
+    if (!receipt.r2 || !staging) return;
+    const media = await getMedia(receipt.mediaId);
+    if (!media || (await stat(media.path)).size !== media.tamanho) return;
+    try {
+      await syncPath(media.path);
+      await syncPath(join(pool, `${receipt.mediaId}.json`));
+      await syncPath(pool);
+      await syncPath(join(completed, `${id}.json`));
+      await syncPath(completed);
+      await staging.delete(receipt.r2.key);
+      await rememberCompletion(id, receipt);
+    } catch {
+      log(`limpeza R2 pendente para o envio ${id}`, new Error("a cópia local está disponível; a exclusão será repetida"));
+    }
+  }
+
+  function startImport(id: string): void {
+    if (closing || imports.has(id)) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const task = (async () => {
+      try {
+        const state = await withUploadLock(id, async () => {
+          if (await readCompletion(id)) { await removeUpload(id); runCleanup(); return null; }
+          return readState(id);
+        });
+        if (!state?.r2 || state.r2.phase !== "importing" || signal.aborted) return;
+        const remote = requireStaging();
+        const object = await remote.head(state.r2.key);
+        signal.throwIfAborted();
+        if (!object || object.size !== state.tamanhoTotal) throw new UploadHttpError(422, "tamanho do objeto R2 não confere");
+        // A importação recomeça do objeto íntegro. Recolha o parcial de uma
+        // tentativa anterior antes de conferir espaço para a nova cópia.
+        await rm(partialPath(id), { force: true });
+        if (!await hasSpace(state.tamanhoTotal)) throw new UploadHttpError(507, "não há espaço suficiente no volume de Mídias");
+        const file = await open(partialPath(id), "w");
+        const hash = createHash("sha256");
+        let received = 0;
+        try {
+          for await (const chunk of remote.read(state.r2.key, object.etag, signal)) {
+            signal.throwIfAborted();
+            if (received + chunk.byteLength > state.tamanhoTotal) throw new UploadHttpError(422, "tamanho da importação não confere");
+            await writeBufferFully(file, chunk, received);
+            hash.update(chunk);
+            received += chunk.byteLength;
+          }
+          if (received !== state.tamanhoTotal) throw new UploadHttpError(422, "importação incompleta");
+          await file.sync();
+        } finally { await file.close(); }
+        // Só a publicação ocupa o lock. Um DELETE pode persistir canceling e
+        // abortar o stream enquanto o download ainda está em andamento.
+        await withUploadLock(id, async () => {
+          const current = await readState(id).catch(() => null);
+          if (signal.aborted || current?.r2?.phase !== "importing") return;
+          current.recebido = received;
+          current.atualizadoEm = now();
+          await writeState(id, current);
+          await publish(id, current, hash);
+        });
+        runCleanup();
+      } catch (error) {
+        await withUploadLock(id, async () => {
+          // Se a queda ocorreu depois de publicar, o recibo é a fonte de verdade.
+          if (await readCompletion(id)) { runCleanup(); await removeUpload(id); return; }
+          await rm(partialPath(id), { force: true });
+          if (closing || signal.aborted) return;
+          const current = await readState(id).catch(() => null);
+          if (!current?.r2 || current.r2.phase === "canceling") return;
+          current.r2.phase = "failed";
+          current.r2.status = error instanceof UploadHttpError ? error.status : 502;
+          current.r2.error = error instanceof UploadHttpError ? error.message : "não foi possível importar do R2; tente novamente";
+          current.recebido = 0;
+          current.atualizadoEm = now();
+          await writeState(id, current);
+        });
+      }
+    })().catch(() => log(`falha na importação R2 ${id}`, new Error("o envio pode ser retomado")));
+    imports.set(id, { task, controller });
+    void task.finally(() => { if (imports.get(id)?.task === task) imports.delete(id); });
+  }
+
+  function checkedParts(state: UploadState, parts: StagingPart[]): StagingPart[] {
+    const size = state.r2!.partBytes;
+    const count = Math.ceil(state.tamanhoTotal / size);
+    if (parts.length !== count || parts.some((part, index) => part.number !== index + 1
+      || part.size !== Math.min(size, state.tamanhoTotal - index * size))) {
+      throw new UploadHttpError(409, "partes do envio incompletas ou com tamanho incorreto");
+    }
+    return parts;
+  }
+
+  async function r2Status(id: string, state: UploadState): Promise<Record<string, unknown>> {
+    const session = state.r2!;
+    if (session.phase === "canceling") throw new UploadHttpError(410, "envio cancelado");
+    if (session.phase === "importing") startImport(id);
+    const result = { transporte: "r2", tamanhoTotal: state.tamanhoTotal, tamanhoParte: session.partBytes };
+    if (session.phase === "failed") return { ...result, estado: "failed", error: session.error, status: session.status };
+    if (session.phase === "importing") return { ...result, estado: "importing", offset: state.tamanhoTotal };
+    const remote = requireStaging();
+    // Também recupera a queda entre CompleteMultipartUpload e writeState.
+    if (await remote.head(session.key)) {
+      session.phase = "importing";
+      state.atualizadoEm = now();
+      await writeState(id, state);
+      startImport(id);
+      return { ...result, estado: "importing", offset: state.tamanhoTotal };
+    }
+    const parts = await remote.parts(session.key, session.upload);
+    let offset = 0;
+    for (const part of parts) {
+      const expected = Math.min(session.partBytes, state.tamanhoTotal - offset);
+      if (part.number !== offset / session.partBytes + 1 || part.size !== expected) break;
+      offset += part.size;
+    }
+    state.atualizadoEm = now();
+    await writeState(id, state);
+    return { ...result, offset, estado: "uploading" };
+  }
+
+  async function cancelRemote(id: string, session: R2Session): Promise<void> {
+    const remote = requireStaging();
+    await remote.abort(session.key, session.upload);
+    await remote.delete(session.key);
+    await removeUpload(id);
+  }
+
+  async function cleanExpired(localOnly = false): Promise<void> {
     const cutoff = now() - ttlMs;
     for (const entry of await readdir(temporary, { withFileTypes: true })) {
       if (!entry.isDirectory() || !uploadId(entry.name)) continue;
       const state = await readFile(join(temporary, entry.name, "state.json"), "utf8")
         .then((raw) => JSON.parse(raw) as UploadState, () => null);
+      if (state?.r2 && localOnly) continue;
+      if (state?.r2?.phase === "canceling" && staging) {
+        await cancelRemote(entry.name, state.r2)
+          .catch(() => log(`cancelamento R2 pendente ${entry.name}`, new Error("a exclusão será repetida")));
+        continue;
+      }
+      // Reconciliar todos os objetos concluídos cobre a queda entre Complete
+      // e writeState, mesmo que a aba nunca mais consulte o envio.
+      if (state?.r2?.phase === "uploading" && staging) {
+        try {
+          const object = await staging.head(state.r2.key);
+          if (object) {
+            await withUploadLock(entry.name, async () => {
+              const current = await readState(entry.name).catch(() => null);
+              if (current?.r2?.phase !== "uploading") return;
+              current.r2.phase = "importing";
+              current.atualizadoEm = now();
+              await writeState(entry.name, current);
+              startImport(entry.name);
+            });
+            continue;
+          }
+        } catch {
+          log(`reconciliação R2 pendente ${entry.name}`, new Error("a verificação será repetida"));
+          continue;
+        }
+      }
       // Sob o lock do envio: uma parte chegando agora não pode ter a pasta
       // apagada no meio da escrita.
       if (state && state.atualizadoEm <= cutoff) {
         await withUploadLock(entry.name, async () => {
           const current = await readState(entry.name).catch(() => null);
-          if (current && current.atualizadoEm <= cutoff) await removeUpload(entry.name);
-        });
+          if (current && current.atualizadoEm <= cutoff) {
+            if (current.r2) {
+              if (current.r2.phase !== "uploading" || !staging) return;
+              // Um objeto completo ainda não validado não deve ser apagado.
+              if (await staging.head(current.r2.key)) {
+                current.r2.phase = "importing";
+                await writeState(entry.name, current);
+                startImport(entry.name);
+                return;
+              }
+              await staging.abort(current.r2.key, current.r2.upload);
+            }
+            await removeUpload(entry.name);
+          }
+        }).catch(() => log(`limpeza de envio pendente ${entry.name}`, new Error("a limpeza será repetida")));
       }
     }
   }
@@ -490,15 +687,35 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const item = await readFile(join(completed, entry.name), "utf8")
         .then((raw) => JSON.parse(raw) as CompletedUpload, () => null);
-      if (item && item.expiraEm < now()) await rm(join(completed, entry.name), { force: true });
+      if (!item) continue;
+      if (item.r2) {
+        const receipt = await readCompletion(entry.name.slice(0, -5));
+        if (receipt) await cleanRemote(entry.name.slice(0, -5), receipt);
+      } else if (item.expiraEm < now()) await withUploadLock(entry.name.slice(0, -5), async () => {
+        const current = await readCompletion(entry.name.slice(0, -5));
+        if (!current) await rm(join(completed, entry.name), { force: true });
+      });
     }
   }
 
-  await cleanExpired();
+  function runCleanup(): void {
+    if (closing) return;
+    if (cleanupTask) { cleanupRequested = true; return; }
+    cleanupRequested = false;
+    cleanupTask = cleanExpired().then(cleanCompleted)
+      .catch((error) => { if (!closing) log("falha na limpeza de envios", error); })
+      .finally(() => { cleanupTask = undefined; if (cleanupRequested) runCleanup(); });
+  }
+
+  await cleanExpired(true);
+  for (const entry of await readdir(temporary, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !uploadId(entry.name)) continue;
+    const state = await readState(entry.name).catch(() => null);
+    if (state?.r2?.phase === "importing") startImport(entry.name);
+  }
+  runCleanup();
   const cleanupIntervalMs = opts.cleanupIntervalMs ?? Math.max(1_000, Math.min(60 * 60 * 1000, ttlMs / 2 || 1_000));
-  const interval = setInterval(() => {
-    void cleanExpired().then(cleanCompleted).catch((error) => log("falha na limpeza de envios", error));
-  }, cleanupIntervalMs);
+  const interval = setInterval(runCleanup, cleanupIntervalMs);
   interval.unref?.();
 
   const runtime: MediaRuntime = {
@@ -537,12 +754,65 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           const id = randomUUID();
           await mkdir(join(temporary, id));
           await writeFile(partialPath(id), Buffer.alloc(0));
-          await writeState(id, { nome, tamanhoTotal: tamanho, recebido: 0, criadoEm: now(), atualizadoEm: now(), sha256 });
-          sendJson(res, { id, offset: 0, tamanhoParte: partBytes }, 201);
+          let r2: R2Session | undefined;
+          try {
+            if (staging) {
+              const key = `decupa-staging/${id}`;
+              const size = Math.max(5 * 1024 * 1024, partBytes, Math.ceil(tamanho / 10_000));
+              r2 = { key, upload: await staging.create(key), partBytes: size, phase: "uploading" };
+            }
+            await writeState(id, { nome, tamanhoTotal: tamanho, recebido: 0, criadoEm: now(), atualizadoEm: now(), sha256, r2 });
+          } catch (error) {
+            if (r2) await staging!.abort(r2.key, r2.upload).catch(() => {});
+            await removeUpload(id);
+            throw error;
+          }
+          sendJson(res, { id, offset: 0, tamanhoParte: r2?.partBytes ?? partBytes, ...(r2 ? { transporte: "r2" } : {}) }, 201);
           return true;
         }
         if (parts[0] === "api" && parts[1] === "uploads" && parts[2] && uploadId(parts[2])) {
           const id = parts[2];
+          if (parts.length === 4 && req.method === "POST" && ["parts", "complete"].includes(parts[3]!)) {
+            await withUploadLock(id, async () => {
+              const receipt = await readCompletion(id);
+              if (receipt) { sendJson(res, { mediaId: receipt.mediaId, deduplicado: receipt.deduplicado }); return; }
+              const state = await readState(id);
+              const session = state.r2;
+              if (!session) throw new UploadHttpError(409, "este envio não usa R2");
+              if (session.phase === "canceling") throw new UploadHttpError(410, "envio cancelado");
+              if (imports.has(id)) { sendJson(res, { transporte: "r2", estado: "importing" }, 202); return; }
+              const remote = requireStaging();
+              if (parts[3] === "parts") {
+                if (session.phase !== "uploading") throw new UploadHttpError(409, "envio já finalizado");
+                const body = await readJson(req);
+                const numero = integer(body.numero, "número da parte inválido");
+                if (numero < 1 || numero > Math.ceil(state.tamanhoTotal / session.partBytes)) throw new UploadHttpError(400, "número da parte inválido");
+                const signed = await remote.signPart(session.key, session.upload, numero);
+                state.atualizadoEm = now();
+                await writeState(id, state);
+                sendJson(res, { url: signed });
+              } else {
+                // HEAD torna a conclusão repetível mesmo se a resposta do R2
+                // se perdeu depois de ele concluir o multipart.
+                let object = await remote.head(session.key);
+                if (!object) {
+                  const uploaded = checkedParts(state, await remote.parts(session.key, session.upload));
+                  await remote.complete(session.key, session.upload, uploaded);
+                  object = await remote.head(session.key);
+                }
+                if (!object || object.size !== state.tamanhoTotal) throw new UploadHttpError(422, "tamanho do objeto R2 não confere");
+                session.phase = "importing";
+                delete session.error;
+                delete session.status;
+                state.atualizadoEm = now();
+                await writeState(id, state);
+                startImport(id);
+                sendJson(res, { transporte: "r2", estado: "importing" }, 202);
+              }
+            });
+            return true;
+          }
+          if (parts.length !== 3) return false;
           if (req.method === "GET") {
             await withUploadLock(id, async () => {
               const completedUpload = await readCompletion(id);
@@ -554,7 +824,9 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
                 return;
               }
               const state = await readState(id);
-              if (state.recebido === state.tamanhoTotal) {
+              if (state.r2) {
+                sendJson(res, await r2Status(id, state));
+              } else if (state.recebido === state.tamanhoTotal) {
                 const result = await recoverCompleted(id, state);
                 sendJson(res, { ...result, offset: state.recebido, tamanhoTotal: state.tamanhoTotal, estado: result.deduplicado ? "deduped" : "ready" satisfies UploadClientState });
               } else {
@@ -564,8 +836,25 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
             return true;
           }
           if (req.method === "DELETE") {
-            await withUploadLock(id, async () => { await removeUpload(id); });
-            res.writeHead(204); res.end();
+            let remotePending = false;
+            await withUploadLock(id, async () => {
+              const state = await readState(id).catch(() => null);
+              const receipt = await readCompletion(id);
+              const session = state?.r2 ?? receipt?.r2;
+              if (session) {
+                if (state?.r2) {
+                  state.r2.phase = "canceling";
+                  state.atualizadoEm = now();
+                  await writeState(id, state);
+                  imports.get(id)?.controller.abort();
+                }
+                remotePending = true;
+                return;
+              }
+              await removeUpload(id);
+            });
+            if (remotePending) runCleanup();
+            res.writeHead(remotePending ? 202 : 204); res.end();
             return true;
           }
           if (req.method === "PATCH") {
@@ -580,7 +869,13 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         throw error;
       }
     },
-    close: async () => { clearInterval(interval); },
+    close: async () => {
+      closing = true;
+      clearInterval(interval);
+      for (const job of imports.values()) job.controller.abort();
+      staging?.close?.();
+      await Promise.allSettled([...imports.values()].map(job => job.task));
+    },
   };
   return runtime;
 }
