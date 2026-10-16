@@ -305,6 +305,21 @@ export class DriveMediaImport {
     this.state = "parado";
   }
 
+  /** Pasta vira lista de mídias no servidor; arquivo segue direto, sem consulta. */
+  async expandirPasta(url) {
+    const alvo = String(url ?? "").trim();
+    if (!alvo) throw httpError(400, "cole o link do arquivo no Google Drive");
+    if (!alvo.includes("/folders/")) return { tipo: "arquivo" };
+    const response = await this.fetchImpl("/api/uploads/from-drive/list", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: alvo }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw httpError(response.status, body.error || `erro ${response.status}`);
+    return body;
+  }
+
   async start(url) {
     const alvo = String(url ?? "").trim();
     if (!alvo) throw httpError(400, "cole o link do arquivo no Google Drive");

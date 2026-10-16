@@ -322,7 +322,7 @@ describe("fila de envios da gaveta", () => {
 describe("importação do Drive na gaveta", () => {
   const LINK = "https://drive.google.com/file/d/IdTeste123/view";
 
-  function montarGavetaDrive() {
+  function montarGavetaDrive(expandirPasta: (url: string) => Promise<unknown> = async () => ({ tipo: "arquivo" })) {
     const importacoes: EnvioFalso[] = [];
     const gaveta = criarGaveta({
       criarEnvio: ({ onProgress }: { onProgress: (valor: { percent: number; state: string }) => void }) => {
@@ -336,6 +336,7 @@ describe("importação do Drive na gaveta", () => {
         importacoes.push(envio);
         return envio;
       },
+      expandirPasta,
       chaveDoArquivo: (arquivoDaGaveta: { name: string; size: number }) => `${arquivoDaGaveta.name}:${arquivoDaGaveta.size}`,
       enviarCriacao: async () => ({ url: "/projects/novo-abcd/" }),
       onCriado: () => {},
@@ -362,7 +363,7 @@ describe("importação do Drive na gaveta", () => {
 
   it("adiciona o link na fila, atualiza o nome e conclui", async () => {
     const { gaveta, importacoes } = montarGavetaDrive();
-    gaveta.adicionarDriveUrl(LINK);
+    await gaveta.adicionarDriveUrl(LINK);
     expect(importacoes).toHaveLength(1);
     expect(importacoes[0]!.arquivo).toBe(LINK);
     expect(gaveta.instantanea().itens[0]).toMatchObject({ origem: "drive", estado: "enviando", nome: LINK });
@@ -373,22 +374,22 @@ describe("importação do Drive na gaveta", () => {
     expect(gaveta.instantanea().itens[0]).toMatchObject({ estado: "pronto", mediaId: "4".repeat(64) });
   });
 
-  it("recusa link vazio, repetido e acima do limite do Fluxo", () => {
+  it("recusa link vazio, repetido e acima do limite do Fluxo", async () => {
     const { gaveta } = montarGavetaDrive();
-    gaveta.adicionarDriveUrl("   ");
+    await gaveta.adicionarDriveUrl("   ");
     expect(gaveta.instantanea().erro?.mensagem).toMatch(/Cole o link/);
-    gaveta.adicionarDriveUrl(LINK);
-    gaveta.adicionarDriveUrl(LINK);
+    await gaveta.adicionarDriveUrl(LINK);
+    await gaveta.adicionarDriveUrl(LINK);
     expect(gaveta.instantanea().itens).toHaveLength(1);
     expect(gaveta.instantanea().erro?.mensagem).toBe("Esta Mídia já está na lista.");
     gaveta.definirFluxo("limpeza");
-    gaveta.adicionarDriveUrl(`${LINK}?outro=1`);
+    await gaveta.adicionarDriveUrl(`${LINK}?outro=1`);
     expect(gaveta.instantanea().erro?.mensagem).toMatch(/exatamente uma Mídia/);
   });
 
   it("falha do Drive mostra a mensagem e remover cancela com o link", async () => {
     const { gaveta, importacoes } = montarGavetaDrive();
-    gaveta.adicionarDriveUrl(LINK);
+    await gaveta.adicionarDriveUrl(LINK);
     importacoes[0]!.falhar(Object.assign(new Error("arquivo não encontrado no Drive ou sem link público"), { status: 404 }));
     await flush();
     expect(gaveta.instantanea().itens[0]).toMatchObject({ estado: "erro", mensagem: "Arquivo não encontrado no Drive ou sem link público." });
@@ -398,5 +399,40 @@ describe("importação do Drive na gaveta", () => {
     expect(gaveta.instantanea().itens[0]?.estado).toBe("enviando");
     gaveta.remover(chave);
     expect(importacoes[0]!.cancels).toBe(1);
+  });
+
+  it("pasta vira um item por mídia, com nomes e aviso de ignorados", async () => {
+    const { gaveta, importacoes } = montarGavetaDrive(async () => ({
+      tipo: "pasta",
+      items: [
+        { fileId: "a".repeat(28), nome: "aula.mp4", tamanho: 100 },
+        { fileId: "b".repeat(28), nome: "entrevista.m4a", tamanho: 50 },
+      ],
+      ignorados: 1,
+    }));
+    await gaveta.adicionarDriveUrl("https://drive.google.com/drive/folders/Pasta0001");
+    const itens = gaveta.instantanea().itens;
+    expect(itens).toHaveLength(2);
+    expect(itens[0]).toMatchObject({ origem: "drive", estado: "enviando", nome: "aula.mp4" });
+    expect(itens[1]).toMatchObject({ origem: "drive", estado: "aguardando", nome: "entrevista.m4a" });
+    expect(importacoes).toHaveLength(2);
+    expect(importacoes[0]!.arquivo).toBe(`https://drive.google.com/file/d/${"a".repeat(28)}/view`);
+    expect(gaveta.instantanea().erro?.mensagem).toBe("1 item ignorado: não são vídeo ou áudio.");
+    importacoes[0]!.concluir("5".repeat(64));
+    await flush();
+    expect(gaveta.instantanea().itens[1]?.estado).toBe("enviando");
+  });
+
+  it("expansão com erro ou sem mídias não cria item", async () => {
+    const falha = montarGavetaDrive(async () => {
+      throw Object.assign(new Error("arquivo não encontrado no Drive ou sem link público"), { status: 404 });
+    });
+    await falha.gaveta.adicionarDriveUrl("https://drive.google.com/drive/folders/Pasta0001");
+    expect(falha.gaveta.instantanea().itens).toHaveLength(0);
+    expect(falha.gaveta.instantanea().erro?.mensagem).toBe("Arquivo não encontrado no Drive ou sem link público.");
+    const vazia = montarGavetaDrive(async () => ({ tipo: "pasta", items: [], ignorados: 3 }));
+    await vazia.gaveta.adicionarDriveUrl("https://drive.google.com/drive/folders/Vazia0001");
+    expect(vazia.gaveta.instantanea().itens).toHaveLength(0);
+    expect(vazia.gaveta.instantanea().erro?.mensagem).toBe("Nenhum vídeo ou áudio na pasta do Drive.");
   });
 });

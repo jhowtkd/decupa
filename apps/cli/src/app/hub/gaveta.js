@@ -131,6 +131,7 @@ export function formatarDuracao(segundos) {
  * @param {object} config
  * @param {any} config.criarEnvio
  * @param {any} [config.criarImportacaoDrive]
+ * @param {any} [config.expandirPasta]
  * @param {any} config.chaveDoArquivo
  * @param {any} config.enviarCriacao
  * @param {any} config.onCriado
@@ -138,7 +139,8 @@ export function formatarDuracao(segundos) {
  * @param {any} [config.onMidiaPublicada]
  */
 export function criarGaveta({
-  criarEnvio, criarImportacaoDrive, chaveDoArquivo, enviarCriacao, onCriado, onChange, onMidiaPublicada = () => {},
+  criarEnvio, criarImportacaoDrive, expandirPasta = async () => ({ tipo: "arquivo" }),
+  chaveDoArquivo, enviarCriacao, onCriado, onChange, onMidiaPublicada = () => {},
 }) {
   let nome = "";
   let fluxo = "montagem";
@@ -321,7 +323,7 @@ export function criarGaveta({
     notificar();
   }
 
-  function adicionarDriveUrl(valor) {
+  async function adicionarDriveUrl(valor) {
     erro = null;
     const validado = validarDriveUrl(valor);
     if (!validado.valido) {
@@ -334,21 +336,50 @@ export function criarGaveta({
       notificar();
       return;
     }
-    const assinatura = `drive\0${validado.url}`;
-    if (itens.some((item) => item.assinatura === assinatura)) {
-      erro = { campo: "aviso", mensagem: "Esta Mídia já está na lista." };
+    let expansao;
+    try {
+      expansao = await expandirPasta(validado.url);
+    } catch (error) {
+      erro = { campo: "aviso", mensagem: mensagemDeErroDeEnvio(error, "drive") };
       notificar();
       return;
     }
-    const quantidade = validarQuantidadeDeMidias(fluxo, itens.length + 1);
-    if (quantidade) {
-      erro = { campo: "aviso", mensagem: quantidade };
+    const alvos = expansao?.tipo === "pasta" && Array.isArray(expansao.items)
+      ? expansao.items
+        .filter((item) => item && typeof item.fileId === "string" && item.fileId !== "")
+        .map((item) => ({
+          url: `https://drive.google.com/file/d/${item.fileId}/view`,
+          nome: typeof item.nome === "string" && item.nome !== "" ? item.nome : null,
+        }))
+      : [{ url: validado.url, nome: null }];
+    if (alvos.length === 0) {
+      erro = { campo: "aviso", mensagem: "Nenhum vídeo ou áudio na pasta do Drive." };
       notificar();
       return;
     }
-    const item = novoItem({ nome: validado.url, origem: "drive", alvo: validado.url, assinatura });
-    item.envio = criarImportacaoDrive({ onProgress: (valor) => progredir(item, valor) });
-    itens.push(item);
+    const ignorados = expansao?.tipo === "pasta" ? Number(expansao.ignorados) || 0 : 0;
+    let adicionados = 0;
+    for (const alvo of alvos) {
+      const assinatura = `drive\0${alvo.url}`;
+      if (itens.some((item) => item.assinatura === assinatura)) continue;
+      const quantidade = validarQuantidadeDeMidias(fluxo, itens.length + 1);
+      if (quantidade) {
+        erro = { campo: "aviso", mensagem: quantidade };
+        break;
+      }
+      const item = novoItem({ nome: alvo.nome ?? alvo.url, origem: "drive", alvo: alvo.url, assinatura });
+      item.envio = criarImportacaoDrive({ onProgress: (valor) => progredir(item, valor) });
+      itens.push(item);
+      adicionados += 1;
+    }
+    if (adicionados === 0 && !erro) {
+      erro = { campo: "aviso", mensagem: alvos.length > 1 ? "Estas Mídias já estão na lista." : "Esta Mídia já está na lista." };
+    } else if (ignorados > 0 && !erro) {
+      erro = {
+        campo: "aviso",
+        mensagem: `${ignorados} ${ignorados === 1 ? "item ignorado" : "itens ignorados"}: não são vídeo ou áudio.`,
+      };
+    }
     proximo();
     notificar();
   }

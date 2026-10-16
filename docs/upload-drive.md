@@ -2,14 +2,15 @@
 
 Cole o link de um arquivo do Drive na gaveta de Novo Projeto e a VPS baixa direto do Google, valida e publica no acervo local. O navegador só acompanha o progresso — quem trafega os bytes é a conexão datacenter ↔ datacenter, sem passar pela máquina de quem importa.
 
-## 1. Compartilhar o arquivo
+## 1. Compartilhar o arquivo ou a pasta
 
-No Drive, compartilhe o arquivo como **Qualquer pessoa com o link – Leitor**. Pastas não são suportadas: abra o arquivo e copie o link dele. Documentos nativos do Google (Docs, Planilhas, Apresentações) não podem ser importados; exporte como vídeo ou áudio.
+No Drive, compartilhe como **Qualquer pessoa com o link – Leitor**. Vale arquivo isolado, pasta (cada vídeo/áudio vira um item na fila) e conteúdo de drives compartilhados. Pastas são varridas com subpastas até 5 níveis; documentos nativos do Google (Docs, Planilhas, Apresentações) e arquivos que não são vídeo ou áudio são ignorados com aviso. O limite é 50 mídias por pasta.
 
 Formatos de link aceitos:
 
 - `https://drive.google.com/file/d/ID_DO_ARQUIVO/view`
 - `https://drive.google.com/open?id=ID_DO_ARQUIVO`
+- `https://drive.google.com/drive/folders/ID_DA_PASTA`
 - o ID puro do arquivo
 
 ## 2. Criar a API key

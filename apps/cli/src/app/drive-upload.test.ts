@@ -20,6 +20,8 @@ function driveFixture(input: Buffer) {
   let tamanho = input.length;
   let nome = "aula.mp4";
   let metadataError: { status: number; message: string } | null = null;
+  let folder: { items: { id: string; nome: string; tamanho: number; md5?: string }[]; ignorados: number } | null = null;
+  let folderIsId = false;
   return {
     starts,
     set failRead(value: boolean) { failRead = value; },
@@ -29,9 +31,16 @@ function driveFixture(input: Buffer) {
     set tamanho(value: number) { tamanho = value; },
     set nome(value: string) { nome = value; },
     set metadataError(value: { status: number; message: string } | null) { metadataError = value; },
+    set folder(value: { items: { id: string; nome: string; tamanho: number; md5?: string }[]; ignorados: number } | null) { folder = value; },
+    set folderIsId(value: boolean) { folderIsId = value; },
     async metadata(fileId: string) {
       if (metadataError) throw new DriveHttpError(metadataError.status, metadataError.message);
+      if (folderIsId) throw new DriveHttpError(400, "este ID é de uma pasta", "FOLDER_ID");
       return { id: fileId, nome, tamanho, md5, mimeType: "video/mp4" };
+    },
+    async listMedia(_folderId: string) {
+      if (!folder) throw new DriveHttpError(404, "arquivo não encontrado no Drive ou sem link público");
+      return folder;
     },
     async read(_fileId: string, start: number, total: number) {
       starts.push(start);
@@ -130,7 +139,7 @@ it("recusa link inválido, pasta, arquivo ausente e vazio", async () => {
   }
   const folder = await fetch(`${f.app.base}/api/uploads/from-drive`, { method: "POST", body: JSON.stringify({ url: "https://drive.google.com/drive/folders/abc123" }) });
   expect(folder.status).toBe(400);
-  expect(await folder.json()).toMatchObject({ error: expect.stringContaining("pastas") });
+  expect(await folder.json()).toMatchObject({ error: expect.stringContaining("pasta do Drive") });
   f.drive.metadataError = { status: 404, message: "arquivo não encontrado no Drive ou sem link público" };
   const missing = await fetch(`${f.app.base}/api/uploads/from-drive`, { method: "POST", body: JSON.stringify({ url: URL }) });
   expect(missing.status).toBe(404);
@@ -283,6 +292,57 @@ it("rotas de outros transportes recusam o envio do Drive e vice-versa", async ()
     expect((await fetch(`${f.app.base}/api/uploads/${local.id}/retry`, { method: "POST" })).status).toBe(409);
   } finally { release(); }
   await settled(f.app.base, upload.id);
+});
+
+it("expande pasta em mídias sem criar envios", async () => {
+  const input = await readFile(join(FIXTURES, "clip.mp4"));
+  const f = await fixture(input);
+  f.drive.folder = {
+    items: [
+      { id: "a".repeat(28), nome: "aula.mp4", tamanho: input.length, md5: createHash("md5").update(input).digest("hex") },
+      { id: "b".repeat(28), nome: "entrevista.m4a", tamanho: 10 },
+    ],
+    ignorados: 2,
+  };
+  const response = await fetch(`${f.app.base}/api/uploads/from-drive/list`, {
+    method: "POST", body: JSON.stringify({ url: "https://drive.google.com/drive/folders/Pasta0001" }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    tipo: "pasta",
+    items: [
+      { fileId: "a".repeat(28), nome: "aula.mp4", tamanho: input.length },
+      { fileId: "b".repeat(28), nome: "entrevista.m4a", tamanho: 10 },
+    ],
+    ignorados: 2,
+  });
+  expect(await readdir(join(f.root, ".tmp"))).toEqual([]);
+  const file = await fetch(`${f.app.base}/api/uploads/from-drive/list`, {
+    method: "POST", body: JSON.stringify({ url: URL }),
+  });
+  expect(await file.json()).toMatchObject({ tipo: "arquivo", nome: "aula.mp4" });
+});
+
+it("pasta vazia, ID de pasta e link de pasta na criação", async () => {
+  const f = await fixture(Buffer.from("x"));
+  f.drive.folder = { items: [], ignorados: 3 };
+  const empty = await fetch(`${f.app.base}/api/uploads/from-drive/list`, {
+    method: "POST", body: JSON.stringify({ url: "https://drive.google.com/drive/folders/Vazia0001" }),
+  });
+  expect(empty.status).toBe(400);
+  expect(await empty.json()).toMatchObject({ error: expect.stringContaining("nenhum vídeo ou áudio") });
+  f.drive.folder = { items: [{ id: "a".repeat(28), nome: "a.mp4", tamanho: 10 }], ignorados: 0 };
+  f.drive.folderIsId = true;
+  const byId = await fetch(`${f.app.base}/api/uploads/from-drive/list`, {
+    method: "POST", body: JSON.stringify({ url: "PastaId000000000000000000001" }),
+  });
+  expect(byId.status).toBe(200);
+  expect(await byId.json()).toMatchObject({ tipo: "pasta" });
+  f.drive.folderIsId = false;
+  const create = await fetch(`${f.app.base}/api/uploads/from-drive`, {
+    method: "POST", body: JSON.stringify({ url: "https://drive.google.com/drive/folders/Pasta0001" }),
+  });
+  expect(create.status).toBe(400);
 });
 
 it("reaproveita a mídia já importada do mesmo conteúdo", async () => {

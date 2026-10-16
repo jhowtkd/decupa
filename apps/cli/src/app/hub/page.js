@@ -235,6 +235,7 @@ async function carregarAcervo() {
 const gaveta = criarGaveta({
   criarEnvio: ({ onProgress }) => new ResumableMediaUpload({ onProgress }),
   criarImportacaoDrive: ({ onProgress }) => new DriveMediaImport({ onProgress }),
+  expandirPasta: (url) => new DriveMediaImport({}).expandirPasta(url),
   chaveDoArquivo: uploadFingerprint,
   enviarCriacao,
   onCriado: (url) => window.location.assign(url),

@@ -147,6 +147,22 @@ it("cancelar avisa o servidor e esquece a importação", async () => {
   expect(storage.readImports()).toEqual({});
 });
 
+it("arquivo dispensa expansão e pasta lista no servidor", async () => {
+  const calls = [];
+  const { fetchImpl } = await fixture(({ method, path }) => {
+    calls.push(`${method} ${path}`);
+    return { body: { tipo: "pasta", items: [{ fileId: "a".repeat(28), nome: "a.mp4", tamanho: 10 }], ignorados: 1 } };
+  });
+  const client = new DriveMediaImport({ fetchImpl, storage: memoryStorage() });
+  await expect(client.expandirPasta(LINK)).resolves.toEqual({ tipo: "arquivo" });
+  expect(calls).toEqual([]);
+  await expect(client.expandirPasta("https://drive.google.com/drive/folders/Pasta0001")).resolves.toMatchObject({
+    tipo: "pasta", items: [{ fileId: "a".repeat(28) }], ignorados: 1,
+  });
+  expect(calls).toEqual(["POST /api/uploads/from-drive/list"]);
+  await expect(client.expandirPasta("   ")).rejects.toMatchObject({ status: 400 });
+});
+
 it("id expirado cria uma nova importação", async () => {
   const { fetchImpl } = await fixture(({ method, path }) => {
     if (method === "GET" && path === "/api/uploads/antigo") return { status: 404, body: { error: "envio não encontrado" } };

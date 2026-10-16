@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { probe } from "@decupa/media";
 import { createR2Staging, type R2Staging, type StagingPart } from "./r2-staging.ts";
-import { createDriveImport, DriveHttpError, parseDriveFileId, type DriveImport } from "./drive-import.ts";
+import { createDriveImport, DriveHttpError, parseDriveFileId, parseDriveUrl, type DriveImport } from "./drive-import.ts";
 
 /** Estados que a interface do navegador usa para acompanhar um envio. */
 export type UploadClientState = "uploading" | "paused" | "importing" | "verifying" | "ready" | "deduped" | "failed";
@@ -972,6 +972,47 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           });
           startDriveImport(id);
           sendJson(res, { id, transporte: "drive", estado: "importing", offset: 0, tamanhoTotal: file.tamanho, nome }, 202);
+          return true;
+        }
+        // Expansão de pasta: só lista, sem criar envios. A interface cria um
+        // item por mídia, cada um com seu próprio envio retomável.
+        if (url.pathname === "/api/uploads/from-drive/list" && req.method === "POST") {
+          const remote = requireDrive();
+          const body = await readJson(req);
+          try {
+            const parsed = parseDriveUrl(body.url);
+            if (parsed.kind === "folder") {
+              const { items, ignorados } = await remote.listMedia(parsed.id);
+              if (items.length === 0) throw new UploadHttpError(400, "nenhum vídeo ou áudio na pasta do Drive");
+              sendJson(res, {
+                tipo: "pasta",
+                items: items.map(item => ({ fileId: item.id, nome: item.nome, tamanho: item.tamanho })),
+                ignorados,
+              });
+              return true;
+            }
+            try {
+              const file = await remote.metadata(parsed.id);
+              sendJson(res, { tipo: "arquivo", fileId: parsed.id, nome: file.nome, tamanho: file.tamanho });
+            } catch (error) {
+              // ID puro de pasta: metadados revelam, lista expande.
+              if (error instanceof DriveHttpError && error.code === "FOLDER_ID") {
+                const { items, ignorados } = await remote.listMedia(parsed.id);
+                if (items.length === 0) throw new UploadHttpError(400, "nenhum vídeo ou áudio na pasta do Drive");
+                sendJson(res, {
+                  tipo: "pasta",
+                  items: items.map(item => ({ fileId: item.id, nome: item.nome, tamanho: item.tamanho })),
+                  ignorados,
+                });
+                return true;
+              }
+              throw error;
+            }
+          } catch (error) {
+            if (error instanceof UploadHttpError) throw error;
+            if (error instanceof DriveHttpError) throw new UploadHttpError(error.status, error.message);
+            throw new UploadHttpError(502, "não foi possível alcançar o Google Drive; tente novamente");
+          }
           return true;
         }
         if (parts[0] === "api" && parts[1] === "uploads" && parts[2] && uploadId(parts[2])) {
