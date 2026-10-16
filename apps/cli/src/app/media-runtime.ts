@@ -2,11 +2,13 @@ import { createHash, randomUUID, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile,
+  type FileHandle,
 } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { probe } from "@decupa/media";
 import { createR2Staging, type R2Staging, type StagingPart } from "./r2-staging.ts";
+import { createDriveImport, DriveHttpError, parseDriveFileId, type DriveImport } from "./drive-import.ts";
 
 /** Estados que a interface do navegador usa para acompanhar um envio. */
 export type UploadClientState = "uploading" | "paused" | "importing" | "verifying" | "ready" | "deduped" | "failed";
@@ -29,6 +31,14 @@ interface R2Session {
   status?: number;
 }
 
+interface DriveSession {
+  fileId: string;
+  md5?: string;
+  phase: "downloading" | "failed" | "canceling";
+  error?: string;
+  status?: number;
+}
+
 interface UploadState {
   nome: string;
   tamanhoTotal: number;
@@ -37,6 +47,7 @@ interface UploadState {
   atualizadoEm: number;
   sha256?: string;
   r2?: R2Session;
+  drive?: DriveSession;
 }
 
 type CompletedUpload = { mediaId: string; deduplicado: boolean; expiraEm: number; r2?: R2Session };
@@ -135,6 +146,13 @@ function uploadId(value: string): boolean {
   return /^[0-9a-f-]{36}$/.test(value);
 }
 
+/** O nome vem do Drive: higieniza em vez de recusar, para não travar a importação. */
+function sanitizeDriveName(value: string): string {
+  // oxlint-disable-next-line no-control-regex -- higieniza nome do Drive: controles e DEL não entram no acervo.
+  const clean = value.replace(/[\\/]/g, " ").replace(/[\0-\x1F\x7F]/g, "").trim().slice(0, 255);
+  return clean === "" ? "drive-import" : clean;
+}
+
 function parseRange(value: string | undefined): { start: number; end: number; total: number } {
   const match = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/.exec(value ?? "");
   if (!match) throw new UploadHttpError(400, "Content-Range inválido");
@@ -157,6 +175,8 @@ export interface MediaRuntime {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
   getMedia(mediaId: string): Promise<MediaRecord | null>;
   close(): Promise<void>;
+  /** Verdadeiro quando há chave do Drive: a interface mostra a importação. */
+  driveEnabled: boolean;
 }
 
 export interface MediaRuntimeOptions {
@@ -168,6 +188,7 @@ export interface MediaRuntimeOptions {
   /** Gancho dos testes para segurar a janela entre publicar e limpar. */
   beforeRemoveUpload?: () => Promise<void>;
   staging?: R2Staging;
+  drive?: DriveImport;
 }
 
 /** FileHandle.write pode aceitar menos bytes do que o buffer pede. */
@@ -193,6 +214,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   const now = opts.now ?? Date.now;
   const log = opts.log ?? ((message, error) => console.error(message, error));
   const staging = opts.staging ?? createR2Staging(env);
+  const drive = opts.drive ?? createDriveImport(env);
   const root = resolve(opts.root);
   const pool = join(root, "pool");
   const temporary = join(root, ".tmp");
@@ -336,18 +358,18 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     // precisa recalculá-lo a partir do parcial, não reaproveitar este.
     hashes.delete(id);
     if (state.sha256 && state.sha256 !== mediaId) {
-      if (!state.r2) await removeUpload(id);
+      if (!state.r2 && !state.drive) await removeUpload(id);
       throw new UploadHttpError(422, "sha256 da mídia não confere");
     }
     const source = partialPath(id);
     let info;
     try { info = await probe(source); }
     catch (error) {
-      if (!state.r2) await removeUpload(id);
+      if (!state.r2 && !state.drive) await removeUpload(id);
       throw new UploadHttpError(422, error instanceof Error ? error.message : "mídia ilegível");
     }
     if ((!info.hasVideo && !info.hasAudio) || info.durationMs <= 0) {
-      if (!state.r2) await removeUpload(id);
+      if (!state.r2 && !state.drive) await removeUpload(id);
       throw new UploadHttpError(422, "mídia sem vídeo ou áudio legível");
     }
 
@@ -399,6 +421,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       }
       const state = await readState(id);
       if (state.r2) throw new UploadHttpError(409, "este envio usa R2");
+      if (state.drive) throw new UploadHttpError(409, "este envio usa o Drive");
       const range = parseRange(typeof req.headers["content-range"] === "string" ? req.headers["content-range"] : undefined);
       const length = range.end - range.start + 1;
       if (range.total !== state.tamanhoTotal) throw new UploadHttpError(409, "tamanho total não confere");
@@ -491,6 +514,16 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     return staging;
   }
 
+  function requireDrive(): DriveImport {
+    if (!drive) throw new UploadHttpError(503, "importação do Drive não configurada");
+    return drive;
+  }
+
+  // Persistência do progresso do Drive: o lock é breve, só para gravar o
+  // offset. Um DELETE no meio da escrita interrompe o download sem travar.
+  const DRIVE_PROGRESS_BYTES = 1024 * 1024;
+  const DRIVE_INTERRUPTED = new Error("importação do Drive interrompida");
+
   async function syncPath(path: string): Promise<void> {
     const file = await open(path, "r");
     try { await file.sync(); } finally { await file.close(); }
@@ -580,6 +613,123 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     void task.finally(() => { if (imports.get(id)?.task === task) imports.delete(id); });
   }
 
+  // Download do Drive com retomada por Range. Falha de rede preserva o
+  // parcial e o offset; falha de integridade (422) descarta o parcial.
+  // A conferência de espaço desconta o que já foi baixado.
+  function startDriveImport(id: string): void {
+    if (closing || imports.has(id)) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let received = 0;
+    let file: FileHandle | null = null;
+    const task = (async () => {
+      try {
+        const state = await withUploadLock(id, async () => {
+          if (await readCompletion(id)) { await removeUpload(id); runCleanup(); return null; }
+          return readState(id);
+        });
+        if (!state?.drive || state.drive.phase !== "downloading" || signal.aborted) return;
+        const remote = requireDrive();
+        const total = state.tamanhoTotal;
+        const expectedMd5 = state.drive.md5;
+        received = state.recebido;
+        const existing = await stat(partialPath(id)).catch(() => null);
+        if (!existing || existing.size < received) received = 0;
+        file = await open(partialPath(id), received === 0 ? "w" : "r+");
+        if (received > 0 && existing!.size > received) await file.truncate(received);
+        let sha = createHash("sha256");
+        let md5 = createHash("md5");
+        if (received > 0) {
+          for await (const chunk of createReadStream(partialPath(id))) {
+            sha.update(chunk as Buffer);
+            md5.update(chunk as Buffer);
+          }
+        }
+        if (!await hasSpace(total - received)) throw new UploadHttpError(507, "não há espaço suficiente no volume de Mídias");
+        const stream = await remote.read(state.drive.fileId, received, total, signal);
+        signal.throwIfAborted();
+        if (stream.restarted) {
+          received = 0;
+          sha = createHash("sha256");
+          md5 = createHash("md5");
+          await file.truncate(0);
+          await withUploadLock(id, async () => {
+            const current = await readState(id).catch(() => null);
+            if (signal.aborted || current?.drive?.phase !== "downloading") throw DRIVE_INTERRUPTED;
+            current.recebido = 0;
+            current.atualizadoEm = now();
+            await writeState(id, current);
+          });
+        }
+        let lastPersisted = received;
+        for await (const chunk of stream.body) {
+          signal.throwIfAborted();
+          const buffer = Buffer.from(chunk as Uint8Array);
+          if (received + buffer.byteLength > total) throw new UploadHttpError(422, "tamanho da importação não confere");
+          await writeBufferFully(file, buffer, received);
+          sha.update(buffer);
+          md5.update(buffer);
+          received += buffer.byteLength;
+          if (received - lastPersisted >= DRIVE_PROGRESS_BYTES) {
+            lastPersisted = received;
+            await withUploadLock(id, async () => {
+              const current = await readState(id).catch(() => null);
+              if (signal.aborted || current?.drive?.phase !== "downloading") throw DRIVE_INTERRUPTED;
+              current.recebido = received;
+              current.atualizadoEm = now();
+              await writeState(id, current);
+            });
+          }
+        }
+        if (received !== total) throw new UploadHttpError(422, "importação incompleta");
+        if (expectedMd5 && md5.digest("hex") !== expectedMd5) throw new UploadHttpError(422, "hash do Drive não confere");
+        await file.sync();
+        // Só a publicação ocupa o lock. Um DELETE pode persistir canceling e
+        // abortar o stream enquanto o download ainda está em andamento.
+        await withUploadLock(id, async () => {
+          const current = await readState(id).catch(() => null);
+          if (signal.aborted || current?.drive?.phase !== "downloading") return;
+          current.recebido = received;
+          current.atualizadoEm = now();
+          await writeState(id, current);
+          await publish(id, current, sha);
+        });
+        runCleanup();
+      } catch (error) {
+        if (file) await file.close().catch(() => {});
+        file = null;
+        if (error === DRIVE_INTERRUPTED) return;
+        await withUploadLock(id, async () => {
+          // Se a queda ocorreu depois de publicar, o recibo é a fonte de verdade.
+          if (await readCompletion(id)) { runCleanup(); await removeUpload(id); return; }
+          if (closing || signal.aborted) return;
+          const current = await readState(id).catch(() => null);
+          if (!current?.drive || current.drive.phase === "canceling") return;
+          const fatal = (error instanceof UploadHttpError && error.status === 422)
+            || (error instanceof DriveHttpError && error.status === 422);
+          const status = error instanceof UploadHttpError || error instanceof DriveHttpError ? error.status : 502;
+          const message = error instanceof UploadHttpError || error instanceof DriveHttpError ? error.message
+            : "não foi possível importar do Drive; tente novamente";
+          if (fatal) {
+            await rm(partialPath(id), { force: true });
+            current.recebido = 0;
+          } else {
+            current.recebido = received;
+          }
+          current.drive.phase = "failed";
+          current.drive.status = status;
+          current.drive.error = message;
+          current.atualizadoEm = now();
+          await writeState(id, current);
+        });
+      } finally {
+        if (file) await file.close().catch(() => {});
+      }
+    })().catch(() => log(`falha na importação do Drive ${id}`, new Error("a importação pode ser retomada")));
+    imports.set(id, { task, controller });
+    void task.finally(() => { if (imports.get(id)?.task === task) imports.delete(id); });
+  }
+
   function checkedParts(state: UploadState, parts: StagingPart[]): StagingPart[] {
     const size = state.r2!.partBytes;
     const count = Math.ceil(state.tamanhoTotal / size);
@@ -618,6 +768,17 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     return { ...result, offset, estado: "uploading" };
   }
 
+  async function driveStatus(id: string, state: UploadState): Promise<Record<string, unknown>> {
+    const session = state.drive!;
+    if (session.phase === "canceling") throw new UploadHttpError(410, "envio cancelado");
+    const result = { transporte: "drive", tamanhoTotal: state.tamanhoTotal, nome: state.nome };
+    if (session.phase === "failed") {
+      return { ...result, estado: "failed", error: session.error, status: session.status, offset: state.recebido };
+    }
+    startDriveImport(id);
+    return { ...result, estado: "importing", offset: state.recebido };
+  }
+
   async function cancelRemote(id: string, session: R2Session): Promise<void> {
     const remote = requireStaging();
     await remote.abort(session.key, session.upload);
@@ -631,7 +792,14 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
       if (!entry.isDirectory() || !uploadId(entry.name)) continue;
       const state = await readFile(join(temporary, entry.name, "state.json"), "utf8")
         .then((raw) => JSON.parse(raw) as UploadState, () => null);
-      if (state?.r2 && localOnly) continue;
+      // Drive não tem cópia remota para limpar: o cancelamento só remove o
+      // parcial. Sem rede envolvida, vale também na limpeza de inicialização.
+      if (state?.drive?.phase === "canceling") {
+        await removeUpload(entry.name)
+          .catch(() => log(`cancelamento do Drive pendente ${entry.name}`, new Error("a limpeza será repetida")));
+        continue;
+      }
+      if ((state?.r2 || state?.drive) && localOnly) continue;
       if (state?.r2?.phase === "canceling" && staging) {
         await cancelRemote(entry.name, state.r2)
           .catch(() => log(`cancelamento R2 pendente ${entry.name}`, new Error("a exclusão será repetida")));
@@ -664,6 +832,13 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
         await withUploadLock(entry.name, async () => {
           const current = await readState(entry.name).catch(() => null);
           if (current && current.atualizadoEm <= cutoff) {
+            if (current.drive) {
+              // Falha aguarda retry explícito; download parado expira com o parcial.
+              if (current.drive.phase !== "downloading") return;
+              imports.get(entry.name)?.controller.abort();
+              await removeUpload(entry.name);
+              return;
+            }
             if (current.r2) {
               if (current.r2.phase !== "uploading" || !staging) return;
               // Um objeto completo ainda não validado não deve ser apagado.
@@ -712,6 +887,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     if (!entry.isDirectory() || !uploadId(entry.name)) continue;
     const state = await readState(entry.name).catch(() => null);
     if (state?.r2?.phase === "importing") startImport(entry.name);
+    if (state?.drive?.phase === "downloading") startDriveImport(entry.name);
   }
   runCleanup();
   const cleanupIntervalMs = opts.cleanupIntervalMs ?? Math.max(1_000, Math.min(60 * 60 * 1000, ttlMs / 2 || 1_000));
@@ -720,6 +896,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
 
   const runtime: MediaRuntime = {
     getMedia,
+    driveEnabled: drive !== undefined,
     handle: async (req, res): Promise<boolean> => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const parts = url.pathname.split("/").filter(Boolean);
@@ -770,13 +947,65 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
           sendJson(res, { id, offset: 0, tamanhoParte: r2?.partBytes ?? partBytes, ...(r2 ? { transporte: "r2" } : {}) }, 201);
           return true;
         }
+        if (url.pathname === "/api/uploads/from-drive" && req.method === "POST") {
+          const remote = requireDrive();
+          const body = await readJson(req);
+          let fileId: string;
+          let file: { nome: string; tamanho: number; md5?: string };
+          try {
+            fileId = parseDriveFileId(body.url);
+            file = await remote.metadata(fileId);
+          } catch (error) {
+            if (error instanceof DriveHttpError) throw new UploadHttpError(error.status, error.message);
+            throw new UploadHttpError(502, "não foi possível alcançar o Google Drive; tente novamente");
+          }
+          if (file.tamanho === 0) throw new UploadHttpError(400, "o arquivo do Drive está vazio");
+          if (file.tamanho > maxBytes) throw new UploadHttpError(413, "mídia acima do tamanho máximo");
+          if (!(await hasSpace(file.tamanho))) throw new UploadHttpError(507, "não há espaço suficiente no volume de Mídias");
+          const id = randomUUID();
+          const nome = sanitizeDriveName(file.nome);
+          await mkdir(join(temporary, id));
+          await writeFile(partialPath(id), Buffer.alloc(0));
+          await writeState(id, {
+            nome, tamanhoTotal: file.tamanho, recebido: 0, criadoEm: now(), atualizadoEm: now(),
+            drive: { fileId, md5: file.md5, phase: "downloading" },
+          });
+          startDriveImport(id);
+          sendJson(res, { id, transporte: "drive", estado: "importing", offset: 0, tamanhoTotal: file.tamanho, nome }, 202);
+          return true;
+        }
         if (parts[0] === "api" && parts[1] === "uploads" && parts[2] && uploadId(parts[2])) {
           const id = parts[2];
+          if (parts.length === 4 && req.method === "POST" && parts[3] === "retry") {
+            await withUploadLock(id, async () => {
+              const receipt = await readCompletion(id);
+              if (receipt) { sendJson(res, { mediaId: receipt.mediaId, deduplicado: receipt.deduplicado }); return; }
+              const state = await readState(id);
+              if (!state.drive) throw new UploadHttpError(409, "este envio não é do Drive");
+              if (state.drive.phase === "canceling") throw new UploadHttpError(410, "envio cancelado");
+              if (state.drive.phase === "downloading") {
+                startDriveImport(id);
+                sendJson(res, { transporte: "drive", estado: "importing" }, 202);
+                return;
+              }
+              if (state.drive.status === 422) throw new UploadHttpError(409, "esta mídia falhou na validação; escolha outro arquivo");
+              requireDrive();
+              state.drive.phase = "downloading";
+              delete state.drive.error;
+              delete state.drive.status;
+              state.atualizadoEm = now();
+              await writeState(id, state);
+              startDriveImport(id);
+              sendJson(res, { transporte: "drive", estado: "importing" }, 202);
+            });
+            return true;
+          }
           if (parts.length === 4 && req.method === "POST" && ["parts", "complete"].includes(parts[3]!)) {
             await withUploadLock(id, async () => {
               const receipt = await readCompletion(id);
               if (receipt) { sendJson(res, { mediaId: receipt.mediaId, deduplicado: receipt.deduplicado }); return; }
               const state = await readState(id);
+              if (state.drive) throw new UploadHttpError(409, "este envio usa o Drive");
               const session = state.r2;
               if (!session) throw new UploadHttpError(409, "este envio não usa R2");
               if (session.phase === "canceling") throw new UploadHttpError(410, "envio cancelado");
@@ -826,6 +1055,8 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
               const state = await readState(id);
               if (state.r2) {
                 sendJson(res, await r2Status(id, state));
+              } else if (state.drive) {
+                sendJson(res, await driveStatus(id, state));
               } else if (state.recebido === state.tamanhoTotal) {
                 const result = await recoverCompleted(id, state);
                 sendJson(res, { ...result, offset: state.recebido, tamanhoTotal: state.tamanhoTotal, estado: result.deduplicado ? "deduped" : "ready" satisfies UploadClientState });
@@ -841,9 +1072,15 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
               const state = await readState(id).catch(() => null);
               const receipt = await readCompletion(id);
               const session = state?.r2 ?? receipt?.r2;
-              if (session) {
+              if (session || state?.drive) {
                 if (state?.r2) {
                   state.r2.phase = "canceling";
+                  state.atualizadoEm = now();
+                  await writeState(id, state);
+                  imports.get(id)?.controller.abort();
+                }
+                if (state?.drive) {
+                  state.drive.phase = "canceling";
                   state.atualizadoEm = now();
                   await writeState(id, state);
                   imports.get(id)?.controller.abort();

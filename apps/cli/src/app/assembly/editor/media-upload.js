@@ -244,3 +244,152 @@ export class ResumableMediaUpload {
     return result;
   }
 }
+
+const DRIVE_STORAGE = "decupa.drive-imports.v1";
+
+function savedDriveImports(storage) {
+  try {
+    const value = JSON.parse(storage.getItem(DRIVE_STORAGE) || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDriveImports(storage, value) {
+  try { storage.setItem(DRIVE_STORAGE, JSON.stringify(value)); } catch { /* armazenamento indisponível */ }
+}
+
+/** Importação do Google Drive: o navegador só acompanha; quem baixa é a VPS.
+ *  Pausar solta a espera — o download continua no servidor e a retomada
+ *  reanexa pelo id salvo. Só remover/cancelar aborta a importação. */
+export class DriveMediaImport {
+  constructor({ fetchImpl = (url, init) => fetch(url, init), storage = globalThis.localStorage, onProgress = () => {} } = {}) {
+    this.fetchImpl = fetchImpl;
+    this.storage = storage;
+    this.onProgress = onProgress;
+    this.paused = false;
+    this.state = "parado";
+    this.controller = null;
+    this.uploadId = null;
+  }
+
+  readSaved(url) {
+    return savedDriveImports(this.storage)[url] || null;
+  }
+
+  writeSaved(url, state) {
+    const all = savedDriveImports(this.storage);
+    all[url] = { ...state };
+    saveDriveImports(this.storage, all);
+  }
+
+  forget(url) {
+    const all = savedDriveImports(this.storage);
+    delete all[url];
+    saveDriveImports(this.storage, all);
+  }
+
+  pause() {
+    this.paused = true;
+    if (this.state !== "concluido") this.state = "pausado";
+    this.controller?.abort();
+  }
+
+  async cancel(url) {
+    this.pause();
+    const id = this.uploadId ?? this.readSaved(String(url ?? "").trim())?.id;
+    if (id) await this.fetchImpl(`/api/uploads/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    if (url) this.forget(String(url).trim());
+    this.uploadId = null;
+    this.state = "parado";
+  }
+
+  async start(url) {
+    const alvo = String(url ?? "").trim();
+    if (!alvo) throw httpError(400, "cole o link do arquivo no Google Drive");
+    this.paused = false;
+    this.state = "enviando";
+    this.controller = new AbortController();
+    const signal = this.controller.signal;
+    const request = async (path, init = {}) => {
+      const response = await this.fetchImpl(path, { ...init, signal });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw httpError(response.status, body.error || `erro ${response.status}`);
+      return body;
+    };
+    const sleep = () => new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(new UploadPausedError()); };
+      const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 1000);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    });
+    try {
+      const saved = this.readSaved(alvo);
+      let result;
+      if (saved?.id) {
+        const endpoint = `/api/uploads/${encodeURIComponent(saved.id)}`;
+        const state = await request(endpoint).catch((error) => {
+          if (error.status === 404 || error.status === 410) return null;
+          throw error;
+        });
+        if (state?.mediaId) {
+          this.state = "concluido";
+          this.onProgress({ bytes: 1, total: 1, percent: 100, state: state.deduplicado ? "deduped" : "ready" });
+          this.forget(alvo);
+          return state;
+        }
+        if (state) {
+          this.uploadId = saved.id;
+          result = state.estado === "failed"
+            ? await request(`${endpoint}/retry`, { method: "POST" })
+            : state;
+        }
+      }
+      if (!result) {
+        result = await request("/api/uploads/from-drive", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url: alvo }),
+        });
+        this.uploadId = result.id;
+        this.writeSaved(alvo, { id: result.id });
+      }
+      const endpoint = `/api/uploads/${encodeURIComponent(this.uploadId)}`;
+      this.report(result);
+      while (!result.mediaId) {
+        if (signal.aborted) throw new UploadPausedError();
+        result = await request(endpoint);
+        if (result.estado === "failed") throw httpError(result.status || 502, result.error || "a importação do Drive falhou");
+        if (!result.mediaId) {
+          this.report(result);
+          await sleep();
+        }
+      }
+      this.state = "concluido";
+      this.forget(alvo);
+      this.onProgress({ bytes: result.tamanhoTotal || 1, total: result.tamanhoTotal || 1, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
+      return result;
+    } catch (error) {
+      if (this.paused || error?.name === "AbortError" || error instanceof UploadPausedError) {
+        this.state = "pausado";
+        throw error instanceof UploadPausedError ? error : new UploadPausedError();
+      }
+      this.state = "parado";
+      throw error;
+    } finally {
+      this.controller = null;
+    }
+  }
+
+  report(result) {
+    const total = Number(result.tamanhoTotal) || 0;
+    const bytes = Math.min(Number(result.offset) || 0, total);
+    this.onProgress({
+      bytes, total,
+      percent: total ? (bytes / total) * 100 : 0,
+      state: "importing",
+      ...(typeof result.nome === "string" ? { nome: result.nome } : {}),
+    });
+  }
+}

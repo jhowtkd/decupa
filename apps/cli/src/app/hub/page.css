@@ -102,6 +102,8 @@ dialog.drawer[open] { display: flex; flex-direction: column; }
 .dropzone-title { font-size: 14px; font-weight: 700; }
 .dropzone small { color: var(--muted); font-size: 12px; }
 .dropzone:has(input:disabled) { opacity: .5; cursor: default; }
+.drive-row { display: flex; gap: 8px; align-items: center; }
+.drive-row input { flex: 1; min-width: 0; }
 .library, .media-queue { margin: 0; padding: 0; list-style: none; }
 .library { max-height: 220px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: var(--radius-sub); }
 .library li { display: flex; align-items: center; gap: 10px; padding: 9px 11px; }

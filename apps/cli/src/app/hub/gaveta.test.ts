@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   corpoDaCriacao, criarGaveta, formatarDuracao, limitesDeMidias, mensagemDeErroDeCriacao,
-  mensagemDeErroDeEnvio, textoDoItem, textoDoResumo, validarArquivo, validarNome, validarQuantidadeDeMidias,
+  mensagemDeErroDeEnvio, textoDoItem, textoDoResumo, validarArquivo, validarDriveUrl, validarNome, validarQuantidadeDeMidias,
 } from "./gaveta.js";
 
 it("informa que a VPS ainda está importando antes de liberar a mídia", () => {
@@ -316,5 +316,87 @@ describe("fila de envios da gaveta", () => {
       criando: false, erro: { campo: "aviso", mensagem: "Limpeza precisa de exatamente uma Mídia" },
     });
     expect(criacoes).toHaveLength(1);
+  });
+});
+
+describe("importação do Drive na gaveta", () => {
+  const LINK = "https://drive.google.com/file/d/IdTeste123/view";
+
+  function montarGavetaDrive() {
+    const importacoes: EnvioFalso[] = [];
+    const gaveta = criarGaveta({
+      criarEnvio: ({ onProgress }: { onProgress: (valor: { percent: number; state: string }) => void }) => {
+        const envio = new EnvioFalso();
+        envio.onProgress = onProgress;
+        return envio;
+      },
+      criarImportacaoDrive: ({ onProgress }: { onProgress: (valor: { percent: number; state: string }) => void }) => {
+        const envio = new EnvioFalso();
+        envio.onProgress = onProgress;
+        importacoes.push(envio);
+        return envio;
+      },
+      chaveDoArquivo: (arquivoDaGaveta: { name: string; size: number }) => `${arquivoDaGaveta.name}:${arquivoDaGaveta.size}`,
+      enviarCriacao: async () => ({ url: "/projects/novo-abcd/" }),
+      onCriado: () => {},
+      onChange: () => {},
+    });
+    return { gaveta, importacoes };
+  }
+
+  it("valida o link e mostra o progresso como importação", () => {
+    expect(validarDriveUrl("   ")).toEqual({ valido: false, mensagem: "Cole o link do arquivo no Google Drive." });
+    expect(validarDriveUrl(`  ${LINK}  `)).toEqual({ valido: true, url: LINK });
+    expect(textoDoItem({ estado: "enviando", origem: "drive", percent: 42.4 }, false)).toBe("Importando · 42%");
+  });
+
+  it("erros do Drive falam de importação e reaproveitam o servidor", () => {
+    expect(mensagemDeErroDeEnvio({ status: 503 }, "drive")).toMatch(/não está configurada/);
+    expect(mensagemDeErroDeEnvio({ status: 404 }, "drive")).toMatch(/sem link público/);
+    expect(mensagemDeErroDeEnvio({ status: 403 }, "drive")).toMatch(/Google recusou/);
+    expect(mensagemDeErroDeEnvio(new TypeError("Failed to fetch"), "drive")).toMatch(/acompanhar a importação/);
+    expect(mensagemDeErroDeEnvio({ status: 400, message: "pastas do Drive não são suportadas" }, "drive"))
+      .toBe("pastas do Drive não são suportadas");
+    expect(mensagemDeErroDeEnvio({ status: 404 })).toMatch(/expirou/);
+  });
+
+  it("adiciona o link na fila, atualiza o nome e conclui", async () => {
+    const { gaveta, importacoes } = montarGavetaDrive();
+    gaveta.adicionarDriveUrl(LINK);
+    expect(importacoes).toHaveLength(1);
+    expect(importacoes[0]!.arquivo).toBe(LINK);
+    expect(gaveta.instantanea().itens[0]).toMatchObject({ origem: "drive", estado: "enviando", nome: LINK });
+    importacoes[0]!.onProgress({ percent: 40, state: "importing", nome: "aula.mp4" } as { percent: number; state: string });
+    expect(gaveta.instantanea().itens[0]).toMatchObject({ nome: "aula.mp4", texto: "Importando · 40%" });
+    importacoes[0]!.concluir("4".repeat(64));
+    await flush();
+    expect(gaveta.instantanea().itens[0]).toMatchObject({ estado: "pronto", mediaId: "4".repeat(64) });
+  });
+
+  it("recusa link vazio, repetido e acima do limite do Fluxo", () => {
+    const { gaveta } = montarGavetaDrive();
+    gaveta.adicionarDriveUrl("   ");
+    expect(gaveta.instantanea().erro?.mensagem).toMatch(/Cole o link/);
+    gaveta.adicionarDriveUrl(LINK);
+    gaveta.adicionarDriveUrl(LINK);
+    expect(gaveta.instantanea().itens).toHaveLength(1);
+    expect(gaveta.instantanea().erro?.mensagem).toBe("Esta Mídia já está na lista.");
+    gaveta.definirFluxo("limpeza");
+    gaveta.adicionarDriveUrl(`${LINK}?outro=1`);
+    expect(gaveta.instantanea().erro?.mensagem).toMatch(/exatamente uma Mídia/);
+  });
+
+  it("falha do Drive mostra a mensagem e remover cancela com o link", async () => {
+    const { gaveta, importacoes } = montarGavetaDrive();
+    gaveta.adicionarDriveUrl(LINK);
+    importacoes[0]!.falhar(Object.assign(new Error("arquivo não encontrado no Drive ou sem link público"), { status: 404 }));
+    await flush();
+    expect(gaveta.instantanea().itens[0]).toMatchObject({ estado: "erro", mensagem: "Arquivo não encontrado no Drive ou sem link público." });
+    const chave = gaveta.instantanea().itens[0]!.chave;
+    gaveta.tentarDeNovo(chave);
+    expect(importacoes).toHaveLength(1);
+    expect(gaveta.instantanea().itens[0]?.estado).toBe("enviando");
+    gaveta.remover(chave);
+    expect(importacoes[0]!.cancels).toBe(1);
   });
 });

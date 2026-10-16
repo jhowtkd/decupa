@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="decupa-media-enabled" content="">
+  <meta name="decupa-drive-enabled" content="">
   <title>Projetos · Decupa</title>
   <link rel="stylesheet" href="/hub/page.css">
 </head>
@@ -81,6 +82,14 @@
             <small>Vídeo ou áudio. Se a conexão cair, o envio retoma daqui.</small>
             <input id="mediaFiles" type="file" accept="video/*,audio/*" multiple>
           </label>
+          <div id="driveImport" class="drive-import" hidden>
+            <h4 class="subhead">Do Google Drive</h4>
+            <p class="field-copy">Compartilhe como “qualquer pessoa com o link” e cole o link. A VPS baixa direto do Google.</p>
+            <div class="drive-row">
+              <input id="driveUrl" type="url" placeholder="https://drive.google.com/file/d/…" autocomplete="off" aria-label="Link do arquivo no Google Drive">
+              <button id="driveAdd" class="quiet" type="button">Importar</button>
+            </div>
+          </div>
           <h4 id="libraryTitle" class="subhead">Do acervo</h4>
           <p id="libraryStatus" class="field-copy" role="status">Carregando o acervo…</p>
           <ul id="library" class="library" aria-labelledby="libraryTitle"></ul>

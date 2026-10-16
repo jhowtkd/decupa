@@ -1,4 +1,4 @@
-import { ResumableMediaUpload, uploadFingerprint } from "./media-upload.js";
+import { DriveMediaImport, ResumableMediaUpload, uploadFingerprint } from "./media-upload.js";
 import { criarGaveta, formatarDuracao, textoDoResumo } from "./gaveta.js";
 
 const state = { projects: [], timer: null, loadToken: 0, acervo: [], acervoToken: 0 };
@@ -14,6 +14,9 @@ const nameInput = document.getElementById("projectName");
 const nameError = document.getElementById("projectNameError");
 const flowInputs = document.querySelectorAll('input[name="fluxo"]');
 const fileInput = document.getElementById("mediaFiles");
+const driveImport = document.getElementById("driveImport");
+const driveUrl = document.getElementById("driveUrl");
+const driveAdd = document.getElementById("driveAdd");
 const midiasRule = document.getElementById("midiasRule");
 const libraryStatus = document.getElementById("libraryStatus");
 const libraryElement = document.getElementById("library");
@@ -25,6 +28,7 @@ const createButton = document.getElementById("createProject");
 // Sem o acervo configurado, o servidor responde 404 aos envios: a gaveta avisa
 // antes de o usuário escolher um arquivo que não teria para onde ir.
 const mediaEnabled = document.querySelector('meta[name="decupa-media-enabled"]')?.getAttribute("content") === "true";
+const driveEnabled = document.querySelector('meta[name="decupa-drive-enabled"]')?.getAttribute("content") === "true";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -135,7 +139,7 @@ function renderQueue(visao) {
   queueElement.innerHTML = visao.itens.map((item) => {
     const chave = escapeHtml(item.chave);
     const nome = escapeHtml(item.nome);
-    const mostraProgresso = item.origem === "envio"
+    const mostraProgresso = (item.origem === "envio" || item.origem === "drive")
       && (item.estado === "enviando" || item.estado === "pausado" || item.estado === "aguardando");
     return `<li class="media-item">
       <div class="media-item-top"><span class="media-item-name">${nome}</span><span class="media-item-state">${escapeHtml(item.texto)}</span></div>
@@ -230,6 +234,7 @@ async function carregarAcervo() {
 
 const gaveta = criarGaveta({
   criarEnvio: ({ onProgress }) => new ResumableMediaUpload({ onProgress }),
+  criarImportacaoDrive: ({ onProgress }) => new DriveMediaImport({ onProgress }),
   chaveDoArquivo: uploadFingerprint,
   enviarCriacao,
   onCriado: (url) => window.location.assign(url),
@@ -276,6 +281,17 @@ fileInput.addEventListener("change", () => {
   // Zerar a entrada deixa escolher o mesmo arquivo de novo depois de removê-lo.
   fileInput.value = "";
   gaveta.adicionarArquivos(arquivos);
+});
+driveImport.hidden = !(mediaEnabled && driveEnabled);
+driveAdd.addEventListener("click", () => {
+  gaveta.adicionarDriveUrl(driveUrl.value);
+  if (!gaveta.instantanea().erro) driveUrl.value = "";
+});
+driveUrl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    driveAdd.click();
+  }
 });
 queueElement.addEventListener("click", (event) => {
   const botao = event.target.closest("button[data-acao]");
