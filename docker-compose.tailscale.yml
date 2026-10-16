@@ -1,0 +1,53 @@
+# Perfil Tailscale: o Decupa fica acessível só para os aparelhos da rede
+# Tailscale da equipe, em https://<nome>.<tailnet>.ts.net, sem publicar porta
+# nenhuma no host.
+#
+# Ativação: no .env do host, uma vez. Os comandos de sempre passam a usá-lo.
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.tailscale.yml
+# Com GPU, os três arquivos:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.tailscale.yml
+# Pré-requisitos e conferência: docs/implantacao-docker.md.
+#
+# O `tailscale serve` assume o papel do Caddy: termina o HTTPS com o certificado
+# do nome .ts.net e repassa ao `decupa` o Host original, X-Forwarded-Host,
+# X-Forwarded-Proto=https e o IP do aparelho em X-Forwarded-For, sobrescrevendo
+# o que o cliente mandou. Um Caddy no meio não confiaria no contêiner do
+# Tailscale e trocaria esses cabeçalhos pelos dele: o cookie de sessão perderia
+# o Secure e o bloqueio de login por IP passaria a valer para a equipe inteira.
+services:
+  decupa:
+    environment:
+      # O nome .ts.net completo do nó, que o Decupa confere em toda requisição.
+      DECUPA_ALLOWED_HOSTS: "${DECUPA_ALLOWED_HOSTS:-${DECUPA_DOMAIN:?DECUPA_DOMAIN precisa ser o nome .ts.net do nó},decupa}"
+
+  # Fora do perfil, o Caddy não sobe e as portas 80/443 não são publicadas.
+  caddy:
+    profiles: [caddy]
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    depends_on:
+      decupa:
+        condition: service_healthy
+    environment:
+      TS_HOSTNAME: "${DECUPA_TAILSCALE_HOSTNAME:-decupa}"
+      # Só a primeira subida usa a chave; depois o login fica no volume e o
+      # TS_AUTH_ONCE impede um novo login com uma chave já vencida.
+      TS_AUTHKEY: "${DECUPA_TAILSCALE_AUTHKEY:-}"
+      TS_AUTH_ONCE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      # Rede em espaço de usuário: dispensa /dev/net/tun e NET_ADMIN, e o serve
+      # alcança o `decupa` pela rede do compose.
+      TS_USERSPACE: "true"
+      # O nome `decupa` do serve.json se resolve pelo DNS do Docker. Aceitar o
+      # DNS da tailnet trocaria o resolvedor do contêiner.
+      TS_ACCEPT_DNS: "false"
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      # O diretório, não o arquivo: o Tailscale observa a pasta para recarregar.
+      - ./docker/tailscale:/config:ro
+
+volumes:
+  tailscale-state:

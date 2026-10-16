@@ -6,6 +6,7 @@ on:
       - Dockerfile
       - docker-compose.yml
       - docker-compose.gpu.yml
+      - docker-compose.tailscale.yml
       - Caddyfile
       - .dockerignore
       - .env.example
@@ -22,6 +23,31 @@ jobs:
       - uses: actions/checkout@v4
       - name: smoke do compose CPU
         run: bash scripts/docker-smoke.sh
+
+  # O perfil Tailscale não sobe aqui: o login exige uma chave da tailnet. A CI
+  # confere a composição; a subida real segue docs/implantacao-docker.md.
+  tailscale-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DECUPA_AUTH_PASSWORD: ci-sem-uso
+      DECUPA_DOMAIN: decupa.exemplo.ts.net
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: só decupa e tailscale sobem, sem porta publicada
+        run: |
+          compose=(docker compose -f docker-compose.yml -f docker-compose.tailscale.yml)
+          services="$("${compose[@]}" config --services | sort | tr '\n' ' ')"
+          [[ "$services" == "decupa tailscale " ]] || { echo "serviços: $services" >&2; exit 1; }
+          if "${compose[@]}" config | grep -q 'published:'; then
+            echo "o perfil Tailscale não pode publicar portas" >&2; exit 1
+          fi
+
+      - name: serve aponta para o decupa e o Funnel fica desligado
+        run: |
+          jq -e '.Web["${TS_CERT_DOMAIN}:443"].Handlers["/"].Proxy == "http://decupa:7788"' docker/tailscale/serve.json
+          jq -e 'has("AllowFunnel") | not' docker/tailscale/serve.json
 
   # Só o build da variante cuda. O runner não tem GPU, então o contêiner não é
   # executado aqui: a execução em GPU é manual (docs/implantacao-docker.md).
