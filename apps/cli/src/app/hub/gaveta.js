@@ -65,6 +65,8 @@ export function mensagemDeErroDeCriacao(erro) {
 }
 
 /** Texto de estado de uma Mídia na fila. */
+const ENVIO_PAUSADO = "O envio está pausado. Retome o envio ou remova as Mídias pendentes para criar o Projeto.";
+
 export function textoDoItem(item, pausado) {
   if (item.estado === "aguardando") return pausado ? "Aguardando · fila pausada" : "Aguardando";
   if (item.estado === "enviando") {
@@ -328,6 +330,11 @@ export function criarGaveta({
 
   function pausar() {
     pausado = true;
+    // Pausar depois de pedir a criação desiste dela, pelo mesmo motivo de `criar`.
+    if (criacaoAgendada) {
+      criacaoAgendada = false;
+      erro = { campo: "aviso", mensagem: ENVIO_PAUSADO };
+    }
     ativo?.envio.pause();
     notificar();
   }
@@ -352,6 +359,11 @@ export function criarGaveta({
     }
     if (itens.some((item) => item.estado === "erro")) {
       definirErro("aviso", "Um envio falhou. Tente de novo ou remova a Mídia para criar o Projeto.");
+      return;
+    }
+    // Pausado não termina sozinho: agendar prometeria um Projeto que nunca chega.
+    if (pausado && itens.some((item) => item.estado === "aguardando" || item.estado === "pausado")) {
+      definirErro("aviso", ENVIO_PAUSADO);
       return;
     }
     erro = null;

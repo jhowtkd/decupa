@@ -217,6 +217,27 @@ describe("fila de envios da gaveta", () => {
     expect(gaveta.instantanea().itens[0]).toMatchObject({ estado: "pronto", mediaId: "e".repeat(64) });
   });
 
+  it("com o envio pausado, criar não agenda e pausar depois desiste da criação agendada", async () => {
+    const { gaveta, envios, criacoes } = montarGaveta();
+    gaveta.definirNome("Podcast");
+    gaveta.adicionarArquivos([arquivo("a.mp4")]);
+    gaveta.pausar();
+    await flush();
+    gaveta.criar();
+    expect(gaveta.instantanea()).toMatchObject({ criacaoAgendada: false, erro: { campo: "aviso" } });
+    expect(gaveta.instantanea().erro?.mensagem).toMatch(/pausado/);
+
+    gaveta.retomar();
+    gaveta.criar();
+    expect(gaveta.instantanea().criacaoAgendada).toBe(true);
+    gaveta.pausar();
+    await flush();
+    expect(gaveta.instantanea()).toMatchObject({ criacaoAgendada: false, erro: { campo: "aviso" } });
+    envios[0]!.concluir("f".repeat(64));
+    await flush();
+    expect(criacoes).toHaveLength(0);
+  });
+
   it("fechar a gaveta durante envio pausa a fila e desiste da criação agendada", async () => {
     const { gaveta, envios, criacoes } = montarGaveta();
     gaveta.definirNome("Podcast");
