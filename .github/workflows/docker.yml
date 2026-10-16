@@ -28,12 +28,13 @@ jobs:
   build-cuda:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      # Valor descartável: o compose exige a senha ao interpolar o arquivo, mesmo
-      # no build, e nenhum contêiner sobe neste job.
-      DECUPA_AUTH_PASSWORD: ci-somente-build
     steps:
       - uses: actions/checkout@v4
+
+      # O compose exige a senha ao interpolar o arquivo, mesmo só no build, e
+      # nenhum contêiner sobe neste job: um valor aleatório por execução basta.
+      - name: senha descartável do compose
+        run: echo "DECUPA_AUTH_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
 
       # As rodas nvidia-* da variante cuda somam vários GB, e o runner tem pouco
       # disco livre. Removemos toolchains que o Decupa não usa antes do build.

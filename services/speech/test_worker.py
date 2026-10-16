@@ -296,6 +296,33 @@ class ResidentWorkerTest(unittest.TestCase):
         self.assertIn("usando cpu", stderr.getvalue())
         self.assertIn("cuda missing", stderr.getvalue())
 
+    def test_align_falls_back_to_cpu_when_cuda_align_fails(self):
+        whisper = Mock()
+        asr = Mock()
+        asr.transcribe.return_value = {"segments": []}
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.side_effect = [
+            RuntimeError("CUDA out of memory"), ("align", "meta"), RuntimeError("CUDA out of memory"),
+        ]
+        whisper.load_audio.return_value = [0.0] * 8000
+        whisper.align.return_value = {"segments": []}
+        worker = load_worker(whisper).SpeechWorker()
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            worker.transcribe(task_id="gpu", wav="a.wav", device="cuda")
+        align_devices = [call.kwargs["device"] for call in whisper.load_align_model.call_args_list]
+        self.assertEqual(align_devices, ["cuda", "cpu"])
+        # O alinhamento roda no dispositivo em que o modelo carregou, não no do ASR.
+        self.assertEqual(whisper.align.call_args.args[4], "cpu")
+        self.assertIn("alinhamento não carregou em cuda", stderr.getvalue())
+        # Como o ASR, a placa é tentada de novo (o OOM pode ter passado), mas o
+        # modelo de CPU já carregado é reaproveitado no recuo.
+        whisper.load_align_model.reset_mock()
+        with patch("sys.stderr", io.StringIO()):
+            worker.transcribe(task_id="gpu-2", wav="b.wav", device="cuda")
+        self.assertEqual([call.kwargs["device"] for call in whisper.load_align_model.call_args_list], ["cuda"])
+        self.assertEqual(whisper.align.call_args.args[4], "cpu")
+
     def test_benchmark_loaded_models_not_cache_replay(self):
         whisper = Mock()
         asr = Mock()

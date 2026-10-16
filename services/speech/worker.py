@@ -198,14 +198,29 @@ class SpeechWorker:
             return self._asr[key], tried
 
     def _align_for(self, language: str, device: str):
-        key = (language, device)
+        """Modelo de alinhamento e o dispositivo em que ele de fato carregou.
+
+        Com o ASR já ocupando a placa, o alinhamento pode não caber nela: cai
+        para CPU como o ASR, em vez de derrubar a transcrição inteira.
+        """
         with self._lock:
-            cached = self._align.get(key)
+            tried = device
+            cached = self._align.get((language, tried))
             if cached is not None:
-                return cached
-            loaded = whisperx.load_align_model(language_code=language, device=device)
-            self._align.setdefault(key, loaded)
-            return self._align[key]
+                return cached, tried
+            try:
+                loaded = whisperx.load_align_model(language_code=language, device=tried)
+            except Exception as exc:
+                if tried == "cpu":
+                    raise
+                stderr_log(f"fala: alinhamento não carregou em {tried} ({exc}); usando cpu")
+                tried = "cpu"
+                cached = self._align.get((language, tried))
+                if cached is not None:
+                    return cached, tried
+                loaded = whisperx.load_align_model(language_code=language, device=tried)
+            self._align.setdefault((language, tried), loaded)
+            return self._align[(language, tried)], tried
 
     def preload(
         self,
@@ -260,14 +275,14 @@ class SpeechWorker:
             self._check(task_id)
             self._report(task_id, "carregando o modelo de alinhamento")
             with self._heartbeat(task_id, "carregando o modelo de alinhamento"):
-                align_model, align_meta = self._align_for(language, device)
+                (align_model, align_meta), align_device = self._align_for(language, device)
             self._report(task_id, "alinhando as palavras", 0)
             aligned = whisperx.align(
                 segments,
                 align_model,
                 align_meta,
                 audio,
-                device,
+                align_device,
                 return_char_alignments=False,
                 progress_callback=self._percent_reporter(task_id, "alinhando as palavras"),
             )
