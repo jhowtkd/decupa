@@ -68,6 +68,54 @@ describe("preflight recusa sidecar de fala sem ambiente", () => {
   });
 });
 
+describe("assertSidecarSynced funcional (imagem Docker CPU)", () => {
+  function functionalRecorder(code: number): Executor & { calls: ExecCall[] } {
+    const calls: ExecCall[] = [];
+    return {
+      calls,
+      async run(call: ExecCall): Promise<ExecResult> {
+        calls.push(call);
+        return { code, stdout: "", stderr: "" };
+      },
+    };
+  }
+  async function comModoFuncional<T>(fn: () => Promise<T>): Promise<T> {
+    const before = process.env.DECUPA_SIDECAR_CHECK;
+    process.env.DECUPA_SIDECAR_CHECK = "functional";
+    try { return await fn(); }
+    finally {
+      if (before === undefined) delete process.env.DECUPA_SIDECAR_CHECK;
+      else process.env.DECUPA_SIDECAR_CHECK = before;
+    }
+  }
+
+  it("fala valida importando whisperx do venv, sem uv sync", async () => {
+    const exec = functionalRecorder(0);
+    await comModoFuncional(() => assertSidecarSynced(exec, "/opt/decupa/services/speech", "fala"));
+    expect(exec.calls).toHaveLength(1);
+    expect(exec.calls[0]).toMatchObject({
+      command: "/opt/decupa/services/speech/.venv/bin/python",
+      args: ["-c", "import whisperx"],
+    });
+  });
+
+  it("falha funcional manda reconstruir a imagem", async () => {
+    const exec = functionalRecorder(1);
+    const error = await comModoFuncional(() => assertSidecarSynced(exec, "/opt/x", "fala"))
+      .then(() => null, (e: Error) => e);
+    expect(error, "devia lançar").not.toBeNull();
+    expect(error!.message).toMatch(/docker compose up -d --build decupa/);
+    expect(error!.message).toMatch(/fala/);
+  });
+
+  it("visão mantém o sync check mesmo no modo funcional", async () => {
+    const exec = recorder(0);
+    await comModoFuncional(() => assertSidecarSynced(exec, "/opt/x", "visão"));
+    expect(exec.calls).toHaveLength(1);
+    expect(exec.calls[0]?.args).toContain("sync");
+  });
+});
+
 const temUv = spawnSync("uv", ["--version"]).status === 0;
 
 describe.skipIf(!temUv)("assertSidecarSynced com uv real", () => {
