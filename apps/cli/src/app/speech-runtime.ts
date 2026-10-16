@@ -31,6 +31,18 @@ function idleMinutes(env: Record<string, string | undefined>): number {
 }
 
 /**
+ * CPU é o padrão do worker. `cuda` só vem de pedido explícito do operador
+ * (o perfil de GPU define DECUPA_SPEECH_DEVICE=cuda); sem placa, o worker cai
+ * para CPU e avisa no log.
+ */
+function speechDevice(env: Record<string, string | undefined>): "cpu" | "cuda" {
+  const raw = env.DECUPA_SPEECH_DEVICE?.trim() ?? "";
+  if (raw === "") return "cpu";
+  if (raw === "cpu" || raw === "cuda") return raw;
+  throw new Error("DECUPA_SPEECH_DEVICE precisa ser cpu ou cuda");
+}
+
+/**
  * O processo Python é do servidor, não do Projeto. O coordinator que guarda
  * a transcrição continua sendo criado por Projeto, porque esse cache não pode
  * fazer uma Mídia de uma pasta vencer a transcrição de outra.
@@ -38,6 +50,7 @@ function idleMinutes(env: Record<string, string | undefined>): number {
 export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpeechRuntime {
   const now = opts.now ?? Date.now;
   const idleMs = idleMinutes(opts.env) * 60_000;
+  const device = speechDevice(opts.env);
   const executor = new SpawnExecutor();
   const syncExecutor = opts.syncExecutor ?? executor;
   const speechEnv = Object.fromEntries(
@@ -81,7 +94,7 @@ export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpe
       : {
           worker: async (req) => {
             if (closed) throw new Error("worker de fala encerrou");
-            client ??= createResidentSpeechClient();
+            client ??= createResidentSpeechClient({ device });
             const activeClient = client;
             lastUsed = now();
             inFlight += 1;

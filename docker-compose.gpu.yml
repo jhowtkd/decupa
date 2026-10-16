@@ -1,0 +1,32 @@
+# Perfil de GPU NVIDIA. Não é um serviço a mais: este arquivo troca a
+# configuração do `decupa` por cima do compose padrão. Assim continua havendo
+# um só Decupa, com os mesmos volumes e o nome que o Caddy procura. Um
+# `profiles: [gpu]` criaria um segundo serviço e não resolveria isso.
+#
+# Ativação: no .env do host, uma vez. Os comandos de sempre passam a usá-lo.
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+# Pré-requisitos e conferência: docs/implantacao-docker.md.
+#
+# DECUPA_JOB_CONCURRENCY segue em 1 (padrão do .env.example): os jobs pesados
+# compartilham a mesma placa e o app não escolhe cartão por job.
+services:
+  decupa:
+    build:
+      args:
+        DECUPA_VARIANT: cuda
+    image: ${DECUPA_IMAGE:-decupa}:cuda
+    environment:
+      # `video` expõe libnvidia-encode ao contêiner. Sem ele o ffmpeg lista
+      # h264_nvenc, mas não abre o encoder e o render cai para software.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+      # Transcrição na placa. Com DECUPA_SPEECH_DEVICE=cpu no .env, o perfil
+      # continua reservando a GPU para o render e a transcrição volta à CPU.
+      DECUPA_SPEECH_DEVICE: ${DECUPA_SPEECH_DEVICE:-cuda}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

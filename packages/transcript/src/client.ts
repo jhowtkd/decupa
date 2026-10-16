@@ -70,10 +70,16 @@ export function createResidentSpeechClient(opts: {
   onStderr?: (chunk: string) => void;
   /** Tempo máximo sem linha de progresso da tarefa em andamento. */
   watchdogMs?: number;
+  /**
+   * Dispositivo do modelo. Sem ele o worker usa CPU: GPU nunca é escolhida
+   * sozinha, então `cuda` só chega quando o operador pede (DECUPA_SPEECH_DEVICE).
+   */
+  device?: "cpu" | "cuda";
 } = {}): ResidentSpeechClient {
   const spawnFn = opts.spawn ?? spawn;
   const speechDir = opts.speechDir ?? SPEECH_DIR;
   const watchdogMs = opts.watchdogMs ?? DEFAULT_WATCHDOG_MS;
+  const device = opts.device;
   const onStderr = opts.onStderr ?? ((chunk: string) => {
     process.stderr.write(chunk);
   });
@@ -232,6 +238,7 @@ export function createResidentSpeechClient(opts: {
           language: req.language,
           model: req.model ?? "small",
           ...(req.computeType ? { compute_type: req.computeType } : {}),
+          ...(device ? { device } : {}),
         },
       })}\n`);
     });

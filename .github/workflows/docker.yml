@@ -5,6 +5,7 @@ on:
     paths:
       - Dockerfile
       - docker-compose.yml
+      - docker-compose.gpu.yml
       - Caddyfile
       - .dockerignore
       - .env.example
@@ -21,3 +22,34 @@ jobs:
       - uses: actions/checkout@v4
       - name: smoke do compose CPU
         run: bash scripts/docker-smoke.sh
+
+  # Só o build da variante cuda. O runner não tem GPU, então o contêiner não é
+  # executado aqui: a execução em GPU é manual (docs/implantacao-docker.md).
+  build-cuda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # O compose exige a senha ao interpolar o arquivo, mesmo só no build, e
+      # nenhum contêiner sobe neste job: um valor aleatório por execução basta.
+      - name: senha descartável do compose
+        run: echo "DECUPA_AUTH_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      # As rodas nvidia-* da variante cuda somam vários GB, e o runner tem pouco
+      # disco livre. Removemos toolchains que o Decupa não usa antes do build.
+      - name: liberar disco do runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - name: conferir o compose com o perfil de GPU
+        run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
+
+      - name: build da variante cuda
+        run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml build decupa
+
+      - name: a imagem decupa:cuda existe
+        run: docker image inspect decupa:cuda --format 'id={{.Id}} bytes={{.Size}}'

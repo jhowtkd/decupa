@@ -50,6 +50,13 @@ def stderr_progress(task_id: str, stage: str, percent: float | None = None) -> N
         sys.stderr.flush()
 
 
+def stderr_log(message: str) -> None:
+    """Linha de log no stderr: o cliente Node a repassa ao log do servidor."""
+    with _progress_lock:
+        sys.stderr.write("\n" + message + "\n")
+        sys.stderr.flush()
+
+
 # Enquanto um modelo carrega (o de alinhamento PT baixa mais de 1 GB na primeira
 # vez), nada sai do WhisperX. Uma thread repete a etapa corrente nesse ritmo para
 # o watchdog do cliente (10 min sem linha de progresso) não matar o worker com a
@@ -175,9 +182,11 @@ class SpeechWorker:
             tried = wanted
             try:
                 asr = whisperx.load_model(model, tried, compute_type=compute_type, language=language)
-            except Exception:
+            except Exception as exc:
                 if tried == "cpu":
                     raise
+                # Sem este aviso, o recuo para CPU fica invisível no log do servidor.
+                stderr_log(f"fala: não carregou em {tried} ({exc}); usando cpu")
                 tried = "cpu"
                 key = (model, language, compute_type, tried)
                 cached = self._asr.get(key)
@@ -189,14 +198,29 @@ class SpeechWorker:
             return self._asr[key], tried
 
     def _align_for(self, language: str, device: str):
-        key = (language, device)
+        """Modelo de alinhamento e o dispositivo em que ele de fato carregou.
+
+        Com o ASR já ocupando a placa, o alinhamento pode não caber nela: cai
+        para CPU como o ASR, em vez de derrubar a transcrição inteira.
+        """
         with self._lock:
-            cached = self._align.get(key)
+            tried = device
+            cached = self._align.get((language, tried))
             if cached is not None:
-                return cached
-            loaded = whisperx.load_align_model(language_code=language, device=device)
-            self._align.setdefault(key, loaded)
-            return self._align[key]
+                return cached, tried
+            try:
+                loaded = whisperx.load_align_model(language_code=language, device=tried)
+            except Exception as exc:
+                if tried == "cpu":
+                    raise
+                stderr_log(f"fala: alinhamento não carregou em {tried} ({exc}); usando cpu")
+                tried = "cpu"
+                cached = self._align.get((language, tried))
+                if cached is not None:
+                    return cached, tried
+                loaded = whisperx.load_align_model(language_code=language, device=tried)
+            self._align.setdefault((language, tried), loaded)
+            return self._align[(language, tried)], tried
 
     def preload(
         self,
@@ -251,14 +275,14 @@ class SpeechWorker:
             self._check(task_id)
             self._report(task_id, "carregando o modelo de alinhamento")
             with self._heartbeat(task_id, "carregando o modelo de alinhamento"):
-                align_model, align_meta = self._align_for(language, device)
+                (align_model, align_meta), align_device = self._align_for(language, device)
             self._report(task_id, "alinhando as palavras", 0)
             aligned = whisperx.align(
                 segments,
                 align_model,
                 align_meta,
                 audio,
-                device,
+                align_device,
                 return_char_alignments=False,
                 progress_callback=self._percent_reporter(task_id, "alinhando as palavras"),
             )

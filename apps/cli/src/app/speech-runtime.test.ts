@@ -9,8 +9,8 @@ const transcribe = vi.hoisted(() => vi.fn(async () => ({ language: "pt", words: 
 
 vi.mock("@decupa/transcript", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@decupa/transcript")>()),
-  createResidentSpeechClient: () => {
-    createClient();
+  createResidentSpeechClient: (opts?: unknown) => {
+    createClient(opts);
     return { transcribe, cancel: () => {}, restart: () => {}, close: closeClient };
   },
 }));
@@ -91,4 +91,30 @@ it("killChildren encerra o runtime: transcrição depois disso é recusada", asy
   await expect(speech.worker(request)).rejects.toThrow(/encerrou/);
   expect(createClient).toHaveBeenCalledTimes(1);
   await runtime.close();
+});
+
+it("DECUPA_SPEECH_DEVICE aceita só cpu ou cuda e chega ao worker residente", async () => {
+  expect(() => createServerSpeechRuntime({
+    executorInjected: false,
+    env: { DECUPA_SPEECH_DEVICE: "gpu" },
+  })).toThrow(/cpu ou cuda/);
+
+  const dir = await mkdtemp(join(tmpdir(), "speech-runtime-device-"));
+  dirs.push(dir);
+  const syncExecutor = { run: async () => ({ code: 0, stdout: "", stderr: "" }) };
+  const request = { taskId: "t", wav: "audio.wav", language: "pt" };
+
+  const padrao = createServerSpeechRuntime({ executorInjected: false, env: {}, syncExecutor });
+  await padrao.attach(join(dir, "alpha")).speech!.worker(request);
+  expect(createClient).toHaveBeenLastCalledWith({ device: "cpu" });
+  await padrao.close();
+
+  const gpu = createServerSpeechRuntime({
+    executorInjected: false,
+    env: { DECUPA_SPEECH_DEVICE: "cuda" },
+    syncExecutor,
+  });
+  await gpu.attach(join(dir, "beta")).speech!.worker(request);
+  expect(createClient).toHaveBeenLastCalledWith({ device: "cuda" });
+  await gpu.close();
 });
