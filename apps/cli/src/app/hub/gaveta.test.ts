@@ -4,6 +4,10 @@ import {
   mensagemDeErroDeEnvio, textoDoItem, textoDoResumo, validarArquivo, validarNome, validarQuantidadeDeMidias,
 } from "./gaveta.js";
 
+it("informa que a VPS ainda está importando antes de liberar a mídia", () => {
+  expect(textoDoItem({ estado: "enviando", fase: "importing", percent: 100 }, false)).toBe("Importando");
+});
+
 /** Cliente de upload falso: a fila segura o `start` até o teste decidir o desfecho. */
 class EnvioFalso {
   starts = 0;

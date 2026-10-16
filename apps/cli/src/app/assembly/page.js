@@ -502,15 +502,15 @@ async function uploadTeamFiles(files) {
     const upload = new ResumableMediaUpload({
       onProgress: (value) => {
         progress.value = value.percent || 0;
-        status.textContent = mediaProgressText(value) + (value.state === "verifying" ? " · verificando" : "");
+        status.textContent = value.state === "importing" ? "Importando para o acervo…" : mediaProgressText(value) + (value.state === "verifying" ? " · verificando" : "");
         if (value.state === "uploading") {
           pause.hidden = false;
           pause.disabled = false;
           pause.textContent = "Pausar";
-        } else if (value.state === "verifying") {
+        } else if (value.state === "verifying" || value.state === "importing") {
           pause.hidden = false;
           pause.disabled = true;
-          pause.textContent = "Verificando";
+          pause.textContent = value.state === "importing" ? "Importando" : "Verificando";
         } else if (value.state === "ready" || value.state === "deduped") {
           pause.hidden = true;
           pause.disabled = true;

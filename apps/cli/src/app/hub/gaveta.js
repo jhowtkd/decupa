@@ -70,6 +70,7 @@ const ENVIO_PAUSADO = "O envio está pausado. Retome o envio ou remova as Mídia
 export function textoDoItem(item, pausado) {
   if (item.estado === "aguardando") return pausado ? "Aguardando · fila pausada" : "Aguardando";
   if (item.estado === "enviando") {
+    if (item.fase === "importing") return "Importando";
     return item.fase === "verifying" ? "Verificando" : `Enviando · ${Math.round(item.percent || 0)}%`;
   }
   if (item.estado === "pausado") return "Pausado";

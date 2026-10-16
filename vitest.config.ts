@@ -28,6 +28,10 @@ export default defineConfig({
       DECUPA_COMPANY_PRESET: "",
       DECUPA_BASE_URL: "",
       DECUPA_MODEL: "",
+      DECUPA_R2_ACCOUNT_ID: "",
+      DECUPA_R2_BUCKET: "",
+      DECUPA_R2_ACCESS_KEY_ID: "",
+      DECUPA_R2_SECRET_ACCESS_KEY: "",
     },
   },
 });

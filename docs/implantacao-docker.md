@@ -4,6 +4,9 @@ O compose oficial sobe o Decupa na Raiz de Projetos atrás do Caddy. Somente o
 Caddy publica portas; o serviço Decupa fica acessível apenas na rede interna do
 compose.
 
+Para enviar arquivos diretamente ao Cloudflare R2 e importar para o acervo local,
+veja [Upload pelo R2 como passagem](upload-r2.md).
+
 ## Primeira subida
 
 ```bash
