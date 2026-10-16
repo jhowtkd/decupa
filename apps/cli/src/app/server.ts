@@ -87,8 +87,11 @@ function escapeHtml(value: string): string {
   })[character]!);
 }
 
-function sendProjectRootPage(res: ServerResponse, page: string, identity: string | undefined): void {
-  const rendered = page.replace("__DECUPA_USER__", () => escapeHtml(identity ?? "usuário local"));
+function sendProjectRootPage(res: ServerResponse, page: string, identity: string | undefined, mediaEnabled: boolean): void {
+  const rendered = page
+    .replace("__DECUPA_USER__", () => escapeHtml(identity ?? "usuário local"))
+    .replace('<meta name="decupa-media-enabled" content="">',
+      () => `<meta name="decupa-media-enabled" content="${mediaEnabled ? "true" : "false"}">`);
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(rendered),
@@ -377,7 +380,13 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
   const hubPage = await readFile(join(HERE, "hub", "page.html"), "utf8");
   const hubCss = await readFile(join(HERE, "hub", "page.css"), "utf8");
-  const hubJs = await readFile(join(HERE, "hub", "page.js"), "utf8");
+  // O envio da gaveta é o cliente do editor da Montagem, servido daqui e não copiado:
+  // retomada e mensagens de erro ficam iguais nos dois lugares.
+  const hubScripts = new Map<string, string>([
+    ["/hub/page.js", await readFile(join(HERE, "hub", "page.js"), "utf8")],
+    ["/hub/gaveta.js", await readFile(join(HERE, "hub", "gaveta.js"), "utf8")],
+    ["/hub/media-upload.js", await readFile(join(HERE, "assembly", "editor", "media-upload.js"), "utf8")],
+  ]);
   const cleanupPage = await readFile(join(HERE, "page.html"), "utf8");
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
@@ -476,9 +485,10 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         res.end(hubCss);
         return;
       }
-      if (req.method === "GET" && url.pathname === "/hub/page.js") {
+      const hubScript = req.method === "GET" ? hubScripts.get(url.pathname) : undefined;
+      if (hubScript !== undefined) {
         res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });
-        res.end(hubJs);
+        res.end(hubScript);
         return;
       }
       if (url.pathname === "/api/projects") {
@@ -570,7 +580,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (isRootRequest && req.method === "GET") {
-        sendProjectRootPage(res, hubPage, requestIdentity(req));
+        sendProjectRootPage(res, hubPage, requestIdentity(req), media !== undefined);
         return;
       }
       if (await registry.handle(req, res)) return;

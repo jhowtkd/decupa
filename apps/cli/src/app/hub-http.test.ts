@@ -1,8 +1,11 @@
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { File } from "node:buffer";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { EDIT_RESERVATION_FILE, EDIT_RESERVATION_TTL_MS } from "./edit-reservation.ts";
+import { ResumableMediaUpload } from "./assembly/editor/media-upload.js";
 import { blankProject } from "./assembly/routes.ts";
 import { createProject } from "./assembly/store.ts";
 import { sourceManifestPath, writeKeepList } from "./session.ts";
@@ -159,6 +162,114 @@ it("keep-list da Limpeza atualiza a última alteração editorial", async () => 
     const after = await (await fetch(`${base}/api/projects`)).json() as Array<{ id: string; atualizadoEm: number }>;
     expect(after.find(project => project.id === "limpeza")?.atualizadoEm)
       .toBeGreaterThan(before.find(project => project.id === "limpeza")!.atualizadoEm);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+  } as unknown as Storage;
+}
+
+/** O cliente real da gaveta, apontado para o servidor de teste: o que o navegador faz. */
+function enviarPeloHub(base: string, nome: string, bytes: Uint8Array): Promise<{ mediaId: string; deduplicado: boolean }> {
+  const upload = new ResumableMediaUpload({
+    fetchImpl: (url: string, init?: RequestInit) => fetch(`${base}${url}`, init),
+    storage: memoryStorage(),
+  });
+  return upload.start(new File([bytes], nome, { lastModified: 1 })) as Promise<{ mediaId: string; deduplicado: boolean }>;
+}
+
+it("envia Mídias com o cliente do hub e cria o Projeto com elas", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hub-gaveta-http-"));
+  const projectsRoot = join(root, "projetos");
+  await mkdir(projectsRoot);
+  const app = await startApp({
+    projectsRoot, port: 0, autoStart: false, executor, env: { DECUPA_MEDIA_ROOT: join(root, "midias") },
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const aula = await enviarPeloHub(base, "aula.mp4", await readFile(join(FIXTURES, "clip.mp4")));
+    const fala = await enviarPeloHub(base, "fala.wav", await readFile(join(FIXTURES, "tone-gap.wav")));
+    expect(aula.mediaId).toMatch(/^[0-9a-f]{64}$/);
+    expect(fala.mediaId).not.toBe(aula.mediaId);
+
+    const criar = (body: unknown) => fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    // A regra que a gaveta espelha: Limpeza aceita exatamente uma Mídia.
+    expect((await criar({ nome: "Limpeza dupla", fluxo: "limpeza", midias: [aula.mediaId, fala.mediaId] })).status).toBe(400);
+
+    const created = await criar({ nome: "Aula da equipe", fluxo: "montagem", midias: [aula.mediaId, fala.mediaId] });
+    expect(created.status).toBe(201);
+    const body = await created.json() as { id: string; url: string };
+    expect(body).toEqual({ id: expect.any(String), url: `/projects/${body.id}/` });
+    const projects = await (await fetch(`${base}/api/projects`)).json() as Array<{ id: string; nome: string; fluxo: string }>;
+    expect(projects).toContainEqual(expect.objectContaining({ id: body.id, nome: "Aula da equipe", fluxo: "montagem" }));
+    expect((await fetch(`${base}${body.url}`)).status).toBe(200);
+
+    const limpeza = await criar({ nome: "Aula limpa", fluxo: "limpeza", midias: [aula.mediaId] });
+    expect(limpeza.status).toBe(201);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("o cliente do hub recebe o status de Mídia inválida do servidor", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hub-gaveta-invalid-http-"));
+  const app = await startApp({
+    projectsRoot: join(root, "projetos"), port: 0, autoStart: false, executor, env: { DECUPA_MEDIA_ROOT: join(root, "midias") },
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    await expect(enviarPeloHub(base, "quebrado.bin", Buffer.from("não é vídeo"))).rejects.toMatchObject({ status: 422 });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("o cliente do hub recebe o status de Mídia acima do máximo do servidor", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hub-gaveta-limit-http-"));
+  const app = await startApp({
+    projectsRoot: join(root, "projetos"), port: 0, autoStart: false, executor,
+    env: { DECUPA_MEDIA_ROOT: join(root, "midias"), DECUPA_UPLOAD_MAX_GB: "0.000001" },
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    await expect(enviarPeloHub(base, "grande.mp4", new Uint8Array(100_000))).rejects.toMatchObject({ status: 413 });
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("serve a gaveta do hub com os módulos que a página importa e os IDs que o script procura", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hub-gaveta-static-http-"));
+  const app = await startApp({
+    projectsRoot: root, port: 0, autoStart: false, executor, env: { DECUPA_MEDIA_ROOT: join(root, "midias") },
+  });
+  const base = `http://127.0.0.1:${app.port}`;
+  try {
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toContain('<meta name="decupa-media-enabled" content="true">');
+    expect(html).toContain('<dialog id="newProjectDialog"');
+    const script = await (await fetch(`${base}/hub/page.js`)).text();
+    const ids = new Set([...script.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]));
+    expect(ids.size).toBeGreaterThan(10);
+    for (const id of ids) expect(html).toContain(`id="${id}"`);
+    for (const path of ["/hub/gaveta.js", "/hub/media-upload.js"]) {
+      const response = await fetch(`${base}${path}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("javascript");
+    }
+    expect((await fetch(`${base}/hub/nao-existe.js`)).status).toBe(404);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

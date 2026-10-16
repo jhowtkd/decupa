@@ -17,6 +17,11 @@ export function uploadFingerprint(file) {
   return [file.name, file.size, file.lastModified || 0].join("\u0000");
 }
 
+/** Erro de HTTP com o status preservado: quem mostra a mensagem escolhe o texto pelo código. */
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
 export class UploadPausedError extends Error {
   constructor() {
     super("envio pausado");
@@ -26,7 +31,9 @@ export class UploadPausedError extends Error {
 
 /** Upload sequencial: uma parte em voo, estado persistido e retomável. */
 export class ResumableMediaUpload {
-  constructor({ fetchImpl = fetch, storage = globalThis.localStorage, onProgress = () => {} } = {}) {
+  // O `fetch` do navegador não pode ser guardado e chamado como método de outro
+  // objeto (`this.fetchImpl(...)`): no Chrome isso lança "Illegal invocation".
+  constructor({ fetchImpl = (url, init) => fetch(url, init), storage = globalThis.localStorage, onProgress = () => {} } = {}) {
     this.fetchImpl = fetchImpl;
     this.storage = storage;
     this.onProgress = onProgress;
@@ -101,7 +108,7 @@ export class ResumableMediaUpload {
           body: JSON.stringify({ nome: file.name, tamanho: file.size }),
         });
         result = await created.json().catch(() => ({}));
-        if (!created.ok) throw new Error(result.error || `erro ${created.status}`);
+        if (!created.ok) throw httpError(created.status, result.error || `erro ${created.status}`);
         if (result.mediaId) {
           this.onProgress({ bytes: file.size, total: file.size, percent: 100, state: result.deduplicado ? "deduped" : "ready" });
           this.state = "concluido";
@@ -142,7 +149,7 @@ export class ResumableMediaUpload {
           this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
           continue;
         }
-        if (!response.ok) throw new Error(body.error || `erro ${response.status}`);
+        if (!response.ok) throw httpError(response.status, body.error || `erro ${response.status}`);
         this.offset = end + 1;
         this.writeSaved(file, { id: this.uploadId, offset: this.offset, tamanhoParte: this.partSize });
         this.onProgress({ bytes: this.offset, total: file.size, percent: file.size ? this.offset / file.size * 100 : 100, state: this.offset === file.size ? "verifying" : "uploading" });
