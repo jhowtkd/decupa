@@ -41,10 +41,27 @@ export function corpoDaCriacao({ nome, fluxo, midias }) {
   return { nome, fluxo, midias: [...midias] };
 }
 
+/** O link do Drive só precisa vir preenchido: quem valida de verdade é o servidor. */
+export function validarDriveUrl(valor) {
+  const url = String(valor ?? "").trim();
+  if (!url) return { valido: false, mensagem: "Cole o link do arquivo no Google Drive." };
+  return { valido: true, url };
+}
+
 /** Erro de envio → texto. Sem status, a requisição nem chegou: a conexão caiu e
- *  a retomada volta do offset salvo no navegador. */
-export function mensagemDeErroDeEnvio(erro) {
+ *  a retomada volta do offset salvo no navegador. No Drive, quem baixa é a VPS:
+ *  as mensagens falam de importação e reaproveitam o texto do servidor. */
+export function mensagemDeErroDeEnvio(erro, origem = "envio") {
   const status = erro?.status;
+  if (origem === "drive") {
+    if (status === undefined) return "Conexão com a VPS interrompida. Tente de novo para acompanhar a importação.";
+    if (status === 503) return "A importação do Drive não está configurada na VPS.";
+    if (status === 404) return "Arquivo não encontrado no Drive ou sem link público.";
+    if (status === 403) return "O Google recusou o acesso (cota ou permissão). Tente mais tarde.";
+    if (status === 413) return "Esta Mídia passa do tamanho máximo permitido.";
+    if (status === 507) return "Não há espaço suficiente no volume de Mídias. Libere espaço e tente de novo.";
+    return erro?.message || "Não foi possível importar do Drive.";
+  }
   if (status === undefined) return "Conexão interrompida. Tente de novo para retomar o envio.";
   if (status === 413) return "Esta Mídia passa do tamanho máximo permitido.";
   if (status === 507) return "Não há espaço suficiente no volume de Mídias. Libere espaço e tente de novo.";
@@ -70,6 +87,7 @@ const ENVIO_PAUSADO = "O envio está pausado. Retome o envio ou remova as Mídia
 export function textoDoItem(item, pausado) {
   if (item.estado === "aguardando") return pausado ? "Aguardando · fila pausada" : "Aguardando";
   if (item.estado === "enviando") {
+    if (item.origem === "drive") return `Importando · ${Math.round(item.percent || 0)}%`;
     if (item.fase === "importing") return "Importando";
     return item.fase === "verifying" ? "Verificando" : `Enviando · ${Math.round(item.percent || 0)}%`;
   }
@@ -109,8 +127,20 @@ export function formatarDuracao(segundos) {
  * `{ onProgress }` e devolve um cliente de upload retomável; `enviarCriacao`
  * faz o `POST /project/new` com as Mídias prontas.
  */
+/**
+ * @param {object} config
+ * @param {any} config.criarEnvio
+ * @param {any} [config.criarImportacaoDrive]
+ * @param {any} [config.expandirPasta]
+ * @param {any} config.chaveDoArquivo
+ * @param {any} config.enviarCriacao
+ * @param {any} config.onCriado
+ * @param {any} config.onChange
+ * @param {any} [config.onMidiaPublicada]
+ */
 export function criarGaveta({
-  criarEnvio, chaveDoArquivo, enviarCriacao, onCriado, onChange, onMidiaPublicada = () => {},
+  criarEnvio, criarImportacaoDrive, expandirPasta = async () => ({ tipo: "arquivo" }),
+  chaveDoArquivo, enviarCriacao, onCriado, onChange, onMidiaPublicada = () => {},
 }) {
   let nome = "";
   let fluxo = "montagem";
@@ -126,7 +156,7 @@ export function criarGaveta({
     sequencia += 1;
     return {
       chave: `m${sequencia}`, nome: "", origem: "envio", estado: "aguardando",
-      arquivo: null, assinatura: null, envio: null, mediaId: null, deduplicado: false,
+      arquivo: null, alvo: null, assinatura: null, envio: null, mediaId: null, deduplicado: false,
       fase: null, mensagem: null, percent: 0, removido: false, ...campos,
     };
   }
@@ -170,6 +200,8 @@ export function criarGaveta({
     if (item.removido) return;
     item.percent = Math.round(Number(valor.percent) || 0);
     item.fase = valor.state;
+    // O nome do Drive só chega depois do POST: o item entra com o link.
+    if (typeof valor.nome === "string" && valor.nome !== "") item.nome = valor.nome;
     notificar();
   }
 
@@ -178,7 +210,7 @@ export function criarGaveta({
     Object.assign(item, { estado: "enviando", mensagem: null, fase: null });
     let envio;
     try {
-      envio = Promise.resolve(item.envio.start(item.arquivo));
+      envio = Promise.resolve(item.envio.start(item.alvo ?? item.arquivo));
     } catch (error) {
       envio = Promise.reject(error);
     }
@@ -212,7 +244,7 @@ export function criarGaveta({
       item.estado = "pausado";
     } else {
       item.estado = "erro";
-      item.mensagem = mensagemDeErroDeEnvio(error);
+      item.mensagem = mensagemDeErroDeEnvio(error, item.origem);
       erro = { campo: "aviso", mensagem: item.mensagem };
     }
     proximo();
@@ -291,6 +323,67 @@ export function criarGaveta({
     notificar();
   }
 
+  async function adicionarDriveUrl(valor) {
+    erro = null;
+    const validado = validarDriveUrl(valor);
+    if (!validado.valido) {
+      erro = { campo: "aviso", mensagem: validado.mensagem };
+      notificar();
+      return;
+    }
+    if (!criarImportacaoDrive) {
+      erro = { campo: "aviso", mensagem: "A importação do Drive não está disponível." };
+      notificar();
+      return;
+    }
+    let expansao;
+    try {
+      expansao = await expandirPasta(validado.url);
+    } catch (error) {
+      erro = { campo: "aviso", mensagem: mensagemDeErroDeEnvio(error, "drive") };
+      notificar();
+      return;
+    }
+    const alvos = expansao?.tipo === "pasta" && Array.isArray(expansao.items)
+      ? expansao.items
+        .filter((item) => item && typeof item.fileId === "string" && item.fileId !== "")
+        .map((item) => ({
+          url: `https://drive.google.com/file/d/${item.fileId}/view`,
+          nome: typeof item.nome === "string" && item.nome !== "" ? item.nome : null,
+        }))
+      : [{ url: validado.url, nome: null }];
+    if (alvos.length === 0) {
+      erro = { campo: "aviso", mensagem: "Nenhum vídeo ou áudio na pasta do Drive." };
+      notificar();
+      return;
+    }
+    const ignorados = expansao?.tipo === "pasta" ? Number(expansao.ignorados) || 0 : 0;
+    let adicionados = 0;
+    for (const alvo of alvos) {
+      const assinatura = `drive\0${alvo.url}`;
+      if (itens.some((item) => item.assinatura === assinatura)) continue;
+      const quantidade = validarQuantidadeDeMidias(fluxo, itens.length + 1);
+      if (quantidade) {
+        erro = { campo: "aviso", mensagem: quantidade };
+        break;
+      }
+      const item = novoItem({ nome: alvo.nome ?? alvo.url, origem: "drive", alvo: alvo.url, assinatura });
+      item.envio = criarImportacaoDrive({ onProgress: (valor) => progredir(item, valor) });
+      itens.push(item);
+      adicionados += 1;
+    }
+    if (adicionados === 0 && !erro) {
+      erro = { campo: "aviso", mensagem: alvos.length > 1 ? "Estas Mídias já estão na lista." : "Esta Mídia já está na lista." };
+    } else if (ignorados > 0 && !erro) {
+      erro = {
+        campo: "aviso",
+        mensagem: `${ignorados} ${ignorados === 1 ? "item ignorado" : "itens ignorados"}: não são vídeo ou áudio.`,
+      };
+    }
+    proximo();
+    notificar();
+  }
+
   function adicionarDoAcervo(midia) {
     erro = null;
     if (itens.some((item) => item.mediaId === midia.id)) {
@@ -313,7 +406,7 @@ export function criarGaveta({
     item.removido = true;
     if (ativo === item) ativo = null;
     // Cancela no servidor o envio parcial; uma Mídia já pronta fica no acervo.
-    if (item.envio && item.estado !== "pronto") void Promise.resolve(item.envio.cancel(item.arquivo)).catch(() => {});
+    if (item.envio && item.estado !== "pronto") void Promise.resolve(item.envio.cancel(item.alvo ?? item.arquivo)).catch(() => {});
     itens = itens.filter((outro) => outro !== item);
     erro = null;
     proximo();
@@ -398,6 +491,7 @@ export function criarGaveta({
     definirNome,
     definirFluxo,
     adicionarArquivos,
+    adicionarDriveUrl,
     adicionarDoAcervo,
     remover,
     tentarDeNovo,

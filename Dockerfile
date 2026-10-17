@@ -69,6 +69,9 @@ RUN uv python install 3.11 3.12 \
 # --extra-index-url (PyPI) teria prioridade e esconderia as versões `+cpu`.
 # Na variante cuda o torch do lock já é a build CUDA do PyPI (com as rodas
 # nvidia-*-cu12); a conferência no fim falha o build se ele vier sem CUDA.
+# A troca dessincroniza o venv do uv.lock de propósito; por isso a imagem
+# valida a fala por import (DECUPA_SIDECAR_CHECK=functional) em vez de
+# `uv sync --check`, e o build falha se o import não resolver.
 RUN test "${DECUPA_VARIANT}" = cpu || test "${DECUPA_VARIANT}" = cuda \
     && if [ "${DECUPA_VARIANT}" = cpu ]; then \
       uv pip install --python services/speech/.venv/bin/python \
@@ -79,9 +82,10 @@ RUN test "${DECUPA_VARIANT}" = cpu || test "${DECUPA_VARIANT}" = cuda \
       awk -F= '/^(nvidia-|triton==)/ { print $1 }'); do \
       uv pip uninstall --python services/speech/.venv/bin/python "$package"; \
       done; \
+      services/speech/.venv/bin/python -c 'import whisperx, torch; assert torch.version.cuda is None'; \
     fi \
     && if [ "${DECUPA_VARIANT}" = cuda ]; then \
-      services/speech/.venv/bin/python -c 'import sys, torch; print(torch.__version__, torch.version.cuda); sys.exit(torch.version.cuda is None)'; \
+      services/speech/.venv/bin/python -c 'import sys, whisperx, torch; print(torch.__version__, torch.version.cuda); sys.exit(torch.version.cuda is None)'; \
     fi \
     && rm -rf /root/.cache/uv
 
@@ -109,6 +113,7 @@ COPY --chown=decupa:decupa . .
 ENV HOME=/home/decupa \
     HF_HOME=/home/decupa/.cache/huggingface \
     TORCH_HOME=/home/decupa/.cache/torch \
+    DECUPA_SIDECAR_CHECK=functional \
     DECUPA_BIND_HOST=0.0.0.0 \
     DECUPA_TRUST_PROXY=1 \
     DECUPA_MEDIA_ROOT=/data/media \

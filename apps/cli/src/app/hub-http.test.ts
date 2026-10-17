@@ -275,3 +275,20 @@ it("serve a gaveta do hub com os módulos que a página importa e os IDs que o s
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("injeta no HTML se a importação do Drive está configurada", async () => {
+  for (const [key, expected] of [[undefined, "false"], ["chave-1", "true"]] as const) {
+    const root = await mkdtemp(join(tmpdir(), "hub-drive-meta-http-"));
+    const app = await startApp({
+      projectsRoot: root, port: 0, autoStart: false, executor,
+      env: { DECUPA_MEDIA_ROOT: join(root, "midias"), ...(key ? { DECUPA_DRIVE_API_KEY: key } : {}) },
+    });
+    try {
+      const html = await (await fetch(`http://127.0.0.1:${app.port}/`)).text();
+      expect(html).toContain(`<meta name="decupa-drive-enabled" content="${expected}">`);
+    } finally {
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});

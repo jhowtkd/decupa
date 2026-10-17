@@ -5,7 +5,8 @@ Caddy publica portas; o serviço Decupa fica acessível apenas na rede interna d
 compose.
 
 Para enviar arquivos diretamente ao Cloudflare R2 e importar para o acervo local,
-veja [Upload pelo R2 como passagem](upload-r2.md).
+veja [Upload pelo R2 como passagem](upload-r2.md). Para a VPS baixar direto do
+Google Drive a partir de um link, veja [Importação direta do Google Drive](upload-drive.md).
 
 ## Primeira subida
 

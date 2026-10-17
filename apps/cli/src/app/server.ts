@@ -87,11 +87,13 @@ function escapeHtml(value: string): string {
   })[character]!);
 }
 
-function sendProjectRootPage(res: ServerResponse, page: string, identity: string | undefined, mediaEnabled: boolean): void {
+function sendProjectRootPage(res: ServerResponse, page: string, identity: string | undefined, mediaEnabled: boolean, driveEnabled: boolean): void {
   const rendered = page
     .replace("__DECUPA_USER__", () => escapeHtml(identity ?? "usuário local"))
     .replace('<meta name="decupa-media-enabled" content="">',
-      () => `<meta name="decupa-media-enabled" content="${mediaEnabled ? "true" : "false"}">`);
+      () => `<meta name="decupa-media-enabled" content="${mediaEnabled ? "true" : "false"}">`)
+    .replace('<meta name="decupa-drive-enabled" content="">',
+      () => `<meta name="decupa-drive-enabled" content="${driveEnabled ? "true" : "false"}">`);
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(rendered),
@@ -580,7 +582,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (isRootRequest && req.method === "GET") {
-        sendProjectRootPage(res, hubPage, requestIdentity(req), media !== undefined);
+        sendProjectRootPage(res, hubPage, requestIdentity(req), media !== undefined, media?.driveEnabled === true);
         return;
       }
       if (await registry.handle(req, res)) return;

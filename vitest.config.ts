@@ -32,6 +32,7 @@ export default defineConfig({
       DECUPA_R2_BUCKET: "",
       DECUPA_R2_ACCESS_KEY_ID: "",
       DECUPA_R2_SECRET_ACCESS_KEY: "",
+      DECUPA_DRIVE_API_KEY: "",
     },
   },
 });

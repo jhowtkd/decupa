@@ -385,12 +385,35 @@ const SPEECH_DIR = dirname(SPEECH_SCRIPT);
  * vazio em silêncio e a etapa só cai depois, num ModuleNotFoundError que
  * ninguém liga ao setup. `sync --check` compara sem criar nem alterar nada.
  */
+/** Sidecars intencionalmente dessincronizados do uv.lock e o import que prova cada um.
+ *  Hoje só a fala na imagem Docker CPU (torch CUDA → CPU; ver Dockerfile). */
+const SIDECAR_FUNCTIONAL_IMPORTS: Record<string, string> = {
+  fala: "whisperx",
+};
+
 export async function assertSidecarSynced(
   exec: Executor,
   dir: string,
   name: string,
   signal?: AbortSignal,
 ): Promise<void> {
+  const functional = SIDECAR_FUNCTIONAL_IMPORTS[name];
+  // Na imagem, o build já falharia se estes imports não resolvessem.
+  if (process.env.DECUPA_SIDECAR_CHECK === "functional" && functional) {
+    const { code } = await exec.run({
+      command: join(dir, ".venv", "bin", "python"),
+      args: ["-c", `import ${functional}`],
+      cwd: dir,
+      ...(signal ? { signal } : {}),
+    });
+    if (code !== 0) {
+      throw new Error(
+        `o ambiente Python de ${name} está ausente ou incompleto em ${join(dir, ".venv")}. ` +
+        "Reconstrua a imagem: docker compose up -d --build decupa",
+      );
+    }
+    return;
+  }
   const { code } = await exec.run({
     command: "uv",
     args: ["sync", "--locked", "--check", "--offline"],
