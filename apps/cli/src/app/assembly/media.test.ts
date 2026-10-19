@@ -6,6 +6,7 @@ import { hashFile, probe } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { SpawnExecutor, type ExecCall, type Executor } from "../pipeline.ts";
 import { fixtureAssembly } from "./fixture.ts";
+import { mediaWork } from "./media-work.ts";
 import { ensurePlayback, ensureThumbnail, proxyPath, thumbnailPath, verifySourceIdentity } from "./media.ts";
 import type { Source } from "./types.ts";
 
@@ -99,6 +100,54 @@ it("reusa proxy válido sem chamar o ffmpeg de novo", async () => {
   const second = await ensurePlayback(source, dir, counting);
   expect(counting.calls).toHaveLength(0);
   expect(second).toEqual(first);
+});
+
+it("miniatura em cache responde enquanto mediaWork está ocupada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-thumb-cache-slot-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const expected = thumbnailPath(dir, source.sha256);
+  await mkdir(join(dir, "media", source.sha256), { recursive: true });
+  await writeFile(expected, "cached thumbnail");
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const blocker = mediaWork.run(() => held);
+  const pending = ensureThumbnail(source, dir, copyingExec());
+  const result = await Promise.race([
+    pending.then((thumbnail) => ({ kind: "cached" as const, thumbnail })),
+    new Promise<{ kind: "blocked" }>((resolve) => setTimeout(() => resolve({ kind: "blocked" }), 250)),
+  ]);
+  release();
+  await blocker;
+  if (result.kind === "blocked") await pending;
+  expect(result).toEqual({ kind: "cached", thumbnail: expected });
+});
+
+it("proxy e miniatura válidos respondem enquanto mediaWork está ocupada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-playback-cache-slot-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path);
+  const proxy = proxyPath(dir, source.sha256);
+  const thumbnail = thumbnailPath(dir, source.sha256);
+  await mkdir(join(dir, "media", source.sha256), { recursive: true });
+  await copyFile(join(FIXTURES, "clip.mp4"), proxy);
+  await writeFile(thumbnail, "cached thumbnail");
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const blocker = mediaWork.run(() => held);
+  const pending = ensurePlayback(source, dir, copyingExec());
+  const result = await Promise.race([
+    pending.then((playback) => ({ kind: "cached" as const, playback })),
+    new Promise<{ kind: "blocked" }>((resolve) => setTimeout(() => resolve({ kind: "blocked" }), 2_000)),
+  ]);
+  release();
+  await blocker;
+  if (result.kind === "blocked") await pending;
+  expect(result).toEqual({ kind: "cached", playback: { videoPath: proxy, thumbnailPath: thumbnail } });
 });
 
 it("áudio sem vídeo usa player próprio: sem miniatura e sem thumb", async () => {

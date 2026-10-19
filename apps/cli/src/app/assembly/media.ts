@@ -174,13 +174,21 @@ export async function ensureThumbnail(
   await verifySourceIdentity(source);
   if (!source.hasVideo) return null;
   opts.signal?.throwIfAborted();
+  const cachedThumbnail = async (): Promise<string | null> => {
+    const path = thumbnailPath(dir, source.sha256);
+    try {
+      return (await stat(path)).size > 0 ? path : null;
+    } catch {
+      return null;
+    }
+  };
+  const cached = await cachedThumbnail();
+  if (cached) return cached;
   return mediaWork.run(async (signal) => {
     signal?.throwIfAborted();
-    try {
-      if ((await stat(thumbnailPath(dir, source.sha256))).size > 0) return thumbnailPath(dir, source.sha256);
-    } catch {
-      // Extração direta: uma miniatura não precisa transcodificar o vídeo inteiro.
-    }
+    const ready = await cachedThumbnail();
+    if (ready) return ready;
+    // Extração direta: uma miniatura não precisa transcodificar o vídeo inteiro.
     await mkdir(playbackDir(dir, source.sha256), { recursive: true });
     return buildThumbnail(source, dir, source.path, exec, { ...opts, signal });
   }, { key: thumbnailPath(dir, source.sha256), signal: opts.signal });
@@ -196,10 +204,14 @@ export async function ensurePlayback(
   await verifySourceIdentity(source);
   const proxy = proxyPath(dir, source.sha256);
   opts.signal?.throwIfAborted();
+  // Cache validado responde mesmo enquanto um render ocupa mediaWork.
+  if (await proxyIsValid(proxy, source)) {
+    return { videoPath: proxy, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
+  }
   // O perfil é resolvido FORA do slot: a prova de hardware também passa pela
   // mediaWork, que não é reentrante — detectar dentro do job travaria a fila.
   let profile = opts.profile;
-  if (profile == null && opts.detectHardware && source.hasVideo && !(await proxyIsValid(proxy, source))) {
+  if (profile == null && opts.detectHardware && source.hasVideo) {
     profile = await detectHardwareProfile(source.path, join(dir, "hardware-proof"), exec, { signal: opts.signal });
   }
   // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.

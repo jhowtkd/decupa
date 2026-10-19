@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { hashFile } from "@decupa/media";
+import { createFileCoordinator } from "@decupa/coordinator";
+import { createVisualPools } from "./visual-pool.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import type { Executor } from "../pipeline.ts";
 import { describeSource, normalizeCompactSpans, sanitizeProviderKey, VISUAL_PROMPT, VISUAL_PROMPT_SPARSE, type VisualMetric } from "./model.ts";
@@ -286,6 +288,126 @@ it("respostas complementares conservam ambos os trechos", async () => {
   ]);
 });
 
+it("resposta parcial atrasada não sobrescreve cache completo publicado durante a rede", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-cache-race-"));
+  const source = await speechSource(dir, 3);
+  const coordinator = createFileCoordinator(join(dir, "cpu-coordinator"), { limit: 1, pollMs: 5 });
+  let releaseFirstRequest!: (value: string) => void;
+  let notifyFirstRequest!: () => void;
+  const firstRequest = new Promise<string>((resolve) => { releaseFirstRequest = resolve; });
+  const firstRequestStarted = new Promise<void>((resolve) => { notifyFirstRequest = resolve; });
+  let clientACalls = 0;
+  let clientBCalls = 0;
+  const partialResponse = JSON.stringify({
+    spans: [{ id: "local-0", start: 0, end: 2, text: "partial A", confidence: "observed", tags: [] }],
+  });
+  const completeResponse = JSON.stringify({
+    spans: [{ id: "local-0", start: 0, end: 3, text: "complete B", confidence: "observed", tags: [] }],
+  });
+  const clientA = {
+    ...TEST_IDENTITY,
+    async send() {
+      clientACalls += 1;
+      if (clientACalls === 1) {
+        notifyFirstRequest();
+        return firstRequest;
+      }
+      return partialResponse;
+    },
+  };
+  const clientB = {
+    ...TEST_IDENTITY,
+    async send() {
+      clientBCalls += 1;
+      return completeResponse;
+    },
+  };
+  const deps = { coordinator, exec: frameExecutor };
+
+  // A finishes local extraction, then waits on network with the CPU slot free.
+  const delayedA = describeSource(source, dir, new AbortController().signal, { ...deps, client: clientA });
+  await firstRequestStarted;
+  // B uses the released CPU slot and publishes a complete cache entry.
+  const completeB = await describeSource(source, dir, new AbortController().signal, { ...deps, client: clientB });
+  expect(completeB.map((span) => [span.start, span.end, span.text])).toEqual([[0, 3, "complete B"]]);
+
+  // A resumes with a partial answer twice (original + one repair) and must
+  // preserve B's newer full coverage when it publishes its own cache result.
+  releaseFirstRequest(partialResponse);
+  await delayedA;
+  const cached = await describeSource(source, dir, new AbortController().signal, { ...deps, client: clientB });
+  expect(cached.map((span) => [span.start, span.end])).toEqual([[0, 3]]);
+  expect(cached.map((span) => span.id)).toHaveLength(new Set(cached.map((span) => span.id)).size);
+  expect(clientACalls).toBe(2);
+  expect(clientBCalls).toBe(1);
+});
+
+it("publicações concorrentes de respostas complementares preservam cobertura e IDs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-cache-complement-race-"));
+  const source = await speechSource(dir, 3);
+  const coordinator = createFileCoordinator(join(dir, "cpu-coordinator"), { limit: 1, pollMs: 5 });
+  let releaseA!: (value: string) => void;
+  let releaseB!: (value: string) => void;
+  let notifyA!: () => void;
+  let notifyB!: () => void;
+  const requestA = new Promise<string>((resolve) => { releaseA = resolve; });
+  const requestB = new Promise<string>((resolve) => { releaseB = resolve; });
+  const requestAStarted = new Promise<void>((resolve) => { notifyA = resolve; });
+  const requestBStarted = new Promise<void>((resolve) => { notifyB = resolve; });
+  const aPartial = JSON.stringify({
+    spans: [{ id: "local-0", start: 0, end: 2, text: "first half", confidence: "observed", tags: [] }],
+  });
+  const bPartial = JSON.stringify({
+    spans: [{ id: "local-0", start: 2, end: 3, text: "last second", confidence: "observed", tags: [] }],
+  });
+  let callsA = 0;
+  let callsB = 0;
+  const clientA = {
+    ...TEST_IDENTITY,
+    async send() {
+      callsA += 1;
+      if (callsA === 1) {
+        notifyA();
+        return requestA;
+      }
+      return aPartial;
+    },
+  };
+  const clientB = {
+    ...TEST_IDENTITY,
+    async send() {
+      callsB += 1;
+      if (callsB === 1) {
+        notifyB();
+        return requestB;
+      }
+      return bPartial;
+    },
+  };
+  const deps = { coordinator, exec: frameExecutor };
+
+  const pendingA = describeSource(source, dir, new AbortController().signal, { ...deps, client: clientA });
+  await requestAStarted;
+  const pendingB = describeSource(source, dir, new AbortController().signal, { ...deps, client: clientB });
+  await requestBStarted;
+  // Both callers observed an empty cache before either network response can publish.
+  releaseA(aPartial);
+  releaseB(bPartial);
+  await Promise.all([pendingA, pendingB]);
+
+  const cached = await describeSource(source, dir, new AbortController().signal, { ...deps, client: clientA });
+  const intervals = cached.map(({ start, end }) => [start, end]);
+  expect(intervals[0]?.[0]).toBe(0);
+  expect(intervals.at(-1)?.[1]).toBe(3);
+  for (let index = 1; index < intervals.length; index += 1) {
+    expect(intervals[index - 1]?.[1]).toBe(intervals[index]?.[0]);
+  }
+  expect(new Set(cached.map((span) => span.id)).size).toBe(cached.length);
+  // A final call is a cache hit: each client made only its original + repair request.
+  expect(callsA).toBe(2);
+  expect(callsB).toBe(2);
+});
+
 it("janela que volta sem algum segundo é pedida de novo, apontando os segundos faltantes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembly-model-"));
   const source = await speechSource(dir, 3);
@@ -442,6 +564,180 @@ it("emite telemetria por fase e cache-hit na segunda execução", async () => {
   expect(JSON.stringify(events)).not.toContain("data:image");
   expect(events.every((e) => e.elapsedMs >= 0 && e.queueMs >= 0)).toBe(true);
   expect(events.every((e) => e.sourceId === "a")).toBe(true);
+});
+
+it("cache visual validado responde enquanto a cota de CPU está ocupada", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-cache-slot-"));
+  const source = await speechSource(dir, 3);
+  let modelCalls = 0;
+  let extractionCalls = 0;
+  const deps = {
+    client: {
+      ...TEST_IDENTITY,
+      async send() {
+        modelCalls += 1;
+        return JSON.stringify({ spans: [{ id: "local-0", start: 0, end: 3, text: "cached", confidence: "observed", tags: [] }] });
+      },
+    },
+    exec: {
+      async run(call: Parameters<Executor["run"]>[0]) {
+        extractionCalls += 1;
+        return frameExecutor.run(call);
+      },
+    },
+  };
+  const expected = await describeSource(source, dir, new AbortController().signal, deps);
+  const coordinator = createFileCoordinator(join(dir, "cpu-coordinator"), { limit: 1, pollMs: 5 });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let blockerStarted!: () => void;
+  const blockerStartedPromise = new Promise<void>((resolve) => { blockerStarted = resolve; });
+  const blocker = coordinator.withSlot({ stage: "render" }, async () => {
+    blockerStarted();
+    await held;
+  });
+  await blockerStartedPromise;
+  const cached = describeSource(source, dir, new AbortController().signal, { ...deps, coordinator });
+  const outcome = await Promise.race([
+    cached.then((spans) => ({ kind: "cached" as const, spans })),
+    new Promise<{ kind: "blocked" }>((resolve) => setTimeout(() => resolve({ kind: "blocked" }), 250)),
+  ]);
+  release();
+  await blocker;
+  if (outcome.kind === "blocked") await cached;
+  expect(outcome.kind).toBe("cached");
+  if (outcome.kind === "cached") expect(outcome.spans).toEqual(expected);
+  expect(modelCalls).toBe(1);
+  expect(extractionCalls).toBe(1);
+});
+
+it("recheca cache visual depois de esperar a cota e evita extração/modelo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-cache-recheck-"));
+  const source = await speechSource(dir, 3);
+  const coordinatorDir = join(dir, "cpu-coordinator");
+  const coordinator = createFileCoordinator(coordinatorDir, { limit: 1, pollMs: 5 });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let blockerStarted!: () => void;
+  const blockerStartedPromise = new Promise<void>((resolve) => { blockerStarted = resolve; });
+  const blocker = coordinator.withSlot({ stage: "render" }, async () => {
+    blockerStarted();
+    await held;
+  });
+  await blockerStartedPromise;
+  let modelCalls = 0;
+  let extractionCalls = 0;
+  const client = {
+    ...TEST_IDENTITY,
+    async send() {
+      modelCalls += 1;
+      return JSON.stringify({ spans: [{ id: "local-0", start: 0, end: 3, text: "published while queued", confidence: "observed", tags: [] }] });
+    },
+  };
+  const deps = {
+    client,
+    exec: {
+      async run(call: Parameters<Executor["run"]>[0]) {
+        extractionCalls += 1;
+        return frameExecutor.run(call);
+      },
+    },
+  };
+  const queued = describeSource(source, dir, new AbortController().signal, { ...deps, coordinator });
+  let enteredQueue = false;
+  const queuedAt = Date.now();
+  while (!enteredQueue && Date.now() - queuedAt < 3_000) {
+    try {
+      const waiters = JSON.parse(await readFile(join(coordinatorDir, "waiters.json"), "utf8")) as unknown[];
+      enteredQueue = waiters.length > 0;
+    } catch {
+      // Wait for the initial cache miss to enter the CPU queue.
+    }
+    if (!enteredQueue) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(enteredQueue).toBe(true);
+  // This independent caller fills the shared, validated cache after the queued
+  // caller's initial miss and before CPU becomes available.
+  await describeSource(source, dir, new AbortController().signal, deps);
+  release();
+  await blocker;
+  const spans = await queued;
+  expect(spans[0]?.text).toBe("published while queued");
+  expect(modelCalls).toBe(1);
+  expect(extractionCalls).toBe(1);
+});
+
+it("describeSource propaga prioridade interativa para a fila de CPU", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-priority-"));
+  const source = await speechSource(dir, 3);
+  const coordinatorDir = join(dir, "cpu-coordinator");
+  const coordinator = createFileCoordinator(coordinatorDir, { limit: 1, pollMs: 5 });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let blockerStarted!: () => void;
+  const blockerStartedPromise = new Promise<void>((resolve) => { blockerStarted = resolve; });
+  const blocker = coordinator.withSlot({ stage: "render" }, async () => {
+    blockerStarted();
+    await held;
+  });
+  await blockerStartedPromise;
+  const described = describeSource(source, dir, new AbortController().signal, {
+    coordinator,
+    priority: "interactive",
+    client: {
+      ...TEST_IDENTITY,
+      async send() {
+        return JSON.stringify({ spans: [{ id: "local-0", start: 0, end: 3, text: "interactive", confidence: "observed", tags: [] }] });
+      },
+    },
+    exec: frameExecutor,
+  });
+  let priorities: string[] = [];
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 3_000) {
+    try {
+      const queued = JSON.parse(await readFile(join(coordinatorDir, "waiters.json"), "utf8")) as { priority: string }[];
+      priorities = queued.map((waiter) => waiter.priority);
+      if (priorities.includes("interactive")) break;
+    } catch {
+      // Wait for describeSource to perform its cache miss and queue extraction.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  release();
+  await blocker;
+  await described;
+  expect(priorities).toContain("interactive");
+});
+
+it("espera de rede visual não retém a cota de CPU", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-model-network-slot-"));
+  const source = await speechSource(dir, 3);
+  const coordinator = createFileCoordinator(join(dir, "cpu-coordinator"), { limit: 1, pollMs: 5 });
+  let releaseRequest!: () => void;
+  let requestStarted!: () => void;
+  const networkHeld = new Promise<string>((resolve) => { releaseRequest = () => resolve(JSON.stringify({
+    spans: [{ id: "local-0", start: 0, end: 3, text: "network result", confidence: "observed", tags: [] }],
+  })); });
+  const requestStartedPromise = new Promise<void>((resolve) => { requestStarted = resolve; });
+  const described = describeSource(source, dir, new AbortController().signal, {
+    coordinator,
+    pools: createVisualPools({ ffmpegLimit: 1, networkLimit: 1 }),
+    client: {
+      ...TEST_IDENTITY,
+      async send() {
+        requestStarted();
+        return networkHeld;
+      },
+    },
+    exec: frameExecutor,
+  });
+  await requestStartedPromise;
+  let cpuStarted = false;
+  await coordinator.withSlot({ stage: "another-cpu-task" }, () => { cpuStarted = true; });
+  releaseRequest();
+  await described;
+  expect(cpuStarted).toBe(true);
 });
 
 it("erro de transporte termina com evento error", async () => {

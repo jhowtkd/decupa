@@ -57,6 +57,8 @@ type Waiter = {
   priority: TaskPriority;
   at: number;
   seenAt: number;
+  /** Já cedeu a vez a uma interação; novas interações passam a respeitar seu FIFO. */
+  bypassed?: boolean;
 };
 
 type Slot = { leaseId: string; until: number };
@@ -135,9 +137,13 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
       reject(cancelled(signal.reason));
       return;
     }
-    const timer = setTimeout(resolve, ms);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
     const onAbort = (): void => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       reject(cancelled(signal?.reason));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -256,11 +262,22 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     await unlink(join(paths.slots, `${index}.json`)).catch(() => undefined);
   };
 
-  const rank = (waiter: Waiter): number => (waiter.priority === "interactive" ? 0 : 1);
+  const rank = (waiter: Waiter): number => (waiter.priority === "interactive" || waiter.bypassed ? 0 : 1);
 
   const isHead = (waiters: Waiter[], waiterId: string): boolean => {
     const ordered = [...waiters].sort((a, b) => rank(a) - rank(b) || a.at - b.at || a.waiterId.localeCompare(b.waiterId));
     return ordered[0]?.waiterId === waiterId;
+  };
+
+  const afterClaim = (waiters: Waiter[], claimed: Waiter): Waiter[] => {
+    // A preferência interativa vale uma ultrapassagem. O marcador fica em
+    // disco para que clientes/processos diferentes também garantam progresso
+    // dos lotes, sem depender de um contador privado ou de novos limites.
+    return waiters.filter((waiter) => waiter.waiterId !== claimed.waiterId).map((waiter) => (
+      claimed.priority === "interactive" && waiter.priority === "batch"
+        ? { ...waiter, bypassed: true }
+        : waiter
+    ));
   };
 
   const refreshWaiter = (waiters: Waiter[], waiter: Waiter, t: number): boolean => {
@@ -299,7 +316,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
         await writeSlot(i, { leaseId, until: t + leaseMs });
-        await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
+        await writeWaiters(afterClaim(waiters, waiter));
         await writeTask({
           id: taskId,
           stage,
@@ -328,7 +345,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
         await writeSlot(i, { leaseId, until: t + leaseMs });
-        await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
+        await writeWaiters(afterClaim(waiters, waiter));
         return { index: i, leaseId };
       }
       return null;
