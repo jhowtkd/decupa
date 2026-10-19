@@ -8,6 +8,8 @@ const DEFAULT_MAX_RETRIES = 2;
 export type VisualPoolOptions = {
   ffmpegLimit: number;
   networkLimit: number;
+  /** Janelas em extração, espera, resposta ou publicação, somadas. */
+  windowLimit?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -42,6 +44,8 @@ function backoffMs(attempt: number, random: () => number): number {
 
 const DEFAULT_FFMPEG_LIMIT = 2;
 const DEFAULT_NETWORK_LIMIT = 2;
+// Duas requisições + até duas janelas antecipadas, sem acumular o vídeo todo.
+const DEFAULT_WINDOW_LIMIT = 4;
 
 let shared: VisualPools | undefined;
 
@@ -57,6 +61,8 @@ export function sharedVisualPools(): VisualPools {
 export function createVisualPools(opts: VisualPoolOptions): VisualPools {
   const ffmpeg: LimitedQueue = createLimitedQueue(opts.ffmpegLimit);
   const network: LimitedQueue = createLimitedQueue(opts.networkLimit);
+  const windowLimit = opts.windowLimit ?? DEFAULT_WINDOW_LIMIT;
+  const windowQueue: LimitedQueue = createLimitedQueue(windowLimit);
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const random = opts.random ?? Math.random;
@@ -89,12 +95,59 @@ export function createVisualPools(opts: VisualPoolOptions): VisualPools {
     request<T>(work: () => Promise<T> | T, runOpts?: VisualPoolRunOptions): Promise<T> {
       return network.run(() => requestOnce(work, runOpts?.signal), { signal: runOpts?.signal });
     },
-    mapWindows<W, R>(
+    async mapWindows<W, R>(
       windows: readonly W[],
       mapper: (window: W, index: number) => Promise<R> | R,
-      _runOpts?: VisualPoolRunOptions,
+      runOpts?: VisualPoolRunOptions,
     ): Promise<R[]> {
-      return Promise.all(windows.map((window, index) => Promise.resolve().then(() => mapper(window, index))));
+      runOpts?.signal?.throwIfAborted();
+      const results: R[] = [];
+      let nextIndex = 0;
+      let failed = false;
+      let firstError: unknown;
+      // Cancela só a admissão desta chamada; mappers ativos conservam seu
+      // sinal original e precisam terminar antes da rejeição do mapeamento.
+      const admission = new AbortController();
+      const admissionSignal = runOpts?.signal
+        ? AbortSignal.any([runOpts.signal, admission.signal])
+        : admission.signal;
+      const fail = (error: unknown): void => {
+        if (failed) return;
+        firstError = error;
+        failed = true;
+        admission.abort(error);
+      };
+
+      // Poucos workers pegam a próxima janela só após publicar a anterior.
+      // A fila é do pool, não da chamada: fontes simultâneas dividem o teto.
+      // Não cadastramos uma promise/listener por janela da fonte inteira.
+      const worker = async (): Promise<void> => {
+        while (!failed && nextIndex < windows.length) {
+          try {
+            runOpts?.signal?.throwIfAborted();
+            const index = nextIndex++;
+            results[index] = await windowQueue.run(async () => {
+              if (failed) throw firstError;
+              runOpts?.signal?.throwIfAborted();
+              try {
+                return await mapper(windows[index]!, index);
+              } catch (error) {
+                // Registra antes de liberar o slot, pois a fila pode admitir
+                // outro worker desta chamada antes do catch externo rodar.
+                fail(error);
+                throw error;
+              }
+            }, { signal: admissionSignal });
+          } catch (error) {
+            fail(error);
+          }
+        }
+      };
+      // Drena os mappers já admitidos antes de devolver erro/cancelamento:
+      // nenhum trabalho desta chamada continua publicando após seu término.
+      await Promise.all(Array.from({ length: Math.min(windowLimit, windows.length) }, worker));
+      if (failed) throw firstError;
+      return results;
     },
   };
   return pools;
