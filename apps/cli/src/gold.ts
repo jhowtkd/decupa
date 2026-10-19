@@ -3,6 +3,9 @@ import { totalDurationMs, type Interval } from "@decupa/core";
 import { alignEditedFiles } from "@decupa/goldedit";
 import { probe } from "@decupa/media";
 
+// Um quadro a 30 fps, como no critério G0 de scripts/segment-timing.test.ts.
+const DURATION_TOLERANCE_MS = 1000 / 30;
+
 export interface GoldEditFile {
   raw: string;
   edited: string;
@@ -38,13 +41,25 @@ export async function runGold(opts: {
     rawPath: opts.rawPath,
     editedPath: opts.editedPath,
   });
+  const removedMs = totalDurationMs(removed);
+  const durationDifferenceMs = Math.abs(
+    rawInfo.durationMs - editedInfo.durationMs - removedMs,
+  );
+  if (!Number.isFinite(durationDifferenceMs) || durationDifferenceMs > DURATION_TOLERANCE_MS) {
+    throw new Error(
+      `alinhamento inconclusivo: bruto (${rawInfo.durationMs} ms) − ` +
+      `editado (${editedInfo.durationMs} ms) − removido (${removedMs} ms) ` +
+      `difere ${durationDifferenceMs} ms (tolerância ${DURATION_TOLERANCE_MS} ms); ` +
+      "revise o par bruto/editado antes de publicar o gold",
+    );
+  }
 
   const result: GoldEditFile = {
     raw: opts.rawPath,
     edited: opts.editedPath,
     rawDurationMs: rawInfo.durationMs,
     editedDurationMs: editedInfo.durationMs,
-    removedMs: totalDurationMs(removed),
+    removedMs,
     removed,
     generatedAt: new Date().toISOString(),
   };
