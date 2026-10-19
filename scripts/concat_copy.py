@@ -3,8 +3,8 @@
 O motor de condense normaliza cada segmento (mesmo tamanho, SAR, fps,
 yuv420p e libx264) justamente para o concat demuxer, mas depois recodifica o
 vídeo inteiro na junção — no 4K isso era ~40% do tempo da exportação. Aqui o
-vídeo vai por cópia; só o áudio é recodificado, uma vez, para não acumular o
-priming do AAC de cada segmento como dessincronia.
+vídeo vai por cópia; só o áudio é recodificado, alinhando as amostras aos
+timestamps para não acumular priming/padding do AAC como dessincronia.
 
 Sem dependência do motor: `install(engine)` troca o `_concat_hard` do módulo
 do motor pinado e, se a cópia falhar, cai na concatenação original.
@@ -32,6 +32,14 @@ def concat_video_copy(segments: list[dict[str, Any]], output_path: Path | str, *
         "-map", "0:v:0", "-map", "0:a:0?",
         "-c:v", "copy",
         "-c:a", "aac",
+        # O decoder entrega blocos AAC completos, inclusive a sobra do último
+        # bloco de cada segmento. O concat demuxer posiciona o próximo pela
+        # duração declarada, gerando sobreposição nos PTS. Recodificar sozinho
+        # acumula essas amostras (45 ms em 5 cortes; 237 ms em 20 na fixture).
+        # async=1 só preenche/apara, sem mudar velocidade/tom; first_pts remove
+        # priming inicial. O limiar padrão de 100 ms deixa passar o erro de um
+        # bloco AAC (~21 ms a 48 kHz): corrigimos diferenças a partir de 1 ms.
+        "-af", "aresample=async=1:first_pts=0:min_hard_comp=0.001",
         "-movflags", "+faststart",
         str(output_path),
     ]
