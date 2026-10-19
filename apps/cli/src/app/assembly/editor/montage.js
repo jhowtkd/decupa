@@ -148,24 +148,61 @@ function disjointRanges(ranges) {
   return merged;
 }
 
-/** Palavras da fonte fora da seleção atual da cena (para inclusão). */
-export function omittedWords(project, scene, sourceId) {
+/** Mesma varredura para a contagem fechada e o catálogo aberto. */
+function scanOmitted(project, scene, sourceId, visit) {
   const retained = disjointRanges(scene.takes
     .filter((take) => take.sourceId === sourceId)
     .flatMap((take) => retainedOfTake(take)));
   // Palavras e intervalos em ordem: um ponteiro só, sem varrer os intervalos por palavra.
-  const out = [];
+  let count = 0;
   let j = 0;
   for (const word of effectiveWords(project, sourceId)) {
     while (j < retained.length && retained[j].end <= word.start) j += 1;
     if (j < retained.length && retained[j].start < word.end) continue;
-    out.push(word);
+    count += 1;
+    if (visit) visit(word);
   }
+  return count;
+}
+
+const omittedCountCache = new WeakMap();
+
+/**
+ * Resumo sem materializar o array de palavras das zonas recolhidas.
+ * @returns {number}
+ */
+export function omittedWordCount(project, scene, sourceId) {
+  const scenes = memo(omittedCountCache, project,
+    [project.scenes, project.analyses, project.corrections], () => new Map());
+  if (!scenes.has(scene)) scenes.set(scene, new Map());
+  const sources = scenes.get(scene);
+  if (!sources.has(sourceId)) sources.set(sourceId, scanOmitted(project, scene, sourceId));
+  return sources.get(sourceId);
+}
+
+/** Palavras da fonte fora da seleção atual da cena (para inclusão). */
+export function omittedWords(project, scene, sourceId) {
+  const out = [];
+  scanOmitted(project, scene, sourceId, (word) => out.push(word));
   return out;
 }
 
-/** Palavras do take com marcas de remoção/proteção/correção. */
+const takeCache = new WeakMap();
+
+/**
+ * Palavras do take com marcas de remoção/proteção/correção. Não altere o catálogo.
+ * @returns {ReturnType<typeof buildTakeWords>}
+ */
 export function takeWords(project, scene, take) {
+  const scenes = memo(takeCache, project,
+    [project.scenes, project.analyses, project.corrections], () => new Map());
+  if (!scenes.has(scene)) scenes.set(scene, new Map());
+  const takes = scenes.get(scene);
+  if (!takes.has(take)) takes.set(take, buildTakeWords(project, scene, take));
+  return takes.get(take);
+}
+
+function buildTakeWords(project, scene, take) {
   const kept = [];
   const words = effectiveWords(project, take.sourceId);
   // O catálogo é ordenado por início: começa na primeira palavra do take.

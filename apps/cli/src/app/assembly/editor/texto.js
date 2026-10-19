@@ -11,6 +11,7 @@ import {
   montageTimeOfWord,
   montageWordTimes,
   omittedWords,
+  omittedWordCount,
   retainedDuration,
   takeWords,
   wordAtPlayhead,
@@ -246,7 +247,7 @@ export function docSignature(p) {
         + ":" + effectiveWords(p, source.id).map((word) => word.text).join(" ");
     }).join("|") + "|" + (p.preparation ? p.preparation.status : "");
   }
-  return "prose|" + p.scenes.map((scene) =>
+  return "prose|" + sourceDocSignature(p) + "|" + p.scenes.map((scene) =>
     scene.id + ":" + scene.takes.map((take) =>
       take.id + ":" + takeWords(p, scene, take).map((word) =>
         word.id + "," + (word.display || word.text)
@@ -257,8 +258,22 @@ export function docSignature(p) {
     // sem tocar palavras — sem isso o chip continuaria exibindo o antigo.
     + ":s" + (scene.support || []).map((entry) =>
       entry.visualId + "@" + entry.offsetFrames + "+" + entry.durationFrames,
-    ).join(","),
+    ).join(",") + JSON.stringify([scene.objective, scene.rationale, scene.gaps, scene.takes]),
   ).join("||");
+}
+
+// Metadados compartilhados; o catálogo omitido só entra na assinatura local
+// das zonas abertas. Fechadas, elas dependem apenas da contagem.
+const sourceSignatures = new WeakMap();
+function sourceDocSignature(p) {
+  const deps = [p.assembly.sources, p.assembly.fps, p.analyses, p.corrections];
+  const cached = sourceSignatures.get(p);
+  if (cached && cached.deps.every((dep, i) => dep === deps[i])) return cached.signature;
+  const signature = JSON.stringify([p.assembly.sources, p.assembly.fps,
+    (p.analyses || []).map((analysis) => (analysis.visual || []).map((span) => [span.id, span.sourceId])),
+  ]);
+  sourceSignatures.set(p, { deps, signature });
+  return signature;
 }
 
 /** Rótulo pt-BR de um token do accept do filePicker (puro). */
@@ -418,74 +433,67 @@ function chipHtml(p, scene, support, index) {
     + ICON.image + esc(name) + " · " + esc(seconds1(dur)) + "</button>";
 }
 
-function renderProse(p, selection) {
+function renderScene(p, scene, index, selection) {
   let html = "";
   const { starts } = montageWordTimes(p);
-  p.scenes.forEach((scene, index) => {
-    html += '<section class="scene" id="cena-' + esc(scene.id) + '" data-scene-section="' + esc(scene.id) + '">';
-    html += '<header class="scene-head" data-scene="' + esc(scene.id) + '">'
-      + '<span class="num">' + (index + 1) + "</span>"
-      + '<h2 class="title">' + esc(scene.objective || "Cena " + (index + 1)) + "</h2>"
+  html += '<header class="scene-head" data-scene="' + esc(scene.id) + '">'
+    + '<span class="num">' + (index + 1) + "</span>"
+    + '<h2 class="title">' + esc(scene.objective || "Cena " + (index + 1)) + "</h2>"
+    + '<span class="spacer"></span>'
+    + '<span class="pill mono">' + esc(sceneRangeLabel(p, scene)) + "</span>"
+    + '<button type="button" class="icon" data-scene-menu="' + esc(scene.id) + '" aria-haspopup="menu"'
+    + ' aria-expanded="false" aria-label="Ações da cena ' + (index + 1) + '">' + ICON.more + "</button></header>";
+  html += '<div class="scene-body">';
+  if (scene.rationale) html += '<p class="scene-note">' + esc(scene.rationale) + "</p>";
+  for (const gap of scene.gaps) html += '<p class="scene-gap">Lacuna: ' + esc(gap) + "</p>";
+  // Âncoras de apoio: índice plano da primeira palavra com tempo de
+  // montagem >= início do apoio; sem palavra depois, cai no fim da cena.
+  const flat = [];
+  for (const take of scene.takes) {
+    for (const word of takeWords(p, scene, take)) {
+      flat.push({ takeId: take.id, time: starts.get(selectionKey(scene.id, take.id, word.id)) ?? null });
+    }
+  }
+  const anchors = new Map();
+  scene.support
+    .map((support, i) => ({ support, i, t: supportMontageStart(p, scene, support) }))
+    .sort((a, b) => a.t - b.t)
+    .forEach((chip) => {
+      let at = flat.findIndex((entry) => entry.time != null && entry.time >= chip.t);
+      if (at < 0) at = flat.length;
+      if (!anchors.has(at)) anchors.set(at, []);
+      anchors.get(at).push(chip);
+    });
+  const chipAt = (pos) => (anchors.get(pos) || [])
+    .map((chip) => chipHtml(p, scene, chip.support, chip.i) + " ").join("");
+  let pos = 0;
+  for (const take of scene.takes) {
+    const source = p.assembly.sources.find((item) => item.id === take.sourceId);
+    html += '<div class="take"><p class="prose">';
+    for (const word of takeWords(p, scene, take)) {
+      html += chipAt(pos) + wordButton(scene, take.id, word, selection) + " ";
+      pos += 1;
+    }
+    html += '</p><span class="src-chip">' + esc(source ? source.name : take.sourceId) + " · "
+      + esc(take.start.toFixed(1).replace(".", ",")) + "–" + esc(take.end.toFixed(1).replace(".", ",")) + " s</span></div>";
+  }
+  html += chipAt(pos) + "</div>";
+  // Zonas omitidas: resumo com "Incluir trecho" (inclui tudo de uma vez) e
+  // o texto recolhido; palavra a palavra continua no menu ouvir/incluir.
+  for (const source of p.assembly.sources) {
+    const count = omittedWordCount(p, scene, source.id);
+    if (!count) continue;
+    html += '<div class="unused"><div class="unused-head"><span>Trecho não usado</span>'
+      + '<span class="mono">' + esc(source.name) + " · " + count + (count === 1 ? " palavra" : " palavras") + "</span>"
       + '<span class="spacer"></span>'
-      + '<span class="pill mono">' + esc(sceneRangeLabel(p, scene)) + "</span>"
-      + '<button type="button" class="icon" data-scene-menu="' + esc(scene.id) + '" aria-haspopup="menu"'
-      + ' aria-expanded="false" aria-label="Ações da cena ' + (index + 1) + '">' + ICON.more + "</button></header>";
-    html += '<div class="scene-body">';
-    if (scene.rationale) html += '<p class="scene-note">' + esc(scene.rationale) + "</p>";
-    for (const gap of scene.gaps) html += '<p class="scene-gap">Lacuna: ' + esc(gap) + "</p>";
-    // Âncoras de apoio: índice plano da primeira palavra com tempo de
-    // montagem >= início do apoio; sem palavra depois, cai no fim da cena.
-    const flat = [];
-    for (const take of scene.takes) {
-      for (const word of takeWords(p, scene, take)) {
-        flat.push({ takeId: take.id, time: starts.get(selectionKey(scene.id, take.id, word.id)) ?? null });
-      }
-    }
-    const anchors = new Map();
-    scene.support
-      .map((support, i) => ({ support, i, t: supportMontageStart(p, scene, support) }))
-      .sort((a, b) => a.t - b.t)
-      .forEach((chip) => {
-        let at = flat.findIndex((entry) => entry.time != null && entry.time >= chip.t);
-        if (at < 0) at = flat.length;
-        if (!anchors.has(at)) anchors.set(at, []);
-        anchors.get(at).push(chip);
-      });
-    const chipAt = (pos) => (anchors.get(pos) || [])
-      .map((chip) => chipHtml(p, scene, chip.support, chip.i) + " ").join("");
-    let pos = 0;
-    for (const take of scene.takes) {
-      const source = p.assembly.sources.find((item) => item.id === take.sourceId);
-      html += '<div class="take"><p class="prose">';
-      for (const word of takeWords(p, scene, take)) {
-        html += chipAt(pos) + wordButton(scene, take.id, word, selection) + " ";
-        pos += 1;
-      }
-      html += '</p><span class="src-chip">' + esc(source ? source.name : take.sourceId) + " · "
-        + esc(take.start.toFixed(1).replace(".", ",")) + "–" + esc(take.end.toFixed(1).replace(".", ",")) + " s</span></div>";
-    }
-    html += chipAt(pos) + "</div>";
-    // Zonas omitidas: resumo com "Incluir trecho" (inclui tudo de uma vez) e
-    // o texto recolhido; palavra a palavra continua no menu ouvir/incluir.
-    for (const source of p.assembly.sources) {
-      const missing = omittedWords(p, scene, source.id);
-      if (!missing.length) continue;
-      html += '<div class="unused"><div class="unused-head"><span>Trecho não usado</span>'
-        + '<span class="mono">' + esc(source.name) + " · " + missing.length + (missing.length === 1 ? " palavra" : " palavras") + "</span>"
-        + '<span class="spacer"></span>'
-        + '<button type="button" class="small" data-include-zone data-scene="' + esc(scene.id) + '" data-source="' + esc(source.id) + '">Incluir trecho</button></div>'
-        + '<details><summary>Ver o texto</summary><p class="prose">';
-      for (const word of missing) {
-        html += wordButton(scene, "", word, selection, " omit", ' data-source="' + esc(source.id) + '"') + " ";
-      }
-      html += "</p></details></div>";
-    }
-    html += "</section>";
-  });
+      + '<button type="button" class="small" data-include-zone data-scene="' + esc(scene.id) + '" data-source="' + esc(source.id) + '">Incluir trecho</button></div>'
+      + '<details data-omitted-source="' + esc(source.id) + '" data-scene="' + esc(scene.id) + '">'
+      + '<summary>Ver o texto</summary><p class="prose"></p></details></div>';
+  }
   return html;
 }
 
-function renderCenter(p, selection) {
+function renderCenter(p) {
   const texto = document.getElementById("texto");
   const dropzone = document.getElementById("dropzone");
   if (!p || !texto || !dropzone) return;
@@ -508,7 +516,7 @@ function renderCenter(p, selection) {
   // wrapper .measure; os gestos continuam no #texto, então trocar os filhos
   // não afeta a delegação.
   texto.innerHTML = '<div class="measure">'
-    + (p.scenes.length === 0 ? transcriptHtml(p) : renderProse(p, selection))
+    + transcriptHtml(p)
     + "</div>";
   if (scroller) scroller.scrollTop = top;
   if (focusedKey) {
@@ -519,12 +527,265 @@ function renderCenter(p, selection) {
   }
 }
 
-/** Atualiza aria-pressed sem re-render (gestos mantêm o DOM). */
-function paintSelection(root, selection) {
-  for (const btn of root.querySelectorAll("button.word")) {
+const wordIndexes = new WeakMap();
+
+function wordIndex(root) {
+  if (!wordIndexes.has(root)) wordIndexes.set(root, { buttons: new Map(), selected: new Set() });
+  return wordIndexes.get(root);
+}
+
+/** O índice contém apenas as ocorrências montadas, atualizado por região. */
+function indexWords(root, region, add) {
+  const { buttons } = wordIndex(root);
+  for (const btn of region.querySelectorAll("button.word")) {
     const key = selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.wordId);
-    btn.setAttribute("aria-pressed", selection.has(key) ? "true" : "false");
+    if (add) buttons.set(key, btn);
+    else buttons.delete(key);
   }
+}
+
+/** Atualiza só as ocorrências cuja marca mudou, sem varrer o documento. */
+function paintSelection(root, selection) {
+  const index = wordIndex(root);
+  for (const key of index.selected) {
+    if (!selection.has(key)) index.buttons.get(key)?.setAttribute("aria-pressed", "false");
+  }
+  for (const key of selection) {
+    if (!index.selected.has(key)) index.buttons.get(key)?.setAttribute("aria-pressed", "true");
+  }
+  index.selected = new Set(selection);
+}
+
+/**
+ * Cascas permanentes mantêm os ids usados pelo rail e pela faixa. Só a cena
+ * visível e suas vizinhas têm conteúdo; ao sair, sua altura medida ocupa o
+ * lugar do texto. A seleção continua sendo a mesma Set do estado, inclusive
+ * para ocorrências que estão temporariamente fora do DOM.
+ */
+function sceneDocument(root, selection, didPaint) {
+  const measure = document.createElement("div");
+  measure.className = "measure";
+  root.replaceChildren(measure);
+  const previousAnchoring = root.style.overflowAnchor;
+  root.style.overflowAnchor = "none";
+  let project;
+  let entries = [];
+  let forcedScene = null;
+  let restoringFocusScene = null;
+  let frame = null;
+  let disposed = false;
+  const expanded = new Map();
+
+  function anchor() {
+    const top = root.getBoundingClientRect().top;
+    const entry = entries.find((item) => item.el.getBoundingClientRect().bottom > top);
+    return entry ? { el: entry.el, offset: entry.el.getBoundingClientRect().top - top } : null;
+  }
+
+  function restoreAnchor(saved, scrollTop) {
+    root.scrollTop = saved && root.contains(saved.el)
+      ? scrollTop + saved.el.getBoundingClientRect().top - root.getBoundingClientRect().top - saved.offset
+      : scrollTop;
+  }
+
+  function estimate(scene) {
+    const width = Math.max(120, Math.min(640, root.clientWidth || 640) - 32);
+    const words = scene.takes.reduce((sum, take) => sum + takeWords(project, scene, take).length, 0);
+    const zones = project.assembly.sources.filter((source) => omittedWordCount(project, scene, source.id) > 0).length;
+    return 60 + Math.ceil(words * 80 / width) * 34 + scene.takes.length * 34
+      + (scene.rationale ? 40 : 0) + scene.gaps.length * 24 + zones * 100;
+  }
+
+  function fillOmitted(details, scene) {
+    const prose = details.querySelector(".prose");
+    indexWords(root, prose, false);
+    prose.innerHTML = details.open
+      ? omittedWords(project, scene, details.dataset.omittedSource).map((word) =>
+        wordButton(scene, "", word, selection(), " omit", ' data-source="' + esc(details.dataset.omittedSource) + '"') + " ",
+      ).join("")
+      : "";
+    indexWords(root, prose, true);
+  }
+
+  function viewSignature(entry) {
+    return entry.baseSignature + JSON.stringify([
+      entry.scene.takes.map((take) => takeWords(project, entry.scene, take)),
+      project.assembly.sources.map((source) => omittedWordCount(project, entry.scene, source.id)),
+      [...(expanded.get(entry.scene.id) || [])].map((sourceId) => omittedWords(project, entry.scene, sourceId)),
+    ]);
+  }
+
+  function mount(entry) {
+    const active = document.activeElement;
+    const focused = entry.el.contains(active) ? active?.dataset : null;
+    const focusKey = focused?.wordId !== undefined
+      ? selectionKey(focused.scene, focused.take, focused.wordId) : null;
+    indexWords(root, entry.el, false);
+    entry.el.style.height = "";
+    entry.el.innerHTML = renderScene(project, entry.scene, entry.index, selection());
+    entry.el.dataset.sceneMounted = "true";
+    entry.mounted = true;
+    entry.dirty = false;
+    for (const details of entry.el.querySelectorAll("details[data-omitted-source]")) {
+      if (!expanded.get(entry.scene.id)?.has(details.dataset.omittedSource)) continue;
+      details.open = true;
+      fillOmitted(details, entry.scene);
+    }
+    indexWords(root, entry.el, true);
+    if (focusKey) wordIndex(root).buttons.get(focusKey)?.focus({ preventScroll: true });
+  }
+
+  function unmount(entry) {
+    const height = entry.el.getBoundingClientRect().height;
+    if (height > 0) entry.height = height;
+    indexWords(root, entry.el, false);
+    entry.el.style.height = entry.height + "px";
+    entry.el.replaceChildren();
+    entry.el.dataset.sceneMounted = "false";
+    entry.mounted = false;
+    // A assinatura pode conter o catálogo omitido inteiro. A remontagem
+    // recalcula esse valor, então não retenha sua cópia fora do DOM.
+    entry.signature = null;
+  }
+
+  function refresh() {
+    if (disposed || !project) return;
+    const saved = anchor();
+    const scrollTop = root.scrollTop;
+    const viewport = root.getBoundingClientRect();
+    const visible = entries.filter((entry) => {
+      const rect = entry.el.getBoundingClientRect();
+      return root.clientHeight > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom;
+    });
+    const wanted = new Set();
+    // Região escondida ou ainda sem layout: começa com duas cenas.
+    for (const entry of visible.length ? visible : entries.slice(0, 1)) {
+      for (let i = Math.max(0, entry.index - 1); i <= Math.min(entries.length - 1, entry.index + 1); i += 1) wanted.add(entries[i]);
+    }
+    const forced = entries.find((entry) => entry.scene.id === forcedScene);
+    if (forced) {
+      for (let i = Math.max(0, forced.index - 1); i <= Math.min(entries.length - 1, forced.index + 1); i += 1) wanted.add(entries[i]);
+    }
+    for (const entry of entries) {
+      // Foco de teclado não desaparece quando a pessoa rola com o ponteiro.
+      if (entry.scene.id === restoringFocusScene
+        || (entry.mounted && entry.el.contains(document.activeElement))) wanted.add(entry);
+      if (wanted.has(entry)) {
+        if (!entry.mounted || entry.dirty) {
+          const signature = viewSignature(entry);
+          if (!entry.mounted || entry.signature !== signature) mount(entry);
+          entry.signature = signature;
+          entry.dirty = false;
+        }
+        const height = entry.el.getBoundingClientRect().height;
+        if (height > 0) entry.height = height;
+      } else if (entry.mounted) unmount(entry);
+    }
+    restoreAnchor(saved, scrollTop);
+    didPaint();
+  }
+
+  function schedule() {
+    if (disposed || frame !== null) return;
+    if (typeof requestAnimationFrame !== "function") { refresh(); return; }
+    frame = requestAnimationFrame(() => { frame = null; refresh(); });
+  }
+
+  function onScroll() {
+    forcedScene = null;
+    schedule();
+  }
+
+  function onToggle(ev) {
+    const details = ev.target;
+    if (!details?.hasAttribute?.("data-omitted-source")) return;
+    const entry = entries.find((item) => item.scene.id === details.dataset.scene);
+    if (!entry?.el.contains(details)) return;
+    if (!expanded.has(entry.scene.id)) expanded.set(entry.scene.id, new Set());
+    const sources = expanded.get(entry.scene.id);
+    const wasOpen = sources.has(details.dataset.omittedSource);
+    if (wasOpen === details.open) return;
+    if (details.open) sources.add(details.dataset.omittedSource);
+    else sources.delete(details.dataset.omittedSource);
+    const saved = anchor();
+    const top = root.scrollTop;
+    fillOmitted(details, entry.scene);
+    entry.signature = viewSignature(entry);
+    entry.height = entry.el.getBoundingClientRect().height || entry.height;
+    restoreAnchor(saved, top);
+    refresh();
+  }
+
+  root.addEventListener("scroll", onScroll, { passive: true });
+  // toggle não propaga; a captura permite delegar também aos details novos.
+  root.addEventListener("toggle", onToggle, true);
+  window.addEventListener("resize", schedule);
+  const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+  observer?.observe(root);
+  observer?.observe(measure);
+
+  return {
+    update(p) {
+      const saved = anchor();
+      const top = root.scrollTop;
+      // insertBefore pode desfocar o subtree no navegador. Capture antes de
+      // reordenar as cascas, inclusive para mover cena e desfazer.
+      const active = document.activeElement;
+      const focused = root.contains(active) && active?.dataset?.wordId !== undefined
+        ? { scene: active.dataset.scene,
+          key: selectionKey(active.dataset.scene, active.dataset.take, active.dataset.wordId) } : null;
+      restoringFocusScene = focused?.scene ?? null;
+      project = p;
+      const sources = sourceDocSignature(p);
+      const old = new Map(entries.map((entry) => [entry.scene.id, entry]));
+      entries = p.scenes.map((scene, index) => {
+        const signature = sources + JSON.stringify([scene, index, sceneMontageStart(p, scene.id)]);
+        let entry = old.get(scene.id);
+        if (!entry) {
+          const el = document.createElement("section");
+          el.className = "scene";
+          el.id = "cena-" + scene.id;
+          el.dataset.sceneSection = scene.id;
+          el.dataset.sceneMounted = "false";
+          entry = { el, mounted: false, height: estimate(scene) };
+          el.style.height = entry.height + "px";
+        }
+        entry.dirty = true;
+        entry.baseSignature = signature;
+        entry.scene = scene;
+        entry.index = index;
+        old.delete(scene.id);
+        return entry;
+      });
+      for (const [id, entry] of old) {
+        indexWords(root, entry.el, false);
+        entry.el.remove();
+        expanded.delete(id);
+      }
+      entries.forEach((entry, index) => {
+        if (measure.children[index] !== entry.el) measure.insertBefore(entry.el, measure.children[index] || null);
+      });
+      restoreAnchor(saved, top);
+      refresh();
+      if (focused) wordIndex(root).buttons.get(focused.key)?.focus({ preventScroll: true });
+      restoringFocusScene = null;
+      schedule();
+    },
+    ensure(sceneId) {
+      forcedScene = sceneId;
+      refresh();
+    },
+    destroy() {
+      disposed = true;
+      if (frame !== null) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      root.removeEventListener("scroll", onScroll);
+      root.removeEventListener("toggle", onToggle, true);
+      window.removeEventListener?.("resize", schedule);
+      root.style.overflowAnchor = previousAnchoring;
+      wordIndexes.delete(root);
+    },
+  };
 }
 
 /**
@@ -650,16 +911,35 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   const selection = () => state.get("selection") || new Set();
 
   let lastSig = null;
+  let prose = null;
+  let activeWord = null;
   function render(p, sig = p ? docSignature(p) : null) {
     if (!p) return;
     paintMeta(p);
     if (sig === lastSig) {
       const el = root();
+      // Mesmo conteúdo visível pode trazer um catálogo omitido mais recente.
+      // Atualiza a foto e só as regiões cuja assinatura local mudou.
+      prose?.update(p);
       if (el) paintSelection(el, selection());
       return;
     }
     lastSig = sig;
-    renderCenter(p, selection());
+    const el = root();
+    if (el && !needsEmptyGuide(p) && p.scenes.length > 0) {
+      const dropzone = document.getElementById("dropzone");
+      if (dropzone) dropzone.hidden = true;
+      if (!prose) prose = sceneDocument(el, selection, () => {
+        paintCurrentScene();
+        paintPlayhead(state.get("playhead"));
+      });
+      prose.update(p);
+    } else {
+      prose?.destroy();
+      prose = null;
+      if (el) wordIndexes.delete(el);
+      renderCenter(p);
+    }
     paintCurrentScene();
     paintProposalBanner(p, state.get("speechProposal"));
     paintSupportSwap(state.get("supportSwap"));
@@ -1328,6 +1608,9 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   state.subscribe("project", (p) => {
     if (!p) {
       if (closeMenu) closeMenu();
+      prose?.destroy();
+      prose = null;
+      lastSig = null;
       return;
     }
     const pruned = pruneSelection(p, selection());
@@ -1350,14 +1633,17 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     if (!el || el.hidden) return;
     const hit = wordAtPlayhead(state.get("project"), playhead);
     const target = hit
-      ? el.querySelector(`button.word[data-scene="${CSS.escape(hit.sceneId)}"][data-take="${CSS.escape(hit.takeId)}"]`
-        + `[data-word-id="${CSS.escape(hit.wordId)}"]`)
+      ? wordIndex(el).buttons.get(selectionKey(hit.sceneId, hit.takeId, hit.wordId))
       : null;
-    for (const btn of el.querySelectorAll("button.word.ativa")) btn.classList.toggle("ativa", btn === target);
+    if (activeWord !== target) activeWord?.classList.remove("ativa");
     target?.classList.add("ativa");
+    activeWord = target;
   }
   state.subscribe("playhead", (t) => paintPlayhead(t));
-  state.subscribe("selectedScene", paintCurrentScene);
+  state.subscribe("selectedScene", (sceneId) => {
+    prose?.ensure(sceneId);
+    paintCurrentScene();
+  });
 
   const el = root();
   if (el) {
