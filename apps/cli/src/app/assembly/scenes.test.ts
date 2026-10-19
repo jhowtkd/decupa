@@ -214,6 +214,52 @@ it("fonte excluída sai do prompt e é rejeitada na proposta e na aprovação", 
   }], ["s1"]), p)).toThrow(/excluída do escopo/);
 });
 
+it("prompt diferencia índice de fala com erro, fonte excluída e fonte legitimamente sem fala", async () => {
+  const p = project();
+  const excluded = p.assembly.sources.find((source) => source.id === "b")!;
+  excluded.included = false;
+  excluded.hasAudio = true;
+  const noSpeech = { ...excluded, id: "c", name: "ambiente.mp4", included: true };
+  p.assembly.sources.push(noSpeech);
+  p.analyses.push({
+    sourceId: "b",
+    key: "bad-index",
+    speech: [],
+    visual: [],
+    status: "error",
+    error: "índice de fala indisponível na fonte b: JSON inválido",
+    words: [],
+    wordsStatus: "missing",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  p.analyses.push({
+    sourceId: "c",
+    key: "empty-valid-index",
+    speech: [],
+    visual: [],
+    status: "ready",
+    words: [],
+    wordsStatus: "ready",
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  let prompt = "";
+  await proposeScenes(p, "abrir", new AbortController().signal, {
+    send: async (content) => {
+      prompt = (content[0] as { text: string }).text;
+      return JSON.stringify({
+        id: "x", baseRevision: 1, changedSceneIds: [], explanation: "nada",
+        scenes: [],
+      });
+    },
+  });
+
+  expect(prompt).toContain('"id":"b"');
+  expect(prompt).toContain('"name":"apoio.mp4"');
+  expect(prompt).toContain('"speechStatus":"error","speechError":"índice de fala indisponível na fonte b: JSON inválido"');
+  expect(prompt).toContain('"speechStatus":"no-speech","speechError":null');
+  expect(prompt).toContain('fontes excluídas do escopo: ["b"]');
+});
+
 it("compila takes com exclusões sem recortar frase", () => {
   const p = takeScene();
   const compiled = compileScenes(p, p.scenes);

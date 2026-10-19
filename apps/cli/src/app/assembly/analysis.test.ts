@@ -147,6 +147,34 @@ it("fonte com áudio mas sem fala vira análise pronta e vazia", async () => {
   expect(result.words).toEqual([]);
 });
 
+it.each([
+  ["ausente", undefined],
+  ["JSON malformado", "{"],
+  ["esquema incompatível", JSON.stringify({ units: "não é uma lista" })],
+])("índice de fala %s é erro identificado na fonte", async (_label, raw) => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-bad-speech-index-"));
+  const path = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, "fonte-h1", "speech");
+  const exec: Executor = {
+    async run(call: ExecCall) {
+      if (call.args.includes("index") && raw !== undefined) {
+        const work = call.env?.CLAUDE_PROJECT_DIR;
+        if (!work) throw new Error("index sem diretório de trabalho");
+        await mkdir(join(work, "out"), { recursive: true });
+        await writeFile(join(work, "out", "speech_index.json"), raw);
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+
+  const result = await analyzeSource(source, dir, exec);
+  expect(result.status).toBe("error");
+  expect(result.speech).toEqual([]);
+  expect(result.error).toMatch(/fonte fonte-h1/);
+  expect(result.error).toMatch(raw === undefined ? /ENOENT|no such file/i : raw === "{" ? /JSON|position|fim/i : /units|unidades|estrutura/i);
+});
+
 it("preserva palavras e confiança do transcript sem inventar tempos", () => {
   const source = fixtureAssembly().sources[0]!;
   const raw = { segments: [{ words: [

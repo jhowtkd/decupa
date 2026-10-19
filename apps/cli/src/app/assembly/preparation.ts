@@ -162,7 +162,10 @@ async function renderPreview(
 }
 
 function needsAttention(project: Project): boolean {
-  const analysisError = project.analyses.some((analysis) => analysis.status === "error");
+  const includedSources = new Set(project.assembly.sources.filter((source) => source.included).map((source) => source.id));
+  const analysisError = project.analyses.some(
+    (analysis) => includedSources.has(analysis.sourceId) && analysis.status === "error",
+  );
   const missingVisual = project.analyses.flatMap((analysis) => analysis.visualCoverage.missing).length;
   const stageError = Object.values(project.preparation?.sources ?? {}).some(
     (stage) => stage.media === "error" || stage.audio === "error" || stage.visual === "error",
@@ -408,8 +411,12 @@ export async function runPreparation(
               analyses: mergeAnalyses(p.analyses, [analysis]),
               preparation: p.preparation
                 ? patchSource(p.preparation, source.id, {
-                  audio: analysis.status === "error" ? "error" : "ready",
-                  ...(analysis.status === "error" && analysis.error ? { error: analysis.error } : {}),
+                  // Só a leitura concluída do índice comprova a modalidade de
+                  // fala, inclusive quando o resultado válido é vazio.
+                  audio: analysis.status === "ready" ? "ready" : "error",
+                  error: analysis.status === "ready"
+                    ? undefined
+                    : analysis.error ?? "evidência de fala incompleta",
                 })
                 : p.preparation,
             }));
@@ -437,7 +444,7 @@ export async function runPreparation(
             continue;
           }
           if (!visualClient) continue;
-          await markSource(source.id, { visual: "running", error: undefined });
+          await markSource(source.id, { visual: "running" });
           try {
             const spans = await describeSource(source, dir, signal, {
               client: visualClient,
@@ -475,7 +482,10 @@ export async function runPreparation(
                 preparation: p.preparation
                   ? patchSource(p.preparation, source.id, {
                     visual: gap ? "pending" : "ready",
-                    error: gap,
+                    // Concluir visão não apaga a causa da falha de fala.
+                    error: p.preparation.sources[source.id]?.audio === "error"
+                      ? p.preparation.sources[source.id]?.error
+                      : gap,
                   })
                   : p.preparation,
               };
@@ -506,13 +516,20 @@ export async function runPreparation(
             if (!coverage || coverage.missing.length > 0) return true;
           }
           const analysis = current.analyses.find((item) => item.sourceId === source.id);
-          if (!analysis || analysis.status === "error") return true;
+          if (!analysis || analysis.status !== "ready") return true;
           return false;
         });
         if (blocked.length > 0) {
           return await markTerminal(
             "interrupted",
-            `análise necessária pendente nas fontes: ${blocked.map((s) => s.id).join(", ")}; retome ou exclua a fonte para prosseguir`,
+            `análise necessária pendente nas fontes: ${blocked.map((source) => {
+              const state = current.preparation?.sources[source.id];
+              const analysis = current.analyses.find((item) => item.sourceId === source.id);
+              const cause = state?.audio !== "ready" && analysis?.error
+                ? analysis.error
+                : state?.error ?? "evidência necessária incompleta";
+              return `${source.id} (${source.name}): ${cause}`;
+            }).join("; ")}; retome ou exclua a fonte para prosseguir`,
           );
         }
 

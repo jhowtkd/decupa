@@ -564,13 +564,21 @@ export async function proposeScenes(
         ...(template ? ["Use a receita editorial como orientação adaptável: preserve sentido das falas, não copie mídia nem texto da referência, não force número de cenas. Relate cada orientação ativa em templateReport:[{ruleId,status:applied|adapted|unavailable,reason,sceneIds?}] — sceneIds só quando a regra mirar cenas específicas. Animações não executadas entram em scenes[].animationNotes:[{id,description,destination:Resolve|After Effects}], nunca como efeito já produzido. Formato e duração são orientações; sinalize adaptações às configurações e ao conteúdo deste projeto.",`receita: ${JSON.stringify({id:template.id,revision:template.revision,rules:template.rules.filter(r=>r.enabled)})}`] : []),
         `briefing salvo: ${JSON.stringify(snapshot.input)}`,
         `pedido adicional: ${input}`,
-        `fontes: ${JSON.stringify(snapshot.assembly.sources.map((source) => ({
-          id: source.id,
-          name: source.name,
-          role: source.role,
-          included: source.included,
-          durationSeconds: source.durationSeconds,
-        })))}`,
+        `fontes: ${JSON.stringify(snapshot.assembly.sources.map((source) => {
+          const analysis = snapshot.analyses.find((item) => item.sourceId === source.id);
+          return {
+            id: source.id,
+            name: source.name,
+            role: source.role,
+            included: source.included,
+            durationSeconds: source.durationSeconds,
+            speechStatus: !source.hasAudio ? "not-applicable"
+              : analysis?.status === "ready" ? (analysis.speech.length > 0 ? "ready" : "no-speech")
+              : analysis ? "error" : "pending",
+            speechError: analysis?.status === "ready" ? null
+              : analysis?.error ?? (source.hasAudio ? "evidência de fala incompleta" : null),
+          };
+        }))}`,
         `unidades de fala e mapa: ${JSON.stringify({ speech, visual })}`,
         `cobertura visual: ${missingVisual} segundo(s) sem exame`,
         `fontes excluídas do escopo: ${JSON.stringify(snapshot.assembly.sources.filter((source) => !source.included).map((source) => source.id))}`,
