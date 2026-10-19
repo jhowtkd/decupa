@@ -88,6 +88,7 @@ export type DescribeDeps = {
   exec?: Executor;
   ffmpegLimit?: number;
   networkLimit?: number;
+  windowLimit?: number;
   pools?: VisualPools;
   isCurrent?: () => boolean;
   onMetric?: (metric: VisualMetric) => void;
@@ -330,10 +331,11 @@ async function describeSourceUnqueued(
   await mkdir(cacheDir, { recursive: true });
 
   if (signal.aborted) throw new Error("descrição visual cancelada");
-  const pool = deps?.pools ?? (deps?.ffmpegLimit != null || deps?.networkLimit != null
+  const pool = deps?.pools ?? (deps?.ffmpegLimit != null || deps?.networkLimit != null || deps?.windowLimit != null
     ? createVisualPools({
       ffmpegLimit: deps.ffmpegLimit ?? 2,
       networkLimit: deps.networkLimit ?? 2,
+      windowLimit: deps.windowLimit,
     })
     : sharedVisualPools());
   const windows = visualWindows(source.durationSeconds);
