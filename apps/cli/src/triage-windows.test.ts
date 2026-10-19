@@ -1,18 +1,45 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_VIDEO_PAYLOAD_BYTES, parseSpeechIndex, ZaiTriageModel, type StructureRequest } from "@decupa/triage";
 import { runTriage } from "./triage.ts";
 import { defaultCutWindow, planTriageWindows, prepareTriageWindows } from "./triage-windows.ts";
+
+let raizTemporaria: string | undefined;
+const diretoriosTemporarios = new Set<string>();
+
+beforeAll(async () => {
+  // PID + sufixo aleatório identificam esta execução, inclusive se ela for morta.
+  // Após kill, a recuperação é manual: confirmar que a execução terminou e
+  // remover só esta raiz exata. Não varrer /tmp nem remover por prefixo.
+  raizTemporaria = await mkdtemp(join(tmpdir(), `triage-windows-${process.pid}-`));
+});
+
+async function diretorioTemporario(prefixo: string) {
+  const dir = await mkdtemp(join(raizTemporaria!, prefixo));
+  diretoriosTemporarios.add(dir);
+  return dir;
+}
 
 beforeEach(() => {
   vi.stubEnv("ZAI_API_KEY", "test");
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+afterEach(async () => {
+  try {
+    for (const dir of diretoriosTemporarios) {
+      await rm(dir, { recursive: true, force: true });
+      diretoriosTemporarios.delete(dir);
+    }
+  } finally {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  }
+});
+
+afterAll(async () => {
+  if (raizTemporaria) await rm(raizTemporaria, { recursive: true, force: true });
 });
 
 function unidade(id: string, index: number, start: number, end: number) {
@@ -20,7 +47,7 @@ function unidade(id: string, index: number, start: number, end: number) {
 }
 
 async function videoGrande() {
-  const dir = await mkdtemp(join(tmpdir(), "triage-janela-"));
+  const dir = await diretorioTemporario("triage-janela-");
   const indexPath = join(dir, "speech_index.json");
   await writeFile(indexPath, JSON.stringify({
     source_duration: 800,
@@ -68,7 +95,7 @@ describe("triagem de vídeo longo", () => {
   });
 
   it("vídeo pequeno continua numa chamada só, com o arquivo original", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "triage-curto-"));
+    const dir = await diretorioTemporario("triage-curto-");
     const indexPath = join(dir, "speech_index.json");
     await writeFile(indexPath, JSON.stringify({
       source_duration: 20,
@@ -118,7 +145,7 @@ describe("triagem de vídeo longo", () => {
   });
 
   it("resposta {} não fica em cache e a próxima execução chama o modelo de novo", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "triage-vazio-"));
+    const dir = await diretorioTemporario("triage-vazio-");
     const indexPath = join(dir, "speech_index.json");
     await writeFile(indexPath, JSON.stringify({
       source_duration: 10,
@@ -214,7 +241,7 @@ describe("triagem ponta a ponta com silêncio longo", () => {
   const RESPOSTA = { choices: [{ finish_reason: "stop", message: { content: '{"claims":[]}' } }] };
 
   async function gravacao(units: ReturnType<typeof fala>) {
-    const dir = await mkdtemp(join(tmpdir(), "triage-silencio-"));
+    const dir = await diretorioTemporario("triage-silencio-");
     const indexPath = join(dir, "speech_index.json");
     await writeFile(indexPath, JSON.stringify({ source_duration: DURACAO, units }), "utf8");
     // Nome do proxy do app: o `ensureLightVideo` não re-transcodifica.
@@ -297,7 +324,7 @@ describe("janela acima do teto por bitrate variável", () => {
   const R1 = VIDEO_BYTES / 5400;
 
   async function gravacao(units: ReturnType<typeof fala>) {
-    const dir = await mkdtemp(join(tmpdir(), "triage-bitrate-"));
+    const dir = await diretorioTemporario("triage-bitrate-");
     const indexPath = join(dir, "speech_index.json");
     await writeFile(indexPath, JSON.stringify({ source_duration: DURACAO, units }), "utf8");
     const videoPath = join(dir, "triage-proxy.mp4");
@@ -399,7 +426,7 @@ describe("janela acima do teto por bitrate variável", () => {
 
 describe("cancelamento no recorte de janela", () => {
   it("defaultCutWindow com signal já abortado rejeita com CancelledError", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "triage-cancela-"));
+    const dir = await diretorioTemporario("triage-cancela-");
     const ac = new AbortController();
     ac.abort();
     await expect(defaultCutWindow("/nao/existe.mp4", join(dir, "j.mp4"), 0, 1, ac.signal))
@@ -407,7 +434,7 @@ describe("cancelamento no recorte de janela", () => {
   });
 
   it("prepareTriageWindows: erro genérico depois do abort vira CancelledError", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "triage-cancela-prep-"));
+    const dir = await diretorioTemporario("triage-cancela-prep-");
     const videoPath = join(dir, "v.mp4");
     await writeFile(videoPath, Buffer.alloc(VIDEO_BYTES));
     const ac = new AbortController();
