@@ -25,8 +25,8 @@ export interface AlignOptions {
  * um cursor que só anda para frente. Quando o melhor casamento pula à frente do
  * cursor, o pulo é um trecho removido.
  *
- * O ponto detectado fica atrasado em exatamente metade da janela — a última
- * janela que ainda casa é a que *começa* antes do corte. Daí a correção
+ * Nos saltos internos, o ponto detectado fica atrasado em metade da janela —
+ * a última janela que ainda casa é a que *começa* antes do corte. Daí a correção
  * `+windowMs/2`, verificada empiricamente: com ela o erro é 0 ms em fixture
  * sintético para windowMs de 200, 300 e 400.
  */
@@ -47,6 +47,8 @@ export function alignEdited(opts: AlignOptions): Interval[] {
 
   const gaps: Interval[] = [];
   let cursor = 0;
+  let rawEnd: number | undefined;
+  let editedEnd = 0;
 
   for (let editedStart = 0; editedStart + window <= edited.length; editedStart += hop) {
     const searchEnd = Math.min(cursor + lookahead, raw.length - window);
@@ -75,12 +77,26 @@ export function alignEdited(opts: AlignOptions): Interval[] {
     }
 
     if (best > cursor) {
+      // Na primeira janela o casamento já localiza o início preservado;
+      // o viés de meia janela só corrige saltos internos.
+      const bias = editedStart === 0 ? 0 : biasCorrectionMs;
       gaps.push({
-        startMs: toMs(cursor) + biasCorrectionMs,
-        endMs: toMs(best) + biasCorrectionMs,
+        startMs: toMs(cursor) + bias,
+        endMs: toMs(best) + bias,
       });
     }
     cursor = best + hop;
+    rawEnd = best + window;
+    editedEnd = editedStart + window;
+  }
+
+  if (rawEnd !== undefined) {
+    // O cursor aponta para o próximo hop, não para o fim do áudio casado.
+    // Inclui a fração final do editado que não completa outro hop.
+    const tailStart = rawEnd + (edited.length - editedEnd);
+    if (tailStart < raw.length) {
+      gaps.push({ startMs: toMs(tailStart), endMs: toMs(raw.length) });
+    }
   }
 
   return mergeIntervals(gaps, hopMs).filter(
