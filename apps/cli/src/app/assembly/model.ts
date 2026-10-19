@@ -12,7 +12,7 @@ import { extractVisualFrames } from "./frames.ts";
 import { parseModelJson, requestValidated } from "./model-response.ts";
 import type { VisualFrame, VisualWindow } from "./frames.ts";
 import { sanitizeProviderKey, visualIdentityKey } from "./visual-identity.ts";
-import type { FileCoordinator } from "@decupa/coordinator";
+import type { FileCoordinator, TaskPriority } from "@decupa/coordinator";
 import { runHeavy } from "../heavy-work.ts";
 export { sanitizeProviderKey } from "./visual-identity.ts";
 
@@ -95,6 +95,7 @@ export type DescribeDeps = {
   now?: () => number;
   profile?: VisualProfile;
   coordinator?: FileCoordinator;
+  priority?: TaskPriority;
   onQueued?: () => void;
   onStarted?: () => void;
 };
@@ -308,7 +309,7 @@ export function parseLocalSpans(text: string, source: Source, window: VisualWind
   return validateVisual(placed, source);
 }
 
-async function describeSourceUnqueued(
+export async function describeSource(
   source: Source,
   dir: string,
   signal: AbortSignal,
@@ -382,26 +383,49 @@ async function describeSourceUnqueued(
       if (signal.aborted) throw new Error("descrição visual cancelada");
       const file = cacheFile(cacheDir, window);
       let previous: VisualSpan[] = [];
-      if (identityKey) {
+      const readCached = async (): Promise<VisualSpan[] | null> => {
+        if (!identityKey) return null;
         try {
           const cached = parseWindowCache(JSON.parse(await readFile(file, "utf8")), source, window, identityKey);
-          if (cached && windowCovered(cached, window)) {
-            outcome = "cache-hit";
-            return cached;
-          }
+          if (cached && windowCovered(cached, window)) return cached;
           previous = cached ?? [];
         } catch {
           // cache miss ou inválido: processa a janela
         }
+        return null;
+      };
+      // Um hit validado não depende de render, ASR ou extrações na fila.
+      const cached = await readCached();
+      if (cached) {
+        outcome = "cache-hit";
+        return cached;
       }
       const extractQueued = now();
       let extractStarted = extractQueued;
       let frames: VisualFrame[];
       try {
-        frames = await pool.encode(async () => {
-          extractStarted = now();
-          return extractVisualFrames(source, window, exec, { signal });
-        }, { signal });
+        const extracted = await runHeavy(deps?.coordinator, {
+          stage: "visual",
+          priority: deps?.priority,
+          signal,
+          onQueued: deps?.onQueued,
+          onStarted: deps?.onStarted,
+          build: async () => {
+            // Outro trabalho pode ter publicado enquanto este aguardava CPU.
+            const ready = await readCached();
+            if (ready) return { kind: "cached" as const, spans: ready };
+            const frames = await pool.encode(async () => {
+              extractStarted = now();
+              return extractVisualFrames(source, window, exec, { signal });
+            }, { signal });
+            return { kind: "frames" as const, frames };
+          },
+        });
+        if (extracted.kind === "cached") {
+          outcome = "cache-hit";
+          return extracted.spans;
+        }
+        frames = extracted.frames;
         frameCount = frames.length;
         emit({
           phase: "extract", outcome: "ok",
@@ -454,36 +478,52 @@ async function describeSourceUnqueued(
         }
         return spans;
       }, signal);
-      signal.throwIfAborted();
-      if (deps?.isCurrent && !deps.isCurrent()) throw new Error("descrição visual obsoleta");
-      const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
-      const taken = new Set(kept.map((span) => span.id));
-      const placed = fresh.map((span) => {
-        const id = uniqueSpanId(span.id, taken);
-        taken.add(id);
-        return id === span.id ? span : { ...span, id };
+      const publish = async (): Promise<VisualSpan[]> => {
+        // A rede roda sem CPU reservada: outro cliente pode ter publicado
+        // cobertura desde a extração. Releitura, merge e rename precisam do
+        // mesmo slot para uma resposta atrasada não apagar cobertura nova.
+        const ready = await readCached();
+        signal.throwIfAborted();
+        if (deps?.isCurrent && !deps.isCurrent()) throw new Error("descrição visual obsoleta");
+        if (ready) return ready;
+        const kept = previous.filter((prev) => !fresh.some((f) => coversInterval(f, prev)));
+        const taken = new Set(kept.map((span) => span.id));
+        const placed = fresh.map((span) => {
+          const id = uniqueSpanId(span.id, taken);
+          taken.add(id);
+          return id === span.id ? span : { ...span, id };
+        });
+        const merged = profile === "compact"
+          ? [...kept, ...placed].sort(compareSpans)
+          : mergeAdjacent([...kept, ...placed]);
+        if (identityKey && configIdentity) {
+          const envelope: VisualWindowCache = {
+            version: VISUAL_CACHE_VERSION,
+            sha256: source.sha256,
+            promptVersion: VISUAL_PROMPT_VERSION,
+            model: configIdentity.model,
+            providerKey: configIdentity.providerKey,
+            identityKey,
+            inputMode: "frames",
+            sampleFps: 1,
+            window,
+            spans: merged,
+          };
+          const tmp = `${file}.${randomUUID()}.tmp`;
+          await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
+          await rename(tmp, file);
+        }
+        return merged;
+      };
+      if (!identityKey) return await publish();
+      return await runHeavy(deps?.coordinator, {
+        stage: "visual",
+        priority: deps?.priority,
+        signal,
+        onQueued: deps?.onQueued,
+        onStarted: deps?.onStarted,
+        build: publish,
       });
-      const merged = profile === "compact"
-        ? [...kept, ...placed].sort(compareSpans)
-        : mergeAdjacent([...kept, ...placed]);
-      if (identityKey && configIdentity) {
-        const envelope: VisualWindowCache = {
-          version: VISUAL_CACHE_VERSION,
-          sha256: source.sha256,
-          promptVersion: VISUAL_PROMPT_VERSION,
-          model: configIdentity.model,
-          providerKey: configIdentity.providerKey,
-          identityKey,
-          inputMode: "frames",
-          sampleFps: 1,
-          window,
-          spans: merged,
-        };
-        const tmp = `${file}.${randomUUID()}.tmp`;
-        await writeFile(tmp, `${JSON.stringify(envelope)}\n`, "utf8");
-        await rename(tmp, file);
-      }
-      return merged;
     } catch (error) {
       outcome = signal.aborted ? "cancelled" : "error";
       throw error;
@@ -495,20 +535,4 @@ async function describeSourceUnqueued(
       });
     }
   }
-}
-
-export async function describeSource(
-  source: Source,
-  dir: string,
-  signal: AbortSignal,
-  deps?: DescribeDeps,
-): Promise<VisualSpan[]> {
-  if (!deps?.coordinator) return describeSourceUnqueued(source, dir, signal, deps);
-  return runHeavy(deps.coordinator, {
-    stage: "visual",
-    signal,
-    onQueued: deps.onQueued,
-    onStarted: deps.onStarted,
-    build: () => describeSourceUnqueued(source, dir, signal, deps),
-  });
 }

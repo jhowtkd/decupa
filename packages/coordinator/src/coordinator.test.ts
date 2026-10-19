@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { getEventListeners } from "node:events";
 import { mkdir, readFile, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,6 +124,51 @@ describe("createFileCoordinator", () => {
     release();
     await blocker;
     await expect(coordinator.withSlot({ stage: "rendering" }, async () => "seguinte")).resolves.toBe("seguinte");
+  });
+
+  it("remove listeners de abort do polling depois de concluir ou cancelar", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    const coordinator = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const blocker = coordinator.withSlot({ stage: "rendering" }, () => held);
+    await waitUntil("blocker holds the slot", async () => {
+      try {
+        const waiters = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[];
+        return waiters.length === 0;
+      } catch {
+        return false;
+      }
+    });
+
+    const completes = new AbortController();
+    const completedWaiter = coordinator.withSlot({ stage: "rendering", signal: completes.signal }, () => "done");
+    await waitUntil("completed waiter polls", async () => getEventListeners(completes.signal, "abort").length > 0);
+    expect(getEventListeners(completes.signal, "abort").length).toBeGreaterThan(0);
+    release();
+    await Promise.all([blocker, completedWaiter]);
+    expect(getEventListeners(completes.signal, "abort")).toHaveLength(0);
+
+    // Repeat with cancellation while the waiter is polling behind a held slot.
+    let releaseAgain!: () => void;
+    const heldAgain = new Promise<void>((resolve) => { releaseAgain = resolve; });
+    let blockerStarted!: () => void;
+    const secondBlockerStarted = new Promise<void>((resolve) => { blockerStarted = resolve; });
+    const secondBlocker = coordinator.withSlot({ stage: "rendering" }, async () => {
+      blockerStarted();
+      await heldAgain;
+    });
+    await secondBlockerStarted;
+    const controller = new AbortController();
+    const cancelledWaiter = coordinator.withSlot({ stage: "rendering", signal: controller.signal }, () => "unreachable");
+    await waitUntil("cancelled waiter polls", async () => getEventListeners(controller.signal, "abort").length > 0);
+    controller.abort();
+    await expect(cancelledWaiter).rejects.toBeInstanceOf(CancelledError);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    releaseAgain();
+    await secondBlocker;
   });
 
   it("cancelar depois do claim não inicia o trabalho", async () => {
@@ -427,6 +473,67 @@ describe("createFileCoordinator", () => {
     release();
     expect(await Promise.all([blocker, batch, interactive])).toEqual(["blocker", "batch", "edit"]);
     expect(order).toEqual(["interactive", "batch"]);
+  });
+
+  it("lote ultrapassado uma vez entra na ordem FIFO e não sofre starvation", async () => {
+    const root = dir();
+    await mkdir(root, { recursive: true });
+    // Dois clientes independentes exercitam o marcador persistido entre processos.
+    const batchClient = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const interactiveClient = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const order: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const blocker = batchClient.withSlot({ stage: "rendering" }, () => held);
+    await waitUntil("blocker holds the slot", async () => {
+      try {
+        return (JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as unknown[]).length === 0;
+      } catch {
+        return false;
+      }
+    });
+
+    const batch = batchClient.withSlot({ stage: "rendering", priority: "batch" }, () => { order.push("batch"); });
+    await waitUntil("batch queued", async () => {
+      try {
+        const queue = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as { priority: string }[];
+        return queue.some((waiter) => waiter.priority === "batch");
+      } catch {
+        return false;
+      }
+    });
+    let releaseInteractive!: () => void;
+    let firstInteractiveStarted!: () => void;
+    const interactiveHeld = new Promise<void>((resolve) => { releaseInteractive = resolve; });
+    const interactiveStarted = new Promise<void>((resolve) => { firstInteractiveStarted = resolve; });
+    const firstInteractive = interactiveClient.withSlot({ stage: "rendering", priority: "interactive" }, async () => {
+      order.push("interactive-1");
+      firstInteractiveStarted();
+      await interactiveHeld;
+    });
+    await waitUntil("interactive overtakes batch", async () => {
+      try {
+        const queue = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as { priority: string; [key: string]: unknown }[];
+        return queue.some((waiter) => waiter.priority === "interactive");
+      } catch {
+        return false;
+      }
+    });
+    release();
+    await blocker;
+    await interactiveStarted;
+    const secondInteractive = interactiveClient.withSlot({ stage: "rendering", priority: "interactive" }, () => { order.push("interactive-2"); });
+    await waitUntil("second interactive queued", async () => {
+      try {
+        const queue = JSON.parse(await readFile(join(root, "waiters.json"), "utf8")) as { priority: string }[];
+        return queue.some((waiter) => waiter.priority === "interactive");
+      } catch {
+        return false;
+      }
+    });
+    releaseInteractive();
+    await Promise.all([firstInteractive, batch, secondInteractive]);
+    expect(order).toEqual(["interactive-1", "batch", "interactive-2"]);
   });
 
   /** Se a trava prender, apaga o arquivo para o loop antigo conseguir sair. */

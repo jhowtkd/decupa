@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createFileCoordinator } from "@decupa/coordinator";
 import { expect, it } from "vitest";
 import { runIngest, type Executor } from "./pipeline.ts";
-import { createHeavyCoordinator } from "./heavy-work.ts";
+import { createHeavyCoordinator, runHeavy } from "./heavy-work.ts";
 
 it("Projeto na home não usa o mesmo diretório da fila global", async () => {
   const home = await mkdtemp(join(tmpdir(), "decupa-heavy-home-"));
@@ -53,4 +53,41 @@ it("Projeto na home não usa o mesmo diretório da fila global", async () => {
   await promise.catch(() => undefined);
   expect(outcome).toBe("done");
   expect(workerCalled).toBe(true);
+});
+
+it("processos CLI locais compartilham o limite de CPU configurado", async () => {
+  const home = await mkdtemp(join(tmpdir(), "decupa-heavy-limit-"));
+  const first = createHeavyCoordinator({ configDir: home, env: { DECUPA_JOB_CONCURRENCY: "1" } });
+  const second = createHeavyCoordinator({ configDir: home, env: { DECUPA_JOB_CONCURRENCY: "1" } });
+  let active = 0;
+  let peak = 0;
+  const work = async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    active -= 1;
+  };
+  await Promise.all([
+    first.withSlot({ stage: "frame-extraction" }, work),
+    second.withSlot({ stage: "frame-extraction" }, work),
+  ]);
+  expect(peak).toBe(1);
+});
+
+it("runHeavy prioriza render, mantém outras etapas em lote e respeita override", async () => {
+  const seen: Array<{ stage: string; priority?: string }> = [];
+  const coordinator = {
+    async withSlot<T>(opts: { stage: string; priority?: string }, fn: () => Promise<T> | T) {
+      seen.push(opts);
+      return fn();
+    },
+  } as unknown as import("@decupa/coordinator").FileCoordinator;
+  await runHeavy(coordinator, { stage: "rendering", build: () => "render" });
+  await runHeavy(coordinator, { stage: "visual", build: () => "visual" });
+  await runHeavy(coordinator, { stage: "rendering", priority: "batch", build: () => "background render" });
+  expect(seen.map(({ stage, priority }) => [stage, priority])).toEqual([
+    ["rendering", "interactive"],
+    ["visual", "batch"],
+    ["rendering", "batch"],
+  ]);
 });

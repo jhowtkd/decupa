@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
+import { createFileCoordinator, type FileCoordinator, type TaskPriority } from "@decupa/coordinator";
 
 export type HeavyWorkOptions = {
   coordinatorDir?: string;
@@ -8,7 +8,7 @@ export type HeavyWorkOptions = {
   env: Record<string, string | undefined>;
 };
 
-/** DECUPA_JOB_CONCURRENCY controla somente o trabalho pesado compartilhado. */
+/** DECUPA_JOB_CONCURRENCY controla o trabalho local pesado; rede usa seu próprio pool. */
 export function jobConcurrency(env: Record<string, string | undefined>): number {
   const raw = env.DECUPA_JOB_CONCURRENCY;
   if (raw === undefined || raw.trim() === "") return 1;
@@ -35,6 +35,7 @@ export function runHeavy<T>(
   coordinator: FileCoordinator | undefined,
   opts: {
     stage: string;
+    priority?: TaskPriority;
     signal?: AbortSignal;
     onQueued?: () => void;
     onStarted?: () => void;
@@ -48,6 +49,9 @@ export function runHeavy<T>(
   opts.onQueued?.();
   return coordinator.withSlot({
     stage: opts.stage,
+    // Prévias pedidas no editor precedem análise em lote; o chamador pode
+    // declarar batch para renders de fundo ou interactive para análise.
+    priority: opts.priority ?? (opts.stage === "rendering" ? "interactive" : "batch"),
     signal: opts.signal,
   }, () => {
       opts.onStarted?.();
