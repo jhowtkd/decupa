@@ -1,4 +1,7 @@
 import { createTracer, type Tracer } from "@decupa/trace";
+import { TypeSafeBudget } from "./budget.ts";
+export { TypeSafeBudget, TypeSafeTimeoutError, TypeSafeBudgetExceededError, DEFAULT_TYPESAFE_TOTAL_MS, DEFAULT_TYPESAFE_MAX_CALLS } from "./budget.ts";
+export type { TypeSafeBudgetOptions } from "./budget.ts";
 
 export const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const TYPESAFE_DEFAULT_MODEL = "jev-latest";
@@ -66,6 +69,10 @@ export type TypeSafeClientOptions = {
   random?: () => number;
   retryBudgetMs?: number;
   maxRetries?: number;
+  /** Prazo por fetch, incluindo a leitura do corpo. */
+  requestTimeoutMs?: number;
+  /** A mesma instância deve acompanhar todos os pedidos da operação. */
+  budget?: TypeSafeBudget;
 };
 
 export class TypeSafeHttpError extends Error {
@@ -122,6 +129,8 @@ export class TypeSafeClient {
   private readonly random: () => number;
   private readonly retryBudgetMs: number;
   private readonly maxRetries: number;
+  private readonly requestTimeoutMs: number;
+  readonly budget: TypeSafeBudget;
 
   constructor(opts: TypeSafeClientOptions) {
     if (!opts.apiKey) {
@@ -138,6 +147,8 @@ export class TypeSafeClient {
     this.random = opts.random ?? Math.random;
     this.retryBudgetMs = opts.retryBudgetMs ?? DEFAULT_RETRY_BUDGET_MS;
     this.maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_RETRY_BUDGET_MS;
+    this.budget = opts.budget ?? new TypeSafeBudget({ now: opts.now });
   }
 
   private redact(text: string): string {
@@ -153,7 +164,9 @@ export class TypeSafeClient {
   }
 
   async decide(req: TypeSafeRequest, signal?: AbortSignal): Promise<TypeSafeResult> {
-    return this.tracer.run("typesafe", () => this.decideWithRetry(req, signal), { signal });
+    return this.tracer.run("typesafe", () => this.budget.withinTime(
+      deadlineSignal => this.decideWithRetry(req, deadlineSignal), signal, this.retryBudgetMs,
+    ), { signal });
   }
 
   private async decideWithRetry(req: TypeSafeRequest, signal?: AbortSignal): Promise<TypeSafeResult> {
@@ -161,7 +174,7 @@ export class TypeSafeClient {
     let attempt = 0;
     for (;;) {
       try {
-        return await this.once(req, signal);
+        return await this.budget.run(requestSignal => this.once(req, requestSignal), signal, this.requestTimeoutMs);
       } catch (err) {
         if (signal?.aborted) throw err;
         const status = err instanceof TypeSafeHttpError ? err.status : 0;

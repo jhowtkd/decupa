@@ -6,6 +6,7 @@ import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext,
 import { randomUUID } from "node:crypto";
 import type { Executor } from "../pipeline.ts";
 import { createAnalysisClient } from "@decupa/triage";
+import { TypeSafeBudget } from "@decupa/typesafe";
 import type {
   Assembly,
   Clip,
@@ -511,12 +512,13 @@ export async function proposeScenes(
   project: Project,
   input: string,
   signal: AbortSignal,
-  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
+  deps?: { send: (content: unknown[], signal?: AbortSignal, onAttempt?: () => void) => Promise<string>; model?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
   _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
-    send: (content: unknown[], signal?: AbortSignal) => createAnalysisClient().send(content, signal),
+    send: (content: unknown[], signal?: AbortSignal, onAttempt?: () => void) => createAnalysisClient().send(content, signal, onAttempt),
   };
+  const budget = deps?.decision?.budget ?? new TypeSafeBudget();
   // Snapshot profundo: mutação do chamador durante o send não contamina
   // nem o prompt nem a validação.
   const snapshot: Project = structuredClone(project);
@@ -587,7 +589,9 @@ export async function proposeScenes(
       ].join("\n\n"),
     },
   ];
-  const generated = await requestValidated(content, (parts, requestSignal) => client.send(parts, requestSignal), (text) => {
+  const generated = await requestValidated(content, (parts, requestSignal) => budget.run(
+    (deadlineSignal, onAttempt) => client.send(parts, deadlineSignal, onAttempt), requestSignal,
+  ), (text) => {
     const raw = parseModelJson(text) as Record<string, unknown>;
     if (Array.isArray(raw.scenes)) raw.scenes = raw.scenes.map((item: Record<string, unknown>) => {
       const previous = snapshot.scenes.find(s => s.id === item.id);

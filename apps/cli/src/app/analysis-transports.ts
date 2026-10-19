@@ -33,10 +33,10 @@ export function resolveAppTransports(opts: TransportOptions) {
     textKey = JSON.stringify([resolved.model, sanitizeProviderKey(resolved.baseUrl), payloadProfileKey({ ...resolved, inputMode: "text" })]);
     // recipe-v1 usava este objeto e esta ordem de campos na chave do diretório.
     if (resolved.profile !== "openai-reasoning-medium") legacyModelKey = JSON.stringify({ model: resolved.model, providerKey: resolved.baseUrl });
-    textSend = (content, signal) => text.send(content, signal);
+    textSend = (content, signal, onAttempt) => text.send(content, signal, onAttempt);
   } catch (error) {
     let text: OpenAiCompatClient | undefined;
-    textSend = async (content, signal) => {
+    textSend = async (content, signal, onAttempt) => {
       // A primeira configuração pela tela ainda funciona sem reiniciar. Só
       // a credencial recém-gravada é relida; o ambiente segue o da subida.
       if (!text) {
@@ -44,7 +44,7 @@ export function resolveAppTransports(opts: TransportOptions) {
         if (!stored) throw error;
         text = new OpenAiCompatClient(assemblyTextClientOptions({ stored, env, fetchImpl: opts.fetchImpl }));
       }
-      return text.send(content, signal);
+      return text.send(content, signal, onAttempt);
     };
   }
   let visualClient: VisualClient;
