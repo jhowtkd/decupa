@@ -27,7 +27,7 @@ async function source(dir: string): Promise<string> {
 }
 
 /** Corta com o comando no formato do `_cut_segment` do motor e junta pelo wrapper. */
-async function render(src: string, out: string, fixStart: boolean): Promise<void> {
+async function render(src: string, out: string, fixStart: boolean, repeats = 1): Promise<void> {
   const code = `
 import json, subprocess
 from pathlib import Path
@@ -48,7 +48,7 @@ for n, (a, b) in enumerate(clips):
         cmd = start_at_zero(cmd)
     subprocess.run(cmd, check=True)
     segs.append({"path": str(p)})
-assert concat_video_copy(segs, ${JSON.stringify(out)}, crf=18) is None
+assert concat_video_copy(segs * ${repeats}, ${JSON.stringify(out)}, crf=18) is None
 print("ok")
 `;
   await run(PYTHON, ["-c", code], { env: { ...process.env, PYTHONPATH: SCRIPTS } });
@@ -86,23 +86,36 @@ async function events(path: string): Promise<{ flashes: number[]; beeps: number[
   return { flashes, beeps };
 }
 
-function offsetsMs(ev: { flashes: number[]; beeps: number[] }): number[] {
-  return ev.flashes.map((f) => {
-    const near = ev.beeps.reduce((best, b) => (Math.abs(b - f) < Math.abs(best - f) ? b : best), Infinity);
-    return (near - f) * 1000;
+function syncOffsets(ev: { flashes: number[]; beeps: number[] }): { flash: number; beep: number; offsetMs: number }[] {
+  return ev.flashes.map((flash) => {
+    const beep = ev.beeps.reduce((best, candidate) => (
+      Math.abs(candidate - flash) < Math.abs(best - flash) ? candidate : best
+    ), Infinity);
+    return { flash, beep, offsetMs: (beep - flash) * 1000 };
   });
 }
 
-it("segmentos começando em zero: duração do plano e áudio em sincronia após a junção", async () => {
+function syncDiagnostic(offsets: ReturnType<typeof syncOffsets>): string {
+  const worst = offsets.reduce((best, offset) => (
+    Math.abs(offset.offsetMs) > Math.abs(best.offsetMs) ? offset : best
+  ));
+  const sequence = offsets.map(({ offsetMs }) => offsetMs.toFixed(2)).join(", ");
+  return `desvio máximo ${Math.abs(worst.offsetMs).toFixed(2)} ms na ocorrência ${offsets.indexOf(worst) + 1}`
+    + ` (flash ${worst.flash.toFixed(3)} s, bipe ${worst.beep.toFixed(3)} s); sequência de desvios [${sequence}] ms`;
+}
+
+it.each([1, 4])("segmentos começando em zero: duração e sincronismo após %i sequência(s) de 5 cortes", async (repeats) => {
   const dir = await mkdtemp(join(tmpdir(), "segment-timing-"));
   const src = await source(dir);
   const out = join(dir, "fixed.mp4");
-  await render(src, out, true);
-  expect(Math.abs(await duration(out) - EXPECTED)).toBeLessThan(FRAME);
+  await render(src, out, true, repeats);
+  expect(Math.abs(await duration(out) - EXPECTED * repeats)).toBeLessThan(FRAME);
   const ev = await events(out);
-  expect(ev.flashes.length).toBeGreaterThanOrEqual(8);
+  expect(ev.flashes.length).toBeGreaterThanOrEqual(8 * repeats);
   expect(ev.beeps).toHaveLength(ev.flashes.length);
-  for (const ms of offsetsMs(ev)) expect(Math.abs(ms)).toBeLessThan(FRAME * 1000);
+  const offsets = syncOffsets(ev);
+  const maxOffsetMs = Math.max(...offsets.map(({ offsetMs }) => Math.abs(offsetMs)));
+  expect(maxOffsetMs, syncDiagnostic(offsets)).toBeLessThan(FRAME * 1000);
 }, 120_000);
 
 it("com o make_zero do motor a exportação cresce a cada corte e o áudio escorrega", async () => {
@@ -113,6 +126,7 @@ it("com o make_zero do motor a exportação cresce a cada corte e o áudio escor
   // Cada corte acrescenta a folga do atraso de B-frames/priming (~23 ms aqui):
   // em 5 cortes já passa de 2 quadros.
   expect(await duration(out) - EXPECTED).toBeGreaterThan(2 * FRAME);
-  const offsets = offsetsMs(await events(out));
-  expect(Math.max(...offsets.map(Math.abs))).toBeGreaterThan(FRAME * 1000);
+  const offsets = syncOffsets(await events(out));
+  const maxOffsetMs = Math.max(...offsets.map(({ offsetMs }) => Math.abs(offsetMs)));
+  expect(maxOffsetMs, syncDiagnostic(offsets)).toBeGreaterThan(FRAME * 1000);
 }, 120_000);

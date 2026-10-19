@@ -8,15 +8,17 @@ on:
 jobs:
   test:
     # A suíte básica é portátil: os fixtures saem do FFmpeg (lavfi) e nada mais
-    # chama `say`, então macOS e Windows rodam exatamente os mesmos testes. O
-    # motor de condense não é clonado no CI — os testes de preflight usam motor
+    # chama `say`, então Linux, macOS e Windows rodam a suíte completa. Linux
+    # acompanha a base Ubuntu da VPS/Docker. Certificação e pendências por SO:
+    # docs/plataformas-suportadas.md. O motor de condense não é clonado antes
+    # da suíte JS — os testes de preflight usam motor
     # falso em tmpdir, e o gold do motor (tests/engine-gold.test.ts) se pula
     # sozinho quando ele falta. WhisperX/modelos também não são baixados aqui:
     # os testes do doctor usam dependências fake.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # Chaves de IA vazias de propósito: nenhum teste pode depender de credencial
     # real, e tests/assembly-flow.test.ts exige que elas sejam falsy.
@@ -29,6 +31,12 @@ jobs:
       TYPESAFE_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
+
+      - name: instalar ffmpeg (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
 
       - name: instalar ffmpeg (macOS)
         if: matrix.os == 'macos-latest'
@@ -50,18 +58,31 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm smoke
-      - run: pnpm test
-
-      # Testes Python com mocks: não baixam modelo nem precisam dos venvs dos
-      # sidecars (WhisperX, MediaPipe), só da biblioteca padrão.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: versões efetivas do ambiente
+        shell: bash
+        run: |
+          {
+            printf '### Ambiente de validação (%s)\n\n```text\n' '${{ runner.os }}'
+            node --version
+            pnpm --version
+            python --version
+            ffmpeg -version
+            ffprobe -version
+            printf '```\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm smoke
+      - run: pnpm test --maxWorkers=2
+
+      # Testes Python com mocks: não baixam modelo nem precisam dos venvs dos
+      # sidecars (WhisperX, MediaPipe), só da biblioteca padrão.
       # Um passo por comando: no Windows o pwsh só olha o código do último
       # comando do script, e a falha da fala sumiria atrás do passo da visão.
       - name: testes Python da fala
@@ -71,10 +92,10 @@ jobs:
         run: python -m unittest discover -s services/vision -p "test_*.py"
 
       # O render importa o motor, clonado do bundle do repositório sem rede.
-      # Só no macOS: a prova de recursos lê a árvore de processos pelo `ps` e
-      # usa sinais POSIX.
+      # Linux e macOS: a prova de recursos lê a árvore pelo `ps` e usa sinais
+      # POSIX. Windows continua com os testes JS e Python dos sidecars.
       - name: testes Python do render
-        if: matrix.os == 'macos-latest'
+        if: runner.os != 'Windows'
         run: |
           node scripts/setup.mjs --engine-only
           python -m unittest discover -s scripts -p "test_render_*.py"

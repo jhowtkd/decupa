@@ -92,6 +92,11 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 
 ## 6. Situação por plataforma
 
+Para o servidor Linux/VPS e a certificação atual do CI, consulte a
+[política de plataformas suportadas](../plataformas-suportadas.md). A tabela
+abaixo preserva o aceite histórico do setup local; a matriz ordinária atual
+inclui Linux, macOS e Windows, com pendências por sistema documentadas na política.
+
 | Sistema | Situação nesta referência |
 |---|---|
 | macOS arm64 | Aceite real em 14/09/2026 (commit `5c9bd89`): **aprovados** setup novo (44 s com caches quentes) e repetido (4 s, idempotente), proteção do motor com recusa WIP, caminhos com espaços, servidor de montagem (GET 200, SIGINT/Ctrl+C com porta fechada, porta ocupada com erro claro, reabertura), fala local PT-BR (ingestão de vídeo de 107 s em 158 s, sem chamada remota) e MP4 baseline do `assembly-proof`. Pendências: a asserção do `assembly-proof` em 29,97 fps falha por 1 frame (achado preexistente, código não mudado nesta branch) e a suíte completa/CI remota não rodaram no clone de aceite. Na 1ª rodada (`029bd6e`) o setup falhava ao localizar o npm do Node Homebrew — corrigido em `5c9bd89`. Detalhes na [evidência](../superpowers/evidence/2026-09-14-setup-simplificado.md). |

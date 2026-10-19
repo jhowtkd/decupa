@@ -82,6 +82,24 @@ it("concatena copiando o vídeo dos segmentos e recodifica só o áudio", async 
   expect(Number(info.format.duration)).toBeLessThan(3.8);
 }, 60_000);
 
+it("preserva segmentos sem áudio na junção por cópia", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "concat-silent-"));
+  const src = await segment(dir, "source.mp4", 1.5, 440);
+  const silent = join(dir, "silent.mp4");
+  await ff(["-i", src, "-an", "-c:v", "copy", silent]);
+  const out = join(dir, "out.mp4");
+  const result = await python(
+    `import json\nfrom concat_copy import concat_video_copy\n` +
+    `print(json.dumps(concat_video_copy([{"path": ${JSON.stringify(silent)}}, {"path": ${JSON.stringify(silent)}}], ${JSON.stringify(out)}, crf=18)))`,
+  );
+  expect(JSON.parse(result)).toBeNull();
+  expect(await packets(out)).toHaveLength(2 * (await packets(silent)).length);
+  const { stdout } = await run("ffprobe", [
+    "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", out,
+  ]);
+  expect(stdout.trim()).toBe("video");
+}, 60_000);
+
 it("se a cópia falhar, cai na concatenação original do motor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "concat-fallback-"));
   const code = [
