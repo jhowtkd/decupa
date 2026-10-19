@@ -395,6 +395,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const allowPaidVisual = opts.allowPaidVisual === true;
   const templatesRoot = opts.templatesRoot ?? join(opts.providerConfigDir ?? homedir(), ".decupa", "templates");
   const templates = createTemplateRuntime(templatesRoot, {
+    getMedia: media ? id => media.getMedia(id) : undefined,
     port: () => boundPort,
     originConfig: network,
     selectFn: opts.selectFn,
@@ -1155,6 +1156,7 @@ async function startAssemblyApp(opts: {
   });
   const { runtime, project, loadStored, transports, speech, closeSpeech } = setup;
   const templates=createTemplateRuntime(templatesRoot,{
+    getMedia: media ? id => media.getMedia(id) : undefined,
     port:()=>boundPort,originConfig:network,selectFn:opts.selectFn,exec,speech,
     send:transports.textSend,visualClient:transports.visualClient,
     modelKey:transports.textKey,legacyModelKey:transports.legacyModelKey,legacyVisualCompatible:transports.legacyVisualCompatible,

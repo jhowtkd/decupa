@@ -6,7 +6,8 @@ import {fileURLToPath} from "node:url";
 import {hashFile,probe} from "@decupa/media";
 import {serveMedia} from "../../http/media.ts";
 import {originAllowed,type HostConfig,type ResolvedHostConfig} from "../../http/origin.ts";
-import {selectLocalFiles,type SelectResult} from "../assembly/select.ts";
+import type {SelectResult} from "../assembly/select.ts";
+import type {MediaRuntime} from "../media-runtime.ts";
 import {analyzeRecipe,relinkRecipe,type RecipeAnalysisDeps} from "./analysis.ts";
 import {approveRecipe,listRecipes,loadRecipe,saveRecipe,validateRecipe,recipeId} from "./store.ts";
 import type {Recipe} from "./types.ts";
@@ -18,8 +19,23 @@ async function body(req:IncomingMessage):Promise<Record<string,unknown>>{
  const parts:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new HttpError(413,"pedido excede 1 MiB");parts.push(Buffer.from(chunk));}
  try{const value=JSON.parse(Buffer.concat(parts).toString()||"{}");if(!value||typeof value!=="object"||Array.isArray(value))throw Error();return value;}catch{throw new HttpError(400,"JSON inválido");}
 }
-type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;originConfig?:HostConfig|ResolvedHostConfig;selectFn?:()=>Promise<SelectResult>};
+type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;originConfig?:HostConfig|ResolvedHostConfig;selectFn?:()=>Promise<SelectResult>;getMedia?:MediaRuntime["getMedia"]};
 export function createTemplateRuntime(root:string,deps:Deps){
+ async function reference(input:Record<string,unknown>):Promise<{cancelled:true}|{path:string;mediaId?:string}>{
+  if(input.mediaId!==undefined){
+   if(typeof input.mediaId!=="string"||!/^[a-f0-9]{64}$/i.test(input.mediaId))throw new HttpError(400,"mediaId inválido");
+   if(!deps.getMedia)throw new HttpError(503,"acervo indisponível; configure a biblioteca de mídia");
+   const mediaId=input.mediaId.toLowerCase();const media=await deps.getMedia(mediaId).catch(()=>{throw new HttpError(503,"acervo indisponível; tente novamente");});
+   if(!media)throw new HttpError(404,"mídia não encontrada no acervo");
+   return {path:await realpath(media.path),mediaId};
+  }
+  // Compatibilidade com seletores explicitamente injetados por clientes locais.
+  // A web nunca abre um seletor no servidor nem aceita um caminho do pedido.
+  if(!deps.selectFn)throw new HttpError(400,"escolha um vídeo do acervo ou envie um arquivo");
+  const selected=await deps.selectFn();if("cancelled"in selected)return selected;
+  if(selected.paths.length!==1)throw new HttpError(400,"selecione um vídeo base");
+  return {path:await realpath(selected.paths[0]!)};
+ }
  // O player pede a referência em dezenas de Range requests: hash do vídeo
  // inteiro em cada uma travava a tela. Como verifySourceIdentity, o hash roda
  // uma vez e tamanho+mtime iguais dispensam o próximo; mudou, recalcula.
@@ -41,7 +57,7 @@ export function createTemplateRuntime(root:string,deps:Deps){
   const url=new URL(req.url??"/","http://localhost");if(url.pathname!=="/templates"&&!url.pathname.startsWith("/templates/"))return false;
   try{
    if(req.method!=="GET"&&!originAllowed(req.headers.origin,deps.port(),deps.originConfig))throw new HttpError(403,"origem não permitida");
-   const staticFiles:Record<string,[string,string]>={"/templates":["page.html","text/html"],"/templates/":["page.html","text/html"],"/templates/page.js":["page.js","text/javascript"],"/templates/page.css":["page.css","text/css"]};
+   const staticFiles:Record<string,[string,string]>={"/templates":["page.html","text/html"],"/templates/":["page.html","text/html"],"/templates/page.js":["page.js","text/javascript"],"/templates/page.css":["page.css","text/css"],"/templates/media-upload.js":["../assembly/editor/media-upload.js","text/javascript"]};
    const asset=staticFiles[url.pathname];if(req.method==="GET"&&asset){res.writeHead(200,{"content-type":asset[1]+"; charset=utf-8","cache-control":"no-store"});res.end(await readFile(join(HERE,asset[0]),"utf8"));return true;}
    const parts=url.pathname.split("/").filter(Boolean);if(parts[1]!=="api"||parts.length>4)throw new HttpError(404,"rota desconhecida");
    const input=req.method==="GET"?{}:await body(req);
@@ -49,10 +65,10 @@ export function createTemplateRuntime(root:string,deps:Deps){
     if(req.method==="GET"){const all=await listRecipes(root);const recipes=[];for(const r of all)recipes.push(r.status==="draft"?await recover(r):r);json(res,{recipes});return true;}
     if(req.method!=="POST")throw new HttpError(405,"método inválido");
     if(typeof input.name!=="string"||!input.name.trim()||input.name.length>200)throw new HttpError(400,"informe um nome de até 200 caracteres");
-    const selected=await (deps.selectFn??selectLocalFiles)();if("cancelled"in selected){json(res,{cancelled:true});return true;}
-    if(selected.paths.length!==1)throw new HttpError(400,"selecione um vídeo base");
-    const path=await realpath(selected.paths[0]!);const info=await probe(path);if(!info.hasVideo||info.durationMs<=0)throw new HttpError(400,"referência precisa conter vídeo válido");
-    const recipe:Recipe={id:randomUUID(),revision:1,name:input.name.trim(),status:"draft",source:{path,sha256:await hashFile(path),durationSeconds:info.durationMs/1000},analysis:{status:"pending",stage:"media"},rules:[]};
+    const selected=await reference(input);if("cancelled"in selected){json(res,{cancelled:true});return true;}
+    const path=selected.path;const info=await probe(path);if(!info.hasVideo||info.durationMs<=0)throw new HttpError(400,"referência precisa conter vídeo válido");
+    const sha256=await hashFile(path);if(selected.mediaId&&sha256!==selected.mediaId)throw new HttpError(409,"identidade da mídia do acervo diferente");
+    const recipe:Recipe={id:randomUUID(),revision:1,name:input.name.trim(),status:"draft",source:{path,sha256,durationSeconds:info.durationMs/1000},analysis:{status:"pending",stage:"media"},rules:[]};
     await saveRecipe(root,recipe,null);json(res,{recipe},201);return true;
    }
    const id=recipeId(parts[2]!);const key=join(root,id);const action=parts[3];
@@ -73,9 +89,9 @@ export function createTemplateRuntime(root:string,deps:Deps){
    if(req.method!=="POST")throw new HttpError(405,"método inválido");
    if(action==="approve"){const next=approveRecipe(recipe,recipe.revision);await saveRecipe(root,next,recipe.revision);json(res,{recipe:next});return true;}
    if(action==="relink"){
-    const selected=await(deps.selectFn??selectLocalFiles)();if("cancelled"in selected){json(res,{cancelled:true});return true;}
-    if(selected.paths.length!==1)throw new HttpError(400,"selecione um vídeo");
-    const next={...await relinkRecipe(recipe,selected.paths[0]!),revision:recipe.revision+1,status:"draft" as const};await saveRecipe(root,next,recipe.revision);json(res,{recipe:next});return true;
+    const selected=await reference(input);if("cancelled"in selected){json(res,{cancelled:true});return true;}
+    if(selected.mediaId&&selected.mediaId!==recipe.source.sha256)throw new HttpError(409,"identidade da referência diferente");
+    const next={...await relinkRecipe(recipe,selected.path),revision:recipe.revision+1,status:"draft" as const};await saveRecipe(root,next,recipe.revision);json(res,{recipe:next});return true;
    }
    if(action==="analyze"){
     const allowModel=deps.allowModel||input.modelOptIn===true;const allowVisual=deps.allowVisual||input.visualOptIn===true;
