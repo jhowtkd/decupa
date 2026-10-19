@@ -1,7 +1,7 @@
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { createTracer } from "@decupa/trace";
+import { CancelledError, createTracer } from "@decupa/trace";
 import { createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
 import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
@@ -430,7 +430,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           handle: async (req, res) => { cleanupSetup.startIngest(); return cleanupSetup.runtime.handle(req, res); },
           onJevDisabled: cleanupSetup.onJevDisabled,
           isBusy: cleanupSetup.runtime.isBusy,
-          close: async () => { await cleanupSetup.runtime.close(); },
+          close: cleanupSetup.close,
         };
       }
       const setup = await createAssemblyProjectRuntime({
@@ -692,6 +692,7 @@ type CleanupProjectRuntimeSetup = {
   jobId: string;
   exec: Executor;
   closeSpeech: () => Promise<void>;
+  close: () => Promise<void>;
   startIngest: () => void;
   onJevDisabled: () => void | Promise<void>;
 };
@@ -715,21 +716,53 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir, id: stableCleanupJobId(workDir) });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir, signal: store.signal(job.id) };
+  // A journal stays owned until its final append completes, including closes
+  // launched by the tracer (which deliberately does not await its sink).
+  const journals = new Set<OperationMetrics>();
+  const journalCloses = new Map<OperationMetrics, Promise<void>>();
+  const openJournal = (operation: string, operationId?: string): OperationMetrics => {
+    const metrics = createOperationMetrics({ dir: join(workDir, ".decupa", "metrics"),
+      operationId, metadata: { jobId: job.id, operation } });
+    journals.add(metrics);
+    return metrics;
+  };
+  const closeJournal = (metrics: OperationMetrics): Promise<void> => {
+    const existing = journalCloses.get(metrics);
+    if (existing) return existing;
+    const closed = metrics.close().finally(() => {
+      journals.delete(metrics);
+      journalCloses.delete(metrics);
+    });
+    journalCloses.set(metrics, closed);
+    return closed;
+  };
+  let closing: Promise<void> | undefined;
+  const traceWork = new Set<Promise<unknown>>();
   // Each traced attempt has its own journal, including later cleanup replans.
   const traceOperations = new Map<string, OperationMetrics>();
-  const tracer = createTracer({ emit(event) {
+  const sinkTracer = createTracer({ emit(event) {
     let metrics = traceOperations.get(event.attemptId);
     if (!metrics) {
-      metrics = createOperationMetrics({ dir: join(workDir, ".decupa", "metrics"),
-        operationId: event.attemptId, metadata: { jobId: job.id, operation: event.stage } });
+      metrics = openJournal(event.stage, event.attemptId);
       traceOperations.set(event.attemptId, metrics);
     }
     metrics.emit("trace", event);
     if (event.phase === "finished") {
       traceOperations.delete(event.attemptId);
-      return metrics.close();
+      return closeJournal(metrics);
     }
   } });
+  const tracer: typeof sinkTracer = {
+    run(stage, work, options) {
+      // Replans can reach the tracer after awaiting their input files.
+      if (closing) return Promise.reject(new CancelledError());
+      const pending = sinkTracer.run(stage, work, options);
+      traceWork.add(pending);
+      const settled = (): void => { traceWork.delete(pending); };
+      void pending.then(settled, settled);
+      return pending;
+    },
+  };
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
     env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored: opts.loadStored,
@@ -740,15 +773,19 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   // a página passa a usá-lo quando o poll avisa (`audio: true`).
   let audioReady = false;
   let ingestInFlight = false;
+  let ingestFlight: Promise<void> | undefined;
 
   async function ingest(): Promise<void> {
-    const metrics = createOperationMetrics({ dir: join(workDir, ".decupa", "metrics"),
-      metadata: { jobId: job.id, operation: "ingest" } });
-    const ingestExec: Executor = { run: call => metrics.tracer.run(`process:${basename(call.command)}`, async () => {
-      const result = await exec.run(call);
-      metrics.emit("process-call", { command: basename(call.command), code: result.code });
-      return result;
-    }, { signal: call.signal }) };
+    const metrics = openJournal("ingest");
+    const ingestExec: Executor = { run: call => {
+      // Preflight helpers may omit a signal; shutdown still owns every call.
+      const signal = call.signal ?? pipelineJob.signal;
+      return metrics.tracer.run(`process:${basename(call.command)}`, async () => {
+        const result = await exec.run({ ...call, signal });
+        metrics.emit("process-call", { command: basename(call.command), code: result.code });
+        return result;
+      }, { signal });
+    } };
     const ingestSpeech = speech ? { ...speech,
       worker: instrumentSpeechWorker(speech.worker, metrics),
       coordinator: instrumentCoordinator(speech.coordinator, metrics),
@@ -779,7 +816,7 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
       ingestInFlight = false;
       const stage = store.get(job.id)?.stage;
       metrics.emit("ingest-result", { stage, category: stage === "cancelled" ? "cancelled" : stage === "error" ? "error" : "ok" });
-      await metrics.close();
+      await closeJournal(metrics);
     }
   }
 
@@ -869,12 +906,26 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   });
   let initialIngestStarted = false;
   const startIngest = (): void => {
-    if (opts.autoStart === false || initialIngestStarted) return;
+    if (closing || opts.autoStart === false || initialIngestStarted) return;
     initialIngestStarted = true;
     ingestStarted = true;
-    void ingest();
+    ingestFlight = ingest();
   };
-  return { runtime, jobId: job.id, exec, closeSpeech, startIngest,
+  const close = (): Promise<void> => {
+    if (closing) return closing;
+    // Cancel before the first await; the app also stops executors and speech
+    // synchronously. Let producers emit their terminal events before draining.
+    const runtimeClosed = runtime.close();
+    closing = (async () => {
+      const results = await Promise.allSettled([runtimeClosed, ingestFlight]);
+      while (traceWork.size) await Promise.allSettled(traceWork);
+      await Promise.all([...journals].map(closeJournal));
+      const failure = results.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    })();
+    return closing;
+  };
+  return { runtime, jobId: job.id, exec, closeSpeech, close, startIngest,
     onJevDisabled: () => { cleanup.cancelNotes(); return cleanup.refreshNotes(); } };
 }
 
@@ -917,7 +968,7 @@ async function startCleanupApp(opts: {
   const workDir = opts.workDir ?? cleanupWorkDir(input);
   const setup = await createCleanupProjectRuntime({ ...opts, input, workDir, exec, coordinator,
     visualEnv, visualDir, readStored, loadStored, page, speechRuntime });
-  const { runtime, jobId, closeSpeech, startIngest } = setup;
+  const { runtime, jobId, closeSpeech, close: closeRuntime, startIngest } = setup;
   let boundPort = opts.port ?? 7788;
   const media = await configuredMediaRuntime(opts.env, opts.now);
 
@@ -967,7 +1018,7 @@ async function startCleanupApp(opts: {
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos recebem o sinal.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
-      const runtimeClosed = runtime.close();
+      const runtimeClosed = closeRuntime();
       const mediaClosed = media?.close() ?? Promise.resolve();
       const authClosed = auth.close();
       const speechClosed = closeSpeech();
