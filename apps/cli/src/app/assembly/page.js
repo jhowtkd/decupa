@@ -476,28 +476,41 @@ async function uploadTeamFiles(files) {
     row.append(title, progress, status, pause);
     uploads?.append(row);
     let completedResult = null;
+    let associating = false;
     const showUploadError = (error) => {
       pause.hidden = false;
       pause.disabled = false;
-      pause.textContent = "Retomar";
-      status.textContent = error instanceof UploadPausedError
+      pause.textContent = completedResult ? "Tentar adicionar ao projeto" : "Retomar";
+      status.textContent = completedResult
+        ? "Envio concluído · não foi possível adicionar ao projeto: " + (error?.message || String(error))
+        : error instanceof UploadPausedError
         ? "Pausado — escolha o mesmo arquivo para retomar depois"
         : (error?.message || String(error));
     };
     const completeUpload = async (result) => {
       // O envio já terminou: se o POST do Projeto falhar, o retry só repete
       // esta etapa e não reabre o envio nem manda os bytes de novo.
+      if (associating) return;
+      associating = true;
       completedResult = result;
-      await call("project/media", {
-        method: "POST",
-        body: JSON.stringify({ baseRevision: project().revision, mediaId: result.mediaId }),
-        label: "Adicionando Mídia…",
-      });
-      completedResult = null;
-      pause.hidden = true;
+      pause.hidden = false;
       pause.disabled = true;
-      status.textContent = result.deduplicado ? "Pronto · Mídia reaproveitada" : "Pronto";
-      await refreshMediaLibrary();
+      pause.textContent = "Adicionando…";
+      status.textContent = "Envio concluído · adicionando ao projeto…";
+      try {
+        const { res, body } = await call("project/media", {
+          method: "POST",
+          body: JSON.stringify({ baseRevision: project().revision, mediaId: result.mediaId }),
+          label: "Adicionando Mídia…",
+        });
+        if (!res.ok) throw new Error(body?.error || `erro ${res.status}`);
+        completedResult = null;
+        pause.hidden = true;
+        status.textContent = result.deduplicado ? "Adicionado ao projeto · Mídia reaproveitada" : "Adicionado ao projeto";
+        await refreshMediaLibrary();
+      } finally {
+        associating = false;
+      }
     };
     const upload = new ResumableMediaUpload({
       onProgress: (value) => {
@@ -512,16 +525,19 @@ async function uploadTeamFiles(files) {
           pause.disabled = true;
           pause.textContent = value.state === "importing" ? "Importando" : "Verificando";
         } else if (value.state === "ready" || value.state === "deduped") {
+          status.textContent = "Envio concluído · aguardando adição ao projeto";
           pause.hidden = true;
           pause.disabled = true;
         }
       },
     });
     pause.onclick = () => {
-      if (upload.state === "concluido") {
-        if (completedResult) void completeUpload(completedResult).catch(showUploadError);
+      if (associating) return;
+      if (completedResult) {
+        void completeUpload(completedResult).catch(showUploadError);
         return;
       }
+      if (upload.state === "concluido") return;
       if (upload.state === "enviando") {
         upload.pause();
         pause.textContent = "Retomar";

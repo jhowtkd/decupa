@@ -183,6 +183,127 @@ it("erro de GET de fundo some no GET de fundo seguinte", async () => {
   expect(box.ui.error).toBeNull();
 });
 
+it.each([
+  ["409", { res: { ok: false, status: 409 }, body: { error: "conflito" } }],
+  ["500", { res: { ok: false, status: 500 }, body: { error: "falha" } }],
+  ["rede", new Error("rede")],
+])("upload recusado mantém resultado e retry repete só a associação (%s)", async (_name, outcome) => {
+  const document = installDom('<div id="mediaUploads"></div>');
+  let starts = 0;
+  const calls: string[] = [];
+  const result = { mediaId: "m1", deduplicado: false };
+  let attempts = 0;
+  class Upload {
+    state = "concluido";
+    constructor(_opts: unknown) {}
+    async start() { starts++; return result; }
+    pause() {}
+  }
+  const vm = runInNewContext(
+    slice(await pageJs(), "async function uploadTeamFiles", "/* ---- Fiação ---- */") + "\n;uploadTeamFiles",
+    {
+      document,
+      teamMode: true,
+      mediaEnabled: true,
+      importFiles: vi.fn(),
+      UploadPausedError: class UploadPausedError extends Error {},
+      ResumableMediaUpload: Upload,
+      project: () => ({ revision: 7 }),
+      call: vi.fn(async (path: string) => {
+        calls.push(path);
+        attempts++;
+        if (attempts > 1) return { res: { ok: true, status: 201 }, body: {} };
+        if (outcome instanceof Error) throw outcome;
+        return outcome as never;
+      }),
+      refreshMediaLibrary: vi.fn(),
+      mediaProgressText: () => "Enviando",
+    },
+  ) as (files: unknown[]) => Promise<void>;
+  await vm([{ name: "clip.mp4" }]);
+  const row = document.querySelector(".media-upload-item")!;
+  const button = row.querySelector("button")!;
+  expect({ starts, calls, status: row.querySelector("span")?.textContent, button: button.textContent, hidden: button.hidden })
+    .toMatchObject({ starts: 1, calls: ["project/media"], status: expect.stringContaining("Envio concluído"), button: "Tentar adicionar ao projeto", hidden: false });
+  await button.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect({ starts, calls, status: row.querySelector("span")?.textContent })
+    .toEqual({ starts: 1, calls: ["project/media", "project/media"], status: "Adicionado ao projeto" });
+});
+
+it("upload aceito mostra que foi adicionado ao projeto", async () => {
+  const document = installDom('<div id="mediaUploads"></div>');
+  class Upload {
+    state = "concluido";
+    constructor(_opts: unknown) {}
+    async start() { return { mediaId: "m1", deduplicado: false }; }
+    pause() {}
+  }
+  const vm = runInNewContext(
+    slice(await pageJs(), "async function uploadTeamFiles", "/* ---- Fiação ---- */") + "\n;uploadTeamFiles",
+    {
+      document,
+      teamMode: true,
+      mediaEnabled: true,
+      importFiles: vi.fn(),
+      UploadPausedError: class UploadPausedError extends Error {},
+      ResumableMediaUpload: Upload,
+      project: () => ({ revision: 7 }),
+      call: vi.fn(async () => ({ res: { ok: true, status: 201 }, body: {} })),
+      refreshMediaLibrary: vi.fn(),
+      mediaProgressText: () => "Enviando",
+    },
+  ) as (files: unknown[]) => Promise<void>;
+  await vm([{ name: "clip.mp4" }]);
+  const row = document.querySelector(".media-upload-item")!;
+  expect({ status: row.querySelector("span")?.textContent, button: row.querySelector("button")?.hidden })
+    .toEqual({ status: "Adicionado ao projeto", button: true });
+});
+
+it("associação pendente mostra envio concluído, bloqueia duplo clique e aceita retry", async () => {
+  const document = installDom('<div id="mediaUploads"></div>');
+  let release!: (value: { res: { ok: boolean; status: number }; body: object }) => void;
+  let uploads = 0;
+  const calls: string[] = [];
+  class Upload {
+    state = "concluido";
+    constructor(_opts: unknown) {}
+    async start() { uploads++; return { mediaId: "m1", deduplicado: false }; }
+    pause() {}
+  }
+  const vm = runInNewContext(
+    slice(await pageJs(), "async function uploadTeamFiles", "/* ---- Fiação ---- */") + "\n;uploadTeamFiles",
+    {
+      document, teamMode: true, mediaEnabled: true, importFiles: vi.fn(),
+      UploadPausedError: class UploadPausedError extends Error {}, ResumableMediaUpload: Upload,
+      project: () => ({ revision: 7 }),
+      call: vi.fn((path: string) => { calls.push(path); return new Promise(resolve => { release = resolve; }); }),
+      refreshMediaLibrary: vi.fn(), mediaProgressText: () => "Enviando",
+    },
+  ) as (files: unknown[]) => Promise<void>;
+  const pending = vm([{ name: "clip.mp4" }]);
+  await vi.waitFor(() => expect(calls).toEqual(["project/media"]));
+  const row = document.querySelector(".media-upload-item")!;
+  const button = row.querySelector("button")!;
+  await vi.waitFor(() => expect(button.textContent).toBe("Adicionando…"));
+  expect({ status: row.querySelector("span")?.textContent, text: button.textContent, disabled: button.disabled, uploads, calls })
+    .toEqual({ status: "Envio concluído · adicionando ao projeto…", text: "Adicionando…", disabled: true, uploads: 1, calls: ["project/media"] });
+  button.click();
+  expect(calls).toEqual(["project/media"]);
+  release({ res: { ok: false, status: 409 }, body: { error: "conflito" } });
+  await pending;
+  await vi.waitFor(() => expect(button.textContent).toBe("Tentar adicionar ao projeto"));
+  expect({ status: row.querySelector("span")?.textContent, button: button.textContent, disabled: button.disabled })
+    .toMatchObject({ status: expect.stringContaining("Envio concluído"), button: "Tentar adicionar ao projeto", disabled: false });
+  button.click();
+  await Promise.resolve();
+  expect(calls).toEqual(["project/media", "project/media"]);
+  release({ res: { ok: true, status: 201 }, body: {} });
+  await vi.waitFor(() => expect(row.querySelector("span")?.textContent).toBe("Adicionado ao projeto"));
+  expect({ uploads, status: row.querySelector("span")?.textContent }).toEqual({ uploads: 1, status: "Adicionado ao projeto" });
+});
+
 it("aviso de projeto novo fica até a primeira ação", async () => {
   const js = await pageJs();
   const box = callSandbox(5);

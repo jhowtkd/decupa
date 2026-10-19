@@ -493,7 +493,8 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     + '<label class="duration-option"><input id="noTarget" type="checkbox"> Sem duração alvo</label>'
     + '<label>Duração alvo (s) <input id="target" type="number" min="1" value="60" required></label>'
     + '<button type="button" id="saveInput">Guardar briefing</button></div>'
-    + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button></div>';
+    + '<div class="row dialog-actions"><button type="button" id="closeBriefing" class="quiet">Fechar</button>'
+    + '<button type="button" id="discardBriefing" class="quiet">Descartar alterações</button></div>';
   document.body.appendChild(briefingDialog);
   const briefingForm = document.getElementById("briefingForm");
   const inlineBriefing = document.getElementById("monitorBriefing");
@@ -536,14 +537,10 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
       if (briefingForm.parentElement === inlineBriefing) void briefing.flush();
     });
   }
-  // Fechar e Esc cancelam a edição no diálogo: o formulário volta ao servidor.
-  const discardBriefing = () => briefing.discard(state.get("project")?.input);
+  // Fechar e Esc só recolhem o diálogo; descartar exige uma ação explícita.
   document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
-  document.getElementById("closeBriefing").onclick = () => {
-    discardBriefing();
-    briefingDialog.close();
-  };
-  briefingDialog.addEventListener("cancel", discardBriefing);
+  document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
+  document.getElementById("discardBriefing").onclick = () => briefing.discard(state.get("project")?.input);
   /** Projeto vazio: o briefing sai do diálogo e fica ao lado da área de importar. */
   function placeBriefing(project) {
     const empty = project.assembly.sources.length === 0;

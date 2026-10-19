@@ -645,6 +645,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   let drag = null;
   let suppressClick = false;
   let closeMenu = null;
+  let correctionMenu = null;
 
   const selection = () => state.get("selection") || new Set();
 
@@ -979,7 +980,8 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       return;
     }
     const ordered = group.words.slice().sort((a, b) => a.start - b.start);
-    await api.call("project/edit", {
+    const closeSubmittedMenu = closeMenu;
+    const { res } = await api.call("project/edit", {
       method: "POST",
       body: JSON.stringify({
         baseRevision: p.revision,
@@ -995,7 +997,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     });
     // O alinhamento conclui em background; a assinatura de "project"
     // retoma o render e o bootstrap (page.js) retoma o polling (V3).
-    if (closeMenu) closeMenu();
+    if (res.ok && closeMenu === closeSubmittedMenu && closeMenu) closeMenu();
   }
 
   /** Expande o campo inline de correção dentro do próprio menu flutuante. */
@@ -1017,10 +1019,14 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     apply.textContent = "Aplicar";
     form.append(input, apply);
     menu.appendChild(form);
+    correctionMenu = menu;
     input.focus();
+    const send = singleFlight(() => submitCorrection(input.value.trim()).catch(() => {
+      // api.call já apresenta o erro; o formulário conserva a correção para tentar de novo.
+    }), (busy) => { input.disabled = busy; apply.disabled = busy; });
     form.onsubmit = (ev) => {
       ev.preventDefault();
-      void submitCorrection(input.value.trim());
+      void send();
     };
   }
 
@@ -1063,6 +1069,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     document.addEventListener("keydown", onKey);
     closeMenu = () => {
       closeMenu = null;
+      correctionMenu = null;
       document.removeEventListener("pointerdown", onDoc);
       document.removeEventListener("keydown", onKey);
       menu.remove();
@@ -1326,9 +1333,9 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     const pruned = pruneSelection(p, selection());
     const lost = !sameKeys(pruned, selection());
     const sig = docSignature(p);
-    // Só fecha o menu (e o que foi digitado em "Corrigir") quando o documento
-    // mudou ou a seleção perdeu palavras: prévia nova e poll igual não fecham.
-    if (closeMenu && (sig !== lastSig || lost)) closeMenu();
+    // Reconciliação de conflito pode mudar outra parte do documento. Enquanto
+    // as palavras seguem válidas, a correção digitada fica disponível para retry.
+    if (closeMenu && (lost || (sig !== lastSig && !correctionMenu))) closeMenu();
     if (lost) state.set("selection", pruned);
     render(p, sig);
   });
@@ -1361,5 +1368,3 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   }
   render(state.get("project"));
 }
-
-

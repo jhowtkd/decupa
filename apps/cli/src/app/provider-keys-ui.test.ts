@@ -17,6 +17,9 @@ async function settingsScript() {
   const html = await readFile(new URL("./settings.html", import.meta.url), "utf8");
   return html.match(/<script>([\s\S]*?)<\/script>/)![1]!;
 }
+function completeSettingsState(stored: import("@decupa/triage").Credentials) {
+  return { ...keyProviderState({}, stored), text: textProviderState({}, stored) };
+}
 
 it("primeira tela envia as chaves opcionais e as escolhas reais do formulário", async () => {
   const html = await readFile(new URL("./provider-setup.html", import.meta.url), "utf8"), document = documentStub();
@@ -58,6 +61,93 @@ it("tela de configurações salva cada seção sem reenviar a outra chave (OpenA
   expect(document.getElementById("jevState").textContent).toContain("Jev configurado");
   for (const id of ["removeVisual", "removeJev"]) await document.getElementById(id).onclick();
   expect(bodies.slice(2)).toEqual([{ section: "visual", removeKey: true }, { section: "jev", removeKey: true }]);
+});
+
+it("salvar a seção visual preserva os campos e a chave em memória da seção de texto", async () => {
+  const script = await settingsScript(), document = documentStub();
+  const state = completeSettingsState({ preset: "zai", apiKey: "hidden", model: "glm-5", baseUrl: "", openaiApiKey: "hidden", typesafe: true });
+  const fetch = async (_url: string) => {
+    return new Response(JSON.stringify(state));
+  };
+  new Script(script).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  Object.assign(document.getElementById("preset"), { value: "custom" });
+  Object.assign(document.getElementById("model"), { value: "draft model" });
+  Object.assign(document.getElementById("endpoint"), { value: "https://draft.example/v1" });
+  Object.assign(document.getElementById("textKey"), { value: "draft-key-in-memory" });
+  await document.getElementById("visual").onsubmit({ preventDefault() {}, target: document.getElementById("visual") });
+  expect({
+    preset: document.getElementById("preset").value,
+    model: document.getElementById("model").value,
+    endpoint: document.getElementById("endpoint").value,
+    key: document.getElementById("textKey").value,
+  }).toEqual({ preset: "custom", model: "draft model", endpoint: "https://draft.example/v1", key: "draft-key-in-memory" });
+});
+
+it.each(["text", "jev"] as const)("salvar %s não altera rascunhos das outras seções", async (saving) => {
+  const script = await settingsScript(), document = documentStub();
+  let stored: import("@decupa/triage").Credentials = { preset: "zai", model: "glm-5", openaiApiKey: "hidden", typesafeApiKey: "hidden", typesafe: true };
+  const fetch = async (_url: string, opts?: RequestInit) => {
+    if (opts?.method === "POST") {
+      const { section: _section, ...fields } = JSON.parse(String(opts.body));
+      stored = { ...stored, ...fields };
+    }
+    return new Response(JSON.stringify(completeSettingsState(stored)));
+  };
+  new Script(script).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  Object.assign(document.getElementById("preset"), { value: "custom" });
+  Object.assign(document.getElementById("model"), { value: "draft text model" });
+  Object.assign(document.getElementById("endpoint"), { value: "https://draft.example/v1" });
+  Object.assign(document.getElementById("textKey"), { value: "text-key-in-memory" });
+  Object.assign(document.getElementById("openaiKey"), { value: "visual-key-in-memory" });
+  Object.assign(document.getElementById("textImages"), { checked: true });
+  Object.assign(document.getElementById("assemblyText"), { value: "openai" });
+  Object.assign(document.getElementById("jevKey"), { value: "jev-key-in-memory" });
+  Object.assign(document.getElementById("noJev"), { checked: true });
+  const target = saving === "text" ? "textForm" : "jevForm";
+  await document.getElementById(target).onsubmit({ preventDefault() {}, target: document.getElementById(target) });
+  expect({
+    text: ["preset", "model", "endpoint", "textKey"].map(id => document.getElementById(id).value),
+    visual: [document.getElementById("openaiKey").value, document.getElementById("textImages").checked, document.getElementById("assemblyText").value],
+    jev: [document.getElementById("jevKey").value, document.getElementById("noJev").checked],
+  }).toEqual({
+    text: saving === "text" ? ["custom", "draft text model", "https://draft.example/v1", ""] : ["custom", "draft text model", "https://draft.example/v1", "text-key-in-memory"],
+    visual: ["visual-key-in-memory", true, "openai"],
+    jev: saving === "jev" ? ["", true] : ["jev-key-in-memory", true],
+  });
+});
+
+it("edições feitas enquanto o POST está pendente sobrevivem à resposta da seção salva", async () => {
+  const script = await settingsScript(), document = documentStub();
+  const initial = completeSettingsState({ preset: "zai", model: "glm-5", openaiApiKey: "hidden", typesafeApiKey: "hidden", typesafe: true });
+  let release!: (response: Response) => void;
+  const fetch = async (_url: string, opts?: RequestInit) => opts?.method === "POST"
+    ? await new Promise<Response>(resolve => { release = resolve; })
+    : new Response(JSON.stringify(initial));
+  new Script(script).runInNewContext({ document, fetch });
+  await new Promise(resolve => setImmediate(resolve));
+  document.getElementById("openaiKey").value = "submitted-key";
+  const pending = document.getElementById("visual").onsubmit({ preventDefault() {}, target: document.getElementById("visual") });
+  document.getElementById("openaiKey").value = "newer-key";
+  document.getElementById("textKey").value = "newer-text-key";
+  document.getElementById("model").value = "newer-model";
+  release(new Response(JSON.stringify(completeSettingsState({ preset: "zai", model: "glm-5", openaiApiKey: "saved-key", typesafe: true }))));
+  await pending;
+  expect({ openai: document.getElementById("openaiKey").value, textKey: document.getElementById("textKey").value, model: document.getElementById("model").value })
+    .toEqual({ openai: "newer-key", textKey: "newer-text-key", model: "newer-model" });
+});
+
+it("rascunhos de credenciais não chamam localStorage nem sessionStorage", async () => {
+  const script = await settingsScript(), document = documentStub();
+  const storageCalls: string[] = [];
+  const storage = (name: string) => new Proxy({}, { get: (_target, method) => (..._args: unknown[]) => { storageCalls.push(`${name}.${String(method)}`); } });
+  const fetch = async () => new Response(JSON.stringify(completeSettingsState({ preset: "zai", typesafe: true })));
+  new Script(script).runInNewContext({ document, fetch, localStorage: storage("localStorage"), sessionStorage: storage("sessionStorage") });
+  await new Promise(resolve => setImmediate(resolve));
+  document.getElementById("textKey").value = "draft-secret";
+  document.getElementById("jevKey").value = "draft-secret";
+  expect(storageCalls).toEqual([]);
 });
 
 it("select do texto da Montagem reflete o estado e envia a escolha junto da visão", async () => {

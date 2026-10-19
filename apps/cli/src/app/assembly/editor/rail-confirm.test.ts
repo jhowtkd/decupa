@@ -81,6 +81,34 @@ it("Novo projeto abre a página com #novo", async () => {
   expect(domWindow().location.assign).toHaveBeenCalledWith("http://127.0.0.1:9/#novo");
 });
 
+it("Fechar e Escape preservam o rascunho do briefing ao reabrir", () => {
+  const { state, document } = montar();
+  state.set("project", projeto(1, 2));
+  document.getElementById("openBriefing")?.click();
+  const input = document.getElementById("inputText")!;
+  input.value = "rascunho local";
+  input.dispatchEvent({ type: "input" });
+  document.getElementById("closeBriefing")?.click();
+  state.set("project", { ...projeto(1, 2), revision: 3, input: { kind: "brief", text: "atualizado pelo poll", targetSeconds: 30 } });
+  document.getElementById("openBriefing")?.click();
+  expect(document.getElementById("inputText")?.value).toBe("rascunho local");
+  document.getElementById("briefingDialog")?.dispatchEvent({ type: "cancel", preventDefault() {} });
+  state.set("project", { ...projeto(1, 2), revision: 4, input: { kind: "brief", text: "outro poll", targetSeconds: 45 } });
+  document.getElementById("openBriefing")?.click();
+  expect(document.getElementById("inputText")?.value).toBe("rascunho local");
+});
+
+it("descartar briefing é explícito e volta ao conteúdo aceito pelo servidor", () => {
+  const { state, document } = montar();
+  state.set("project", projeto(1, 2));
+  document.getElementById("openBriefing")?.click();
+  const input = document.getElementById("inputText")!;
+  input.value = "rascunho local";
+  input.dispatchEvent({ type: "input" });
+  document.getElementById("discardBriefing")?.click();
+  expect(document.getElementById("inputText")?.value).toBe("um vídeo");
+});
+
 it("depois de desfazer Preparar (pronta, sem cenas) o botão volta a Montar e chama o prepare sem confirmar", async () => {
   const { state, api, confirm, document } = montar();
   const desfeito = {
