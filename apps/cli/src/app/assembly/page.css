@@ -61,7 +61,7 @@ details { margin: 8px 0; font-size: 13px; }
 summary { cursor: pointer; color: var(--muted); }
 video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: var(--radius-sub); }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
-select:focus-visible, summary:focus-visible, .word:focus-visible {
+select:focus-visible, summary:focus-visible, .word:focus-visible, #monitor:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
@@ -529,9 +529,10 @@ dialog h1 { margin: 0 0 12px; font-size: 17px; }
   #monitor {
     position: fixed; z-index: 15; top: 72px; right: var(--gap); bottom: var(--gap);
     width: min(520px, calc(100vw - 2 * var(--gap)));
+    visibility: hidden;
     transform: translateX(calc(100% + 2 * var(--gap))); transition: transform .16s ease-out;
   }
-  body.monitor-open #monitor { transform: none; }
+  body.monitor-open #monitor { visibility: visible; transform: none; }
   /* Vazio: o texto ocupa a largura; o briefing segue na gaveta do monitor. */
   body.is-empty { grid-template: "topbar" 48px "center" minmax(0, 1fr) / minmax(0, 1fr); }
   #projectName { max-width: 140px; }
