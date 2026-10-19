@@ -3,13 +3,14 @@ import { planFillerSnaps } from "./filler-snaps.ts";
 import { observeAssemblyFillers, type FillerObserveDeps } from "./filler-observe.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash } from "node:crypto";
-import { relative } from "node:path";
+import { basename, join, relative } from "node:path";
+import { createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
 import { hashFile } from "@decupa/media";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { analyzeSource } from "./analysis.ts";
 import { ensurePlayback, verifySourceIdentity } from "./media.ts";
-import { describeSource } from "./model.ts";
+import { describeSource, type VisualMetric } from "./model.ts";
 import { renderAssembly } from "./render.ts";
 import { applyProposalWithFillers, proposalProject, recordPreview } from "./revisions.ts";
 import { proposeScenes } from "./scenes.ts";
@@ -42,6 +43,7 @@ export type PreparationDeps = FillerObserveDeps & {
   speech?: IngestSpeech;
   coordinator?: FileCoordinator;
   onStage?: (stage: "queued" | "transcribing" | "indexing" | "visual") => void;
+  onMetric?: (metric: VisualMetric) => void;
 };
 
 export type PreparationControl = {
@@ -186,6 +188,43 @@ export async function runPreparation(
   deps: PreparationDeps,
   control: PreparationControl,
 ): Promise<Project> {
+  const metrics = createOperationMetrics({
+    dir: join(dir, ".decupa", "metrics"),
+    metadata: { operation: req.mode, baseRevision },
+  });
+  const exec: Executor = { run: call => metrics.tracer.run(`process:${basename(call.command)}`,
+    async () => {
+      const result = await deps.exec.run(call);
+      metrics.emit("process-call", { command: basename(call.command), code: result.code });
+      return result;
+    }, { signal: call.signal }) };
+  const speech = deps.speech ? { ...deps.speech,
+    worker: instrumentSpeechWorker(deps.speech.worker, metrics),
+    coordinator: instrumentCoordinator(deps.speech.coordinator, metrics),
+  } : undefined;
+  try {
+    const result = await metrics.tracer.run("preparation", () => runPreparationOperation(dir, baseRevision, req, {
+      ...deps, exec, speech,
+      coordinator: instrumentCoordinator(deps.coordinator, metrics),
+      onStage: stage => { metrics.emit("stage", { stage }); deps.onStage?.(stage); },
+      onMetric: metric => {
+        metrics.emit("visual", metric);
+        try { deps.onMetric?.(metric); } catch { /* Observability does not interrupt editing. */ }
+      },
+    }, control, metrics));
+    metrics.emit("preparation-result", { status: result.preparation?.status, revision: result.revision });
+    return result;
+  } finally { await metrics.close(); }
+}
+
+async function runPreparationOperation(
+  dir: string,
+  baseRevision: number,
+  req: PreparationRequest,
+  deps: PreparationDeps,
+  control: PreparationControl,
+  metrics: OperationMetrics,
+): Promise<Project> {
   return withPreparationLock(dir, async (contended) => {
     const opened = await loadProject(dir);
     const prior = opened.preparation;
@@ -254,6 +293,11 @@ export async function runPreparation(
     let current: Project;
     try {
       operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
+      const send = operationDeps.proposeSend;
+      if (send) operationDeps = { ...operationDeps, proposeSend: (content, signal) => {
+        metrics.emit("model-call", { purpose: "proposal" });
+        return metrics.tracer.run("proposal-call", () => send(content, signal));
+      } };
       const visualClient = operationDeps.describeClient;
       const included = opened.assembly.sources.filter((source) => source.included);
       const claim: Preparation = {
@@ -346,6 +390,7 @@ export async function runPreparation(
         }
       };
       const atStage = async (stage: Preparation["stage"]): Promise<void> => {
+        metrics.emit("stage", { stage });
         await save((p) => ({
           ...p,
           preparation: p.preparation ? { ...p.preparation, stage, note: undefined } : p.preparation,
@@ -366,7 +411,7 @@ export async function runPreparation(
           checkAlive();
           await markSource(source.id, { media: "running" });
           try {
-            await verifySourceIdentity(source);
+            await metrics.tracer.run("source-identity", () => verifySourceIdentity(source));
             await markSource(source.id, { media: "ready" });
           } catch (err) {
             await markSource(source.id, {
@@ -399,12 +444,16 @@ export async function runPreparation(
           checkAlive();
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
           try {
-            const analysis = await analyzeSource(source, dir, deps.exec, {
+            let analysisBuilt = false;
+            const analysis = await metrics.tracer.run("analysis", () => analyzeSource(source, dir, deps.exec, {
               signal,
               speech: deps.speech,
               heavyCoordinator: deps.coordinator,
-              onStage: deps.onStage,
-            });
+              onStage: stage => { analysisBuilt = true; deps.onStage?.(stage); },
+            }));
+            metrics.emit("cache", { stage: "analysis", sourceId: source.id,
+              outcome: analysisBuilt ? "built" : analysis.status !== "ready" ? "error"
+                : source.hasAudio ? "hit-or-shared" : "not-applicable" });
             checkAlive();
             await save((p) => ({
               ...p,
@@ -448,6 +497,7 @@ export async function runPreparation(
           try {
             const spans = await describeSource(source, dir, signal, {
               client: visualClient,
+              onMetric: deps.onMetric,
               exec: deps.exec,
               isCurrent: control.isCurrent,
               coordinator: deps.coordinator,
@@ -599,10 +649,12 @@ export async function runPreparation(
       await atStage("preview");
       checkAlive();
       try {
+        let renderBuilt = false;
         const artifact = await renderPreview(dir, current, deps.exec, signal, deps.coordinator, {
           onQueued: () => deps.onStage?.("queued"),
-          onStarted: () => deps.onStage?.("transcribing"),
+          onStarted: () => { renderBuilt = true; deps.onStage?.("transcribing"); },
         });
+        metrics.emit("cache", { stage: "preview", outcome: renderBuilt ? "built" : "hit-or-shared" });
         checkAlive();
         await save((p) => recordPreview(p, artifact));
       } catch (err) {
