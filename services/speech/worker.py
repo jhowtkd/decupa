@@ -99,6 +99,8 @@ class SpeechWorker:
         self._state = threading.Lock()
         self._progress = progress
         self._lock = threading.Lock()
+        # Transcrição e correção compartilham o mesmo limite de inferência.
+        self._operation_lock = threading.Lock()
         self.model_loads = 0
         self._preload = {
             "model": "small",
@@ -239,6 +241,34 @@ class SpeechWorker:
         self._asr_for(model, language, compute_type, resolved)
         self._align_for(language, resolved)
 
+    @contextlib.contextmanager
+    def _operation(self, task_id: str):
+        self.begin(task_id)
+        try:
+            with self._operation_lock:
+                self._check(task_id)
+                yield
+        finally:
+            self.end(task_id)
+
+    def align(
+        self,
+        task_id: str,
+        wav: str,
+        text: str,
+        language: str = "pt",
+        device: str = "cpu",
+    ) -> dict:
+        """Alinha o texto no WAV recortado sem carregar ou executar ASR."""
+        with self._operation(task_id):
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("texto vazio para alinhamento")
+            self._report(task_id, "lendo o áudio")
+            audio = whisperx.load_audio(wav)
+            self._check(task_id)
+            segments = [{"start": 0.0, "end": len(audio) / 16000, "text": text.strip()}]
+            return self._align_segments(task_id, segments, audio, language, resolve_device(device))
+
     def transcribe(
         self,
         task_id: str,
@@ -250,8 +280,7 @@ class SpeechWorker:
         batch_size: int = 8,
         text_file: str | None = None,
     ) -> dict:
-        self.begin(task_id)
-        try:
+        with self._operation(task_id):
             self._check(task_id)
             self._report(task_id, "carregando o modelo de fala")
             with self._heartbeat(task_id, "carregando o modelo de fala"):
@@ -272,44 +301,45 @@ class SpeechWorker:
                     batch_size=batch_size,
                     progress_callback=self._percent_reporter(task_id, "transcrevendo"),
                 )["segments"]
-            self._check(task_id)
-            self._report(task_id, "carregando o modelo de alinhamento")
-            with self._heartbeat(task_id, "carregando o modelo de alinhamento"):
-                (align_model, align_meta), align_device = self._align_for(language, device)
-            self._report(task_id, "alinhando as palavras", 0)
-            aligned = whisperx.align(
-                segments,
-                align_model,
-                align_meta,
-                audio,
-                align_device,
-                return_char_alignments=False,
-                progress_callback=self._percent_reporter(task_id, "alinhando as palavras"),
-            )
-            self._check(task_id)
-            words = []
-            unaligned: list[str] = []
-            for sentence_index, segment in enumerate(aligned["segments"]):
-                for word in segment.get("words", []):
-                    if "start" not in word or "end" not in word:
-                        missing = str(word.get("word", "")).strip()
-                        if missing:
-                            unaligned.append(missing)
-                        continue
-                    words.append(
-                        {
-                            "text": word["word"].strip(),
-                            "startMs": int(round(word["start"] * 1000)),
-                            "endMs": int(round(word["end"] * 1000)),
-                            # Sem score, o tempo veio de interpolação: preservar
-                            # a palavra sem autorizar um corte nesse intervalo.
-                            "confidence": float(word["score"]) if word.get("score") is not None else None,
-                            "sentenceIndex": sentence_index,
-                        }
-                    )
-            return {"language": language, "words": words, "unaligned": unaligned, "taskId": task_id}
-        finally:
-            self.end(task_id)
+            return self._align_segments(task_id, segments, audio, language, device)
+
+    def _align_segments(self, task_id: str, segments: list[dict], audio, language: str, device: str) -> dict:
+        self._check(task_id)
+        self._report(task_id, "carregando o modelo de alinhamento")
+        with self._heartbeat(task_id, "carregando o modelo de alinhamento"):
+            (align_model, align_meta), align_device = self._align_for(language, device)
+        self._report(task_id, "alinhando as palavras", 0)
+        aligned = whisperx.align(
+            segments,
+            align_model,
+            align_meta,
+            audio,
+            align_device,
+            return_char_alignments=False,
+            progress_callback=self._percent_reporter(task_id, "alinhando as palavras"),
+        )
+        self._check(task_id)
+        words = []
+        unaligned: list[str] = []
+        for sentence_index, segment in enumerate(aligned["segments"]):
+            for word in segment.get("words", []):
+                if "start" not in word or "end" not in word:
+                    missing = str(word.get("word", "")).strip()
+                    if missing:
+                        unaligned.append(missing)
+                    continue
+                words.append(
+                    {
+                        "text": word["word"].strip(),
+                        "startMs": int(round(word["start"] * 1000)),
+                        "endMs": int(round(word["end"] * 1000)),
+                        # Sem score, o tempo veio de interpolação: preservar
+                        # a palavra sem autorizar um corte nesse intervalo.
+                        "confidence": float(word["score"]) if word.get("score") is not None else None,
+                        "sentenceIndex": sentence_index,
+                    }
+                )
+        return {"language": language, "words": words, "unaligned": unaligned, "taskId": task_id}
 
     def benchmark(self, wavs: list[str]) -> dict:
         before = self.model_loads
@@ -340,16 +370,17 @@ def serve() -> None:
             sys.stdout.write(json.dumps(payload) + "\n")
             sys.stdout.flush()
 
-    def run_transcribe(args: dict) -> None:
+    def run_job(cmd: str, args: dict) -> None:
         task_id = str(args.get("task_id") or "")
         try:
-            reply(worker.transcribe(**args))
+            operation = worker.align if cmd == "align" else worker.transcribe
+            reply(operation(**args))
         except CancelledError as exc:
             reply({"error": str(exc), "taskId": exc.task_id or task_id})
         except Exception as exc:
             reply({"error": str(exc), "taskId": task_id})
         finally:
-            # Argumento inválido estoura antes de transcribe começar; sem isto
+            # Argumento inválido estoura antes de a operação começar; sem isto
             # a tarefa ficaria "em andamento" para sempre.
             worker.end(task_id)
 
@@ -376,10 +407,13 @@ def serve() -> None:
             except Exception as exc:
                 reply({"error": str(exc)})
             continue
+        if cmd not in {"transcribe", "align"}:
+            reply({"error": f"operação de fala inválida: {cmd}", "taskId": str(args.get("task_id") or "")})
+            continue
         # Em andamento já na leitura da linha: um cancel que chega antes de a
         # thread começar ainda vale, e um que chega depois do fim é ignorado.
         worker.begin(str(args.get("task_id") or ""))
-        thread = threading.Thread(target=run_transcribe, args=(args,), daemon=True)
+        thread = threading.Thread(target=run_job, args=(cmd, args), daemon=True)
         jobs.append(thread)
         thread.start()
     for job in jobs:

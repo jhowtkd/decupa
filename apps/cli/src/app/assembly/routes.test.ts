@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { runInNewContext } from "node:vm";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, unlink, writeFile, appendFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, unlink, writeFile, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -981,6 +981,107 @@ it("publishCorrection faz rebase e publica quando a revisão avançou por ediç�
   const corr = final.corrections.find((c) => c.id === "corr-1");
   expect(corr?.status).toBe("aligned");
   expect(corr?.words[0]?.text).toBe("certa");
+});
+
+it("corrige fala pelo worker residente, preserva offset e reutiliza o WAV temporário", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-align-worker-"));
+  const clip = join(dir, "fala.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), clip);
+  const coordinator = createFileCoordinator(join(dir, "coordinator"), { limit: 1 });
+  const withSlot = vi.spyOn(coordinator, "withSlot");
+  let alignedWav = "";
+  const worker = vi.fn(async (req: import("@decupa/transcript").SpeechWorkerRequest) => {
+    expect(req.operation).toBe("align");
+    if (req.operation !== "align") throw new Error("esperava operação align");
+    expect(req.text).toBe("fala nova");
+    expect(req.wav).toContain("decupa-snap-");
+    alignedWav = req.wav;
+    await access(req.wav);
+    return {
+      language: "pt",
+      words: [
+        { text: "fala", startMs: 100, endMs: 220, confidence: 0.9, sentenceIndex: 0 },
+        { text: "nova", startMs: 250, endMs: 430, confidence: 0.8, sentenceIndex: 0 },
+      ],
+      unaligned: [],
+    };
+  });
+  const app = await startApp({
+    projectDir: dir,
+    port: 0,
+    selectFn: async () => ({ paths: [clip] }),
+    executor: indexingExec(),
+    speech: { worker, coordinator, extract: async () => {}, detectSilence: async () => [] },
+  });
+  stop = app.close;
+  const base = `http://127.0.0.1:${app.port}`;
+  const opened = await selectClip(base);
+  const source = opened.project.assembly.sources[0]!;
+  const start = 0.2;
+  const end = 0.8;
+  const edit = await fetch(`${base}/project/edit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      action: { type: "correct", sourceId: source.id, start, end, text: "fala nova" },
+    }),
+  });
+
+  expect(edit.status).toBe(202);
+  await vi.waitFor(async () => {
+    const project = await loadProject(dir);
+    expect(project.corrections[0]?.status).toBe("aligned");
+  });
+
+  const result = await loadProject(dir);
+  const correction = result.corrections[0]!;
+  expect(worker).toHaveBeenCalledTimes(1);
+  expect(worker).toHaveBeenCalledWith(expect.objectContaining({
+    operation: "align", text: "fala nova", language: "pt", wav: alignedWav,
+  }));
+  expect(withSlot).toHaveBeenCalledWith(
+    { stage: "speech", priority: "interactive" },
+    expect.any(Function),
+  );
+  expect(correction.status).toBe("aligned");
+  expect(correction.words.map(({ start: wordStart, end: wordEnd }) => [wordStart, wordEnd])).toEqual([
+    [0.3, 0.42], [0.45, 0.63],
+  ]);
+  await expect(access(alignedWav)).rejects.toThrow();
+});
+
+it("correção não publica palavras quando o alinhamento não cobre o texto solicitado", async () => {
+  const { base, dir } = await boot([], {
+    executor: indexingExec(),
+    speech: {
+      worker: async () => ({
+        language: "pt",
+        words: [{ text: "outra", startMs: 100, endMs: 300, confidence: 0.9, sentenceIndex: 0 }],
+        unaligned: ["fala"],
+      }),
+      extract: async () => {},
+      detectSilence: async () => [],
+    },
+  });
+  const opened = await selectClip(base);
+  const source = opened.project.assembly.sources[0]!;
+  const edit = await fetch(`${base}/project/edit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseRevision: opened.project.revision,
+      action: { type: "correct", sourceId: source.id, start: 0, end: 0.5, text: "fala nova" },
+    }),
+  });
+  expect(edit.status).toBe(202);
+  await vi.waitFor(async () => {
+    const project = await loadProject(dir);
+    expect(project.corrections[0]?.status).toBe("error");
+  });
+  const correction = (await loadProject(dir)).corrections[0]!;
+  expect(correction.error).toMatch(/sem correspondência no áudio/);
+  expect(correction.words).toEqual([]);
 });
 
 it("GET /project não trata prepare em voo como reinício do servidor", async () => {

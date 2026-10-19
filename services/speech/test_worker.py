@@ -323,6 +323,158 @@ class ResidentWorkerTest(unittest.TestCase):
         self.assertEqual([call.kwargs["device"] for call in whisper.load_align_model.call_args_list], ["cuda"])
         self.assertEqual(whisper.align.call_args.args[4], "cpu")
 
+    def test_align_loads_only_alignment_model_on_requested_cpu(self):
+        whisper = Mock()
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 8000
+        whisper.align.return_value = {
+            "segments": [{"words": [{"word": "certa", "start": 0.1, "end": 0.3, "score": 0.8}]}],
+        }
+        worker = load_worker(whisper).SpeechWorker()
+
+        result = worker.align(task_id="align-only", wav="clip.wav", text="certa", device="cpu")
+
+        whisper.load_model.assert_not_called()
+        whisper.load_align_model.assert_called_once_with(language_code="pt", device="cpu")
+        self.assertEqual(whisper.align.call_args.args[0], [{"start": 0.0, "end": 0.5, "text": "certa"}])
+        self.assertEqual(whisper.align.call_args.args[4], "cpu")
+        self.assertEqual(result["words"][0]["text"], "certa")
+        self.assertEqual(result["taskId"], "align-only")
+
+    def test_align_cancellation_discards_result_and_allows_retry(self):
+        whisper = Mock()
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 8000
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_align(*_args, **_kwargs):
+            started.set()
+            self.assertTrue(release.wait(2))
+            return {"segments": [{"words": [{"word": "lento", "start": 0.1, "end": 0.3, "score": 1}]}]}
+
+        whisper.align.side_effect = slow_align
+        worker_mod = load_worker(whisper)
+        worker = worker_mod.SpeechWorker()
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                worker.align(task_id="cancel-align", wav="clip.wav", text="lento")
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.assertTrue(started.wait(1))
+        worker.cancel("cancel-align")
+        release.set()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], worker_mod.CancelledError)
+        self.assertIn("cancel-align", str(errors[0]))
+
+        whisper.align.side_effect = None
+        whisper.align.return_value = {"segments": [{"words": [
+            {"word": "rápido", "start": 0.1, "end": 0.3, "score": 1},
+        ]}]}
+        retry = worker.align(task_id="retry-align", wav="clip.wav", text="rápido")
+        self.assertEqual(retry["words"][0]["text"], "rápido")
+        whisper.load_model.assert_not_called()
+
+    def test_serve_ten_align_requests_share_alignment_load_without_asr(self):
+        whisper = Mock()
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 16000
+        whisper.align.return_value = {"segments": [{"words": [
+            {"word": "certa", "start": 0.1, "end": 0.3, "score": 0.9},
+        ]}]}
+        worker_mod = load_worker(whisper)
+        requests = [json.dumps({
+            "cmd": "align",
+            "args": {"task_id": f"align-{index}", "wav": f"clip-{index}.wav", "text": "certa"},
+        }) for index in range(10)]
+        stdin = io.StringIO("\n".join(requests) + "\n")
+        stdout = io.StringIO()
+
+        with patch.object(worker_mod.sys, "stdin", stdin), patch.object(worker_mod.sys, "stdout", stdout):
+            worker_mod.serve()
+
+        replies = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(replies), 10)
+        self.assertEqual({reply["taskId"] for reply in replies}, {f"align-{index}" for index in range(10)})
+        self.assertTrue(all(reply["words"][0]["text"] == "certa" for reply in replies))
+        whisper.load_align_model.assert_called_once_with(language_code="pt", device="cpu")
+        whisper.load_model.assert_not_called()
+        whisper.transcribe.assert_not_called()
+        self.assertEqual(whisper.align.call_count, 10)
+
+    def test_align_and_transcribe_never_run_heavy_operations_in_parallel(self):
+        whisper = Mock()
+        asr = Mock()
+        whisper.load_model.return_value = asr
+        whisper.load_align_model.return_value = ("align", "meta")
+        whisper.load_audio.return_value = [0.0] * 8000
+        align_started = threading.Event()
+        release_align = threading.Event()
+        transcribe_started = threading.Event()
+        state_lock = threading.Lock()
+        active = 0
+        maximum_active = 0
+
+        def enter_heavy(started: threading.Event, release: threading.Event | None = None):
+            nonlocal active, maximum_active
+            with state_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            started.set()
+            if release is not None:
+                self.assertTrue(release.wait(2))
+            with state_lock:
+                active -= 1
+
+        whisper.align.side_effect = lambda *_args, **_kwargs: (
+            enter_heavy(align_started, release_align),
+            {"segments": []},
+        )[1]
+        asr.transcribe.side_effect = lambda *_args, **_kwargs: (
+            enter_heavy(transcribe_started),
+            {"segments": []},
+        )[1]
+        worker = load_worker(whisper).SpeechWorker()
+        errors: list[BaseException] = []
+
+        def run_align() -> None:
+            try:
+                worker.align(task_id="align", wav="clip.wav", text="fala")
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def run_transcribe() -> None:
+            try:
+                worker.transcribe(task_id="transcribe", wav="source.wav")
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        align_thread = threading.Thread(target=run_align)
+        transcribe_thread = threading.Thread(target=run_transcribe)
+        align_thread.start()
+        self.assertTrue(align_started.wait(1))
+        transcribe_thread.start()
+        time.sleep(0.05)
+        self.assertFalse(transcribe_started.is_set())
+        release_align.set()
+        align_thread.join(2)
+        transcribe_thread.join(2)
+
+        self.assertFalse(align_thread.is_alive())
+        self.assertFalse(transcribe_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(transcribe_started.is_set())
+        self.assertEqual(maximum_active, 1)
+        self.assertEqual(whisper.load_model.call_count, 1)
+
     def test_benchmark_loaded_models_not_cache_replay(self):
         whisper = Mock()
         asr = Mock()
@@ -615,6 +767,11 @@ class HeartbeatDuringModelLoadTest(unittest.TestCase):
     def test_heartbeat_while_align_model_loads(self):
         worker, stamps, _ = self.build(align_hold=("beats", 3))
         worker.transcribe(task_id="a", wav="a.wav")
+        self.assertGreaterEqual(len(stamps(self.STAGE_ALIGN)), 3)
+
+    def test_heartbeat_while_align_operation_loads_alignment_model(self):
+        worker, stamps, _ = self.build(align_hold=("beats", 3))
+        worker.align(task_id="align", wav="a.wav", text="oi", device="cpu")
         self.assertGreaterEqual(len(stamps(self.STAGE_ALIGN)), 3)
 
     def test_heartbeat_stops_after_the_cap(self):
