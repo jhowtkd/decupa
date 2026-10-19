@@ -53,15 +53,25 @@ small{display:block;color:var(--muted)}@media(max-width:600px){header,main{paddi
 const el=id=>document.getElementById(id);
 const originLabel=source=>({environment:'ambiente',user:'configuração deste computador',project:'configuração do projeto',credentials:'credenciais',default:'padrão',fallback:'alternativa sem chave',input:'chave digitada'}[source]||source);
 let assemblyTextLoaded='text',textLoaded=null;
+const sectionFields={text:['preset','model','endpoint','textKey'],visual:['textImages','assemblyText','openaiKey'],jev:['noJev','jevKey']};
+const fieldProperty=id=>['textImages','noJev'].includes(id)?'checked':'value';
+const snapshotFields=section=>Object.fromEntries((section?sectionFields[section]:Object.values(sectionFields).flat()).map(id=>[id,el(id)[fieldProperty(id)]]));
+function updateField(id,value,submitted){const prop=fieldProperty(id);if(!submitted||el(id)[prop]===submitted[id])el(id)[prop]=value;}
 async function showState(){
+ const submitted=snapshotFields();
  const response=await fetch('/settings/state',{headers:{accept:'application/json'}});if(!response.ok)throw Error('Não foi possível ler a configuração.');const body=await response.json();
- const state=body.visual;el('textImages').checked=state.provider==='text'&&!state.notice;
+ applyState(body,null,submitted);
+}
+// O estado efetivo pode mudar em várias seções; só a seção aceita repopula seus campos.
+// Os rascunhos e as chaves digitadas ficam apenas nos formulários, sem persistência local.
+function applyState(body,section,submitted){
+ const state=body.visual;if(!section||section==='visual')updateField('textImages',state.provider==='text'&&!state.notice,submitted);
  el('state').textContent='Origem: '+originLabel(state.source)+'. '+(state.notice||(state.provider==='openai'?(state.configured?'GPT-6 Luna configurado.':'A chave OpenAI está ausente.'):'Provedor de texto escolhido para imagens.'));
- const text=body.assemblyText;assemblyTextLoaded=text.notice?'openai':text.provider;el('assemblyText').value=assemblyTextLoaded;
+ const text=body.assemblyText;if(!section||section==='visual'){assemblyTextLoaded=text.notice?'openai':text.provider;updateField('assemblyText',assemblyTextLoaded,submitted);}
  el('assemblyTextState').textContent='Origem: '+originLabel(text.source)+'. '+(text.notice||(text.provider==='openai'?(text.configured?'GPT-6.1 Sol, raciocínio médio configurado.':'A chave OpenAI está ausente.'):'Provedor de texto (padrão).'));
- el('noJev').checked=!body.jev.enabled&&!body.jev.notice;
+ if(!section||section==='jev')updateField('noJev',!body.jev.enabled&&!body.jev.notice,submitted);
  el('jevState').textContent='Origem: '+originLabel(body.jev.source)+'. '+(body.jev.notice||(body.jev.enabled?'Jev configurado.':'Jev desligado por escolha.'));
- if(body.text){textLoaded=body.text.saved||body.text;el('preset').value=textLoaded.preset;el('model').value=textLoaded.model||'';el('endpoint').value=textLoaded.baseUrl||'';
+ if(body.text){if(!section||section==='text'){textLoaded=body.text.saved||body.text;updateField('preset',textLoaded.preset,submitted);updateField('model',textLoaded.model||'',submitted);updateField('endpoint',textLoaded.baseUrl||'',submitted);}
  el('textState').textContent=(body.text.configured?'Configurado':'Não configurado')+' · '+body.text.preset+' · '+(body.text.model||'sem modelo')+' · '+(body.text.host||'sem endpoint')+' · Origem: '+originLabel(body.text.source)+'.';el('textNotice').textContent=body.text.notice||'';textRequirements();}
 }
 const canonicalEndpoint=value=>{try{return new URL(value).href;}catch{return value;}};
@@ -73,9 +83,10 @@ function changedTextFields(){const fields={};for(const [id,key] of [['preset','p
  const value=el(id).value.trim(),loaded=textLoaded?.[key]||'';if(key==='baseUrl'?canonicalEndpoint(value)!==canonicalEndpoint(loaded):value!==loaded)fields[key]=value;}
  if(el('textKey').value.trim())fields.apiKey=el('textKey').value;return fields;}
 async function saveSection(section,button,fields){
+ const submitted=snapshotFields(section);
  button.disabled=true;const message=el(section==='text'?'textMessage':section==='visual'?'message':'jevMessage');message.textContent='';
  try{const response=await fetch('/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({section,...fields})});const body=await response.json();if(!response.ok)throw Error(body.error);
- el(section==='text'?'textKey':section==='visual'?'openaiKey':'jevKey').value='';await showState();message.textContent=fields.removeKey?'Chave removida deste computador. Confira a origem efetiva acima.':'Configuração salva. Vale na próxima operação quando este computador é a origem efetiva.';
+ updateField(section==='text'?'textKey':section==='visual'?'openaiKey':'jevKey','',submitted);applyState(body,section,submitted);message.textContent=fields.removeKey?'Chave removida deste computador. Confira a origem efetiva acima.':'Configuração salva. Vale na próxima operação quando este computador é a origem efetiva.';
  }catch(error){message.textContent=error.message||'Não foi possível conectar ao Decupa.';}finally{button.disabled=false;}
 }
 el('textForm').onsubmit=event=>{event.preventDefault();return saveSection('text',event.target.querySelector('button'),changedTextFields());};

@@ -120,3 +120,105 @@ it("confirmar Apagar cena envia delete-scene", async () => {
   const body = JSON.parse(String(api.call.mock.calls[0]?.[1] && (api.call.mock.calls[0][1] as { body?: string }).body));
   expect(body.action).toEqual({ type: "delete-scene", sceneId: "s1" });
 });
+
+it.each([
+  ["409", { res: { ok: false, status: 409 }, body: { error: "conflito" } }],
+  ["500", { res: { ok: false, status: 500 }, body: { error: "falha" } }],
+  ["rede", new Error("rede")],
+])("correção textual mantém formulário e texto quando o aceite falha (%s)", async (_name, outcome) => {
+  const { state, api, document } = montar();
+  state.set("project", projeto());
+  arrastar(document);
+  [...document.querySelectorAll("button")].find((btn) => btn.textContent === "Corrigir")?.click();
+  const input = document.querySelector('input[aria-label="Correção do trecho"]')!;
+  input.value = "texto corrigido";
+  api.call.mockImplementationOnce(async () => {
+    if (outcome instanceof Error) throw outcome;
+    return outcome as never;
+  });
+  document.querySelector(".texto-correct")?.dispatchEvent({ type: "submit", preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  expect({ input: document.querySelector('input[aria-label="Correção do trecho"]')?.value, menu: !!menuAberto(document) })
+    .toEqual({ input: "texto corrigido", menu: true });
+});
+
+it("correção textual aceita 202 e fecha o menu", async () => {
+  const { state, api, document } = montar();
+  state.set("project", projeto());
+  arrastar(document);
+  [...document.querySelectorAll("button")].find((btn) => btn.textContent === "Corrigir")?.click();
+  document.querySelector('input[aria-label="Correção do trecho"]')!.value = "texto corrigido";
+  api.call.mockResolvedValueOnce({ res: { ok: true, status: 202 }, body: {} });
+  document.querySelector(".texto-correct")?.dispatchEvent({ type: "submit", preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(menuAberto(document)).toBeNull();
+});
+
+it("409 reconciliado com mudança de apoio preserva a correção enquanto as palavras seguem válidas", async () => {
+  const { state, api, document } = montar();
+  const p = projeto();
+  state.set("project", p);
+  arrastar(document);
+  [...document.querySelectorAll("button")].find((btn) => btn.textContent === "Corrigir")?.click();
+  const input = document.querySelector('input[aria-label="Correção do trecho"]')!;
+  input.value = "correção ainda disponível";
+  api.call.mockImplementationOnce(async () => {
+    state.set("project", {
+      ...p,
+      revision: p.revision + 1,
+      scenes: p.scenes.map(scene => ({ ...scene, support: [{ visualId: "v1", offsetFrames: 2, durationFrames: 8 }] })),
+    });
+    return { res: { ok: false, status: 409 }, body: { error: "conflito reconciliado" } };
+  });
+  document.querySelector(".texto-correct")?.dispatchEvent({ type: "submit", preventDefault() {} });
+  await vi.waitFor(() => expect(api.call).toHaveBeenCalledTimes(1));
+  const firstApply = document.querySelector(".texto-correct button")!;
+  await vi.waitFor(() => expect(firstApply.disabled).toBe(false));
+  expect({
+    revision: (state.get("project") as ReturnType<typeof projeto>).revision,
+    input: document.querySelector('input[aria-label="Correção do trecho"]')?.value,
+    menu: !!menuAberto(document),
+  }).toEqual({ revision: 4, input: "correção ainda disponível", menu: true });
+  api.call.mockResolvedValueOnce({ res: { ok: true, status: 202 }, body: {} });
+  document.querySelector(".texto-correct")?.dispatchEvent({ type: "submit", preventDefault() {} });
+  await vi.waitFor(() => expect(api.call).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(menuAberto(document)).toBeNull());
+  const retry = JSON.parse(String(api.call.mock.calls[1]?.[1] && (api.call.mock.calls[1][1] as { body?: string }).body));
+  expect({ body: retry, closed: menuAberto(document) === null }).toEqual({
+    body: { baseRevision: 4, action: { type: "correct", sourceId: "a", start: 0, end: 1, text: "correção ainda disponível" } },
+    closed: true,
+  });
+});
+
+it.each([
+  ["409", { res: { ok: false, status: 409 }, body: { error: "conflito" } }],
+  ["500", { res: { ok: false, status: 500 }, body: { error: "falha" } }],
+  ["rede", new Error("rede")],
+])("correção pendente bloqueia duplo envio e libera os campos após falha (%s)", async (_name, outcome) => {
+  const { state, api, document } = montar();
+  state.set("project", projeto());
+  arrastar(document);
+  [...document.querySelectorAll("button")].find((btn) => btn.textContent === "Corrigir")?.click();
+  const input = document.querySelector('input[aria-label="Correção do trecho"]')!;
+  input.value = "texto pendente";
+  let release!: (value: { res: { ok: boolean; status: number }; body: object }) => void;
+  let reject!: (error: Error) => void;
+  api.call.mockImplementationOnce(() => new Promise((resolve, rejectRequest) => { release = resolve; reject = rejectRequest; }));
+  const form = document.querySelector(".texto-correct")!;
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  const apply = form.querySelector("button")!;
+  expect({ calls: api.call.mock.calls.length, applyDisabled: apply.disabled, inputDisabled: input.disabled })
+    .toEqual({ calls: 1, applyDisabled: true, inputDisabled: true });
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  expect(api.call).toHaveBeenCalledTimes(1);
+  if (outcome instanceof Error) reject(outcome);
+  else release(outcome);
+  await vi.waitFor(() => expect({ apply: apply.disabled, input: input.disabled }).toEqual({ apply: false, input: false }));
+  expect({ calls: api.call.mock.calls.length, applyDisabled: apply.disabled, inputDisabled: input.disabled, text: input.value, menu: !!menuAberto(document) })
+    .toEqual({ calls: 1, applyDisabled: false, inputDisabled: false, text: "texto pendente", menu: true });
+  api.call.mockResolvedValueOnce({ res: { ok: true, status: 202 }, body: {} });
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  await vi.waitFor(() => expect(api.call).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(menuAberto(document)).toBeNull());
+  expect({ calls: api.call.mock.calls.length, closed: menuAberto(document) === null }).toEqual({ calls: 2, closed: true });
+});
