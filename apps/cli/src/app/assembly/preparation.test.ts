@@ -50,6 +50,8 @@ const PREVIEW_WAIT_NOTE = "prévia aguardando proxy e waveform";
 
 type FakeOpts = {
   failAudioFor?: string;
+  corruptSpeechIndexFor?: string;
+  emptyAudioFor?: string;
   failRender?: boolean;
   describeShort?: boolean;
   failVisual?: boolean;
@@ -66,7 +68,7 @@ type FakeOpts = {
   /** Segura cada request visual até `describes.release`. */
   paceDescribes?: boolean;
 };
-type Calls = { ingest: number; ffmpeg: number; render: number; propose: number; describe: number };
+type Calls = { ingest: number; asrBySource: Record<string, number>; ffmpeg: number; render: number; propose: number; describe: number };
 type Pace = { inFlight: () => number; max: () => number; release: () => void };
 
 function makeFakes(opts: FakeOpts = {}): {
@@ -90,7 +92,7 @@ function makeFakes(opts: FakeOpts = {}): {
   frames: Pace;
   describes: Pace;
 } {
-  const calls: Calls = { ingest: 0, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
+  const calls: Calls = { ingest: 0, asrBySource: {}, ffmpeg: 0, render: 0, propose: 0, describe: 0 };
   const execCalls: ExecCall[] = [];
   let gate: { release: (json: string) => void; gate: Promise<string> } | null = null;
   let audioGate: Promise<void> | null = null;
@@ -163,12 +165,15 @@ function makeFakes(opts: FakeOpts = {}): {
       if (audioGate) await audioGate;
       const input = call.args[call.args.indexOf("--input") + 1];
       const id = input.includes("apoio") ? "b" : "a";
+      calls.asrBySource[id] = (calls.asrBySource[id] ?? 0) + 1;
       if (opts.failAudioFor === id) return { code: 1, stdout: "", stderr: "boom" };
       const work = call.env?.CLAUDE_PROJECT_DIR ?? "";
       await mkdir(join(work, "out"), { recursive: true });
       await writeFile(
         call.args[call.args.indexOf("--out") + 1],
-        opts.withWords
+        opts.emptyAudioFor === id
+          ? JSON.stringify({ segments: [] })
+          : opts.withWords
           ? JSON.stringify({
             segments: [{
               words: [
@@ -184,11 +189,13 @@ function makeFakes(opts: FakeOpts = {}): {
     if (call.command === "python3" && call.args.includes("index")) {
       calls.ingest += 1;
       if (audioGate) await audioGate;
+      const input = call.args[2] ?? "";
+      const id = input.includes("apoio") ? "b" : "a";
       const work = call.env?.CLAUDE_PROJECT_DIR ?? "";
       await mkdir(join(work, "out"), { recursive: true });
       await writeFile(
         join(work, "out", "speech_index.json"),
-        JSON.stringify({
+        opts.corruptSpeechIndexFor === id ? "{" : JSON.stringify({
           units: [{
             id: "u0", index: 1, start: 0, end: 1.2, duration: 1.2, text: "fala transcrito",
             has_terminal_punct: true, is_question: false, word_count: 2, cps: 1,
@@ -618,6 +625,101 @@ describe("runPreparation", () => {
     expect(done.scenes).toHaveLength(1);
     expect(done.preparation?.status).toBe("ready");
     expect(done.previewRevision).toBe(done.revision);
+  });
+
+  it("índice corrompido bloqueia proposta e render; Retomar corrigido reaproveita a primeira transcrição", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
+    const first = makeFakes({ corruptSpeechIndexFor: "b" });
+    const blocked = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+
+    expect(first.calls.propose).toBe(0);
+    expect(first.calls.render).toBe(0);
+    expect(blocked.scenes).toHaveLength(0);
+    expect(blocked.previewRevision).toBeNull();
+    expect(blocked.preparation?.status).toBe("interrupted");
+    expect(blocked.preparation?.sources.apoio).toMatchObject({ audio: "error", visual: "ready" });
+    expect(blocked.preparation?.sources.apoio?.error).toMatch(/índice de fala indisponível.*apoio/);
+    expect(blocked.preparation?.error).toMatch(/apoio.*índice de fala indisponível/);
+    expect(first.calls.asrBySource.a).toBe(1);
+
+    const retry = makeFakes();
+    const resumed = await runPreparation(
+      dir,
+      blocked.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    expect(retry.calls.asrBySource.a ?? 0).toBe(0);
+    expect(resumed.scenes).toHaveLength(1);
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(retry.calls.propose).toBe(1);
+    expect(retry.calls.render).toBe(1);
+  });
+
+  it("Retomar com a fonte problemática explicitamente excluída reaproveita a primeira transcrição", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
+    const first = makeFakes({ corruptSpeechIndexFor: "b" });
+    const blocked = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      first.deps,
+      ctrl(),
+    );
+    expect(blocked.preparation?.status).toBe("interrupted");
+    expect(first.calls.asrBySource.a).toBe(1);
+
+    await saveProject(dir, blocked.revision, (project) => ({
+      ...project,
+      assembly: {
+        ...project.assembly,
+        sources: project.assembly.sources.map((source) =>
+          source.id === "apoio" ? { ...source, included: false } : source,
+        ),
+      },
+    }));
+    const excluded = await loadProject(dir);
+    const retry = makeFakes();
+    const resumed = await runPreparation(
+      dir,
+      excluded.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      retry.deps,
+      ctrl(),
+    );
+    expect(retry.calls.asrBySource.a ?? 0).toBe(0);
+    expect(resumed.assembly.sources.find((source) => source.id === "apoio")?.included).toBe(false);
+    expect(resumed.analyses.find((analysis) => analysis.sourceId === "apoio")?.status).toBe("error");
+    expect(resumed.scenes).toHaveLength(1);
+    expect(resumed.preparation?.status).toBe("ready");
+    expect(retry.calls.propose).toBe(1);
+    expect(retry.calls.render).toBe(1);
+  });
+
+  it("fonte de apoio com índice vazio legítimo permite proposta junto de uma fonte falante", async () => {
+    const base = await seed(dir, [["fala.mp4", "fala", "speech"], ["apoio.mp4", "apoio", "support"]]);
+    const { deps, calls } = makeFakes({ emptyAudioFor: "b" });
+    const done = await runPreparation(
+      dir,
+      base.revision,
+      { mode: "prepare", request: "montar tudo", modelOptIn: true, visualOptIn: true },
+      deps,
+      ctrl(),
+    );
+
+    expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.speech.length).toBeGreaterThan(0);
+    expect(done.analyses.find((analysis) => analysis.sourceId === "apoio")).toMatchObject({ status: "ready", speech: [] });
+    expect(done.preparation?.status).toBe("ready");
+    expect(done.scenes).toHaveLength(1);
+    expect(calls.propose).toBe(1);
+    expect(calls.render).toBe(1);
   });
 
   it("duplo início não duplica cenas nem revisões", async () => {
