@@ -236,48 +236,43 @@ it("render cancelado na fila não lança ffmpeg e preserva a referência", async
   const dest = await renderAssembly(assembly, dir, copyingRenderExec());
   const before = await hashFile(dest);
   const calls: { command: string; args: string[] }[] = [];
-  let entered = 0;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  const blocker = mediaWork.run(() => gate);
   const exec: Executor = {
     async run(call) {
       calls.push({ command: call.command, args: call.args });
-      if (call.command === "ffmpeg" || call.command === "python3") {
-        entered++;
-        await gate;
-        const work = call.env?.CLAUDE_PROJECT_DIR ?? call.cwd ?? "";
-        if (call.command === "python3" && work) {
-          await writeTimelineReference(call);
-        } else {
-          const out = call.args.at(-1)!;
-          if (out.endsWith(".tmp.mp4")) await copyFile(join(FIXTURES, "clip.mp4"), out);
-          else if (out.endsWith(".tmp.jpg")) await writeFile(out, "miniatura");
-        }
-      }
       return { code: 0, stdout: "", stderr: "" };
     },
   };
   const controller = new AbortController();
+  let pending: Promise<PromiseSettledResult<string>[]> | undefined;
   try {
-    const pending = Promise.allSettled([
-      ensurePlayback(assembly.sources[0]!, dir, exec),
+    await vi.waitFor(() => expect(mediaWork.inFlight).toBe(1));
+    const renderPending = Promise.allSettled([
       renderAssembly(assembly, dir, exec, { profile: "nvenc", signal: controller.signal }),
     ]);
+    pending = renderPending;
     await vi.waitFor(() => {
-      expect(entered).toBe(1);
-      expect(mediaWork.waiting).toBeGreaterThanOrEqual(1);
+      expect(mediaWork.waiting).toBe(1);
     });
     controller.abort();
+    await vi.waitFor(async () => {
+      const [render] = await renderPending;
+      expect(render.status).toBe("rejected");
+    });
+    expect(mediaWork.inFlight).toBe(1);
+    expect(calls).toHaveLength(0);
     release();
-    const [playback, render] = await pending;
-    expect(playback.status).toBe("fulfilled");
+    const [render] = await renderPending;
     expect(render.status).toBe("rejected");
     expect(calls.filter((c) => c.command === "python3")).toHaveLength(0);
     expect(await hashFile(dest)).toBe(before);
   } finally {
     release();
+    await Promise.allSettled([blocker, ...(pending ? [pending] : [])]);
   }
 });
 
