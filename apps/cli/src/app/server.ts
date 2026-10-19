@@ -2,6 +2,7 @@ import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { createTracer } from "@decupa/trace";
+import { createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
 import { createCredentialsReader, installCompanyCredentials, readAnalysisCredentials, resolveAssemblyTextProvider, resolveVisualProvider, assemblyTextClientOptions } from "@decupa/triage";
 import { resolveAppTransports } from "./analysis-transports.ts";
 import { providerSetup } from "./provider-setup.ts";
@@ -714,9 +715,21 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   const store = new JobStore();
   const job = store.create({ videoPath: input, workDir, id: stableCleanupJobId(workDir) });
   const pipelineJob: PipelineJob = { id: job.id, videoPath: input, workDir, signal: store.signal(job.id) };
-  // Sem sink: o traces nunca foi lido (sink morto); o tracer segue ativo
-  // para as etapas do pipeline, sem coletar eventos em memória.
-  const tracer = createTracer();
+  // Each traced attempt has its own journal, including later cleanup replans.
+  const traceOperations = new Map<string, OperationMetrics>();
+  const tracer = createTracer({ emit(event) {
+    let metrics = traceOperations.get(event.attemptId);
+    if (!metrics) {
+      metrics = createOperationMetrics({ dir: join(workDir, ".decupa", "metrics"),
+        operationId: event.attemptId, metadata: { jobId: job.id, operation: event.stage } });
+      traceOperations.set(event.attemptId, metrics);
+    }
+    metrics.emit("trace", event);
+    if (event.phase === "finished") {
+      traceOperations.delete(event.attemptId);
+      return metrics.close();
+    }
+  } });
 
   const cleanup = createCleanupPlanning({ job: pipelineJob, exec, tracer, store,
     env: opts.env ?? process.env, fetchImpl: opts.fetchImpl, providerConfigDir: opts.providerConfigDir, loadStored: opts.loadStored,
@@ -729,19 +742,30 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   let ingestInFlight = false;
 
   async function ingest(): Promise<void> {
+    const metrics = createOperationMetrics({ dir: join(workDir, ".decupa", "metrics"),
+      metadata: { jobId: job.id, operation: "ingest" } });
+    const ingestExec: Executor = { run: call => metrics.tracer.run(`process:${basename(call.command)}`, async () => {
+      const result = await exec.run(call);
+      metrics.emit("process-call", { command: basename(call.command), code: result.code });
+      return result;
+    }, { signal: call.signal }) };
+    const ingestSpeech = speech ? { ...speech,
+      worker: instrumentSpeechWorker(speech.worker, metrics),
+      coordinator: instrumentCoordinator(speech.coordinator, metrics),
+    } : undefined;
     ingestInFlight = true;
     void ensureAudioProxy(pipelineJob, exec).then((ok) => { audioReady = ok; }, () => {});
     try {
-      await preflight(pipelineJob, exec);
+      await metrics.tracer.run("preflight", () => preflight(pipelineJob, ingestExec));
       const ingestResult = await runIngest(
         pipelineJob,
-        exec,
-        (stage) => store.setStage(job.id, stage),
+        ingestExec,
+        (stage) => { metrics.emit("stage", { stage }); store.setStage(job.id, stage); },
         (line) => store.setProgress(job.id, line),
-        tracer,
-        speech,
+        metrics.tracer,
+        ingestSpeech,
         ingestAbort.signal,
-        { requireSpeech: true, coordinator: opts.coordinator },
+        { requireSpeech: true, coordinator: instrumentCoordinator(opts.coordinator, metrics) },
       );
       if (ingestResult.warning) store.setWarning(job.id, ingestResult.warning);
       if (store.get(job.id)?.stage === "cancelled") return;
@@ -753,6 +777,9 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
       store.fail(job.id, error instanceof Error ? error.message : String(error));
     } finally {
       ingestInFlight = false;
+      const stage = store.get(job.id)?.stage;
+      metrics.emit("ingest-result", { stage, category: stage === "cancelled" ? "cancelled" : stage === "error" ? "error" : "ok" });
+      await metrics.close();
     }
   }
 
