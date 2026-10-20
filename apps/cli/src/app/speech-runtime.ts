@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { createFileCoordinator } from "@decupa/coordinator";
-import { createResidentSpeechClient, type ResidentSpeechClient } from "@decupa/transcript";
+import { createResidentSpeechClient, SpeechWorkerInterruptedError, type ResidentSpeechClient } from "@decupa/transcript";
 import type { IngestSpeech, Executor } from "./pipeline.ts";
 import { assertSidecarSynced, SPEECH_SCRIPT, SpawnExecutor } from "./pipeline.ts";
 
@@ -93,7 +93,7 @@ export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpe
       ? undefined
       : {
           worker: async (req) => {
-            if (closed) throw new Error("worker de fala encerrou");
+            if (closed) throw new SpeechWorkerInterruptedError("worker de fala encerrou");
             client ??= createResidentSpeechClient({ device });
             const activeClient = client;
             lastUsed = now();
@@ -166,4 +166,3 @@ export function createServerSpeechRuntime(opts: SpeechRuntimeOptions): ServerSpe
     },
   };
 }
-

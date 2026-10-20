@@ -427,17 +427,43 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
       return { code: 0, stdout: "", stderr: "" };
     },
   };
+  let proposalCalls = 0;
+  const proposalPrompts: string[] = [];
   const app = await startApp({
     projectDir: dir,
     inputs: [speech],
     port: 0,
     executor,
-    proposeSend: async () =>
-      JSON.stringify({
+    proposeSend: async (content) => {
+      proposalCalls += 1;
+      proposalPrompts.push(JSON.stringify(content));
+      return JSON.stringify({
         scenes: [{ id: "sc-1", objective: "Abertura", selections: [{ speechId }] }],
         changedSceneIds: ["sc-1"],
         explanation: "fluxo com rebase",
-      }),
+      });
+    },
+    speech: {
+      worker: async (req) => req.operation === "align"
+        ? {
+          language: "pt",
+          words: [
+            { text: "tema", startMs: 100, endMs: 350, confidence: 0.9, sentenceIndex: 0 },
+            { text: "corrigido", startMs: 400, endMs: 800, confidence: 0.9, sentenceIndex: 0 },
+          ],
+          unaligned: [],
+        }
+        : {
+          language: "pt",
+          words: [
+            { text: "olá", startMs: 100, endMs: 500, confidence: 0.9, sentenceIndex: 0 },
+            { text: "tema", startMs: 600, endMs: 1000, confidence: 0.9, sentenceIndex: 0 },
+          ],
+          unaligned: [],
+        },
+      extract: async () => {},
+      detectSilence: async () => [],
+    },
     describeClient: {
       async send(content: unknown[]) {
         const match = /na fonte: \[([\d.]+), ([\d.]+)\)/.exec(JSON.stringify(content));
@@ -504,7 +530,7 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
         revision: number;
         scenes: unknown[];
         analyses: { sourceId: string; status: string }[];
-        corrections: { sourceId: string; text: string }[];
+        corrections: { sourceId: string; text: string; status: string }[];
         preparation: { status: string; error?: string } | null;
         previewArtifact: { revision: number } | null;
       };
@@ -514,9 +540,11 @@ it("edição concorrente à preparação faz rebase: ready sem perder a correç�
     });
     expect(body.project.analyses.find((a) => a.sourceId === sourceId)?.status).toBe("ready");
     expect(body.project.corrections).toHaveLength(1);
-    expect(body.project.corrections[0]).toMatchObject({ sourceId, text: "tema corrigido" });
+    expect(body.project.corrections[0]).toMatchObject({ sourceId, text: "tema corrigido", status: "aligned" });
     expect(body.project.scenes).toHaveLength(1);
     expect(body.project.previewArtifact?.revision).toBe(body.project.revision);
     expect(body.project.revision).toBe(opened.project.revision + 2);
   }, { timeout: 15000, interval: 200 });
+  expect(proposalCalls).toBe(1);
+  expect(proposalPrompts[0]).toContain("tema corrigido");
 });
