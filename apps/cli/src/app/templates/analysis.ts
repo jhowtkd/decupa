@@ -4,12 +4,14 @@ import {basename,join} from "node:path";
 import {hashFile,probe} from "@decupa/media";
 import {publishAtomic} from "@decupa/cache";
 import {payloadProfileKey} from "@decupa/triage";
+import {createOperationMetrics} from "@decupa/bench";
 import type {Executor,IngestSpeech} from "../pipeline.ts";
 import type {Source,Span,VisualSpan} from "../assembly/types.ts";
-import {analysisKey,analyzeSource} from "../assembly/analysis.ts";
+import {analysisKey} from "../assembly/analysis.ts";
+import {analyzeSourceWithMetrics,createAnalysisMetrics} from "../assembly/analysis-metrics.ts";
 import {subtractRanges} from "../assembly/words.ts";
-import {validateVisual} from "../assembly/visual.ts";
-import {describeSource,VISUAL_PROMPT_VERSION,type VisualClient} from "../assembly/model.ts";
+import {validateVisual,visualWindows} from "../assembly/visual.ts";
+import {describeSource,VISUAL_PROMPT_VERSION,visualMetricConfigKey,type VisualClient} from "../assembly/model.ts";
 import {visualIdentityKey} from "../assembly/visual-identity.ts";
 import {parseModelJson,requestValidated} from "../assembly/model-response.ts";
 import {validateRecipe,validateRules} from "./store.ts";
@@ -17,6 +19,7 @@ import {RULE_CATEGORIES,type Recipe,type Rule} from "./types.ts";
 export {validateRules} from "./store.ts";
 export type RecipeAnalysisDeps={
  workDir:string;exec:Executor;send:(content:unknown[],signal?:AbortSignal)=>Promise<string>;modelKey:string;
+ metricsDir?:string;
  allowModel:boolean;allowVisual:boolean;persist:(recipe:Recipe)=>Promise<void>;speech?:IngestSpeech;
  visualClient?:VisualClient;
  legacyModelKey?:string;
@@ -33,6 +36,7 @@ export async function relinkRecipe(recipe:Recipe,path:string):Promise<Recipe>{
 export async function analyzeRecipe(recipe:Recipe,deps:RecipeAnalysisDeps,signal:AbortSignal):Promise<Recipe>{
  if(!deps.allowModel||!deps.allowVisual)throw Error("análise externa não autorizada");
  let next=validateRecipe({...structuredClone(recipe),status:"draft",analysis:{status:"running",stage:"media",pid:process.pid}});
+ const metrics=createOperationMetrics({dir:deps.metricsDir??join(deps.workDir,".decupa","metrics"),metadata:{operation:"template-analysis"}});
  async function stage(value:string){signal.throwIfAborted();next.analysis={status:"running",stage:value,pid:process.pid};await deps.persist(structuredClone(next));}
  try{
   if(deps.resolveAnalysis)deps={...deps,...await deps.resolveAnalysis()};
@@ -59,21 +63,37 @@ export async function analyzeRecipe(recipe:Recipe,deps:RecipeAnalysisDeps,signal
   const visualKey=deps.visualClient?visualIdentityKey(deps.visualClient,"baseline",VISUAL_PROMPT_VERSION):deps.describe?hash([deps.modelKey,"injected-visual"]):null;
   const visualWork=visualKey?stageWork("visual",visualKey):null;
   // Uma chave por etapa: trocar a visão não custa outra ASR, mas invalida seus consumidores.
-  async function cached<T>(work:string|null,name:string,build:()=>Promise<T>,legacy?:()=>Promise<T|null>):Promise<T>{
-   signal.throwIfAborted();const existing=await readCached<T>(work,name);if(existing!==null)return existing;
-   const value=await legacy?.()??await build();signal.throwIfAborted();if(work){await mkdir(work,{recursive:true});await publishAtomic(join(work,name+".json"),JSON.stringify(value));}return value;
+  async function cached<T>(work:string|null,name:string,build:()=>Promise<T>,legacy?:()=>Promise<T|null>,onHit?:()=>void):Promise<T>{
+   signal.throwIfAborted();const existing=await readCached<T>(work,name);if(existing!==null){onHit?.();return existing;}
+   const previous=await legacy?.();if(previous!=null)onHit?.();
+   const value=previous??await build();signal.throwIfAborted();if(work){await mkdir(work,{recursive:true});await publishAtomic(join(work,name+".json"),JSON.stringify(value));}return value;
   }
   await stage("audio");
+  const speechMetric=createAnalysisMetrics(source,metrics);
   const speech=await cached(speechWork,"speech",async()=>{
-   if(!source.hasAudio)return [];
-   if(deps.transcribe)return deps.transcribe(source,signal);
-   const result=await analyzeSource(source,speechWork,deps.exec,{signal,speech:deps.speech});
+   if(!source.hasAudio){speechMetric.finish({key:analysisKey(source.sha256),status:"ready"});return [];}
+   if(deps.transcribe){
+    speechMetric.onStage("indexing");
+    try{const value=await deps.transcribe(source,signal);speechMetric.finish({key:analysisKey(source.sha256),status:"ready"});return value;}
+    catch(error){speechMetric.fail();throw error;}
+   }
+   const result=await analyzeSourceWithMetrics(source,speechWork,deps.exec,{signal,speech:deps.speech},metrics);
    if(result.status!=="ready")throw Error(result.error||"transcrição incompleta");
    return result.speech;
-  },legacySpeech);
+  },legacySpeech,()=>speechMetric.hit(analysisKey(source.sha256)));
   await stage("visual");
-  const visual=await cached(visualWork,"visual",()=>deps.describe?deps.describe(source,signal):describeSource(source,visualWork??deps.workDir,signal,{exec:deps.exec,client:deps.visualClient,ffmpegLimit:1,networkLimit:1}),legacyVisual);
-  const missing=subtractRanges([{start:0,end:source.durationSeconds}],validateVisual(visual,source));
+  let visualReused=false;
+  const visual=await cached(visualWork,"visual",()=>deps.describe?deps.describe(source,signal):describeSource(source,visualWork??deps.workDir,signal,{exec:deps.exec,client:deps.visualClient,ffmpegLimit:1,networkLimit:1,onCacheMetric:metric=>metrics.emit("cache",metric)}),legacyVisual,()=>{visualReused=true;});
+  const emitVisualReuse=(spans:VisualSpan[]|null):void=>{
+   for(const window of visualWindows(source.durationSeconds)){
+    const missing=spans===null||subtractRanges([{start:window.start,end:window.end}],spans).length>0;
+    metrics.emit("cache",{stage:"visual",sha256:source.sha256,configKey:visualMetricConfigKey(deps.describe?null:visualKey,window),durationMs:0,outcome:missing?"error":visualReused?"hit":"built"});
+   }
+  };
+  let validated:VisualSpan[];
+  try{validated=validateVisual(visual,source);}catch(error){if(visualReused||deps.describe)emitVisualReuse(null);throw error;}
+  if(visualReused||deps.describe)emitVisualReuse(validated);
+  const missing=subtractRanges([{start:0,end:source.durationSeconds}],validated);
   if(missing.length){
    if(visualWork)await unlink(join(visualWork,"visual.json"));
    throw Error("Lacunas visuais: "+missing.map(r=>`${r.start.toFixed(3)}–${r.end.toFixed(3)}s`).join(", ")+". Reanalise a referência antes de aprovar.");
@@ -102,5 +122,5 @@ export async function analyzeRecipe(recipe:Recipe,deps:RecipeAnalysisDeps,signal
  }catch(error){
   next.analysis={status:signal.aborted?"cancelled":"error",stage:next.analysis.stage,error:(error instanceof Error?error.message:String(error)).slice(0,9000)||"Análise interrompida"};
   await deps.persist(next);throw error;
- }
+ }finally{await metrics.close();}
 }

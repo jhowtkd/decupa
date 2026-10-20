@@ -61,6 +61,11 @@ Não invente o que não aparece.`;
 export const VISUAL_PROMPT_VERSION = 3;
 export const VISUAL_CACHE_VERSION = "visual-v4";
 
+/** Shared by frame-window builds and the template's outer visual cache. */
+export function visualMetricConfigKey(identityKey: string | null, window: VisualWindow): string | null {
+  return identityKey ? cacheConfigKey({ version: VISUAL_CACHE_VERSION, identityKey, window }) : null;
+}
+
 export type VisualMetric = {
   sourceId: string; windowStart: number; windowEnd: number;
   phase: "extract" | "request" | "total";
@@ -544,7 +549,7 @@ export async function describeSource(
       throw error;
     } finally {
       emitCacheMetric(deps?.onCacheMetric, { stage: "visual", sha256: source.sha256,
-        configKey: identityKey ? cacheConfigKey({ version: VISUAL_CACHE_VERSION, identityKey, window }) : null,
+        configKey: visualMetricConfigKey(identityKey, window),
         outcome: outcome === "cache-hit" ? "hit" : outcome === "ok" && complete ? "built" : "error",
         durationMs: outcome === "cache-hit" ? Math.max(0, now() - windowStart) : workMs });
       // Total da janela: wall desta janela, nunca soma de paralelas.

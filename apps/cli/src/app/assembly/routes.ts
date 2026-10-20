@@ -8,6 +8,7 @@ import { planFillerSnaps } from "./filler-snaps.ts";
 import { assemblyFillerSnapshot, type FillerObserveDeps } from "./filler-observe.ts";
 import { commitFillerChange, parseFillerTargets } from "./filler-routes.ts";
 import { publishAtomic } from "@decupa/cache";
+import { createOperationMetrics } from "@decupa/bench";
 import { loadRecipe } from "../templates/store.ts";
 import { deliverApproved, readDelivery } from "./delivery.ts";
 import { brollCandidates, brollIndex, candidateSupport } from "./broll.ts";
@@ -25,7 +26,7 @@ import { serveMedia } from "../../http/media.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
-import { analyzeSource } from "./analysis.ts";
+import { analyzeSourceWithMetrics } from "./analysis-metrics.ts";
 import { holdPreparation, isPreparationActive, runPreparation } from "./preparation.ts";
 import { describeSource, type VisualClient } from "./model.ts";
 import { ensurePlayback, ensureThumbnail, verifySourceIdentity } from "./media.ts";
@@ -606,69 +607,73 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     wantVisual: boolean,
     current?: { gen: number; signal: AbortSignal },
   ): Promise<Project> {
-    const visualClient = wantVisual ? (await deps.resolveOperationDeps?.())?.describeClient ?? deps.describeClient : deps.describeClient;
-    const { gen, signal } = current ?? begin("analyzing");
-    let done = 0;
-    for (const sourceId of sourceIds) {
-      if (!stillCurrent(gen)) break;
-      const source = project.assembly.sources.find((item) => item.id === sourceId);
-      if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
-      operation = {
-        stage: "analyzing",
-        sourceId,
-        progress: `${done + 1}/${sourceIds.length}`,
-      };
-      try {
-        const analysis = await analyzeSource(source, dir, deps.exec, {
-          signal,
-          speech: deps.speech,
-          heavyCoordinator: deps.coordinator,
-          onStage: (stage) => {
-            if (!stillCurrent(gen)) return;
-            operation = stage === "queued"
-              ? { stage: "queued", sourceId }
-              : { stage: "analyzing", sourceId, progress: `${done + 1}/${sourceIds.length}` };
-          },
-        });
-        if (wantVisual && source.role !== "speech" && visualClient && source.hasVideo && !signal.aborted) {
-          try {
-            analysis.visual = await describeSource(source, dir, signal, {
-              client: visualClient,
-              exec: deps.exec,
-              coordinator: deps.coordinator,
-              onQueued: () => { if (stillCurrent(gen)) operation = { stage: "queued", sourceId }; },
-              onStarted: () => { if (stillCurrent(gen)) operation = { stage: "analyzing", sourceId }; },
-            });
-            analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
-          } catch (err) {
-            analysis.status = "partial";
-            analysis.error = err instanceof Error ? err.message : String(err);
-          }
-        }
+    const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics"), metadata: { operation: "analyze-sources" } });
+    try {
+      const visualClient = wantVisual ? (await deps.resolveOperationDeps?.())?.describeClient ?? deps.describeClient : deps.describeClient;
+      const { gen, signal } = current ?? begin("analyzing");
+      let done = 0;
+      for (const sourceId of sourceIds) {
+        if (!stillCurrent(gen)) break;
+        const source = project.assembly.sources.find((item) => item.id === sourceId);
+        if (!source) throw new HttpError(404, `fonte não cadastrada: ${sourceId}`);
+        operation = {
+          stage: "analyzing",
+          sourceId,
+          progress: `${done + 1}/${sourceIds.length}`,
+        };
         try {
-          await saveProject(dir, project.revision, (current) => {
-            // A análise é um overlay: adicionar outra Mídia pode avançar a
-            // revisão enquanto o trabalho roda. Só descarte o resultado se a
-            // própria fonte tiver sido removida ou trocado de conteúdo.
-            const currentSource = current.assembly.sources.find((item) => item.id === source.id);
-            if (!currentSource || currentSource.sha256 !== source.sha256) return current;
-            return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
-          });
+          const analysis = await analyzeSourceWithMetrics(source, dir, deps.exec, {
+            signal,
+            speech: deps.speech,
+            heavyCoordinator: deps.coordinator,
+            onStage: (stage) => {
+              if (!stillCurrent(gen)) return;
+              operation = stage === "queued"
+                ? { stage: "queued", sourceId }
+                : { stage: "analyzing", sourceId, progress: `${done + 1}/${sourceIds.length}` };
+            },
+          }, metrics);
+          if (wantVisual && source.role !== "speech" && visualClient && source.hasVideo && !signal.aborted) {
+            try {
+              analysis.visual = await describeSource(source, dir, signal, {
+                onCacheMetric: metric => metrics.emit("cache", metric),
+                client: visualClient,
+                exec: deps.exec,
+                coordinator: deps.coordinator,
+                onQueued: () => { if (stillCurrent(gen)) operation = { stage: "queued", sourceId }; },
+                onStarted: () => { if (stillCurrent(gen)) operation = { stage: "analyzing", sourceId }; },
+              });
+              analysis.visualCoverage = visualCoverage(analysis.visual, source.durationSeconds);
+            } catch (err) {
+              analysis.status = "partial";
+              analysis.error = err instanceof Error ? err.message : String(err);
+            }
+          }
+          try {
+            await saveProject(dir, project.revision, (current) => {
+              // A análise é um overlay: adicionar outra Mídia pode avançar a
+              // revisão enquanto o trabalho roda. Só descarte o resultado se a
+              // própria fonte tiver sido removida ou trocado de conteúdo.
+              const currentSource = current.assembly.sources.find((item) => item.id === source.id);
+              if (!currentSource || currentSource.sha256 !== source.sha256) return current;
+              return { ...current, analyses: mergeAnalyses(current.analyses, [analysis]) };
+            });
+          } catch (err) {
+            if (err instanceof HttpError) throw err;
+            const message = err instanceof Error ? err.message : String(err);
+            if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+            throw err;
+          }
+          done += 1;
         } catch (err) {
-          if (err instanceof HttpError) throw err;
-          const message = err instanceof Error ? err.message : String(err);
-          if (/revisão desatualizada/.test(message)) throw new HttpError(409, message);
+          if (isCancelledError(err) || signal.aborted) break;
           throw err;
         }
-        done += 1;
-      } catch (err) {
-        if (isCancelledError(err) || signal.aborted) break;
-        throw err;
+        if (!stillCurrent(gen)) break;
       }
-      if (!stillCurrent(gen)) break;
-    }
-    if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
-    return loadProject(dir);
+      if (stillCurrent(gen)) operation = { stage: "ready", progress: `${done}/${sourceIds.length}` };
+      return await loadProject(dir);
+    } finally { await metrics.close(); }
   }
 
   async function mutate(
@@ -892,12 +897,15 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const source = project.assembly.sources.find((item) => item.id === sourceId);
         if (!source) throw new HttpError(404, "fonte não cadastrada");
         if (url.searchParams.get("view") === "playback") {
+          const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics"), metadata: { operation: "playback" } });
+          let closing: Promise<void> | undefined;
           try {
-            const { videoPath } = await ensurePlayback(source, dir, deps.exec, { detectHardware: true });
+            const { videoPath } = await ensurePlayback(source, dir, deps.exec, { detectHardware: true,
+              onCacheMetric: metric => metrics.emit("cache", metric) }).finally(() => { closing = metrics.close(); });
             await serveMedia(req, res, videoPath);
           } catch (err) {
             throw mediaError(err);
-          }
+          } finally { await (closing ?? metrics.close()); }
           return true;
         }
         try {
@@ -1388,6 +1396,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if(!deps.proposeSend||!(deps.allowPaidModel||project.permissions.model||body.modelOptIn===true))throw new HttpError(402,PAID_BLOCKED);
         if(!project.assembly.sources.some(s=>s.included))throw new HttpError(409,"Importe os materiais do projeto primeiro.");
         const {gen,signal}=begin("proposing");
+        const metrics=createOperationMetrics({dir:join(dir,".decupa","metrics"),metadata:{operation:"template-proposal-analysis"}});
         try {
           const operationDeps={...deps,...await deps.resolveOperationDeps?.()};
           const visualClient=operationDeps.describeClient;
@@ -1395,7 +1404,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             if(project.analyses.some(a=>a.sourceId===source.id&&a.status==="ready"))continue;
             operation={stage:"analyzing",sourceId:source.id};
             if(source.hasVideo&&(!deps.describeClient||!(deps.allowPaidVisual||project.permissions.visual||body.visualOptIn===true)))throw new HttpError(402,PAID_BLOCKED);
-            const analysis=await analyzeSource(source,dir,deps.exec,{
+            const analysis=await analyzeSourceWithMetrics(source,dir,deps.exec,{
               signal,
               speech:deps.speech,
               heavyCoordinator:deps.coordinator,
@@ -1403,10 +1412,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
                 if (!stillCurrent(gen)) return;
                 operation = stage === "queued" ? { stage: "queued", sourceId: source.id } : { stage: "analyzing", sourceId: source.id };
               },
-            });
+            },metrics);
             if(analysis.status!=="ready")throw new HttpError(409,analysis.error||"análise incompleta");
             if(source.hasVideo){
               analysis.visual=await describeSource(source,dir,signal,{
+                onCacheMetric:metric=>metrics.emit("cache",metric),
                 exec:deps.exec,
                 client:visualClient!,
                 coordinator: deps.coordinator,
@@ -1421,7 +1431,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           if(!stillCurrent(gen)||(await loadProject(dir)).revision!==expected)throw new HttpError(409,"revisão mudou durante a proposta");
           await publishAtomic(templateProposalPath,JSON.stringify(proposal));operation={stage:"ready"};
           await sendSnapshot(res,{project:await loadProject(dir),templateProposal:proposal,...snapshot()});
-        }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}
+        }catch(error){if(stillCurrent(gen))operation={stage:"error",error:error instanceof Error?error.message:String(error)};throw error;}finally{await metrics.close();}
         return true;
       }
       if ((parts[1] === "template-accept" || parts[1] === "template-reject") && req.method === "POST") {

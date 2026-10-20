@@ -99,7 +99,7 @@ export function createTemplateRuntime(root:string,deps:Deps){
     const previous=recipe.revision;
     recipe={...recipe,revision:previous+1,status:"draft",analysis:{status:"running",stage:"media",pid:process.pid}};
     await saveRecipe(root,recipe,previous);const ctrl=new AbortController();jobs.set(key,ctrl);
-    void analyzeRecipe(recipe,{...deps,allowModel,allowVisual,workDir:join(root,id,"analysis"),persist:async next=>{await saveRecipe(root,next,recipe.revision);}},ctrl.signal).catch(()=>{}).finally(()=>jobs.delete(key));
+    void analyzeRecipe(recipe,{...deps,allowModel,allowVisual,workDir:join(root,id,"analysis"),metricsDir:join(root,id,".decupa","metrics"),persist:async next=>{await saveRecipe(root,next,recipe.revision);}},ctrl.signal).catch(()=>{}).finally(()=>jobs.delete(key));
     json(res,{recipe},202);return true;
    }
    throw new HttpError(404,"ação desconhecida");
