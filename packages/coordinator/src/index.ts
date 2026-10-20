@@ -18,6 +18,7 @@ export type CoordinatorRunOptions<T> = {
   stage: string;
   priority?: TaskPriority;
   signal?: AbortSignal;
+  /** Falhas não são memorizadas: o executor recebe o erro e seguidores podem tentar de novo. */
   build: () => Promise<T> | T;
 };
 
@@ -306,6 +307,18 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
         return { kind: "done", result: existing.result };
       }
+      if (existing?.status === "running" && existing.leaseUntil > now()) {
+        // Segue o resultado sem disputar vaga nem segurar a cabeça da fila.
+        // Na falha/expiração, reentra com o instante e a prioridade preservados,
+        // mas só disputa uma vaga a partir do próximo poll.
+        const waiters = await readWaiters();
+        const queued = waiters.find((w) => w.waiterId === waiter.waiterId);
+        if (queued) {
+          if (queued.bypassed) waiter.bypassed = true;
+          await writeWaiters(waiters.filter((w) => w.waiterId !== waiter.waiterId));
+        }
+        return null;
+      }
       const waiters = await readWaiters();
       const changed = refreshWaiter(waiters, waiter, now());
       if (changed) await writeWaiters(waiters);
@@ -409,7 +422,10 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
               const current = await readTask(runOpts.id);
               if (current?.leaseId !== leaseId) return;
               await writeTask({ ...current, leaseUntil: now() + leaseMs });
-              await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
+              const currentSlot = await readSlot(slot!.index);
+              if (currentSlot?.leaseId === leaseId) {
+                await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
+              }
             }).catch(() => undefined);
           }, Math.max(10, Math.floor(leaseMs / 3)));
         }
@@ -438,7 +454,19 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         if (beat) clearInterval(beat);
         liveHere.delete(waiterId);
         await dequeue(waiterId);
-        if (slot) await freeSlot(slot.index, slot.leaseId);
+        if (slot) {
+          const claimed = slot;
+          await withLock(async () => {
+            try {
+              const current = await readTask(runOpts.id);
+              if (current?.status === "running" && current.leaseId === claimed.leaseId) {
+                await writeTask({ ...current, status: "failed", leaseId: null, leaseUntil: 0 });
+              }
+            } finally {
+              await freeSlot(claimed.index, claimed.leaseId);
+            }
+          }).catch(() => undefined); // Erro de limpeza não substitui o desfecho do build.
+        }
       }
     },
     async withSlot<T>(slotOpts: CoordinatorSlotOptions, fn: () => Promise<T> | T): Promise<T> {
