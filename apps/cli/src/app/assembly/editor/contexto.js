@@ -146,14 +146,22 @@ export function mountStage({ state, api, player }) {
   function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const view = reviewView(project, status,
-      watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched));
+    const progress = watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched);
+    const previous = state.get("watchCoverage");
+    if (previous?.revision !== project.previewRevision || previous?.ratio !== progress.ratio || previous?.label !== progress.label) {
+      state.set("watchCoverage", { revision: project.previewRevision, ...progress });
+    }
+    const view = reviewView(project, status, progress);
     document.getElementById("reviewTitle").textContent = view.title;
     document.getElementById("freshChip").textContent = project.previewRevision == null
       ? (backgroundBusy(project, state.get("operation"), player) ? "Preparando prévia…" : "Prévia ainda não gerada")
       : view.detail;
     document.getElementById("watchRing").style.strokeDasharray = (view.ratio * RING).toFixed(1) + " " + RING.toFixed(1);
     document.getElementById("watchPct").textContent = Math.round(view.ratio * 100) + "%";
+    const ring = document.getElementById("watchPct").parentElement;
+    ring.removeAttribute("aria-hidden");
+    ring.setAttribute("role", "img");
+    ring.setAttribute("aria-label", "Cobertura assistida: " + Math.round(view.ratio * 100) + "%");
     const approve = document.getElementById("approveFinal");
     const button = approveButtonView(project, status, state.get("view") === "original");
     setDisabled(approve, button.disabled);

@@ -8,13 +8,14 @@ const [
   { mountTemplates },
   { createState },
   { createApi, createProjectPoller },
-  { mountRail, preparationView },
+  { mountRail },
   { mountContexto, mountStage },
   { mountTexto },
   { mountSequencia },
-  { idleStatus, stepperState, versionPill },
+  { stepperState, versionPill },
   { ICON },
   { ResumableMediaUpload, UploadPausedError },
+  { activityView, mountActivity },
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -26,6 +27,7 @@ const [
   import(projectPath("editor/topbar.js")),
   import(projectPath("editor/icons.js")),
   import(projectPath("editor/media-upload.js")),
+  import(projectPath("editor/progress.js")),
 ]);
 
 const state = createState({
@@ -35,7 +37,13 @@ const state = createState({
 const teamMode = document.querySelector('meta[name="decupa-team-mode"]')?.getAttribute("content") === "true";
 const mediaEnabled = document.querySelector('meta[name="decupa-media-enabled"]')?.getAttribute("content") === "true";
 // errorFromPoll: o erro veio de pedido de fundo. notice: aviso até a primeira ação.
-const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null, readOnly: false, owner: null };
+const ui = { importing: false, busy: false, label: null, error: null, errorFromPoll: false, notice: null, readOnly: false, owner: null,
+  connection: "connecting", connectionError: null, errorContext: null };
+const activity = mountActivity({
+  statusEl: document.getElementById("status"),
+  // Reconsulte primeiro: repetir automaticamente uma mutação poderia aplicá-la duas vezes.
+  retry: () => call("project", { label: "Reconectando…" }),
+});
 /** Última revisão com vídeo conhecido no player (prévia anterior). */
 let previewTimer = 0;
 let previewInflight = false;
@@ -53,63 +61,15 @@ function project() {
   return state.get("project");
 }
 
-function setStatus(text, busy, tone = "") {
-  const statusEl = document.getElementById("status");
-  if (!statusEl) return;
-  statusEl.textContent = text;
-  statusEl.dataset.tone = tone;
-  statusEl.classList.toggle("busy", !!busy);
-  if (busy) statusEl.setAttribute("aria-busy", "true");
-  else statusEl.removeAttribute("aria-busy");
-}
-
-/** Texto único do rail: erro > ação em voo > operação do servidor > revisão. */
+/** Pílula resumida; os seis estados e o erro íntegro ficam em Ver atividade. */
 function renderStatus() {
   const previewBusy = previewInflight || previewPending;
   if (state.get("previewBusy") !== previewBusy) state.set("previewBusy", previewBusy);
-  if (ui.error) {
-    setStatus(ui.error, false, "error");
-    return;
-  }
-  if (ui.label) {
-    setStatus(ui.label, true);
-    return;
-  }
-  const operation = state.get("operation");
-  const p = project();
-  if (p?.preparation) {
-    const view = preparationView(p, operation);
-    if (view.busy || view.tone === "error" || p.preparation.status === "cancelled") {
-      setStatus(view.title, view.busy, view.tone === "error" ? "error" : "");
-      return;
-    }
-  }
-  if (operation && OP_LABEL[operation.stage]) {
-    setStatus(OP_LABEL[operation.stage] + "…" + (operation.progress ? " · " + operation.progress : ""), true);
-    return;
-  }
-  if (operation?.stage === "error") {
-    setStatus("Erro: " + (operation.error || "falha no processamento"), false, "error");
-    return;
-  }
-  if (ui.notice) {
-    setStatus(ui.notice, false);
-    return;
-  }
-  if (previewInflight || previewPending) {
-    setStatus("Atualizando prévia…", true);
-    return;
-  }
-  if (p && (p.corrections || []).some((item) => item.status === "pending")) {
-    setStatus("Alinhando correção…", true);
-    return;
-  }
-  if (p) {
-    const idle = idleStatus(p);
-    setStatus(idle.text, false, idle.tone);
-    return;
-  }
-  setStatus("carregando…", true);
+  activity.render(activityView({
+    project: project(), operation: state.get("operation"), ui,
+    watched: state.get("watched"), coverage: state.get("watchCoverage"),
+    previewInflight, previewPending,
+  }));
 }
 
 const client = createApi({
@@ -130,6 +90,10 @@ const reservationUI = mountEditReservationUI({
 // O erro de uma ação fica até a próxima ação (chamada com rótulo): pedido de
 // fundo que dá certo (polling, auto-prévia) só apaga erro de outro pedido de fundo.
 async function call(path, opts = {}) {
+  function recordProjectConnection(res, body) {
+    ui.connection = res.ok ? "connected" : "error";
+    ui.connectionError = res.ok ? null : body.error || "erro " + res.status;
+  }
   const method = (opts.method || "GET").toUpperCase();
   const action = opts.label != null;
   if (ui.importing && method !== "GET") {
@@ -152,12 +116,16 @@ async function call(path, opts = {}) {
   };
   try {
     const { res, body } = await client.call(path, opts);
+    if (path === "project" && method === "GET") {
+      recordProjectConnection(res, body);
+    }
     if (res.status === 409 && body.dono) reservationUI.handleConflict(body);
     if (res.status === 409) {
       // O 409 diz que a base desta aba está errada: a resposta de reconciliação
       // é a fonte da verdade, mesmo com revisão menor (servidor que voltou
       // à cópia anterior). Só poll e POST passam pela guarda de revisão velha.
       const latest = await client.call("project");
+      recordProjectConnection(latest.res, latest.body);
       if (latest.res.ok && latest.body.project) {
         if (latest.body.fillerReport) state.set("fillerReport", latest.body.fillerReport);
         state.set("project", latest.body.project);
@@ -175,6 +143,7 @@ async function call(path, opts = {}) {
     } else if (!res.ok) {
       ui.error = body.error || ("erro " + res.status);
       ui.errorFromPoll = !action;
+      ui.errorContext = { stage: opts.label || path };
     } else if (action || ui.errorFromPoll) {
       ui.error = null;
       ui.errorFromPoll = false;
@@ -198,6 +167,9 @@ async function call(path, opts = {}) {
   } catch (err) {
     ui.error = (err && err.message) || String(err);
     ui.errorFromPoll = !action;
+    ui.errorContext = { stage: opts.label || path };
+    ui.connection = "error";
+    ui.connectionError = ui.error;
     renderStatus();
     throw err;
   }
@@ -208,6 +180,7 @@ const api = {
   notifyError: (message) => {
     ui.error = message;
     ui.errorFromPoll = false;
+    ui.errorContext = { stage: "Solicitação no editor" };
     renderStatus();
   },
 };
@@ -358,6 +331,7 @@ async function importFiles(files) {
     let index = 0;
     for (const file of files) {
       index += 1;
+      ui.errorContext = { stage: "Enviar mídia", media: file.name };
       const label = files.length > 1
         ? "Enviando " + index + "/" + files.length + " · " + file.name + "…"
         : "Enviando " + file.name + "…";
@@ -391,6 +365,10 @@ async function importFiles(files) {
           ? "Sem conexão com o Decupa. Confira o terminal do aplicativo, reabra o mesmo projeto e recarregue esta página antes de tentar importar novamente."
           : (err && err.message) || String(err);
         ui.errorFromPoll = false;
+        if (err instanceof TypeError) {
+          ui.connection = "error";
+          ui.connectionError = ui.error;
+        }
         return;
       } finally {
         ui.label = null;
@@ -677,6 +655,8 @@ state.subscribe("project", (p) => {
 });
 
 state.subscribe("operation", () => { renderStatus(); poller.schedule(); });
+state.subscribe("watched", renderStatus);
+state.subscribe("watchCoverage", renderStatus);
 state.subscribe("fillerReport", () => poller.schedule());
 
 document.addEventListener("decupa:schedule-preview", () => scheduleAutoPreview());
@@ -754,4 +734,4 @@ document.getElementById("mediaClose")?.addEventListener("click", () => {
 renderStatus();
 call("project", { label: "Carregando…" }).then(() => {
   scheduleAutoPreview();
-});
+}).catch(() => { /* Falha inicial permanece visível e retentável em Ver atividade. */ });
