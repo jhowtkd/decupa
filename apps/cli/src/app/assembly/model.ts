@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cacheConfigKey, emitCacheMetric, type CacheMetric } from "@decupa/bench";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createVisualClient, readCredentials } from "@decupa/triage";
@@ -92,6 +93,7 @@ export type DescribeDeps = {
   pools?: VisualPools;
   isCurrent?: () => boolean;
   onMetric?: (metric: VisualMetric) => void;
+  onCacheMetric?: (metric: CacheMetric) => void;
   now?: () => number;
   profile?: VisualProfile;
   coordinator?: FileCoordinator;
@@ -363,6 +365,13 @@ export async function describeSource(
     let attempts = 0;
     let httpAttempts = 0;
     let outcome: VisualMetric["outcome"] = "ok";
+    let complete = false;
+    let workMs = 0;
+    const measureWork = async <T>(work: () => Promise<T>): Promise<T> => {
+      const started = now();
+      try { return await work(); }
+      finally { workMs += Math.max(0, now() - started); }
+    };
     const emit = (partial: Pick<VisualMetric, "phase" | "outcome" | "elapsedMs" | "queueMs" | "attempt">): void => {
       const onMetric = deps?.onMetric;
       if (!onMetric) return;
@@ -416,7 +425,7 @@ export async function describeSource(
             if (ready) return { kind: "cached" as const, spans: ready };
             const frames = await pool.encode(async () => {
               extractStarted = now();
-              return extractVisualFrames(source, window, exec, { signal });
+              return measureWork(() => extractVisualFrames(source, window, exec, { signal }));
             }, { signal });
             return { kind: "frames" as const, frames };
           },
@@ -446,7 +455,7 @@ export async function describeSource(
         const text = await pool.request(async () => {
           const started = now();
           try {
-            const response = await client.send(content, requestSignal, () => { httpAttempts += 1; });
+            const response = await measureWork(() => client.send(content, requestSignal, () => { httpAttempts += 1; }));
             emit({
               phase: "request", outcome: "ok",
               elapsedMs: now() - started, queueMs: started - queued, attempt,
@@ -478,7 +487,7 @@ export async function describeSource(
         }
         return spans;
       }, signal);
-      const publish = async (): Promise<VisualSpan[]> => {
+      const publish = async (): Promise<VisualSpan[]> => measureWork(async () => {
         // A rede roda sem CPU reservada: outro cliente pode ter publicado
         // cobertura desde a extração. Releitura, merge e rename precisam do
         // mesmo slot para uma resposta atrasada não apagar cobertura nova.
@@ -514,9 +523,13 @@ export async function describeSource(
           await rename(tmp, file);
         }
         return merged;
-      };
-      if (!identityKey) return await publish();
-      return await runHeavy(deps?.coordinator, {
+      });
+      if (!identityKey) {
+        const result = await publish();
+        complete = windowCovered(result, window);
+        return result;
+      }
+      const result = await runHeavy(deps?.coordinator, {
         stage: "visual",
         priority: deps?.priority,
         signal,
@@ -524,10 +537,16 @@ export async function describeSource(
         onStarted: deps?.onStarted,
         build: publish,
       });
+      complete = windowCovered(result, window);
+      return result;
     } catch (error) {
       outcome = signal.aborted ? "cancelled" : "error";
       throw error;
     } finally {
+      emitCacheMetric(deps?.onCacheMetric, { stage: "visual", sha256: source.sha256,
+        configKey: identityKey ? cacheConfigKey({ version: VISUAL_CACHE_VERSION, identityKey, window }) : null,
+        outcome: outcome === "cache-hit" ? "hit" : outcome === "ok" && complete ? "built" : "error",
+        durationMs: outcome === "cache-hit" ? Math.max(0, now() - windowStart) : workMs });
       // Total da janela: wall desta janela, nunca soma de paralelas.
       emit({
         phase: "total", outcome,

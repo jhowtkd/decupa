@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { createLimitedQueue } from "@decupa/queue";
 import { createTracer, type TraceSink } from "@decupa/trace";
+export { cacheConfigKey, emitCacheMetric, summarizeReuseJournals, type CacheMetric, type ReuseGroup, type ReuseSummary } from "./reuse.ts";
 
 export type BenchmarkScenario = "cold-start" | "resident-models" | "cached-artifacts";
 
@@ -293,7 +294,8 @@ export function createOperationMetrics(opts: {
   };
 }
 
-/** Retains the coordinator's cache, priority and cancellation semantics. */
+/** Retains cache/priority/cancellation semantics. Since F4-T1, followers of a
+ * live single-flight execution also count as hit-or-shared, not new builds. */
 export function instrumentCoordinator(coordinator: FileCoordinator | undefined, metrics: OperationMetrics): FileCoordinator | undefined {
   if (!coordinator) return undefined;
   return {

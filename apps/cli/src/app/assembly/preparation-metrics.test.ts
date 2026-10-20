@@ -52,6 +52,7 @@ async function makeProject(): Promise<{ dir: string; revision: number }> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.resetAllMocks();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -108,21 +109,30 @@ describe("runPreparation operation metrics", () => {
     const metricsDir = join(dir, ".decupa", "metrics");
     const [journal] = await readdir(metricsDir);
     const lines = (await readFile(join(metricsDir, journal!), "utf8")).trim().split("\n");
+    expect(lines.join("\n")).not.toContain(dir);
+    expect(lines.join("\n")).not.toContain("make a cut");
+    expect(lines.join("\n")).not.toContain('"text":"hello"');
+    expect(lines.join("\n")).not.toContain("person speaking");
     const events = lines.map((line) => {
       const row = JSON.parse(line) as { kind: string; data?: unknown };
       return { kind: row.kind, data: row.data };
     });
     expect(events.some((event) => event.kind === "visual" && JSON.stringify(event.data).includes('"phase":"request"'))).toBe(true);
     expect(events.some((event) => event.kind === "stage")).toBe(true);
-    expect(events).toContainEqual({ kind: "cache", data: { stage: "analysis", sourceId: "source-1", outcome: "hit-or-shared" } });
+    expect(events).toContainEqual({ kind: "cache", data: expect.objectContaining({ stage: "analysis", sourceId: "source-1", outcome: "hit-or-shared", sha256: createHash("sha256").update("fake video bytes").digest("hex"), configKey: expect.stringMatching(/^[a-f0-9]{64}$/), durationMs: expect.any(Number) }) });
     expect(events).toContainEqual({ kind: "cache", data: { stage: "preview", outcome: "hit-or-shared" } });
     expect(events.some((event) => event.kind === "operation-finished")).toBe(true);
 
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
     mocks.analyzeSource.mockImplementation(async (
       _source: unknown, _dir: string, _exec: unknown,
-      options: { onStage?: (stage: "indexing") => void },
+      options: { onStage?: (stage: "queued" | "indexing") => void },
     ) => {
+      options.onStage?.("queued");
+      clock += 1000;
       options.onStage?.("indexing");
+      clock += 30;
       return analysis;
     });
     const builtProject = await makeProject();
@@ -145,7 +155,7 @@ describe("runPreparation operation metrics", () => {
       const row = JSON.parse(line) as { kind: string; data?: unknown };
       return { kind: row.kind, data: row.data };
     }));
-    expect(builtEvents).toContainEqual({ kind: "cache", data: { stage: "analysis", sourceId: "source-1", outcome: "built" } });
+    expect(builtEvents).toContainEqual({ kind: "cache", data: expect.objectContaining({ stage: "analysis", sourceId: "source-1", outcome: "built", sha256: expect.stringMatching(/^[a-f0-9]{64}$/), configKey: expect.stringMatching(/^[a-f0-9]{64}$/), durationMs: 30 }) });
     expect(builtEvents).toContainEqual({ kind: "cache", data: { stage: "preview", outcome: "built" } });
   });
 

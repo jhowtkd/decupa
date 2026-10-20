@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { fixtureAssembly } from "./fixture.ts";
 import { mediaWork } from "./media-work.ts";
 import { ensurePlayback, ensureThumbnail, proxyPath, thumbnailPath, verifySourceIdentity } from "./media.ts";
 import type { Source } from "./types.ts";
+import { createOperationMetrics, summarizeReuseJournals, type CacheMetric } from "@decupa/bench";
 
 async function sourceFrom(path: string, overrides: Partial<Source> = {}): Promise<Source> {
   const base = fixtureAssembly().sources[0]!;
@@ -31,6 +32,44 @@ async function sourceFrom(path: string, overrides: Partial<Source> = {}): Promis
 
 /** Executa ffmpeg de verdade quando o teste precisa provar o comando. */
 const realExec = () => new SpawnExecutor();
+
+it("journals proxy builds and hits with hashed configuration and no source path or name", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "assembly-proxy-metric-"));
+  const path = join(dir, "user-private-text.mp4");
+  await copyFile(join(FIXTURES, "clip.mp4"), path);
+  const source = await sourceFrom(path, { name: "private user text" });
+  const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics") });
+  const events: CacheMetric[] = [];
+  const opts = { onCacheMetric: (event: CacheMetric) => { events.push(event); metrics.emit("cache", event); } };
+  await ensurePlayback(source, dir, copyingExec(), opts);
+  await ensurePlayback(source, dir, copyingExec(), opts);
+  await metrics.close();
+  expect(events.map(event => event.outcome)).toEqual(["built", "hit"]);
+  expect(events[0]).toMatchObject({ stage: "proxy", sha256: source.sha256, configKey: expect.stringMatching(/^[a-f0-9]{64}$/), durationMs: expect.any(Number) });
+  const journal = await readFile(metrics.path, "utf8");
+  expect(journal).not.toContain(dir);
+  expect(journal).not.toContain("private");
+});
+
+it("summarizes the same real media's proxy builds across two projects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "proxy-reuse-projects-"));
+  try {
+    for (const name of ["one", "two"]) {
+      const dir = join(root, name);
+      await mkdir(dir);
+      const path = join(dir, "source.mp4");
+      await copyFile(join(FIXTURES, "clip.mp4"), path);
+      const source = await sourceFrom(path);
+      const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics") });
+      try { await ensurePlayback(source, dir, copyingExec(), { onCacheMetric: event => metrics.emit("cache", event) }); }
+      finally { await metrics.close(); }
+    }
+    const summary = await summarizeReuseJournals(root);
+    expect(summary).toMatchObject({ reusableDerivatives: 1, reuseOpportunities: 1, redundantBuilds: 1 });
+    expect(summary.estimatedSavingsMs).toBeGreaterThan(0);
+    expect(summary.groups).toEqual([expect.objectContaining({ stage: "proxy", projects: 2, builds: 2 })]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 /** Finge o ffmpeg copiando mídia real para a saída pedida. */
 function copyingExec(extra?: (output: string) => Promise<void>): Executor & { calls: ExecCall[] } {
