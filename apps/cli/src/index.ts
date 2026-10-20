@@ -442,6 +442,7 @@ async function main(argv: string[]): Promise<number> {
       providerConfigDir: homedir(),
       input,
       projectsRoot: dirname(input),
+      ledgerScope: "project",
       projectDir: workDir,
       projectId,
       port: values.port ? Number(values.port) : undefined,
@@ -484,6 +485,7 @@ async function main(argv: string[]): Promise<number> {
     const app = await startApp({
       providerConfigDir: homedir(),
       projectsRoot,
+      ...(values["projects-root"] ? {} : { ledgerScope: "project" as const }),
       projectId,
       projectDir,
       inputs: values.input ? [values.input] : undefined,

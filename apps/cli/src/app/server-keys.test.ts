@@ -335,7 +335,7 @@ it("Raiz de Projetos avisa a Limpeza carregada ao desligar o Jev", async () => {
   });
   const id = basename(f.dir);
   const app = await startApp({
-    projectsRoot: dirname(f.dir), projectId: id, projectDir: f.dir,
+    projectsRoot: dirname(f.dir), projectId: id, projectDir: f.dir, ledgerScope: "project",
     input: f.options.input, executor: f.options.executor, providerConfigDir: user,
     env: f.options.env, port: 0, fetchImpl, autoStart: false,
   });

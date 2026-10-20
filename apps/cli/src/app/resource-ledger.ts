@@ -22,14 +22,16 @@ const ledgers = new Map<string, ResourceLedger>();
 const bindings = new Map<string, string>();
 const projectRoots = new Map<string, string>();
 const contexts = new Map<string, { now?: () => number; env?: Record<string, string | undefined> }>();
-const incomplete = new Map<string, Map<string, string>>();
+type LedgerProblem = { message: string; previous?: LedgerProblem; cancelled?: boolean };
+const incomplete = new Map<string, Map<string, LedgerProblem>>();
 const snapshots = new Map<string, { stamp: string; value: Snapshot }>();
 const turns = new Map<string, Promise<unknown>>();
+const RECONCILING = "reconciliação pendente";
 function workAlive(owner: ResourceOwner): boolean {
   return processAlive(owner.pid ?? 0) && !(owner.pid === process.pid && owner.sessionId && owner.sessionId !== PROCESS_SESSION);
 }
-async function serial<T>(root: string, fn: () => Promise<T>): Promise<T> {
-  const run = () => withStorageLock(join(root, ".decupa", "references.lock"), fn);
+async function serial<T>(root: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const run = () => withStorageLock(join(root, ".decupa", "references.lock"), fn, signal);
   const turn = (turns.get(root) ?? Promise.resolve()).then(run, run);
   const tracked = turn.catch(() => undefined); turns.set(root, tracked);
   try { return await turn; } finally { if (turns.get(root) === tracked) turns.delete(root); }
@@ -45,10 +47,12 @@ async function json<T>(path: string): Promise<T | null> {
 export function projectResources(project: DiskProject): string[] {
   return [...new Set((project.assembly?.sources ?? []).map(s => mediaKey(s.sha256)))];
 }
-async function collectProjectResources(dir: string, project: DiskProject): Promise<string[]> {
+async function collectProjectResources(dir: string, project: DiskProject, signal?: AbortSignal): Promise<string[]> {
   const resources = projectResources(project);
   for (const source of project.assembly?.sources ?? []) {
+    signal?.throwIfAborted();
     for (const key of await directories(join(dir, "analysis", source.sha256))) {
+      signal?.throwIfAborted();
       resources.push(derivativeKey(source.sha256, "analysis", key));
       for (const visual of await directories(join(dir, "analysis", source.sha256, key))) {
         if (visual.startsWith("visual-")) resources.push(derivativeKey(source.sha256, "vision", `${key}/${visual}`));
@@ -62,6 +66,7 @@ export class ResourceLedger {
   readonly root: string;
   readonly projectsRoot?: string;
   readonly projectDir?: string;
+  private pendingReconciliation?: LedgerProblem;
   constructor(root: string, projectsRoot?: string, projectDir?: string) { this.root = resolve(root); this.projectsRoot = projectsRoot; this.projectDir = projectDir; }
   private get path() { return join(this.root, ".decupa", "references.json"); }
   private get ownersDir() { return join(this.root, ".decupa", "reference-owners"); }
@@ -90,9 +95,34 @@ export class ResourceLedger {
     snapshots.delete(this.root);
   }
   markIncomplete(error: unknown, scope = this.projectDir ?? this.projectsRoot ?? this.root): void {
-    const problems = incomplete.get(this.root) ?? new Map<string, string>();
-    problems.set(resolve(scope), error instanceof Error ? error.message : String(error));
+    const problems = incomplete.get(this.root) ?? new Map<string, LedgerProblem>();
+    problems.set(resolve(scope), { message: error instanceof Error ? error.message : String(error) });
     incomplete.set(this.root, problems);
+  }
+  markPendingReconciliation(): void {
+    const scope = this.projectDir ?? this.projectsRoot ?? this.root;
+    const previous = incomplete.get(this.root)?.get(scope);
+    this.markIncomplete(RECONCILING);
+    this.pendingReconciliation = incomplete.get(this.root)!.get(scope)!;
+    this.pendingReconciliation.previous = previous;
+  }
+  /** Desfaz somente a marca desta inicialização, nunca um erro ou outro boot. */
+  cancelPendingReconciliation(): void {
+    const scope = this.projectDir ?? this.projectsRoot ?? this.root;
+    const dirty = incomplete.get(this.root);
+    if (this.pendingReconciliation) this.pendingReconciliation.cancelled = true;
+    if (this.pendingReconciliation && dirty?.get(scope) === this.pendingReconciliation) {
+      let previous = this.pendingReconciliation.previous;
+      while (previous?.cancelled) previous = previous.previous;
+      if (previous) dirty.set(scope, previous); else dirty.delete(scope);
+    }
+    if (!dirty?.size) incomplete.delete(this.root);
+  }
+  private finishPendingReconciliation(): void {
+    const dirty = incomplete.get(this.root);
+    const scope = this.projectDir ?? this.projectsRoot ?? this.root;
+    if (this.pendingReconciliation && dirty?.get(scope) === this.pendingReconciliation) dirty.delete(scope);
+    if (!dirty?.size) incomplete.delete(this.root);
   }
   private async put(snapshot: Snapshot, entry: Entry) {
     const previous = snapshot.entries.find(e => e.owner.id === entry.owner.id);
@@ -128,7 +158,7 @@ export class ResourceLedger {
   /** Limpeza futura deve abortar se algum manifesto não pôde ser reconciliado. */
   async references(key: string): Promise<ResourceOwner[]> {
     const snapshot = await this.read();
-    if (incomplete.get(this.root)?.size) throw new Error(`ledger incompleto: ${[...incomplete.get(this.root)!.values()].join(", ")}`);
+    if (incomplete.get(this.root)?.size) throw new Error(`ledger incompleto: ${[...incomplete.get(this.root)!.values()].map(problem => problem.message).join(", ")}`);
     if (snapshot.problems?.length) throw new Error(`ledger incompleto: ${snapshot.problems.join(", ")}`);
     return snapshot.entries.filter(e => e.resources.includes(key) && (e.owner.kind !== "in-progress" || workAlive(e.owner))).map(e => ({ ...e.owner }));
   }
@@ -147,12 +177,19 @@ export class ResourceLedger {
       await this.put(snapshot, { owner, resources });
     });
   }
-  async reconcile(): Promise<void> {
-    // Este atalho não publica nem remove entradas. A varredura usada para
-    // reconciliar acontece dentro do mutex, junto de todos os escritores.
+  async reconcile(opts: { signal?: AbortSignal } = {}): Promise<void> {
+    const check = () => opts.signal?.throwIfAborted();
+    check();
+    // Hub vazio não precisa criar metadados. Este atalho só conclui seu
+    // próprio marcador pendente; não limpa erros nem publica um snapshot.
     if (!this.projectDir && !await stat(this.path).catch(() => null) && !await stat(this.ownersDir).catch(() => null)
-      && (!this.projectsRoot || !(await directories(this.projectsRoot)).length)) return;
+      && (!this.projectsRoot || !(await directories(this.projectsRoot)).length)) {
+      check();
+      this.finishPendingReconciliation();
+      return;
+    }
     await serial(this.root, async () => {
+      check();
       const dirs = this.projectDir ? [this.projectDir] : this.projectsRoot ? (await directories(this.projectsRoot)).map(id => join(this.projectsRoot!, id)) : [];
       const dirSet = new Set(dirs);
       const previous = await this.read().catch(() => ({ version: 1 as const, entries: [], problems: [] }));
@@ -167,6 +204,7 @@ export class ResourceLedger {
       const files = await readdir(this.ownersDir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
       const durableOwners = new Map<string, string>();
       await mapDisk(files.filter(f => f.endsWith(".json")), async file => {
+        check();
         try {
           const entry = await json<Entry>(join(this.ownersDir, file));
           if (!entry || (entry.owner.kind === "in-progress" && !workAlive(entry.owner))) return;
@@ -175,11 +213,12 @@ export class ResourceLedger {
           }
           durableOwners.set(entry.owner.id, JSON.stringify(entry));
           entries.set(entry.owner.id, entry);
-        } catch { problems.push(file); }
+        } catch { check(); problems.push(file); }
       });
       // A Raiz pode conter muitas pastas que não são Projetos. A descoberta
       // limita I/O concorrente e não serializa duas leituras por pasta alheia.
       const derived = await mapDisk(dirs, async dir => {
+        check();
         const found: Entry[] = [];
         try {
           let project = await json<DiskProject>(join(dir, "project.json"));
@@ -190,17 +229,20 @@ export class ResourceLedger {
           if (!project) return found;
           bindings.set(resolve(dir), this.root);
           const owner: ResourceOwner = { id: `project:${resolve(dir)}`, kind: "project", projectDir: resolve(dir) };
-          found.push({ owner, resources: await collectProjectResources(dir, project) });
+          found.push({ owner, resources: await collectProjectResources(dir, project, opts.signal) });
           for (const revision of (await directories(join(dir, "exports"))).filter(r => /^\d+$/.test(r))) {
+            check();
             const manifest = await json<DiskManifest>(join(dir, "exports", revision, "manifest.json"));
             if (!manifest?.sources) continue;
             const owner: ResourceOwner = { id: `export:${resolve(dir)}:${revision}`, kind: "export", projectDir: resolve(dir) };
             found.push({ owner, resources: [...new Set(Object.values(manifest.sources).map(mediaKey))] });
           }
           for (const revision of (await directories(join(dir, "deliveries"))).filter(r => /^\d+$/.test(r))) {
+            check();
             const deliveryDir = join(dir, "deliveries", revision);
             const resources = new Set<string>();
             for (const file of (await readdir(deliveryDir)).filter(f => /^request-.*\.json$/.test(f))) {
+              check();
               const request = await json<DiskProject>(join(deliveryDir, file));
               if (request) for (const key of projectResources(request)) resources.add(key);
             }
@@ -208,30 +250,40 @@ export class ResourceLedger {
             const owner: ResourceOwner = { id: `delivery:${resolve(dir)}:${revision}`, kind: "delivery", projectDir: resolve(dir) };
             found.push({ owner, resources: [...resources] });
           }
-        } catch { problems.push(dir); }
+        } catch { check(); problems.push(dir); }
         return found;
       });
       for (const found of derived) for (const entry of found) entries.set(entry.owner.id, entry);
       // Também persiste detentores derivados: outro escopo consegue refazer
       // o índice inteiro quando o arquivo de índice é perdido.
       await mapDisk([...entries.values()], async entry => {
+        check();
         const payload = JSON.stringify(entry);
         if (durableOwners.get(entry.owner.id) !== payload) await publishAtomic(this.ownerPath(entry.owner.id), payload + "\n", { durable: true });
       });
+      check();
       await this.write({ version: 1, entries: [...entries.values()], problems });
       const dirty = incomplete.get(this.root);
       for (const scope of dirty?.keys() ?? []) if (withinScope(scope) || (!this.projectDir && !this.projectsRoot && scope === this.root)) dirty!.delete(scope);
       if (!dirty?.size) incomplete.delete(this.root);
-    });
+    }, opts.signal);
   }
 }
-export async function initializeResourceLedger(opts: { root: string; projectsRoot?: string; projectDir?: string; now?: () => number; env?: Record<string, string | undefined> }): Promise<ResourceLedger> {
+export async function initializeResourceLedger(opts: { root: string; projectsRoot?: string; projectDir?: string; now?: () => number; env?: Record<string, string | undefined>; deferReconciliation?: boolean }): Promise<ResourceLedger> {
   const root = resolve(opts.root); const projectsRoot = opts.projectsRoot ? resolve(opts.projectsRoot) : undefined;
-  if (projectsRoot) projectRoots.set(projectsRoot, root);
+  if (projectsRoot) {
+    projectRoots.set(projectsRoot, root);
+    // Projetos criados antes do boot podem ter um binding local provisório.
+    // A raiz explícita do Hub passa a governá-los antes da reconciliação.
+    for (const project of bindings.keys()) if (dirname(project) === projectsRoot) bindings.set(project, root);
+  }
   contexts.set(root, { now: opts.now, env: opts.env });
   if (opts.projectDir) bindings.set(resolve(opts.projectDir), root);
   const ledger = new ResourceLedger(root, projectsRoot, opts.projectDir ? resolve(opts.projectDir) : undefined); ledgers.set(root, ledger);
-  try { await ledger.reconcile(); } catch (error) { ledger.markIncomplete(error); }
+  // O boot pode estabelecer os bindings antes de escutar, sem iniciar I/O
+  // de descoberta. Até a reconciliação terminar, a limpeza falha fechada.
+  if (opts.deferReconciliation) ledger.markPendingReconciliation();
+  else try { await ledger.reconcile(); } catch (error) { ledger.markIncomplete(error); }
   return ledger;
 }
 export function projectDirectoryForPath(dir: string): string {
