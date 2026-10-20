@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { TypeSafeHttpError, type TypeSafeRequest } from "@decupa/typesafe";
+import {
+  TypeSafeBudgetExceededError,
+  TypeSafeHttpError,
+  TypeSafeTimeoutError,
+  type TypeSafeRequest,
+} from "@decupa/typesafe";
 import {
   createFillerObserveClient, fillerNoteKey, matchingFillerNote, publishFillerNotes, scoreAmbiguous,
   type FillerObserveItem,
@@ -75,6 +80,24 @@ it.each([401, 422, 429, 529, 500])("HTTP %s vira sem nota, sem repetir o lote", 
   expect(decide).toHaveBeenCalledTimes(1);
   expect(result.notes[0]).toMatchObject({ score: null, decisionFailure: [401, 422].includes(status)
     ? "configuração do Jev" : [429, 529].includes(status) ? "Jev indisponível" : "falha na decisão Jev" });
+});
+
+it.each([
+  [new TypeSafeTimeoutError(30_000), "Jev sem resposta no prazo"],
+  [new TypeSafeBudgetExceededError("time"), "orçamento do Jev esgotado"],
+  [new TypeSafeBudgetExceededError("calls"), "orçamento do Jev esgotado"],
+] as const)("falha tipada de Jev vira razão específica sem retry nem mutação: %s", async (error, reason) => {
+  const candidate = item(1);
+  const before = structuredClone(candidate);
+  const decide = vi.fn(async () => { throw error; });
+
+  const result = await scoreAmbiguous({ decide }, [candidate], {
+    model: "configured-jev", signal: new AbortController().signal,
+  });
+
+  expect(decide).toHaveBeenCalledTimes(1);
+  expect(result.notes[0]).toMatchObject({ score: null, decisionFailure: reason });
+  expect(candidate).toEqual(before);
 });
 
 it.each([429, 529])("cliente observe faz só 1 fetch mesmo com HTTP %s", async status => {

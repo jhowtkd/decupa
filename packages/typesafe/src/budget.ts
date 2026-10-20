@@ -32,14 +32,13 @@ function duration(value: number): number {
 /** O race também encerra adaptadores que ignoram AbortSignal. */
 function withDeadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
-  timeoutMs: number,
-  timeoutError: () => Error,
+  deadline: { timeoutMs: number; error: () => Error } | undefined,
   signal?: AbortSignal,
   now: () => number = () => performance.now(),
 ): Promise<T> {
-  duration(timeoutMs);
+  if (deadline) duration(deadline.timeoutMs);
   if (signal?.aborted) return Promise.reject(new CancelledError());
-  if (timeoutMs <= 0) return Promise.reject(timeoutError());
+  if (deadline && deadline.timeoutMs <= 0) return Promise.reject(deadline.error());
   return new Promise<T>((resolve, reject) => {
     const controller = new AbortController();
     const startedAt = now();
@@ -58,7 +57,7 @@ function withDeadline<T>(
       controller.abort(error);
     };
     const cancel = () => fail(new CancelledError());
-    const timer = setTimeout(() => fail(timeoutError()), timeoutMs);
+    const timer = deadline ? setTimeout(() => fail(deadline.error()), deadline.timeoutMs) : undefined;
     signal?.addEventListener("abort", cancel, { once: true });
     if (signal?.aborted) return cancel();
     try {
@@ -66,7 +65,7 @@ function withDeadline<T>(
       Promise.resolve(pending).then(value => {
         if (settled) return;
         if (signal?.aborted) return cancel();
-        if (now() - startedAt >= timeoutMs) return fail(timeoutError());
+        if (deadline && now() - startedAt >= deadline.timeoutMs) return fail(deadline.error());
         settled = true;
         cleanup();
         resolve(value);
@@ -84,8 +83,10 @@ export type TypeSafeBudgetOptions = {
 };
 
 /** Compartilhe a instância entre proposta, reparo JSON e lotes de decisão.
- * O relógio começa no primeiro uso e inclui intervalos/backoffs; não há reset.
- * Cada run reserva uma chamada antes de iniciar o trabalho, inclusive em erro.
+ * O relógio começa no primeiro run/withinTime e inclui intervalos/backoffs;
+ * não há reset. Texto e reparo usam runCalls: só contam chamadas, com prazo
+ * imposto pelo próprio transporte. Cada run/runCalls reserva uma chamada
+ * antes de iniciar o trabalho, inclusive em erro.
  * Transportes com retry devem chamar onAttempt antes de cada fetch: a primeira
  * tentativa já está reservada; as seguintes consomem o mesmo orçamento.
  */
@@ -114,15 +115,27 @@ export class TypeSafeBudget {
   }
 
   private reserveCall(): void {
-    if (this.remainingMs <= 0) throw new TypeSafeBudgetExceededError("time");
     if (this.usedCalls >= this.maxCalls) throw new TypeSafeBudgetExceededError("calls");
     this.usedCalls += 1;
+  }
+
+  /** Conta tentativas sem iniciar o relógio; o transporte impõe seus prazos. */
+  async runCalls<T>(work: (signal: AbortSignal, onAttempt: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new CancelledError();
+    this.reserveCall();
+    let firstAttempt = true;
+    return withDeadline(requestSignal => work(requestSignal, () => {
+      if (requestSignal.aborted) throw new CancelledError();
+      if (firstAttempt) firstAttempt = false;
+      else this.reserveCall();
+    }), undefined, signal, this.now);
   }
 
   async run<T>(work: (signal: AbortSignal, onAttempt: () => void) => Promise<T>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
     if (signal?.aborted) throw new CancelledError();
     if (timeoutMs !== undefined) duration(timeoutMs);
     if (timeoutMs === 0) throw new TypeSafeTimeoutError(timeoutMs);
+    if (this.remainingMs <= 0) throw new TypeSafeBudgetExceededError("time");
     this.reserveCall();
     let firstAttempt = true;
     return this.withinTime(requestSignal => work(requestSignal, () => {
@@ -140,10 +153,10 @@ export class TypeSafeBudget {
     this.startedAt ??= this.now();
     const remaining = this.remainingMs;
     const budgetFirst = timeoutMs === undefined || remaining <= timeoutMs;
-    return withDeadline(work, Math.min(remaining, timeoutMs ?? remaining), () => {
+    return withDeadline(work, { timeoutMs: Math.min(remaining, timeoutMs ?? remaining), error: () => {
       if (!budgetFirst) return new TypeSafeTimeoutError(timeoutMs!);
       this.timeExhausted = true;
       return new TypeSafeBudgetExceededError("time");
-    }, signal, this.now);
+    } }, signal, this.now);
   }
 }

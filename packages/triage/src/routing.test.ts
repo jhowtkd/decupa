@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { collectSink, createTracer } from "@decupa/trace";
-import { TypeSafeHttpError } from "@decupa/typesafe";
+import { TypeSafeHttpError, TypeSafeTimeoutError, TypeSafeBudgetExceededError } from "@decupa/typesafe";
 import { CircuitBreaker, routeTriage, type FastDecision } from "./routing.ts";
 import { mechanicalKeepList } from "./mechanical.ts";
 import { parseSpeechIndex, type SpeechIndex } from "./speech-index.ts";
@@ -45,6 +45,26 @@ const preroll: StructureClaim = {
 };
 
 describe("routeTriage", () => {
+  it.each([
+    new TypeSafeHttpError(529, "busy"),
+    new TypeSafeTimeoutError(30_000),
+    new TypeSafeBudgetExceededError("time"),
+    new TypeSafeBudgetExceededError("calls"),
+  ])("R3: indisponibilidade $name cai no legado e abre o circuito", async (error) => {
+    const speech = index();
+    const model = new FakeTriageModel([preroll]);
+    const circuit = new CircuitBreaker();
+    const result = await routeTriage({
+      mode: "hybrid", index: speech, model, circuit,
+      unitsBlock: buildUnitsBlock(speech), videoPath: "clip.mp4",
+      decide: async () => { throw error; },
+    });
+    expect(result.source).toBe("fallback");
+    expect(result.circuitOpen).toBe(true);
+    expect(circuit.open).toBe(true);
+    expect(model.calls.filter(call => call.kind === "structure")).toHaveLength(1);
+  });
+
   it("off reproduz o keep-list legado", async () => {
     const speech = index();
     const model = new FakeTriageModel([preroll]);

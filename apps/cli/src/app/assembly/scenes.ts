@@ -695,7 +695,7 @@ export async function proposeScenes(
   if (!generated) {
     const proposalId = randomUUID();
     let validatedText = "";
-    generated = await requestValidated(content, (parts, requestSignal) => budget.run(
+    generated = await requestValidated(content, (parts, requestSignal) => budget.runCalls(
       (deadlineSignal, onAttempt) => client.send(parts, deadlineSignal, onAttempt), requestSignal,
     ), (text) => {
       const result = parseGenerated(text, proposalId);

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { TypeSafeBudget, TypeSafeBudgetExceededError } from "@decupa/typesafe";
 import { resolveAppTransports } from "../analysis-transports.ts";
 import { createAssemblyDecisionContext } from "./assembly-decisions.ts";
@@ -107,6 +107,48 @@ function proposalFor(project: ReturnType<typeof projectWithSpeech>, count: numbe
     scenes: [{ id: "s1", selections: Array.from({ length: count }, (_, i) => ({ speechId: `a:u${i}` })), support: [], gaps: [] }],
   }, project);
 }
+
+it("R1: texto em 301 s conclui e deixa os cinco minutos inteiros para os lotes Jev", async () => {
+  vi.useFakeTimers();
+  try {
+    const project = projectWithSpeech(22);
+    project.analyses[1]!.visual = [];
+    const remaining: number[] = [];
+    let fetches = 0;
+    const context = createAssemblyDecisionContext({ mode: "hybrid" }, { DECUPA_TYPESAFE: "1", TYPESAFE_API_KEY: "fake-key" }, (async (_input, init) => {
+      fetches += 1;
+      remaining.push(context.budget!.remainingMs);
+      const body = JSON.parse(String(init?.body)) as { questions: Record<string, unknown> };
+      // Dois lotes de corte atravessam o relógio cumulativo.
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      return new Response(JSON.stringify({ model: "test", answers: Object.fromEntries(
+        Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0 }]),
+      ) }));
+    }) as typeof fetch);
+    const text = JSON.stringify({
+      scenes: [{ id: "s1", selections: Array.from({ length: 22 }, (_, i) => ({ speechId: `a:u${i}` })), support: [], gaps: [] }],
+      changedSceneIds: ["s1"],
+      cutCandidates: Array.from({ length: 21 }, (_, i) => ({ sceneId: "s1", speechId: `a:u${i}`, reason: "redundante" })),
+    });
+    const outcome = proposeScenes(project, "organizar", new AbortController().signal, {
+      decision: context,
+      send: async () => {
+        await new Promise(resolve => setTimeout(resolve, 301_000));
+        return text;
+      },
+    }).then(result => ({ result }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(310_000);
+    expect(await outcome).toMatchObject({ result: {
+      scenes: [{ id: "s1" }], decisionReport: { status: "completed" },
+    } });
+    expect(fetches).toBe(2);
+    expect(remaining[0]).toBe(300_000);
+    expect(remaining[1]).toBe(299_000);
+    expect(context.budget!.callsUsed).toBe(fetches + 1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it("counts every cuts batch and falls back on the next batch when the shared budget is exhausted", async () => {
   const project = projectWithSpeech(22);

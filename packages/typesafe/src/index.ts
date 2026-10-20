@@ -1,5 +1,5 @@
 import { createTracer, type Tracer } from "@decupa/trace";
-import { TypeSafeBudget } from "./budget.ts";
+import { TypeSafeBudget, TypeSafeTimeoutError, TypeSafeBudgetExceededError } from "./budget.ts";
 export { TypeSafeBudget, TypeSafeTimeoutError, TypeSafeBudgetExceededError, DEFAULT_TYPESAFE_TOTAL_MS, DEFAULT_TYPESAFE_MAX_CALLS } from "./budget.ts";
 export type { TypeSafeBudgetOptions } from "./budget.ts";
 
@@ -82,6 +82,17 @@ export class TypeSafeHttpError extends Error {
     this.name = "TypeSafeHttpError";
     this.status = status;
   }
+}
+
+/** Razão segura para os consumidores exibirem, sem detalhes do transporte. */
+export function decisionFailure(error: unknown): string {
+  if (error instanceof TypeSafeTimeoutError) return "Jev sem resposta no prazo";
+  if (error instanceof TypeSafeBudgetExceededError) return "orçamento do Jev esgotado";
+  if (error instanceof TypeSafeHttpError) {
+    if ([401, 422].includes(error.status)) return "configuração do Jev";
+    if ([429, 529].includes(error.status)) return "Jev indisponível";
+  }
+  return "falha na decisão Jev";
 }
 
 export function isTypeSafeEnabled(
