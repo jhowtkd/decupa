@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeCredentials } from "@decupa/triage";
-import { createMcpSession } from "./tools.ts";
+import { createMcpSession, type StartFn } from "./tools.ts";
 import { dispatch } from "./dispatch.ts";
 import { encodeFrame, FrameParser } from "./protocol.ts";
 
@@ -18,14 +18,14 @@ describe("protocol frames", () => {
 });
 
 describe("MCP tools", () => {
-  function session() {
+  function session(startApp?: StartFn) {
     let _closed = false;
     return createMcpSession({
       doctor: async () => [{ ok: true, name: "node", detail: "22" }],
-      startApp: async (opts) => ({
+      startApp: startApp ?? (async (opts) => ({
         port: opts.port ?? 7788,
         close: async () => { _closed = true; },
-      }),
+      })),
       writeCredentials,
       cwd: () => process.cwd(),
     });
@@ -59,6 +59,30 @@ describe("MCP tools", () => {
   it("start montar devolve a URL do Projeto na mesma Raiz", async () => {
     const result = await session().call("start", { mode: "montar", project: "/tmp/minha-montagem" }) as { url: string };
     expect(result.url).toBe("http://127.0.0.1:7788/projects/minha-montagem/");
+  });
+
+  it("MCP limita o ledger ao Projeto avulso por padrão e mantém o escopo Hub explícito", async () => {
+    const implicitOptions: Parameters<StartFn>[0][] = [];
+    const explicitOptions: Parameters<StartFn>[0][] = [];
+    const capture = (received: Parameters<StartFn>[0][]) => async (opts: Parameters<StartFn>[0]) => {
+      received.push(opts);
+      return { port: opts.port ?? 7788, close: async () => undefined };
+    };
+
+    await session(capture(implicitOptions)).call("start", {
+      mode: "montar", project: "/tmp/solo/projeto",
+    });
+    await session(capture(explicitOptions)).call("start", {
+      mode: "montar", project: "/tmp/hub/projeto", projectsRoot: "/tmp/hub",
+    });
+
+    expect(implicitOptions[0]).toMatchObject({
+      projectsRoot: "/tmp/solo", projectDir: "/tmp/solo/projeto", ledgerScope: "project",
+    });
+    expect(explicitOptions[0]).toMatchObject({
+      projectsRoot: "/tmp/hub", projectDir: "/tmp/hub/projeto",
+    });
+    expect(explicitOptions[0]).not.toHaveProperty("ledgerScope");
   });
 
   it("configure_provider grava em .decupa e não devolve a chave", async () => {

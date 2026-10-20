@@ -170,6 +170,7 @@ export function createMcpSession(deps: McpDeps) {
           const projectId = basename(projectDir);
           const app = await startOnPort({
             projectsRoot: resolve(String(args.projectsRoot ?? dirname(projectDir))),
+            ...(args.projectsRoot ? {} : { ledgerScope: "project" as const }),
             projectId,
             projectDir,
             allowPaidModel: args.allowPaidModel === true,

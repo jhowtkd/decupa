@@ -5,11 +5,13 @@ import { dirname } from "node:path";
 export const PROCESS_SESSION = randomUUID();
 
 /** Serializa escritores cooperantes também entre processos. */
-export async function withStorageLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+export async function withStorageLock<T>(path: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
   await mkdir(dirname(path), { recursive: true });
   const token = `${process.pid}:${PROCESS_SESSION}:${randomUUID()}`;
   const deadline = Date.now() + 30_000;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       const file = await open(path, "wx");
       try { await file.writeFile(token); } finally { await file.close(); }
@@ -28,7 +30,7 @@ export async function withStorageLock<T>(path: string, fn: () => Promise<T>): Pr
       await new Promise(resolve => setTimeout(resolve, 10));
     }
   }
-  try { return await fn(); }
+  try { signal?.throwIfAborted(); return await fn(); }
   finally { if (await readFile(path, "utf8").catch(() => null) === token) await rm(path, { force: true }); }
 }
 

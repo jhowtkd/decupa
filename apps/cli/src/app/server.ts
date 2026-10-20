@@ -1,4 +1,4 @@
-import { initializeResourceLedger, safeSyncProject } from "./resource-ledger.ts";
+import { initializeResourceLedger, safeSyncProject, type ResourceLedger } from "./resource-ledger.ts";
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -175,8 +175,10 @@ async function createAssemblyInProjectsRoot(
   projectsRoot: string,
   displayName: string,
   sources: Source[] = [],
+  bindProject?: (dir: string) => Promise<void>,
 ): Promise<{ id: string; url: string }> {
   return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
+    await bindProject?.(dir);
     const empty = blankProject(randomUUID(), displayName);
     const project = sources.length === 0 ? empty : withCanvasPolicy({
       ...empty,
@@ -192,10 +194,12 @@ async function createCleanupInProjectsRoot(
   media: Pick<MediaRuntime, "getMedia">,
   mediaId: string,
   now?: () => number,
+  bindProject?: (dir: string) => Promise<void>,
 ): Promise<{ id: string; url: string }> {
   const record = await media.getMedia(mediaId);
   if (!record) throw Object.assign(new Error("Mídia não encontrada no acervo"), { status: 404 });
   return reserveProjectDirectory(projectsRoot, displayName, async (dir) => {
+      await bindProject?.(dir);
       // source.json é o manifesto que faz o registro tratar a pasta como
       // Limpeza. A pasta continua na Raiz, mas o arquivo nunca é copiado.
       await claimWorkDir(dir, record.path, now, { flow: "limpeza", displayName });
@@ -285,6 +289,8 @@ type StartAppOptions = {
   input?: string;
   projectDir?: string;
   projectsRoot?: string;
+  /** A CLI mantém o pai para as URLs legadas, mas só possui este Projeto. */
+  ledgerScope?: "project";
   projectId?: string;
   inputs?: string[];
   port?: number;
@@ -324,20 +330,38 @@ type StartAppOptions = {
   decisionLog?: (line: string) => void;
 };
 
+async function withBootLedger(opts: Parameters<typeof initializeResourceLedger>[0], start: (ledger: ResourceLedger) => Promise<AppHandle>): Promise<AppHandle> {
+  const ledger = await initializeResourceLedger({ ...opts, deferReconciliation: true });
+  try { return await start(ledger); }
+  catch (error) { ledger.cancelPendingReconciliation(); throw error; }
+}
+
 export async function startApp(opts: StartAppOptions): Promise<AppHandle> {
   resolveVisualProvider(opts.env ?? process.env);
+  const env = opts.env ?? process.env;
   if (opts.projectsRoot) {
+    const projectsRoot = resolve(opts.projectsRoot);
     const projectId = opts.projectId ?? (opts.projectDir ? basename(resolve(opts.projectDir)) : undefined);
-    return startProjectRootApp({ ...opts, projectId } as StartAppOptions & { projectsRoot: string });
+    if (projectId !== undefined && !PROJECT_ID_PATTERN.test(projectId)) throw new Error("id de Projeto inválido");
+    const initialDir = projectId ? resolve(opts.projectDir ?? join(projectsRoot, projectId)) : undefined;
+    if (initialDir && (dirname(initialDir) !== projectsRoot || basename(initialDir) !== projectId)) throw new Error("Projeto inicial fora da Raiz");
+    if (opts.ledgerScope === "project" && !initialDir) throw new Error("escopo do Projeto precisa de projectDir ou projectId");
+    const ledgerProjectDir = opts.ledgerScope === "project" ? initialDir : undefined;
+    return withBootLedger({
+      root: env.DECUPA_MEDIA_ROOT ?? ledgerProjectDir ?? projectsRoot,
+      ...(ledgerProjectDir ? { projectDir: ledgerProjectDir } : { projectsRoot }), now: opts.now, env,
+    }, ledger => startProjectRootApp({ ...opts, projectsRoot, projectId }, ledger));
   }
   if (opts.projectDir && !opts.input) {
-    return startAssemblyApp(opts as typeof opts & { projectDir: string });
+    const dir = resolve(opts.projectDir);
+    return withBootLedger({ root: env.DECUPA_MEDIA_ROOT ?? dir, projectDir: dir, now: opts.now, env },
+      ledger => startAssemblyApp({ ...opts, projectDir: dir }, ledger));
   }
   if (!opts.input) throw new Error("startApp precisa de input ou projectDir");
   return startCleanupApp({ ...opts, input: opts.input });
 }
 
-async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: string }): Promise<AppHandle> {
+async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: string }, ledger: ResourceLedger): Promise<AppHandle> {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   // Mesmo portão dos modos legados: este é o modo que a CLI usa, então
@@ -351,11 +375,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   }
   const projectsRoot = resolve(opts.projectsRoot);
   await mkdir(projectsRoot, { recursive: true });
-  await initializeResourceLedger({ root: env.DECUPA_MEDIA_ROOT ?? projectsRoot, projectsRoot, now: opts.now, env });
   if (opts.projectId) {
-    if (!PROJECT_ID_PATTERN.test(opts.projectId)) throw new Error("id de Projeto inválido");
     const initialDir = resolve(opts.projectDir ?? resolve(projectsRoot, opts.projectId));
-    if (dirname(initialDir) !== projectsRoot || basename(initialDir) !== opts.projectId) throw new Error("Projeto inicial fora da Raiz");
     if (opts.input) {
       await mkdir(initialDir, { recursive: true });
       await claimWorkDir(initialDir, resolve(opts.input), opts.now, {
@@ -415,10 +436,23 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     allowVisual: allowPaidVisual,
   });
 
+  // As rotas legadas podem abrir/criar outro Projeto por ação explícita.
+  // Vincula somente esse diretório, sem transformar o pai em raiz de busca.
+  const projectBindings = new Map<string, Promise<void>>();
+  const bindProject = opts.ledgerScope === "project" ? async (dir: string): Promise<void> => {
+    if (resolve(dir) === ledger.projectDir) return;
+    let binding = projectBindings.get(dir);
+    if (!binding) {
+      binding = initializeResourceLedger({ root: env.DECUPA_MEDIA_ROOT ?? dir, projectDir: dir, now: opts.now, env }).then(() => undefined);
+      projectBindings.set(dir, binding);
+    }
+    await binding;
+  } : undefined;
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
     now: opts.now,
     createRuntime: async ({ id, dir, prefix, kind }) => {
+      await bindProject?.(dir);
       if (kind === "cleanup") {
         const manifest = await readSourceManifest(dir);
         if (!manifest?.path) throw new Error("manifesto da Limpeza sem caminho da Mídia");
@@ -576,8 +610,8 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           sources.push(...await Promise.all(unique.map((mediaId) => sourceFromMedia(media!, mediaId, `src-${randomUUID()}`))));
         }
         const created = body.fluxo === "limpeza"
-          ? await createCleanupInProjectsRoot(projectsRoot, displayName, media!, mediaIds[0]!.toLowerCase(), opts.now)
-          : await createAssemblyInProjectsRoot(projectsRoot, displayName, sources);
+          ? await createCleanupInProjectsRoot(projectsRoot, displayName, media!, mediaIds[0]!.toLowerCase(), opts.now, bindProject)
+          : await createAssemblyInProjectsRoot(projectsRoot, displayName, sources, bindProject);
         sendJson(res, { id: created.id, url: created.url }, 201);
         return;
       }
@@ -609,18 +643,24 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
   boundPort = port;
 
+  const reconciliationAbort = new AbortController();
+  const reconciliation = ledger.reconcile({ signal: reconciliationAbort.signal }).catch(error => {
+    if (reconciliationAbort.signal.aborted && error === reconciliationAbort.signal.reason) ledger.cancelPendingReconciliation();
+    else ledger.markIncomplete(error);
+  });
   return {
     port,
     address: network.bindHost,
     jobId: opts.projectId ?? "",
     close: async () => {
+      reconciliationAbort.abort();
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
       const runtimesClosed = registry.close();
       const speechClosed = speechRuntime.close();
       const mediaClosed = media?.close() ?? Promise.resolve();
       const authClosed = auth.close();
       const closed = new Promise<void>((resolveClosed) => { server.close(() => resolveClosed()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimesClosed, speechClosed, mediaClosed, authClosed, closed]);
+      await Promise.all([killed, runtimesClosed, speechClosed, mediaClosed, authClosed, closed, reconciliation]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
@@ -1187,7 +1227,7 @@ async function startAssemblyApp(opts: {
   fetchImpl?: typeof fetch;
   decisionLog?: (line: string) => void;
   speechRuntime?: ServerSpeechRuntime;
-}, sharedMedia?: MediaRuntime): Promise<AppHandle> {
+}, ledger: ResourceLedger, sharedMedia?: MediaRuntime): Promise<AppHandle> {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
@@ -1196,7 +1236,6 @@ async function startAssemblyApp(opts: {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
   const dir = resolve(opts.projectDir);
-  await initializeResourceLedger({ root: env.DECUPA_MEDIA_ROOT ?? dir, projectDir: dir, now: opts.now, env });
   const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
@@ -1280,9 +1319,15 @@ async function startAssemblyApp(opts: {
   const port = typeof address === "object" && address ? address.port : (opts.port ?? 7788);
   boundPort = port;
 
+  const reconciliationAbort = new AbortController();
+  const reconciliation = ledger.reconcile({ signal: reconciliationAbort.signal }).catch(error => {
+    if (reconciliationAbort.signal.aborted && error === reconciliationAbort.signal.reason) ledger.cancelPendingReconciliation();
+    else ledger.markIncomplete(error);
+  });
   return {
     port, address: network.bindHost, jobId: project.id,
     close: async () => {
+      reconciliationAbort.abort();
       // Tudo é iniciado antes do primeiro await: no `exit` só o trecho
       // síncrono roda, e é nele que os filhos e o worker de fala morrem.
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
@@ -1292,7 +1337,7 @@ async function startAssemblyApp(opts: {
       const speechClosed = closeSpeech();
       const serverSpeechClosed = speechRuntime.close();
       const closed = new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); });
-      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, closed]);
+      await Promise.all([killed, runtimeClosed, mediaClosed, authClosed, speechClosed, serverSpeechClosed, closed, reconciliation]);
     },
     killChildren: () => {
       if (exec instanceof SpawnExecutor) exec.killNow();
