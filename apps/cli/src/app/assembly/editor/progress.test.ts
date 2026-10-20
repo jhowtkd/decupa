@@ -28,6 +28,35 @@ it("reviewView: prévia atual fica pronta para aprovar mesmo sem ter sido vista 
   expect(reviewView(p({ scenes: [] }), { fresh: true, watched: false }, progress).visible).toBe(false);
 });
 
+it("aprovação excepcional da revisão atual não infere cobertura assistida", () => {
+  // A aprovação pode ser excepcional (watched:false). Aprovação e cobertura
+  // são estados distintos: o cartão não pode transformar 20% em 100%.
+  const progress = { ratio: 0.2, label: "vista até 0:14 de 1:13" };
+  const view = reviewView(p({ finalApprovedRevision: 15 }), { fresh: true, watched: false }, progress);
+  expect(view).toEqual({
+    visible: true, title: "Prévia aprovada",
+    detail: "v15 · cobertura: vista até 0:14 de 1:13", ratio: 0.2,
+  });
+  expect(view.detail).not.toContain("assistida até o fim");
+  expect(reviewView(p({ finalApprovedRevision: 15 }), { fresh: true, watched: false }, { ratio: 0, label: "" }))
+    .toMatchObject({ detail: "v15 · cobertura: não confirmada nesta sessão", ratio: 0 });
+});
+
+it("aprovação de outra revisão não marca a prévia atual como aprovada", () => {
+  const project = p({ revision: 16, previewRevision: 16, finalApprovedRevision: 15 });
+  const current = reviewView(project, { fresh: true, watched: false }, { ratio: 0, label: "" });
+  expect(current).toMatchObject({ visible: true, title: "Pronta para aprovar", ratio: 0 });
+  expect(current.detail).not.toContain("assistida até o fim");
+
+  const stale = reviewView(
+    p({ revision: 16, previewRevision: 15, finalApprovedRevision: 15 }),
+    { fresh: false, watched: false },
+    { ratio: 1, label: "vista até o fim" },
+  );
+  expect(stale).toMatchObject({ title: "Prévia desatualizada", ratio: 0 });
+  expect(stale.detail).not.toContain("assistida até o fim");
+});
+
 it("sem ver tudo, o anel não chega a 100% nem diz que viu tudo", () => {
   // 73,00 s cobertos de 73,12 s, com um buraco em algum ponto: watched continua falso.
   const near = watchProgress(73, 73.12, false);
