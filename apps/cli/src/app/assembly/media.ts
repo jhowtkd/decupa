@@ -1,6 +1,7 @@
 import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hashFile, probe } from "@decupa/media";
+import { cacheConfigKey, emitCacheMetric, type CacheMetric } from "@decupa/bench";
 import type { Executor } from "../pipeline.ts";
 import { detectHardwareProfile, encoderFor, type HardwareProfile } from "./hardware.ts";
 import { mediaWork } from "./media-work.ts";
@@ -8,6 +9,7 @@ import type { Source } from "./types.ts";
 
 export type MediaOpts = {
   signal?: AbortSignal;
+  onCacheMetric?: (metric: CacheMetric) => void;
   /** Perfil já comprovado: reutiliza o encoder sem redetectar hardware na fila. */
   profile?: HardwareProfile;
   /**
@@ -20,6 +22,12 @@ export type MediaOpts = {
 
 /** Bitrate do proxy de hardware: 960px de largura não precisa dos 8M do render. */
 const PROXY_HW_BITRATE = "4M";
+// Identity of the reusable playback contract. Encoders may fall back to software;
+// the cache promises compatible playback, not identical encoded bytes.
+const PROXY_CONFIG_KEY = cacheConfigKey({
+  version: "proxy-playback-v1", width: 960, video: "h264", pixelFormat: "yuv420p", audio: "aac",
+  hardwareBitrate: PROXY_HW_BITRATE, softwareEncoder: "libx264", faststart: true,
+});
 
 export function playbackDir(dir: string, sha256: string): string {
   return join(dir, "media", sha256);
@@ -201,24 +209,36 @@ export async function ensurePlayback(
   exec: Executor,
   opts: MediaOpts = {},
 ): Promise<{ videoPath: string; thumbnailPath: string | null }> {
-  await verifySourceIdentity(source);
+  const started = performance.now();
+  let buildStarted = started, built = false, firstCheckHit = false;
+  let outcome: CacheMetric["outcome"] = "error";
   const proxy = proxyPath(dir, source.sha256);
-  opts.signal?.throwIfAborted();
-  // Cache validado responde mesmo enquanto um render ocupa mediaWork.
-  if (await proxyIsValid(proxy, source)) {
-    return { videoPath: proxy, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
+  let videoPath: string;
+  try {
+    await verifySourceIdentity(source);
+    opts.signal?.throwIfAborted();
+    // Cache validado responde mesmo enquanto um render ocupa mediaWork.
+    firstCheckHit = await proxyIsValid(proxy, source);
+    if (firstCheckHit) videoPath = proxy;
+    else {
+      // Detect outside the non-reentrant media slot, as before.
+      let profile = opts.profile;
+      if (profile == null && opts.detectHardware && source.hasVideo) {
+        profile = await detectHardwareProfile(source.path, join(dir, "hardware-proof"), exec, { signal: opts.signal });
+      }
+      videoPath = await mediaWork.run(async (signal) => {
+        signal?.throwIfAborted();
+        if (await proxyIsValid(proxy, source)) return proxy;
+        built = true;
+        buildStarted = performance.now();
+        return buildProxy(source, dir, exec, { ...opts, profile, signal });
+      }, { key: proxy, signal: opts.signal });
+    }
+    outcome = built ? "built" : firstCheckHit ? "hit" : "hit-or-shared";
+  } finally {
+    emitCacheMetric(opts.onCacheMetric, { stage: "proxy", sha256: source.sha256, configKey: PROXY_CONFIG_KEY,
+      outcome, durationMs: Math.max(0, performance.now() - (built ? buildStarted : started)) });
   }
-  // O perfil é resolvido FORA do slot: a prova de hardware também passa pela
-  // mediaWork, que não é reentrante — detectar dentro do job travaria a fila.
-  let profile = opts.profile;
-  if (profile == null && opts.detectHardware && source.hasVideo) {
-    profile = await detectHardwareProfile(source.path, join(dir, "hardware-proof"), exec, { signal: opts.signal });
-  }
-  // A miniatura aguarda o slot do proxy liberar: a fila não é reentrante.
-  const videoPath = await mediaWork.run(async (signal) => {
-    signal?.throwIfAborted();
-    if (await proxyIsValid(proxy, source)) return proxy;
-    return buildProxy(source, dir, exec, { ...opts, profile, signal });
-  }, { key: proxy, signal: opts.signal });
+  // Thumbnail failures do not turn a successfully built proxy into an error.
   return { videoPath, thumbnailPath: await ensureThumbnail(source, dir, exec, opts) };
 }

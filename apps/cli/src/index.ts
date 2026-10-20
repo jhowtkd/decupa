@@ -30,6 +30,10 @@ const USAGE = `decupa — bancada de medição
       Relatório offline do corpus editorial. Sem categorias liberadas, tudo
       vira trabalho humano. Concordância entre modelos não conta como verdade.
 
+  decupa reuse-report --projects-root <pasta>
+      Lê os journals de todos os projetos e resume reuso por hash/configuração.
+      Estima o trabalho repetido medido; não altera projetos nem seus caches.
+
   decupa gold --raw <bruto> --edited <editado> --out <gold.json>
       Deriva os cortes de um par bruto/editado.
 
@@ -205,6 +209,17 @@ async function main(argv: string[]): Promise<number> {
     const { runOfflineCalibration } = await import("@decupa/triage");
     const report = await runOfflineCalibration();
     console.log(JSON.stringify(report, null, 2));
+    return 0;
+  }
+
+  if (command === "reuse-report") {
+    const { values } = parseArgs({ args: rest, options: { "projects-root": { type: "string" } } });
+    if (!values["projects-root"]) {
+      console.error("reuse-report precisa de --projects-root");
+      return 1;
+    }
+    const { summarizeReuseJournals } = await import("@decupa/bench");
+    console.log(JSON.stringify(await summarizeReuseJournals(resolve(values["projects-root"])), null, 2));
     return 0;
   }
 

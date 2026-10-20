@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { publishAtomic } from "@decupa/cache";
-import { createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
+import { cacheConfigKey, createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
 import { hashFile } from "@decupa/media";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
 import type { FileCoordinator } from "@decupa/coordinator";
@@ -480,7 +480,8 @@ async function runPreparationOperation(
           // autorizou a transcrição. Promessa sempre observada.
           const image = Promise.resolve().then(async () => {
             try {
-              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal, detectHardware: true });
+              const { videoPath } = await ensurePlayback(source, dir, deps.exec, { signal: imageSignal, detectHardware: true,
+                onCacheMetric: metric => metrics.emit("cache", metric) });
               await buildPeaks(deps.exec, {
                 proxyPath: videoPath,
                 sha256: source.sha256,
@@ -499,17 +500,26 @@ async function runPreparationOperation(
         for (const source of targets) {
           checkAlive();
           if (current.preparation?.sources[source.id]?.media !== "ready") continue;
+          const analysisStarted = performance.now();
+          let analysisBuiltAt: number | undefined;
+          let analysisCacheRecorded = false;
           try {
             let analysisBuilt = false;
             const analysis = await metrics.tracer.run("analysis", () => analyzeSource(source, dir, deps.exec, {
               signal,
               speech: deps.speech,
               heavyCoordinator: deps.coordinator,
-              onStage: stage => { analysisBuilt = true; deps.onStage?.(stage); },
+              onStage: stage => {
+                if (stage !== "queued") { analysisBuilt = true; analysisBuiltAt ??= performance.now(); }
+                deps.onStage?.(stage);
+              },
             }));
-            metrics.emit("cache", { stage: "analysis", sourceId: source.id,
-              outcome: analysisBuilt ? "built" : analysis.status !== "ready" ? "error"
-                : source.hasAudio ? "hit-or-shared" : "not-applicable" });
+            metrics.emit("cache", { stage: "analysis", sourceId: source.id, sha256: source.sha256,
+              configKey: cacheConfigKey({ version: "analysis-v2", key: analysis.key }),
+              durationMs: Math.max(0, performance.now() - (analysisBuiltAt ?? analysisStarted)),
+              outcome: analysis.status !== "ready" ? "error" : !source.hasAudio ? "not-applicable"
+                : analysisBuilt ? "built" : "hit-or-shared" });
+            analysisCacheRecorded = true;
             checkAlive();
             await save((p) => ({
               ...p,
@@ -526,6 +536,8 @@ async function runPreparationOperation(
                 : p.preparation,
             }));
           } catch (err) {
+            if (!analysisCacheRecorded) metrics.emit("cache", { stage: "analysis", sourceId: source.id, sha256: source.sha256,
+              configKey: null, outcome: "error", durationMs: Math.max(0, performance.now() - analysisStarted) });
             checkAlive();
             await markSource(source.id, {
               audio: "error",
@@ -554,6 +566,7 @@ async function runPreparationOperation(
             const spans = await describeSource(source, dir, signal, {
               client: visualClient,
               onMetric: deps.onMetric,
+              onCacheMetric: metric => metrics.emit("cache", metric),
               exec: deps.exec,
               isCurrent: control.isCurrent,
               coordinator: deps.coordinator,
