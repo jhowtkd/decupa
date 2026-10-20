@@ -38,6 +38,68 @@ function fakeServe(): string {
 }
 
 describe("createResidentSpeechClient", () => {
+  it("serializa alinhamento e transcrição na mesma fila e envia align sem opções de ASR", async () => {
+    const written: Record<string, unknown>[] = [];
+    const spawned: string[] = [];
+    const client = createResidentSpeechClient({
+      spawn: (command, args, options) => {
+        spawned.push(`${command} ${args.join(" ")}`);
+        const child = spawn(process.execPath, ["-e", `
+          const readline = require("node:readline");
+          const rl = readline.createInterface({ input: process.stdin });
+          rl.on("line", (line) => {
+            const req = JSON.parse(line);
+            if ((req.cmd || "transcribe") === "cancel") return;
+            setTimeout(() => process.stdout.write(JSON.stringify({
+              language: req.args.language || "pt",
+              words: [{ text: req.args.task_id, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [], taskId: req.args.task_id,
+            }) + "\\n"), 80);
+          });
+        `], {
+          cwd: options?.cwd,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const stdin = child.stdin;
+        if (stdin) {
+          const orig = stdin.write.bind(stdin);
+          stdin.write = ((chunk: string | Buffer, encoding?: BufferEncoding, cb?: (err?: Error | null) => void) => {
+            for (const line of String(chunk).split("\\n").filter(Boolean)) written.push(JSON.parse(line) as Record<string, unknown>);
+            return orig(chunk, encoding as BufferEncoding, cb);
+          }) as typeof stdin.write;
+        }
+        return child;
+      },
+    });
+    try {
+      const aligned = client.transcribe({
+        operation: "align", taskId: "align-task", wav: "clip.wav", text: "texto corrigido", language: "pt",
+      });
+      const transcribed = client.transcribe({
+        taskId: "asr-task", wav: "source.wav", language: "pt", model: "small", computeType: "int8",
+      });
+
+      await expect.poll(() => written).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(written).toHaveLength(1);
+      const [alignment] = await Promise.all([aligned, transcribed]);
+
+      expect(alignment.words[0]?.text).toBe("align-task");
+      expect(written.map((request) => request.cmd ?? "transcribe")).toEqual(["align", "transcribe"]);
+      expect(written[0]).toEqual({
+        cmd: "align",
+        args: { task_id: "align-task", wav: "clip.wav", language: "pt", text: "texto corrigido" },
+      });
+      expect(written[0]!.args).not.toHaveProperty("model");
+      expect(written[0]!.args).not.toHaveProperty("compute_type");
+      expect(written[1]!.args).toMatchObject({ task_id: "asr-task", model: "small", compute_type: "int8" });
+      expect(spawned).toEqual(["uv run --no-sync python worker.py --serve"]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("dois arquivos compartilham um processo worker.py --serve e não chamam transcribe.py", async () => {
     const spawned: { command: string; args: string[] }[] = [];
     const client = createResidentSpeechClient({
@@ -272,6 +334,123 @@ describe("createResidentSpeechClient", () => {
       }) + "\n");
       const out = await again;
       expect(out.words[0]?.text).toBe("fresh-b");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("close é terminal para pedidos em fila, pedidos futuros e cancel", async () => {
+    let spawns = 0;
+    const received: { cmd: string; taskId: string }[] = [];
+    let markFirstReceived!: () => void;
+    const firstReceived = new Promise<void>((resolve) => { markFirstReceived = resolve; });
+    const client = createResidentSpeechClient({
+      spawn: () => {
+        spawns += 1;
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: (chunk: string | Buffer) => {
+            const request = JSON.parse(String(chunk)) as {
+              cmd?: string;
+              args?: { task_id?: string };
+            };
+            const taskId = request.args?.task_id ?? "";
+            const cmd = request.cmd ?? "transcribe";
+            if (cmd === "cancel") return true;
+            received.push({ cmd, taskId });
+            if (taskId === "align-first") {
+              markFirstReceived();
+              // Primeira operação fica pendente até o cliente fechar.
+              return true;
+            }
+            queueMicrotask(() => stdout.emit("data", JSON.stringify({
+              language: "pt",
+              words: [{ text: taskId, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId,
+            }) + "\n"));
+            return true;
+          },
+          end: () => undefined,
+        });
+        Object.assign(child, { stdin, stdout, stderr: new EventEmitter(), kill: () => true });
+        return child as unknown as ReturnType<typeof spawn>;
+      },
+    });
+    const outcome = (request: Promise<unknown>) => request.then(
+      () => ({ ok: true as const }),
+      (error: Error) => ({ ok: false as const, message: error.message }),
+    );
+    try {
+      const first = client.transcribe({
+        operation: "align", taskId: "align-first", wav: "one.wav", text: "um", language: "pt",
+      });
+      const second = client.transcribe({
+        operation: "align", taskId: "align-second", wav: "two.wav", text: "dois", language: "pt",
+      });
+      const firstResult = outcome(first);
+      const secondResult = outcome(second);
+      await firstReceived;
+
+      await client.close();
+      client.cancel("cancel-after-close");
+      const afterClose = outcome(client.transcribe({
+        operation: "align", taskId: "align-after-close", wav: "three.wav", text: "três", language: "pt",
+      }));
+
+      const results = await Promise.all([firstResult, secondResult, afterClose]);
+      expect(results).toEqual([
+        { ok: false, message: "worker de fala encerrou" },
+        { ok: false, message: "worker de fala encerrou" },
+        { ok: false, message: "worker de fala encerrou" },
+      ]);
+      expect(spawns).toBe(1);
+      expect(received).toEqual([{ cmd: "align", taskId: "align-first" }]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("restart explícito encerra pendentes e aceita novo pedido", async () => {
+    let spawns = 0;
+    let markFirstReceived!: () => void;
+    const firstReceived = new Promise<void>((resolve) => { markFirstReceived = resolve; });
+    const client = createResidentSpeechClient({
+      spawn: () => {
+        spawns += 1;
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stdin = Object.assign(new EventEmitter(), {
+          write: (chunk: string | Buffer) => {
+            const request = JSON.parse(String(chunk)) as { args?: { task_id?: string } };
+            const taskId = request.args?.task_id ?? "";
+            if (spawns === 1) {
+              markFirstReceived();
+              return true;
+            }
+            queueMicrotask(() => stdout.emit("data", JSON.stringify({
+              language: "pt",
+              words: [{ text: taskId, startMs: 0, endMs: 40, confidence: 1, sentenceIndex: 0 }],
+              unaligned: [],
+              taskId,
+            }) + "\n"));
+            return true;
+          },
+          end: () => undefined,
+        });
+        Object.assign(child, { stdin, stdout, stderr: new EventEmitter(), kill: () => true });
+        return child as unknown as ReturnType<typeof spawn>;
+      },
+    });
+    try {
+      const pending = client.transcribe({ taskId: "before-restart", wav: "a.wav", language: "pt" });
+      await firstReceived;
+      client.restart();
+      await expect(pending).rejects.toThrow("worker de fala reiniciado");
+      const fresh = await client.transcribe({ taskId: "after-restart", wav: "b.wav", language: "pt" });
+      expect(fresh.words[0]?.text).toBe("after-restart");
+      expect(spawns).toBe(2);
     } finally {
       await client.close();
     }

@@ -30,6 +30,7 @@ export type ResidentSpeechClient = {
   cancel: (taskId: string) => void;
   /** Encerra o processo atual; o próximo pedido sobe um worker novo. */
   restart: () => void;
+  /** Encerramento terminal: rejeita também pedidos enfileirados e futuros. */
   close: () => Promise<void>;
 };
 
@@ -84,6 +85,7 @@ export function createResidentSpeechClient(opts: {
     process.stderr.write(chunk);
   });
   let child: ChildProcess | null = null;
+  let closed = false;
   let buffer = "";
   let errBuffer = "";
   let chain: Promise<unknown> = Promise.resolve();
@@ -137,6 +139,7 @@ export function createResidentSpeechClient(opts: {
   };
 
   const ensure = (): ChildProcess => {
+    if (closed) throw new Error("worker de fala encerrou");
     if (child) return child;
     const proc = spawnFn("uv", ["run", "--no-sync", "python", "worker.py", "--serve"], { cwd: speechDir });
     child = proc;
@@ -185,6 +188,7 @@ export function createResidentSpeechClient(opts: {
   };
 
   const cancel = (taskId: string): void => {
+    if (closed) return;
     const proc = ensure();
     proc.stdin?.write(`${JSON.stringify({
       cmd: "cancel",
@@ -231,13 +235,14 @@ export function createResidentSpeechClient(opts: {
       req.signal?.addEventListener("abort", onAbort, { once: true });
       arm();
       proc.stdin.write(`${JSON.stringify({
-        cmd: "transcribe",
+        cmd: req.operation ?? "transcribe",
         args: {
           task_id: req.taskId,
           wav: req.wav,
           language: req.language,
-          model: req.model ?? "small",
-          ...(req.computeType ? { compute_type: req.computeType } : {}),
+          ...(req.operation === "align"
+            ? { text: req.text }
+            : { model: req.model ?? "small", ...(req.computeType ? { compute_type: req.computeType } : {}) }),
           ...(device ? { device } : {}),
         },
       })}\n`);
@@ -252,6 +257,7 @@ export function createResidentSpeechClient(opts: {
   };
 
   const close = async (): Promise<void> => {
+    closed = true;
     stop(new Error("worker de fala encerrou"));
   };
 

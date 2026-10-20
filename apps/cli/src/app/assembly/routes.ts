@@ -15,7 +15,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { isCancelledError } from "@decupa/queue";
-import { alignText } from "@decupa/transcript";
+import { validateAlignmentCoverage } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
@@ -45,7 +45,7 @@ import type { Assembly, Project, Source } from "./types.ts";
 import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
-import type { FileCoordinator } from "@decupa/coordinator";
+import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
 import { handleReservationRequest, requireEditReservation } from "../edit-reservation.ts";
 import type { IncomingMessage as ReservationRequest } from "node:http";
 import type { MediaRuntime } from "../media-runtime.ts";
@@ -351,14 +351,15 @@ export async function publishCorrection(
 }
 
 /**
- * Alinha uma correção pendente em background: recorta o áudio, roda o
- * sidecar com --text-file (sem ASR), refina os cortes com snapCut e publica
- * via CAS. Nunca derruba o servidor; o pending permite retomada.
+ * Alinha uma correção pendente no worker residente sob a fila pesada.
+ * O mesmo WAV serve ao alinhamento sem ASR e ao snap; publica via CAS.
+ * Nunca derruba o servidor; o pending permite retomada.
  */
 async function alignCorrectionJob(
   dir: string,
   correctionId: string,
   expectedRevision: number,
+  deps: AssemblyDeps,
 ): Promise<void> {
   const key = alignKey(dir, correctionId);
   if (alignActive.has(key)) return;
@@ -374,30 +375,11 @@ async function alignCorrectionJob(
       });
       return;
     }
-    let transcript;
-    try {
-      transcript = await alignText({
-        input: source.path,
-        text: correction.text,
-        startSeconds: correction.start,
-        endSeconds: correction.end,
-      });
-    } catch (err) {
-      await publishCorrection(dir, expectedRevision, correctionId, {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    const words: {
-      text: string; start: number; end: number;
-      confidence: number | null; cutStart?: number; cutEnd?: number;
-    }[] = transcript.tokens.map((token) => ({
-      text: token.text,
-      start: token.startMs / 1000,
-      end: token.endMs / 1000,
-      confidence: token.confidence,
-    }));
-    try {
+    const speech = deps.speech;
+    if (!speech) throw new Error("worker de fala indisponível para alinhar correção");
+    const coordinator = speech.coordinator ?? deps.coordinator
+      ?? createFileCoordinator(join(dir, ".decupa", "coordinator"));
+    const words = await coordinator.withSlot({ stage: "speech", priority: "interactive" }, async () => {
       const clipDir = await mkdtemp(join(tmpdir(), "decupa-snap-"));
       try {
         const wav = join(clipDir, "clip.wav");
@@ -407,21 +389,42 @@ async function alignCorrectionJob(
           startSeconds: correction.start,
           durationSeconds: correction.end - correction.start,
         });
-        const pcm = await readPcm({ input: wav });
-        const cuts = snapWordCuts(
-          pcm,
-          words.map((word) => ({ start: word.start - correction.start, end: word.end - correction.start })),
-        );
-        for (const [i, word] of words.entries()) {
-          word.cutStart = cuts[i]!.start + correction.start;
-          word.cutEnd = cuts[i]!.end + correction.start;
+        const aligned = await speech.worker({
+          operation: "align",
+          taskId: `align:${key}`,
+          wav,
+          text: correction.text,
+          language: "pt",
+        });
+        validateAlignmentCoverage(correction.text, aligned.words, aligned.unaligned);
+        const shiftMs = Math.round(correction.start * 1000);
+        const words: {
+          text: string; start: number; end: number;
+          confidence: number | null; cutStart?: number; cutEnd?: number;
+        }[] = aligned.words.map((word) => ({
+          text: word.text,
+          start: (Math.round(word.startMs) + shiftMs) / 1000,
+          end: (Math.round(word.endMs) + shiftMs) / 1000,
+          confidence: word.confidence,
+        }));
+        try {
+          const pcm = await readPcm({ input: wav });
+          const cuts = snapWordCuts(
+            pcm,
+            words.map((word) => ({ start: word.start - correction.start, end: word.end - correction.start })),
+          );
+          for (const [i, word] of words.entries()) {
+            word.cutStart = cuts[i]!.start + correction.start;
+            word.cutEnd = cuts[i]!.end + correction.start;
+          }
+        } catch {
+          // Sem refino acústico, valem as fronteiras do alinhamento.
         }
+        return words;
       } finally {
         await rm(clipDir, { recursive: true, force: true });
       }
-    } catch {
-      // Sem refino acústico, valem as fronteiras do alinhamento.
-    }
+    });
     await publishCorrection(dir, expectedRevision, correctionId, { words });
   } catch (err) {
     await publishCorrection(dir, expectedRevision, correctionId, {
@@ -806,7 +809,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         for (const correction of project.corrections) {
           if (correction.status === "pending" && !alignActive.has(alignKey(dir, correction.id))) {
-            void alignCorrectionJob(dir, correction.id, project.revision);
+            void alignCorrectionJob(dir, correction.id, project.revision, deps);
           }
         }
         // Desfazer só aparece com a foto do topo da pilha legível; histórico
@@ -1735,7 +1738,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         if (correctionId) {
           // Alinhamento continua em background; o pending permite retomada.
-          void alignCorrectionJob(dir, correctionId, project.revision);
+          void alignCorrectionJob(dir, correctionId, project.revision, deps);
           await sendSnapshot(res, { project, ...snapshot() }, 202);
           return true;
         }

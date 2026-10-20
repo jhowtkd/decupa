@@ -86,16 +86,19 @@ export interface SidecarResult {
   unaligned: string[];
 }
 
-export type SpeechWorkerRequest = {
+type SpeechWorkerInput = {
   taskId: string;
   wav: string;
   language: string;
-  model?: string;
-  computeType?: string;
   signal?: AbortSignal;
   /** Progresso do WhisperX em texto curto ("transcrevendo 42%"). */
   onProgress?: (line: string) => void;
 };
+
+export type SpeechWorkerRequest = SpeechWorkerInput & (
+  | { operation?: "transcribe"; model?: string; computeType?: string }
+  | { operation: "align"; text: string; model?: never; computeType?: never }
+);
 
 /** Padrões de `transcribe`, exportados para quem monta a chave da tarefa. */
 export const DEFAULT_LANGUAGE = "pt";
