@@ -1,11 +1,11 @@
 import { parseDecisionConfig } from "@decupa/typesafe/config";
-import { authorizesCut, TypeSafeHttpError, TypeSafeClient } from "@decupa/typesafe";
+import { authorizesCut, TypeSafeHttpError, TypeSafeClient, TypeSafeBudget } from "@decupa/typesafe";
 import { effectiveSpanText, speechCatalog, validateResolvedProposal } from "./scenes.ts";
 import type { DecisionReport, Project, Proposal } from "./types.ts";
 
 export type CutCandidate = {id:string;sceneId:string;takeId:string;text:string;before:string;after:string;reason:string};
 export type DecisionClient = Pick<TypeSafeClient,"decide">;
-export type AssemblyDecisionContext = {mode:"off"|"observe"|"hybrid";client?:DecisionClient;model:string};
+export type AssemblyDecisionContext = {mode:"off"|"observe"|"hybrid";client?:DecisionClient;model:string;budget?:TypeSafeBudget};
 
 export function resolveCutCandidates(project:Project, proposal:Proposal, raw:unknown):CutCandidate[] {
   if (raw === undefined) return [];
@@ -104,10 +104,10 @@ export function validateDecisionReport(raw:unknown):DecisionReport {
   return report;
 }
 
-export function createAssemblyDecisionContext(raw:unknown, env:Record<string,string|undefined>, fetchImpl?:typeof fetch):AssemblyDecisionContext {
+export function createAssemblyDecisionContext(raw:unknown, env:Record<string,string|undefined>, fetchImpl?:typeof fetch, budget = new TypeSafeBudget()):AssemblyDecisionContext {
   const defaultMode=env.DECUPA_TYPESAFE==="1" && env.TYPESAFE_API_KEY?"hybrid":"off";
   const config=parseDecisionConfig(raw??{mode:defaultMode},env);
   const client=config.mode!=="off" && env.DECUPA_TYPESAFE==="1" && env.TYPESAFE_API_KEY
-    ? new TypeSafeClient({apiKey:env.TYPESAFE_API_KEY,model:config.model,fetchImpl}):undefined;
-  return {mode:config.mode,model:config.model,client};
+    ? new TypeSafeClient({apiKey:env.TYPESAFE_API_KEY,model:config.model,fetchImpl,budget}):undefined;
+  return {mode:config.mode,model:config.model,client,budget};
 }

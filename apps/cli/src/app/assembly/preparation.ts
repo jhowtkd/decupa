@@ -30,7 +30,7 @@ export type PreparationRequest = {
 };
 
 export type ModelTransport = {
-  send(content: unknown[], signal?: AbortSignal): Promise<string>;
+  send(content: unknown[], signal?: AbortSignal, onAttempt?: () => void): Promise<string>;
   model?: string;
   providerKey?: string;
 };
@@ -294,9 +294,9 @@ async function runPreparationOperation(
     try {
       operationDeps = { ...deps, ...await deps.resolveOperationDeps?.() };
       const send = operationDeps.proposeSend;
-      if (send) operationDeps = { ...operationDeps, proposeSend: (content, signal) => {
+      if (send) operationDeps = { ...operationDeps, proposeSend: (content, signal, onAttempt) => {
         metrics.emit("model-call", { purpose: "proposal" });
-        return metrics.tracer.run("proposal-call", () => send(content, signal));
+        return metrics.tracer.run("proposal-call", () => send(content, signal, onAttempt));
       } };
       const visualClient = operationDeps.describeClient;
       const included = opened.assembly.sources.filter((source) => source.included);
