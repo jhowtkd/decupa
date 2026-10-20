@@ -3,9 +3,38 @@ import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFileCoordinator } from "@decupa/coordinator";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { startApp } from "./server.ts";
+
+const analysisMetricsClose = vi.hoisted(() => ({
+  active: false,
+  entered: undefined as (() => void) | undefined,
+  release: undefined as Promise<void> | undefined,
+  finished: undefined as (() => void) | undefined,
+}));
+
+vi.mock("@decupa/bench", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@decupa/bench")>();
+  return {
+    ...actual,
+    createOperationMetrics(opts: Parameters<typeof actual.createOperationMetrics>[0]) {
+      const metrics = actual.createOperationMetrics(opts);
+      if (opts.metadata?.operation !== "analyze-sources") return metrics;
+      return {
+        ...metrics,
+        async close() {
+          if (analysisMetricsClose.active) {
+            analysisMetricsClose.entered?.();
+            await analysisMetricsClose.release;
+          }
+          await metrics.close();
+          if (analysisMetricsClose.active) analysisMetricsClose.finished?.();
+        },
+      };
+    },
+  };
+});
 
 const executor = { async run() { return { code: 0, stdout: "", stderr: "" }; } };
 
@@ -163,6 +192,95 @@ it("aplica a política de canvas ao criar Montagem já com Mídia", async () => 
     expect(withMedia.project.assembly.canvasSourceId).toMatch(/^src-/);
     expect(throughRoute.project.assembly.canvasSourceId).toMatch(/^src-/);
   } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("aguarda a análise de Mídia e o journal antes de fechar e apagar a Montagem", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-new-analysis-close-http-"));
+  const projectsRoot = join(root, "projects");
+  const { mediaRoot, mediaId } = await seedMedia(root, "fala.wav", "tone-gap.wav");
+  let signalEntered!: () => void;
+  let releaseAnalysis!: () => void;
+  const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+  const blocked = new Promise<void>((resolve) => { releaseAnalysis = resolve; });
+  let signalMetricsClose!: () => void;
+  let signalMetricsFinished!: () => void;
+  let releaseMetricsClose!: () => void;
+  const metricsCloseEntered = new Promise<void>((resolve) => { signalMetricsClose = resolve; });
+  const metricsCloseFinished = new Promise<void>((resolve) => { signalMetricsFinished = resolve; });
+  const metricsCloseBlocked = new Promise<void>((resolve) => { releaseMetricsClose = resolve; });
+  analysisMetricsClose.active = true;
+  analysisMetricsClose.entered = signalMetricsClose;
+  analysisMetricsClose.release = metricsCloseBlocked;
+  analysisMetricsClose.finished = signalMetricsFinished;
+  const app = await startApp({
+    projectsRoot,
+    port: 0,
+    executor,
+    autoStart: false,
+    env: { DECUPA_MEDIA_ROOT: mediaRoot },
+    speech: {
+      worker: async () => {
+        signalEntered();
+        await blocked;
+        return { language: "pt", words: [], unaligned: [] };
+      },
+      extract: async () => undefined,
+      detectSilence: async () => [],
+    },
+  });
+  try {
+    const base = `http://127.0.0.1:${app.port}`;
+    const created = await (await fetch(`${base}/project/new`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nome: "Análise em andamento", fluxo: "montagem" }),
+    })).json() as { id: string; url: string };
+    const empty = await (await fetch(`${base}${created.url}project`)).json() as { project: { revision: number } };
+    const added = await fetch(`${base}${created.url}project/media`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: empty.project.revision, mediaId }),
+    });
+    expect(added.status).toBe(202);
+    await entered;
+
+    let closeFinished = false;
+    const closing = app.close().then(() => { closeFinished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const closeFinishedWhileBlocked = closeFinished;
+
+    releaseAnalysis();
+    await metricsCloseEntered;
+    let closeFinishedWhileJournalBlocked = false;
+    void closing.then(() => { closeFinishedWhileJournalBlocked = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const journalStillBlocking = !closeFinishedWhileJournalBlocked;
+    releaseMetricsClose();
+    await metricsCloseFinished;
+    await closing;
+    // Só dê tempo para a gravação antiga terminar se as capturas já provaram
+    // que close resolveu antes do worker ou do journal. No caminho correto,
+    // a remoção acontece imediatamente após confirmar o flush abaixo.
+    if (closeFinishedWhileBlocked || !journalStillBlocking) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const metricsDir = join(projectsRoot, created.id, ".decupa", "metrics");
+    const journals = await readdir(metricsDir);
+    const analysisJournal = journals.find((name) => name.endsWith(".jsonl"));
+    expect(analysisJournal).toBeTruthy();
+    expect(await readFile(join(metricsDir, analysisJournal!), "utf8")).toContain('"kind":"operation-finished"');
+    await rm(join(projectsRoot, created.id), { recursive: true, force: true });
+    expect(await readdir(projectsRoot)).toEqual([]);
+    expect(closeFinishedWhileBlocked).toBe(false);
+    expect(journalStillBlocking).toBe(true);
+  } finally {
+    releaseAnalysis();
+    releaseMetricsClose();
+    analysisMetricsClose.active = false;
+    analysisMetricsClose.entered = undefined;
+    analysisMetricsClose.release = undefined;
+    analysisMetricsClose.finished = undefined;
     await app.close();
     await rm(root, { recursive: true, force: true });
   }

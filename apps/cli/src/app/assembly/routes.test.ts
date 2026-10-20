@@ -1046,7 +1046,7 @@ it("corrige fala pelo worker residente, preserva offset e reutiliza o WAV tempor
     operation: "align", text: "fala nova", language: "pt", wav: alignedWav,
   }));
   expect(withSlot).toHaveBeenCalledWith(
-    { stage: "speech", priority: "interactive" },
+    { stage: "speech", priority: "interactive", signal: expect.any(AbortSignal) },
     expect.any(Function),
   );
   expect(correction.status).toBe("aligned");

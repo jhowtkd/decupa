@@ -368,11 +368,13 @@ async function alignCorrectionJob(
   correctionId: string,
   expectedRevision: number,
   deps: AssemblyDeps,
+  signal?: AbortSignal,
 ): Promise<void> {
   const key = alignKey(dir, correctionId);
   if (alignActive.has(key)) return;
   alignActive.add(key);
   try {
+    signal?.throwIfAborted();
     const current = await loadProject(dir);
     const correction = current.corrections.find((item) => item.id === correctionId);
     if (!correction || correction.status !== "pending") return;
@@ -388,7 +390,7 @@ async function alignCorrectionJob(
     if (!speech) return;
     const coordinator = speech.coordinator ?? deps.coordinator
       ?? createFileCoordinator(join(dir, ".decupa", "coordinator"));
-    const words = await coordinator.withSlot({ stage: "speech", priority: "interactive" }, async () => {
+    const words = await coordinator.withSlot({ stage: "speech", priority: "interactive", signal }, async () => {
       const clipDir = await mkdtemp(join(tmpdir(), "decupa-snap-"));
       try {
         const wav = join(clipDir, "clip.wav");
@@ -398,13 +400,16 @@ async function alignCorrectionJob(
           startSeconds: correction.start,
           durationSeconds: correction.end - correction.start,
         });
+        signal?.throwIfAborted();
         const aligned = await speech.worker({
           operation: "align",
           taskId: `align:${key}`,
+          signal,
           wav,
           text: correction.text,
           language: "pt",
         });
+        signal?.throwIfAborted();
         validateAlignmentCoverage(correction.text, aligned.words, aligned.unaligned);
         const shiftMs = Math.round(correction.start * 1000);
         const words: {
@@ -434,11 +439,12 @@ async function alignCorrectionJob(
         await rm(clipDir, { recursive: true, force: true });
       }
     });
+    signal?.throwIfAborted();
     await publishCorrection(dir, expectedRevision, correctionId, { words });
   } catch (err) {
     // Encerrar/cancelar o processo não é falha do texto corrigido. O finally
     // libera o id para o próximo GET retomar o pending (ICE-2 #02).
-    if (err instanceof SpeechWorkerInterruptedError || isCancelledError(err)) return;
+    if (signal?.aborted || err instanceof SpeechWorkerInterruptedError || isCancelledError(err)) return;
     await publishCorrection(dir, expectedRevision, correctionId, {
       error: err instanceof Error ? err.message : String(err),
     }).catch(() => undefined);
@@ -492,8 +498,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   // /cancel ou por outra operação, deixa de valer.
   let preparationSignal: AbortSignal | null = null;
   const livePreviews = new Set<AbortController>();
-  const playbackLifetime = new AbortController();
+  const runtimeLifetime = new AbortController();
   const playbackPreparations = new Set<Promise<string>>();
+  const backgroundWork = new Set<Promise<unknown>>();
   let previewPlaybackState: { key: string; failed: boolean } | undefined;
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
@@ -516,6 +523,16 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   const packageDownloads = new Set<Promise<void>>();
   const capabilities = (deps.deliveryCapabilities ? deps.deliveryCapabilities() : detectDeliveryCapabilities({ env: projectRuntimeContext(dir).env }))
     .then(value => deps.teamMode ? { ...value, primary: "package" as const } : value);
+
+  // Retém análise, preparo e alinhamento em segundo plano até suas escritas terminarem.
+  // O início lazy impede que uma requisição em fechamento dispare trabalho novo.
+  function runBackground(work: () => Promise<unknown>): void {
+    if (runtimeLifetime.signal.aborted) return;
+    const pending = work();
+    backgroundWork.add(pending);
+    const settled = (): void => { backgroundWork.delete(pending); };
+    void pending.then(settled, settled);
+  }
 
   function snapshot() {
     return { operation };
@@ -824,7 +841,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const project = await recoverInterruptedPreparation(dir, await loadProject(dir));
         for (const correction of project.corrections) {
           if (correction.status === "pending" && !alignActive.has(alignKey(dir, correction.id))) {
-            void alignCorrectionJob(dir, correction.id, project.revision, deps);
+            runBackground(() => alignCorrectionJob(dir, correction.id, project.revision, deps, runtimeLifetime.signal));
           }
         }
         // Desfazer só aparece com a foto do topo da pilha legível; histórico
@@ -886,11 +903,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           ...snapshot(),
         }, 202);
         if (analysisOperation) {
-          void analyzeSources(project, [source.id], false, analysisOperation).catch((error: unknown) => {
+          runBackground(() => analyzeSources(project, [source.id], false, analysisOperation).catch((error: unknown) => {
             if (stillCurrent(analysisOperation!.gen)) {
               operation = { stage: "error", sourceId: source.id, error: error instanceof Error ? error.message : String(error) };
             }
-          });
+          }));
         }
         return true;
       }
@@ -972,7 +989,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const key = `${project.revision}:${artifact.revision}:${artifact.sha256}`;
         if (previewPlaybackState?.key !== key) previewPlaybackState = { key, failed: false };
         const playback = previewPlaybackState;
-        const signal = AbortSignal.any([requestSignal(), playbackLifetime.signal]);
+        const signal = AbortSignal.any([requestSignal(), runtimeLifetime.signal]);
         const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics"), metadata: { operation: "preview-playback" } });
         const preparing = (async () => {
           signal.throwIfAborted();
@@ -1382,39 +1399,41 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         // Um pedido novo cancela o anterior (mesma semântica de analyze e
         // propose): o percurso abortado registra cancelled sem escrever mais.
-        const { gen, signal } = begin("preparing");
-        const releaseHold = holdPreparation(dir);
-        preparationSignal = signal;
-        void runPreparation(
-          dir,
-          baseRevision,
-          { mode, request, modelOptIn, visualOptIn },
-          {
-            ...deps,
-            onStage: (stage) => {
-              if (!stillCurrent(gen)) return;
-              operation = stage === "queued" ? { stage: "queued" } : { stage: "preparing" };
+        runBackground(() => {
+          const { gen, signal } = begin("preparing");
+          const releaseHold = holdPreparation(dir);
+          preparationSignal = signal;
+          return runPreparation(
+            dir,
+            baseRevision,
+            { mode, request, modelOptIn, visualOptIn },
+            {
+              ...deps,
+              onStage: (stage) => {
+                if (!stillCurrent(gen)) return;
+                operation = stage === "queued" ? { stage: "queued" } : { stage: "preparing" };
+              },
             },
-          },
-          { signal, isCurrent: () => stillCurrent(gen) },
-        ).finally(() => {
-          releaseHold();
-          if (preparationSignal === signal) preparationSignal = null;
-        }).then(
-          (result) => {
-            if (!stillCurrent(gen)) return;
-            const prep = result.preparation;
-            operation = prep?.status === "cancelled" ? { stage: "cancelled" }
-              : prep && prep.status !== "ready"
-                ? { stage: "error", error: prep.error || "Preparação incompleta. Confira os materiais e retome." }
-                : { stage: "ready" };
-          },
-          (err: unknown) => {
-            if (stillCurrent(gen)) {
-              operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
-            }
-          },
-        );
+            { signal, isCurrent: () => stillCurrent(gen) },
+          ).finally(() => {
+            releaseHold();
+            if (preparationSignal === signal) preparationSignal = null;
+          }).then(
+            (result) => {
+              if (!stillCurrent(gen)) return;
+              const prep = result.preparation;
+              operation = prep?.status === "cancelled" ? { stage: "cancelled" }
+                : prep && prep.status !== "ready"
+                  ? { stage: "error", error: prep.error || "Preparação incompleta. Confira os materiais e retome." }
+                  : { stage: "ready" };
+            },
+            (err: unknown) => {
+              if (stillCurrent(gen)) {
+                operation = { stage: "error", error: err instanceof Error ? err.message : String(err) };
+              }
+            },
+          );
+        });
         await sendSnapshot(res, { project: await loadProject(dir), ...snapshot() }, 202);
         return true;
       }
@@ -1799,7 +1818,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         }
         if (correctionId) {
           // Alinhamento continua em background; o pending permite retomada.
-          void alignCorrectionJob(dir, correctionId, project.revision, deps);
+          runBackground(() => alignCorrectionJob(dir, correctionId, project.revision, deps, runtimeLifetime.signal));
           await sendSnapshot(res, { project, ...snapshot() }, 202);
           return true;
         }
@@ -1987,10 +2006,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     // O runtime não possui servidor nem porta. Encerrar significa apenas
     // interromper operações e prévias que ainda possam manter filhos vivos.
     close: async (): Promise<void> => {
-      playbackLifetime.abort();
+      runtimeLifetime.abort();
       abortOperations();
       livePreviews.clear();
-      await Promise.allSettled([...packageDownloads, ...playbackPreparations]);
+      await Promise.allSettled([...packageDownloads, ...playbackPreparations, ...backgroundWork]);
       await drainProjectWrites(dir);
     },
     snapshot,
