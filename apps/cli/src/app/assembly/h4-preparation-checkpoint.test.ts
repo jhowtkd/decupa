@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { access, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,27 @@ import { runPreparation, type PreparationControl, type PreparationDeps } from ".
 import type { Project, Source } from "./types.ts";
 
 const historyGate = vi.hoisted(() => ({ wait: null as null | (() => Promise<void>) }));
+const sidecarFault = vi.hoisted(() => ({ read: "", write: "" }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: async (...args: Parameters<typeof actual.readFile>) => {
+    if (String(args[0]).endsWith("proposal-checkpoint.json") && sidecarFault.read) {
+      throw Object.assign(new Error("sidecar read unavailable"), { code: sidecarFault.read });
+    }
+    return actual.readFile(...args);
+  } };
+});
+
+vi.mock("@decupa/cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@decupa/cache")>();
+  return { ...actual, publishAtomic: async (...args: Parameters<typeof actual.publishAtomic>) => {
+    if (String(args[0]).endsWith("proposal-checkpoint.json") && sidecarFault.write) {
+      throw Object.assign(new Error("sidecar write unavailable"), { code: sidecarFault.write });
+    }
+    return actual.publishAtomic(...args);
+  } };
+});
 
 vi.mock("./analysis.ts", () => ({
   analyzeSource: async (source: Source) => ({
@@ -118,6 +139,8 @@ describe("checkpoint H4 em runPreparation", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "decupa-h4-checkpoint-"));
     historyGate.wait = null;
+    sidecarFault.read = "";
+    sidecarFault.write = "";
     vi.restoreAllMocks();
   });
   afterEach(async () => {
@@ -199,5 +222,78 @@ describe("checkpoint H4 em runPreparation", () => {
     expect(done.revision).toBe(edited.revision);
     expect(done.scenes).toHaveLength(0);
     expect(textualCalls).toBe(1);
+  });
+
+  it.each(["EACCES", "EISDIR"])("conclui ready com uma chamada quando a leitura do checkpoint falha (%s)", async (code) => {
+    const base = await seed(dir);
+    sidecarFault.read = code;
+    const send = vi.fn(async () => proposal());
+    const done = await runPreparation(dir, base.revision, request, fakeDeps({ send }), control());
+    expect(done.preparation?.status).toBe("ready");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("conclui ready sem repetir o texto quando a escrita do checkpoint falha", async () => {
+    const base = await seed(dir);
+    sidecarFault.write = "ENOSPC";
+    const send = vi.fn(async () => proposal());
+    const done = await runPreparation(dir, base.revision, request, fakeDeps({ send }), control());
+    expect(done.preparation?.status).toBe("ready");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("apaga uma chave diferente antes de tentar uma proposta que falha na rede", async () => {
+    const base = await seed(dir);
+    const path = join(dir, ".decupa", "proposal-checkpoint.json");
+    await mkdir(join(dir, ".decupa"), { recursive: true });
+    await writeFile(path, JSON.stringify({ version: 1, key: "entrada-antiga", generated: { text: "texto antigo" } }));
+    const done = await runPreparation(dir, base.revision, request,
+      fakeDeps({ send: async () => { throw new Error("rede indisponível"); } }), control());
+    expect(done.preparation?.status).toBe("interrupted");
+    await expect(access(path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("apaga o checkpoint cancelado que uma edição tornou impossível de retomar", async () => {
+    const base = await seed(dir);
+    const abort = new AbortController();
+    const deps = fakeDeps({
+      send: async () => proposal(true),
+      decision: { mode: "observe", model: "fake", client: { decide: async () => {
+        await humanEdit(dir, false);
+        abort.abort();
+        throw new Error("cancelado após edição");
+      } } },
+    });
+    const done = await runPreparation(dir, base.revision, request, deps, control(abort.signal));
+    expect(done.preparation?.status).toBe("cancelled");
+    expect(done.assembly.name).toBe("edição humana");
+    await expect(access(join(dir, ".decupa", "proposal-checkpoint.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("um Ajuste interrompido preserva os bytes retomáveis do Preparar", async () => {
+    const base = await seed(dir);
+    const built = await runPreparation(dir, base.revision, request, fakeDeps({ send: async () => proposal() }), control());
+    let textualCalls = 0;
+    const interrupt = async (mode: "prepare" | "adjust") => {
+      const abort = new AbortController();
+      historyGate.wait = async () => {
+        abort.abort();
+        throw new Error("cancelado antes de aplicar a proposta");
+      };
+      return runPreparation(dir, built.revision, { ...request, mode }, fakeDeps({
+        send: async () => {
+          textualCalls += 1;
+          return JSON.stringify({ scenes: [{ id: "s1", selections: [{ takeId: built.scenes[0]!.takes[0]!.id }] }], changedSceneIds: ["s1"] });
+        },
+      }), control(abort.signal));
+    };
+    const prepared = await interrupt("prepare");
+    expect(prepared.preparation?.status, prepared.preparation?.error).toBe("cancelled");
+    const path = await checkpointPath(dir);
+    const before = await readFile(path, "utf8");
+    expect((await interrupt("adjust")).preparation?.status).toBe("cancelled");
+    expect(await readFile(path, "utf8")).toBe(before);
+    await expect(access(join(dir, ".decupa", "proposal-adjust-checkpoint.json"))).resolves.toBeUndefined();
+    expect(textualCalls).toBe(2);
   });
 });

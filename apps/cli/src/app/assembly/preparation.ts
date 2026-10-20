@@ -179,6 +179,16 @@ function needsAttention(project: Project): boolean {
   return analysisError || stageError || missingVisual > 0;
 }
 
+/** Áudio zera a evidência visual antes de a etapa visual repô-la do cache. */
+function proposalCleanupKey(project: Project): string {
+  return proposalStateKey({
+    ...project,
+    analyses: project.analyses.map(analysis => ({
+      ...analysis, visual: [], visualCoverage: { requested: [], returned: [], missing: [] },
+    })),
+  });
+}
+
 /**
  * Percurso prepare/adjust/preview até cenas+prévia atuais, sem cliques
  * intermediários. Resolve com o projeto final em todo desfecho esperado
@@ -259,6 +269,44 @@ async function runPreparationOperation(
     let imagesDone: Promise<void> | undefined;
     let imageFinished = true;
     let operationDeps = deps;
+    const checkpointPath = join(dir, ".decupa", req.mode === "adjust"
+      ? "proposal-adjust-checkpoint.json" : "proposal-checkpoint.json");
+    const otherCheckpointPath = join(dir, ".decupa", req.mode === "adjust"
+      ? "proposal-checkpoint.json" : "proposal-adjust-checkpoint.json");
+    let checkpointBaseKey: string | undefined;
+    let checkpointDisabled = false;
+    const checkpointWarning = (action: "read" | "write" | "remove", error: unknown): void => {
+      checkpointDisabled = true;
+      // Nunca registre texto do modelo, pedidos Jev ou mensagens de I/O.
+      metrics.emit("checkpoint-warning", { action, code: (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN" });
+    };
+    const discardCheckpoint = async (path = checkpointPath): Promise<void> => {
+      try { await unlink(path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") checkpointWarning("remove", error);
+      }
+    };
+    const discardUnresumableCheckpoint = async (): Promise<void> => {
+      if (req.mode === "preview") return;
+      let stateKey = checkpointBaseKey;
+      const beforeProposal = stateKey === undefined;
+      if (stateKey === undefined) {
+        // Cancelamento pode chegar antes da proposta. O metadado local permite
+        // limpar uma entrada antiga sem confundir a etapa visual transitória
+        // com uma edição. O replay continua exigindo a chave exata em load.
+        try {
+          const cached = JSON.parse(await readFile(checkpointPath, "utf8")) as { cleanupKey?: unknown } | null;
+          if (typeof cached?.cleanupKey === "string") stateKey = cached.cleanupKey;
+        } catch (error) {
+          if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT") checkpointWarning("read", error);
+          return;
+        }
+      }
+      if (stateKey !== undefined) {
+        const fresh = await loadProject(dir);
+        if ((beforeProposal ? proposalCleanupKey(fresh) : proposalStateKey(fresh)) !== stateKey) await discardCheckpoint();
+      }
+    };
     const checkAlive = (): void => {
       if (signal.aborted) throw new CancelledExit();
       if (!control.isCurrent()) throw new ObsoleteExit();
@@ -622,31 +670,42 @@ async function runPreparationOperation(
         if (settledBlockedReason) return await markTerminal("interrupted", settledBlockedReason);
         const proposalBase = structuredClone(current);
         const proposalBaseKey = proposalStateKey(proposalBase);
+        const proposalCleanupBaseKey = proposalCleanupKey(proposalBase);
+        checkpointBaseKey = proposalBaseKey;
         const assertProposalBase = (project: Project): void => {
           if (proposalStateKey(project) !== proposalBaseKey) {
             throw new Error("entrada da proposta mudou durante a preparação; edição preservada, retome para prosseguir");
           }
         };
-        const checkpointPath = join(dir, ".decupa", "proposal-checkpoint.json");
         let proposal;
         try {
           proposal = await proposeScenes(proposalBase, req.request, signal, {
             send: operationDeps.proposeSend!, decision: operationDeps.decision,
             configKey: operationDeps.proposalConfigKey ?? operationDeps.fillerConfigKey,
             checkpoint: {
-              load: async () => {
-                try { return JSON.parse(await readFile(checkpointPath, "utf8")) as unknown; }
+              load: async (key) => {
+                let cached: unknown;
+                try { cached = JSON.parse(await readFile(checkpointPath, "utf8")); }
                 catch (error) {
-                  if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return null;
-                  throw error;
+                  if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT") checkpointWarning("read", error);
+                  return null;
                 }
+                if (cached && typeof cached === "object" && "key" in cached && cached.key !== key) {
+                  await discardCheckpoint();
+                  return null;
+                }
+                return cached;
               },
               save: async (checkpoint) => {
                 checkAlive();
                 const fresh = await loadProject(dir);
                 if (fresh.preparation?.id !== id) throw new ObsoleteExit();
                 assertProposalBase(fresh);
-                await publishAtomic(checkpointPath, `${JSON.stringify(checkpoint)}\n`, { durable: true });
+                if (!checkpointDisabled) {
+                  try {
+                    await publishAtomic(checkpointPath, `${JSON.stringify({ ...checkpoint, cleanupKey: proposalCleanupBaseKey })}\n`, { durable: true });
+                  } catch (error) { checkpointWarning("write", error); }
+                }
                 checkAlive();
               },
             }, onDecision: async (note) => {
@@ -655,6 +714,7 @@ async function runPreparationOperation(
             },
           });
         } catch (err) {
+          if (err instanceof ObsoleteExit || err instanceof CancelledExit || err instanceof InterruptedExit) throw err;
           checkAlive();
           return await markTerminal(
             "interrupted",
@@ -683,7 +743,11 @@ async function runPreparationOperation(
             return req.mode === "prepare" ? { ...undone, preparedRevision: next.revision } : undone;
           });
           current = await loadProject(dir);
-          if (current.preparation?.id === id) await unlink(checkpointPath).catch(() => undefined);
+          if (current.preparation?.id === id) {
+            await discardCheckpoint();
+            // Aplicar a proposta muda a revisão e invalida também o outro modo.
+            await discardCheckpoint(otherCheckpointPath);
+          }
         } catch (err) {
           checkAlive();
           return await markTerminal(
@@ -735,8 +799,10 @@ async function runPreparationOperation(
       return await markTerminal(needsAttention(current) ? "attention" : "ready");
     } catch (err) {
       if (err instanceof InterruptedExit) return await loadProject(dir);
-      if (err instanceof ObsoleteExit) return await loadProject(dir);
-      if (err instanceof CancelledExit) return await markTerminal("cancelled");
+      if (err instanceof ObsoleteExit || err instanceof CancelledExit) {
+        await discardUnresumableCheckpoint();
+        return err instanceof CancelledExit ? await markTerminal("cancelled") : await loadProject(dir);
+      }
       throw err;
     }
   });

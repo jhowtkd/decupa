@@ -521,7 +521,7 @@ export type ProposalCheckpoint = {
 };
 
 export type ProposalCheckpointStore = {
-  load: () => Promise<unknown>;
+  load: (key: string) => Promise<unknown>;
   save: (checkpoint: ProposalCheckpoint) => Promise<void>;
 };
 
@@ -665,7 +665,7 @@ export async function proposeScenes(
   let checkpoint: ProposalCheckpoint | undefined;
   let generated: ReturnType<typeof parseGenerated> | undefined;
   if (deps?.checkpoint) {
-    const cached = await deps.checkpoint.load();
+    const cached = await deps.checkpoint.load(key);
     signal.throwIfAborted();
     if (isRecord(cached) && cached.version === PROPOSAL_CHECKPOINT_VERSION && cached.key === key &&
         isRecord(cached.generated) && typeof cached.generated.text === "string" &&
