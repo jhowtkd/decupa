@@ -78,6 +78,9 @@ class InterruptedExit extends Error {
   }
 }
 
+/** O transporte só decide; o fluxo principal persiste fora da corrida de cancelamento. */
+class ProposalBlockedExit extends Error {}
+
 /** Opt-in pago é monotônico: nunca revoga uma permissão já concedida. */
 export function withGrantedPermissions(
   project: Project,
@@ -385,14 +388,18 @@ async function runPreparationOperation(
 
       const byId = new Map<string, Source>(current.assembly.sources.map((source) => [source.id, source]));
       const targets = included.filter((source) => byId.has(source.id));
-      const assertSourcesPresent = async (project: Project): Promise<void> => {
+      const targetIds = new Set(targets.map((source) => source.id));
+      const removedSourceReason = (project: Project): string | null => {
         const missing = targets.filter((source) =>
           !project.assembly.sources.some((item) => item.id === source.id));
-        if (missing.length > 0) {
-          await markTerminal(
-            "interrupted",
-            `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
-          );
+        return missing.length > 0
+          ? `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`
+          : null;
+      };
+      const assertSourcesPresent = async (project: Project): Promise<void> => {
+        const reason = removedSourceReason(project);
+        if (reason) {
+          await markTerminal("interrupted", reason);
           throw new InterruptedExit();
         }
       };
@@ -606,8 +613,18 @@ async function runPreparationOperation(
         // Retomar solicita só o faltante. O progresso segue persistido;
         // prosseguir sem a fonte exige excluí-la explicitamente do conjunto.
         const proposalBlockedReason = (project: Project): string | null => {
-          const includedIds = new Set(project.assembly.sources.filter((source) => source.included).map((source) => source.id));
-          const blocked = targets.filter((source) => includedIds.has(source.id)).filter((source) => {
+          const includedSources = project.assembly.sources.filter((source) => source.included);
+          // O percurso tem alvos fixos para não prolongar a fila pesada com
+          // inclusões em voo. Retomar captura o conjunto novo e usa os caches.
+          // Sem áudio nem visão exigida, não há análise adicional a aguardar.
+          const added = includedSources.filter((source) => !targetIds.has(source.id) &&
+            (source.hasAudio || (source.hasVideo && visualClient)));
+          if (added.length > 0) {
+            return `fonte incluída durante a preparação: ${added.map((source) =>
+              `${source.id} (${source.name})`).join("; ")}; retome para analisar ou exclua a fonte para prosseguir`;
+          }
+          const includedIds = new Set(includedSources.map((source) => source.id));
+          const blocked = includedSources.filter((source) => targetIds.has(source.id)).filter((source) => {
             const state = project.preparation?.sources[source.id];
             if (!state) return true;
             if (state.media !== "ready" || state.audio !== "ready") return true;
@@ -682,7 +699,17 @@ async function runPreparationOperation(
         let proposal;
         try {
           proposal = await proposeScenes(proposalBase, req.request, signal, {
-            send: operationDeps.proposeSend!, decision: operationDeps.decision,
+            send: async (content, requestSignal, onAttempt) => {
+              // A leitura do checkpoint (ou o reparo JSON) cede o controle
+              // depois da barreira. Revalide antes de chamar o transporte pago.
+              checkAlive();
+              const fresh = await loadProject(dir);
+              checkAlive();
+              if (fresh.preparation?.id !== id) throw new ObsoleteExit();
+              const reason = removedSourceReason(fresh) ?? proposalBlockedReason(fresh);
+              if (reason) throw new ProposalBlockedExit(reason);
+              return operationDeps.proposeSend!(content, requestSignal, onAttempt);
+            }, decision: operationDeps.decision,
             configKey: operationDeps.proposalConfigKey ?? operationDeps.fillerConfigKey,
             checkpoint: {
               load: async (key) => {
@@ -718,6 +745,7 @@ async function runPreparationOperation(
         } catch (err) {
           if (err instanceof ObsoleteExit || err instanceof CancelledExit || err instanceof InterruptedExit) throw err;
           checkAlive();
+          if (err instanceof ProposalBlockedExit) return await markTerminal("interrupted", err.message);
           return await markTerminal(
             "interrupted",
             `proposta rejeitada: ${err instanceof Error ? err.message : String(err)}`,
