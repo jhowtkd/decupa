@@ -227,7 +227,7 @@ export function mountStage({ state, api, player }) {
     };
     const current = project.previewRevision != null && project.previewRevision === project.revision;
     if (project.previewRevision != null) {
-      const src = projectPath("project/output/" + project.previewRevision + "/mp4");
+      const src = projectPath("project/preview/" + project.previewRevision);
       if (previewPlayer.getAttribute("data-rev") !== String(project.previewRevision)) {
         const time = previewPlayer.currentTime;
         previewPlayer.src = src;
@@ -583,10 +583,10 @@ export function mountContexto({ state, api, player }) {
     + '<div class="sub format-row"><span class="ttl">Formato</span><span id="formatLine" class="mono"></span><span id="formatOrigin"></span>'
     + '<button type="button" id="editFormat" class="small">Alterar formato</button></div>'
     + '<div class="resolve-paths"><section class="sub"><h2>Resolve gratuito</h2><ol class="plain resolve-steps">'
-    + "<li>Baixe a timeline.otio.</li>"
+    + "<li>Baixe e extraia o pacote completo na máquina do Resolve.</li>"
     + '<li>No Resolve: <span class="mono">File → Import → Timeline</span>.</li>'
     + '<li><span class="mono">File → Export Project</span> salva o projeto nativo .drp.</li></ol></section>'
-    + '<section class="sub"><h2>Resolve Studio <span class="pill">automático</span></h2>'
+    + '<section class="sub" id="resolveAutomatic" hidden><h2>Resolve Studio <span class="pill">automático</span></h2>'
     + '<p class="muted">Requer o Resolve Studio aberto, com scripting local habilitado.</p>'
     + '<div class="row"><button type="button" id="export" class="small">Abrir no DaVinci</button>'
     + '<button type="button" id="exportDrp" class="small" hidden>Exportar .drp</button>'
@@ -774,6 +774,7 @@ export function mountContexto({ state, api, player }) {
     if (res.ok) formatDialog.close();
   };
   const exportUi = { status: "idle", error: null, revision: null };
+  let deliveryCapabilities = { resolve: false, primary: "package" };
   let resolveDelivery=null;
   let resolveRevision=null;
 
@@ -830,20 +831,28 @@ export function mountContexto({ state, api, player }) {
     document.getElementById("verifyTitle").textContent = verify.title;
     document.getElementById("verifyLine").textContent = verify.detail;
     document.getElementById("confirmImport").hidden = !verify.showConfirm;
-    document.getElementById("exportTimeline").hidden = !verify.showExport;
-    const formats = deliveryFormats(project, verificacao);
+    document.getElementById("exportTimeline").hidden = !verify.showExport && (deliveryCapabilities.primary !== "package" || verificacao?.package === true);
+    const portablePrimary = deliveryCapabilities.primary === "package";
+    const formats = deliveryFormats(project, verificacao, null, deliveryCapabilities);
+    document.getElementById("resolveAutomatic").hidden = !deliveryCapabilities.resolve;
+    document.getElementById("exportTimeline").textContent = !portablePrimary ? "Preparar montagem para DaVinci" : "Preparar MP4 + pacote";
+    document.getElementById("filesTitle").textContent = !portablePrimary ? "Montagem preparada para o DaVinci" : "MP4 + pacote portátil";
+    if (portablePrimary && verify.state === "ready") document.getElementById("verifyLine").textContent = "Prepare o MP4 e o pacote com timeline, fontes, legendas disponíveis e instruções de religação.";
+    if (portablePrimary && verify.state === "done") document.getElementById("verifyLine").textContent = "Conferência local preservada. Valide este pacote no Resolve real em uma segunda máquina.";
+    if (portablePrimary && verify.state === "pending") document.getElementById("verifyLine").textContent = "Valide a importação e religue as fontes no Resolve real em uma segunda máquina antes de confirmar.";
     if(resolveRevision!==project.revision) resolveDelivery=null;
     const view = exportView(exportUi, approved, formats);
-    const nativeView=resolveView(resolveDelivery,approved);
+    const nativeView=resolveView(resolveDelivery,approved,deliveryCapabilities);
     const exportButton = document.getElementById("export");
-    exportButton.textContent = nativeView.buttonLabel;
+    exportButton.textContent = portablePrimary && deliveryCapabilities.resolve ? "Abrir no Resolve do servidor" : nativeView.buttonLabel;
     exportButton.classList.toggle("is-loading", view.loading);
     setDisabled(exportButton, nativeView.disabled);
     document.getElementById("exportDrp").hidden=resolveDelivery?.status!=="ready";
     document.getElementById("resolveNewCopy").hidden=!nativeView.newCopy;
     setDisabled(document.getElementById("exportTimeline"),view.disabled);
     const exportStatus = document.getElementById("exportStatus");
-    const parts = [nativeView.statusText || view.statusText];
+    const parts = [!portablePrimary ? nativeView.statusText || view.statusText : view.statusText];
+    if (portablePrimary && resolveDelivery) parts.push(nativeView.statusText);
     if (resolveDelivery) parts.push("O .drp depende dos arquivos de mídia originais.");
     // Legendas indisponíveis: aviso discreto na linha de status; MP4/OTIO seguem intactos.
     if (verificacao?.legendas?.status === "indisponivel") parts.push("Legendas indisponíveis nesta revisão.");
@@ -965,7 +974,7 @@ export function mountContexto({ state, api, player }) {
   document.getElementById("export").onclick=()=>deliverResolve();
   document.getElementById("resolveNewCopy").onclick=()=>deliverResolve(true);
   document.getElementById("exportDrp").onclick=()=>deliverResolve(false,true);
-  fetch(projectPath("project/resolve-status"),{headers:projectHeaders()}).then(r=>r.json()).then(body=>{if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;renderDelivery(state.get("project"));}}).catch(()=>{});
+  fetch(projectPath("project/resolve-status"),{headers:projectHeaders()}).then(r=>r.json()).then(body=>{if(body.capabilities) deliveryCapabilities=body.capabilities;if(!resolveDelivery&&body.delivery){resolveDelivery=body.delivery;resolveRevision=body.delivery.revision;}if(state.get("project"))renderDelivery(state.get("project"));}).catch(()=>{});
 
   state.subscribe("project", render);
   state.subscribe("previewBusy", () => render(state.get("project")));

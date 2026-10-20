@@ -1,3 +1,4 @@
+import { packageOwnerId, packageValid, writePackage } from "./package.ts";
 import { publishAtomic } from "@decupa/cache";
 import { createSpaceManager, type SpaceClaim } from "../space.ts";
 import { mediaKey, projectRuntimeContext, resourceLedgerForProject, storageRootForProject, withResourceWork } from "../resource-ledger.ts";
@@ -7,7 +8,7 @@ import { buildSubtitles } from "./subtitles.ts";
 import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { copyFile, link, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
@@ -53,6 +54,7 @@ export type VerificationRecord = {
   confirmadaEm?: string;
   /** Status das legendas na exportação; ausente/nulo em entregas antigas. */
   legendas?: { status?: string } | null;
+  package?: boolean;
 };
 
 /**
@@ -65,7 +67,7 @@ export async function readVerification(dir: string, revision: number): Promise<V
       await readFile(join(dir, "exports", String(revision), "verificacao.json"), "utf8"),
     ) as VerificationRecord;
     if (!parsed || parsed.revision !== revision) return null;
-    return parsed;
+    return { ...parsed, package: await packageValid(join(dir, "exports", String(revision)), { statOnly: true }) };
   } catch {
     return null;
   }
@@ -234,6 +236,24 @@ export function importInstructions(project: Project): string {
   ].join("\n");
 }
 
+/** Complements an intact delivery without rewriting its verified artifacts or manual record. */
+async function addPortablePackage(project: Project, dir: string, dest: string, instructions: string, metadataBytes: number): Promise<void> {
+  const tmp = join(dir, "exports", `.package-${project.revision}-${process.pid}-${Date.now()}`);
+  const reservation = await createSpaceManager(storageRootForProject(dir)).reserve(`package:${project.revision}`, [{ path: dir, bytes: metadataBytes }]);
+  try {
+    await mkdir(tmp);
+    await writePackage(project, tmp, instructions, dest);
+    if (!await packageValid(tmp, { verifyHashes: true, artifactDir: dest })) throw new Error("substituta inválida ao gravar o pacote");
+    const manifest = await readFile(join(tmp, "package-manifest.json"), "utf8");
+    await rm(join(dest, "portable"), { recursive: true, force: true });
+    await rename(join(tmp, "portable"), join(dest, "portable"));
+    await publishAtomic(join(dest, "package-manifest.json"), manifest, { durable: true });
+  } finally {
+    try { await rm(tmp, { recursive: true, force: true }); }
+    finally { await reservation(); }
+  }
+}
+
 async function exportApprovedOperation(project: Project, dir: string): Promise<string> {
   if (project.finalApprovedRevision !== project.revision) {
     throw new Error("aprovação final desatualizada");
@@ -361,6 +381,7 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
       srtText = null;
     }
     let matchesExpected = false;
+    let localValid = false;
     try {
       const existing = JSON.parse(await readFile(manifestPath, "utf8")) as ExportManifest;
       matchesExpected =
@@ -371,11 +392,17 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
         && existing.instrucoes === instructionsSha
         && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
         && JSON.stringify(existing.legendas) === JSON.stringify(legendas);
-      if (matchesExpected && (await exportedDirValid(dest, aliases))) {
+      localValid = matchesExpected && await exportedDirValid(dest, aliases);
+      if (localValid && await packageValid(dest, { statOnly: true })) {
         return dest;
       }
     } catch {
       // Sem manifest válido: publica abaixo.
+    }
+    if (localValid) {
+      await addPortablePackage(project, dir, dest, instructionsText,
+        Buffer.byteLength(otioText) + 2 * Buffer.byteLength(instructionsText) + 3 * Buffer.byteLength(JSON.stringify(project.assembly.sources)) + 1024 * 1024);
+      return dest;
     }
     // Prepara e valida toda a substituta ANTES de retirar a entrega
     // existente: falha de gravação nunca apaga o destino anterior (R4).
@@ -383,7 +410,7 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
     const destDevice = (await stat(dir)).dev;
     const copyClaims: SpaceClaim[] = [
       { path: dir, bytes: (await stat(reference)).size, materializedPath: join(tmp, "reference.mp4") },
-      { path: dir, bytes: Buffer.byteLength(otioText) + Buffer.byteLength(handoffText) + Buffer.byteLength(instructionsText) + 1024 * 1024 },
+      { path: dir, bytes: 2 * Buffer.byteLength(otioText) + Buffer.byteLength(handoffText) + 2 * Buffer.byteLength(instructionsText) + 1024 * 1024 },
     ];
     const copyAliases = new Set<string>();
     for (const alias of aliases) {
@@ -457,7 +484,8 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
         verificacao: "pendente",
       };
       await writeFile(join(tmp, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-      if (!(await exportedDirValid(tmp, aliases))) {
+      await writePackage(project, tmp, instructionsText);
+      if (!(await exportedDirValid(tmp, aliases)) || !await packageValid(tmp, { verifyHashes: true })) {
         throw new Error("substituta inválida ao gravar a exportação");
       }
     } catch (err) {
@@ -486,7 +514,7 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
             && existing.instrucoes === instructionsSha
             && JSON.stringify(existing.sources) === JSON.stringify(sourceShas)
             && JSON.stringify(existing.legendas) === JSON.stringify(legendas);
-          if (same && (await exportedDirValid(dest, aliases))) return dest;
+          if (same && (await exportedDirValid(dest, aliases)) && await packageValid(dest, { statOnly: true })) return dest;
         } catch {
           // Manifest ilegível: destino inconsistente abaixo.
         }
@@ -507,6 +535,8 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     const ledger = resourceLedgerForProject(dir);
     try {
       await ledger.register({ id: `export:${resolve(dir)}:${project.revision}`, kind: "export", projectDir: resolve(dir) }, project.assembly.sources.map(s => mediaKey(s.sha256)));
+      const manifest = JSON.parse(await readFile(join(dest, "package-manifest.json"), "utf8")) as { sources: Record<string, string> };
+      await ledger.register({ id: packageOwnerId(dir, project.revision), kind: "package", projectDir: resolve(dir) }, Object.values(manifest.sources).map(mediaKey));
     } catch (error) { ledger.markIncomplete(error, dir); }
     return dest;
   });

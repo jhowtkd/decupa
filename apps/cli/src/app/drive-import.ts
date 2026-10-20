@@ -58,7 +58,7 @@ const FOLDER = "application/vnd.google-apps.folder";
 const MAX_PASTA_ITENS = 50;
 const MAX_PASTA_PROFUNDIDADE = 5;
 const MAX_PASTA_VARREDURA = 500;
-const MIDIA_EXTENSOES = new Set([
+export const MIDIA_EXTENSOES = new Set([
   "mp4", "m4v", "mov", "mkv", "webm", "avi", "mts", "m2ts", "mpg", "mpeg", "3gp", "flv", "wmv",
   "mp3", "m4a", "wav", "ogg", "oga", "opus", "flac", "aac", "wma", "aiff", "aif",
 ]);
