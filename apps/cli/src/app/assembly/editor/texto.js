@@ -765,6 +765,20 @@ function sceneDocument(root, selection, didPaint) {
       forcedScene = sceneId;
       refresh();
     },
+    /** Ordem do documento inteiro, inclusive cenas fora do DOM e omitidos abertos. */
+    keys() {
+      const keys = [];
+      for (const { scene } of entries) {
+        for (const take of scene.takes) {
+          for (const word of takeWords(project, scene, take)) keys.push(selectionKey(scene.id, take.id, word.id));
+        }
+        for (const source of project.assembly.sources) {
+          if (!expanded.get(scene.id)?.has(source.id)) continue;
+          for (const word of omittedWords(project, scene, source.id)) keys.push(selectionKey(scene.id, "", word.id));
+        }
+      }
+      return keys;
+    },
     destroy() {
       disposed = true;
       if (frame !== null) cancelAnimationFrame(frame);
@@ -950,16 +964,20 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     }
   }
 
+  // A virtualização tira cenas do DOM; o intervalo segue a ordem editorial inteira.
+  const documentKeys = () => prose ? prose.keys() : visibleWords().map(wordKey);
+
   /** Mesmo intervalo para ponteiro e teclado, sem buracos entre linhas. */
   function selectWord(btn, extend = false, anchor = null) {
-    const words = visibleWords();
+    const keys = documentKeys();
     const key = wordKey(btn);
     if (anchor) selectionAnchor = anchor;
-    if (!extend || !words.some((word) => wordKey(word) === selectionAnchor)) selectionAnchor = key;
+    if (!extend || !keys.includes(selectionAnchor)) selectionAnchor = key;
     selectionFocus = key;
-    const from = words.findIndex((word) => wordKey(word) === selectionAnchor);
-    const to = words.indexOf(btn);
-    state.set("selection", new Set(words.slice(Math.min(from, to), Math.max(from, to) + 1).map(wordKey)));
+    const from = keys.indexOf(selectionAnchor);
+    const to = keys.indexOf(key);
+    state.set("selection", new Set(from < 0 || to < 0 ? [key]
+      : keys.slice(Math.min(from, to), Math.max(from, to) + 1)));
     state.set("selectedSupport", null);
     state.set("selectedScene", btn.dataset.scene);
     paintWordTabs(btn);
@@ -1415,13 +1433,13 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     const onKey = (ev) => {
       if (ev.key === "Escape" && closeMenu) {
         ev.preventDefault();
-        closeMenu();
+        closeMenu({ keyboard: true });
         return;
       }
       // O campo de correção conserva setas e atalhos nativos de edição.
       if (!menu.contains(ev.target) || ev.target.closest("input,textarea,select")) return;
       if (ev.key === "Tab" && !correctionMenu) {
-        if (closeMenu) closeMenu();
+        if (closeMenu) closeMenu({ keyboard: true });
         return;
       }
       const items = [...menu.querySelectorAll('[role="menuitem"]')].filter((btn) => !btn.disabled);
@@ -1435,18 +1453,27 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     };
     document.addEventListener("pointerdown", onDoc);
     document.addEventListener("keydown", onKey);
-    closeMenu = () => {
+    closeMenu = ({ keyboard = false } = {}) => {
       closeMenu = null;
       correctionMenu = null;
       document.removeEventListener("pointerdown", onDoc);
       document.removeEventListener("keydown", onKey);
       menu.remove();
       if (trigger?.isConnected) trigger.setAttribute("aria-expanded", "false");
+      // Pelo teclado, o foco volta ao acionador mesmo se a rolagem desmontou sua
+      // cena. Fechar por clique ou atualização não arrasta a leitura de volta.
+      const sceneMenu = returnTo?.dataset.sceneMenu;
+      const sceneId = sceneMenu ?? returnTo?.dataset.scene ?? returnSnapshot?.scene;
+      const remount = keyboard && returnTo && !returnTo.isConnected && sceneId;
+      if (remount) prose?.ensure(sceneId);
+      const sceneTrigger = remount && sceneMenu !== undefined
+        ? [...(root()?.querySelectorAll("[data-scene-menu]") || [])].find((btn) => btn.dataset.sceneMenu === sceneMenu)
+        : null;
       const target = returnTo?.isConnected && (returnTo.dataset.wordId === undefined || visibleWords().includes(returnTo))
-        ? returnTo : focusTarget(returnSnapshot);
+        ? returnTo : sceneTrigger || focusTarget(returnSnapshot);
       if (target) {
         if (target.dataset.wordId !== undefined) paintWordTabs(target);
-        target.focus();
+        target.focus(keyboard ? undefined : { preventScroll: true });
       }
     };
     menu.querySelector("button:not(:disabled)")?.focus();
