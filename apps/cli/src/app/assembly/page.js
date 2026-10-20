@@ -542,12 +542,42 @@ mountTexto({ state, api, player });
 mountSequencia({ state, api, player });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
+const monitor = document.getElementById("monitor");
 const monitorToggle = document.getElementById("monitorToggle");
+const closeMonitor = document.getElementById("closeMonitor");
 const narrowViewport = matchMedia("(max-width: 1100px)");
+let monitorOpener = monitorToggle;
+let monitorFocus = null;
+document.addEventListener("focusin", (event) => {
+  monitorFocus = monitor.contains(event.target) ? event.target : null;
+});
 /** Tela estreita: o monitor vira gaveta sobre a bancada. */
 function showMonitor(show = true) {
-  document.body.classList.toggle("monitor-open", show);
-  monitorToggle.setAttribute("aria-expanded", String(show));
+  const wasOpen = document.body.classList.contains("monitor-open");
+  const open = narrowViewport.matches && show;
+  // O CSS pode ocultar o controle e desfocá-lo antes do evento matchMedia.
+  const focus = document.activeElement === document.body ? monitorFocus : document.activeElement;
+  if (open && !wasOpen) {
+    monitorOpener = focus && focus !== document.body && !monitor.contains(focus) ? focus : monitorToggle;
+  }
+  document.body.classList.toggle("monitor-open", open);
+  monitorToggle.setAttribute("aria-expanded", String(open));
+  monitor.inert = narrowViewport.matches && !open;
+  if (open && !wasOpen) {
+    monitor.scrollTop = 0;
+    closeMonitor.focus({ preventScroll: true });
+  } else if (monitor.inert && (wasOpen || monitor.contains(focus))) {
+    const target = monitorOpener.isConnected && monitorOpener.getClientRects().length && !monitorOpener.disabled
+      ? monitorOpener : monitorToggle;
+    target.focus();
+  } else if (!narrowViewport.matches && focus === closeMonitor) {
+    // O botão de fechar desaparece no desktop; o foco segue no conteúdo visível.
+    const target = [...monitor.querySelectorAll("button, a[href], input, select, textarea, video[controls], summary, [tabindex]")]
+      .find((el) => el.tabIndex >= 0 && !el.disabled && el.getClientRects().length) || monitor;
+    // Um briefing em modo leitura pode ter todos os controles desabilitados.
+    if (target === monitor) monitor.tabIndex = -1;
+    target.focus({ preventScroll: true });
+  }
 }
 function applyTranscriptNotice(text) {
   const el = document.getElementById("transcriptNotice");
@@ -595,10 +625,12 @@ function applyStageDom(stage) {
   document.getElementById("textoHead").hidden = entrega;
   const delivery = document.getElementById("delivery");
   if (delivery) delivery.hidden = !entrega;
+  const openingMonitor = stage === "revisao" && narrowViewport.matches
+    && !document.body.classList.contains("monitor-open");
   if (stage === "revisao" && narrowViewport.matches) showMonitor(true);
   document.getElementById(STAGE_TARGET[stage])?.scrollIntoView({ block: "nearest" });
   paintStages();
-  if (focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
+  if (!openingMonitor && focus && focus !== document.body && focus.isConnected && !focus.closest("[hidden]")
     && document.activeElement !== focus) {
     focus.focus({ preventScroll: true });
   }
@@ -617,15 +649,16 @@ document.getElementById("stages").addEventListener("click", (event) => {
 // Ação principal do rail (revisar/entregar) navega sem chamada paga.
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
 monitorToggle.onclick = () => showMonitor(!document.body.classList.contains("monitor-open"));
-document.getElementById("closeMonitor").onclick = () => { showMonitor(false); monitorToggle.focus(); };
+closeMonitor.onclick = () => showMonitor(false);
 narrowViewport.addEventListener("change", () => showMonitor(false));
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.body.classList.contains("monitor-open")
     && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
     showMonitor(false);
-    monitorToggle.focus();
   }
 });
+showMonitor(false);
 setStage("materiais");
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
