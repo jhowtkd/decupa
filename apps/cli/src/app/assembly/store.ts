@@ -1,3 +1,5 @@
+import { deriveLifecycle, validateLifecycle } from "../project-lifecycle.ts";
+import { safeSyncProject } from "../resource-ledger.ts";
 import { pruneFillerExceptions, validateFillerCuts } from "./filler-store.ts";
 import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
 import { validateAnimationNotes } from "./handoff.ts";
@@ -23,6 +25,11 @@ import { validateAssembly } from "./validate.ts";
 import { readUndoStack } from "./undo.ts";
 
 const writers = new Map<string, LimitedQueue>();
+
+/** O fechamento do runtime espera metadados publicados após project.json. */
+export async function drainProjectWrites(dir: string): Promise<void> {
+  await writers.get(dir)?.run(() => undefined);
+}
 
 function projectPath(dir: string): string {
   return join(dir, "project.json");
@@ -470,6 +477,7 @@ function validateV2(value: Record<string, unknown>): Project {
   const preparedRevision = Number.isSafeInteger(value.preparedRevision) && (value.preparedRevision as number) >= 0
     ? value.preparedRevision as number : undefined;
   const project: Project = {
+    ...(value.lifecycle !== undefined ? { lifecycle: validateLifecycle(value.lifecycle) } : {}),
     ...(value.template!==undefined?{template:approvedSnapshot(value.template)}:{}),
     ...(value.templateReport!==undefined?{templateReport:validateTemplateReport(value.templateReport,approvedSnapshot(value.template))}:{}),
     version: 2,
@@ -592,7 +600,9 @@ export function validateProject(value: unknown): Project {
 }
 
 async function writeAtomic(dir: string, project: Project): Promise<void> {
+  project.lifecycle = await deriveLifecycle(dir, project.lifecycle, { project });
   await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`, { durable: true });
+  await safeSyncProject(dir, project);
 }
 
 /** Versão anterior do project.json, regravada a cada saveProject. */
@@ -639,7 +649,8 @@ async function readProjectBytes(dir: string): Promise<ProjectBytes> {
 }
 
 export async function loadProject(dir: string): Promise<Project> {
-  return validateProject((await readProjectBytes(dir)).raw);
+  const project = validateProject((await readProjectBytes(dir)).raw);
+  return { ...project, lifecycle: await deriveLifecycle(dir, project.lifecycle, { project }) };
 }
 
 export async function missingMedia(project: Project): Promise<Source[]> {
@@ -654,6 +665,7 @@ export async function missingMedia(project: Project): Promise<Source[]> {
 export async function createProject(dir: string, initial: unknown): Promise<void> {
   // Aceita v1 e normaliza para v2; arquivo novo não tem o que preservar em backup.
   const project = validateProject(initial);
+  project.lifecycle = await deriveLifecycle(dir, project.lifecycle, { project });
   await enqueue(dir, async () => {
     await acquireLock(dir);
     try {
@@ -662,6 +674,7 @@ export async function createProject(dir: string, initial: unknown): Promise<void
         try {
           await handle.writeFile(`${JSON.stringify(project, null, 2)}\n`);
           await handle.sync();
+          await safeSyncProject(dir, project);
         } finally {
           await handle.close();
         }
@@ -851,6 +864,7 @@ export async function saveProject(
       const rawText = bytes.text;
       const raw = bytes.raw as { version?: unknown };
       const current = validateProject(raw);
+      current.lifecycle = await deriveLifecycle(dir, current.lifecycle, { project: current });
       let next: Project;
       if (typeof nextOrFn === "function") {
         // Functional updates run inside the single writer: apply to the latest
@@ -879,6 +893,7 @@ export async function saveProject(
       if (!bytes.fromPrevious) {
         await publishAtomic(previousProjectPath(dir), rawText, { durable: true });
       }
+      next.lifecycle = typeof nextOrFn === "function" ? next.lifecycle ?? current.lifecycle : current.lifecycle ?? next.lifecycle;
       await writeAtomic(dir, next);
     } finally {
       await releaseLock(dir);

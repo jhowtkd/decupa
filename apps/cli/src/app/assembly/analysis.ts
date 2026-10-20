@@ -1,6 +1,7 @@
+import { derivativeKey, ResourceLedger, resourceLedgerForProject } from "../resource-ledger.ts";
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { inspectArtifact, publishAtomic } from "@decupa/cache";
 import type { FileCoordinator } from "@decupa/coordinator";
 import { CancelledError, createLimitedQueue, isCancelledError } from "@decupa/queue";
@@ -58,7 +59,6 @@ const ENVELOPE = "analysis-v2";
 type StoredAnalysis = {
   version: string;
   createdAt: number;
-  refs: string[];
   analysis: Analysis;
 };
 
@@ -69,14 +69,26 @@ function unwrapStored(raw: unknown): StoredAnalysis | null {
     return {
       version: ENVELOPE,
       createdAt: Number(rec.createdAt) || 0,
-      refs: Array.isArray(rec.refs) ? rec.refs.map(String) : [],
       analysis: rec.analysis as Analysis,
     };
   }
   if (typeof rec.key === "string" && rec.status) {
-    return { version: ENVELOPE, createdAt: 0, refs: [], analysis: rec as unknown as Analysis };
+    return { version: ENVELOPE, createdAt: 0, analysis: rec as unknown as Analysis };
   }
   return null;
+}
+
+/** Migra o protótipo antigo uma vez; o envelope deixa de carregar refs. */
+async function migrateLegacyRefs(path: string, raw: unknown, ledger: ResourceLedger, sha: string, key: string): Promise<void> {
+  if (!raw || typeof raw !== "object" || !("refs" in raw) || !Array.isArray(raw.refs)) return;
+  const stored = unwrapStored(raw);
+  if (!stored) return;
+  try {
+    for (const ref of raw.refs) {
+      if (typeof ref === "string") await ledger.addResources({ id: `project:${resolve(ref)}`, kind: "project", projectDir: resolve(ref) }, [derivativeKey(sha, "analysis", key)]);
+    }
+    await publishAtomic(path, `${JSON.stringify(stored, null, 2)}\n`);
+  } catch (error) { ledger.markIncomplete(error); }
 }
 
 async function readCached(
@@ -87,6 +99,7 @@ async function readCached(
   const purpose = opts.purpose ?? "asr";
   const inspection = await inspectArtifact(resultPath(projectDir, source.sha256, opts));
   if (inspection.status !== "ready") return null;
+  await migrateLegacyRefs(resultPath(projectDir, source.sha256, opts), inspection.value, analysisLedger(projectDir, opts), source.sha256, analysisKey(source.sha256, purpose));
   const stored = unwrapStored(inspection.value);
   if (!stored || stored.analysis.key !== analysisKey(source.sha256, purpose) || stored.analysis.status !== "ready") {
     return null;
@@ -94,7 +107,7 @@ async function readCached(
   const ttlMs = opts.ttlMs;
   const stamp = opts.now ?? Date.now;
   if (ttlMs !== undefined && stored.createdAt > 0 && stamp() - stored.createdAt > ttlMs
-    && !stored.refs.includes(projectDir)) {
+    && !(await isAnalysisPinned(projectDir, opts, source.sha256, analysisKey(source.sha256, purpose)))) {
     return null;
   }
   const raw = stored.analysis;
@@ -217,15 +230,13 @@ async function saveAnalysis(
   const dir = analysisCacheDir(projectDir, sourceSha, opts);
   await mkdir(dir, { recursive: true });
   const path = resultPath(projectDir, sourceSha, opts);
-  const existing = unwrapStored((await inspectArtifact(path)).value);
-  const refs = new Set(existing?.refs ?? []);
-  refs.add(projectDir);
+  await migrateLegacyRefs(path, (await inspectArtifact(path)).value, analysisLedger(projectDir, opts), sourceSha, analysisKey(sourceSha, opts.purpose ?? "asr"));
   await publishAtomic(path, `${JSON.stringify({
     version: ENVELOPE,
     createdAt: (opts.now ?? Date.now)(),
-    refs: [...refs],
     analysis,
   } satisfies StoredAnalysis, null, 2)}\n`);
+  await pinAnalysis(projectDir, { sha256: sourceSha }, opts);
 }
 
 function spansFromIndex(source: Source, raw: unknown): Span[] {
@@ -377,36 +388,28 @@ export async function loadAnalysis(
   return readCached(projectDir, source, opts);
 }
 
-export async function pinAnalysis(
-  projectDir: string,
-  source: Source,
-  opts: AnalyzeOptions = {},
-): Promise<void> {
-  const path = resultPath(projectDir, source.sha256, opts);
-  const stored = unwrapStored((await inspectArtifact(path)).value);
-  if (!stored) return;
-  if (stored.refs.includes(projectDir)) return;
-  await publishAtomic(path, `${JSON.stringify({
-    ...stored,
-    refs: [...stored.refs, projectDir],
-  } satisfies StoredAnalysis, null, 2)}\n`);
+function analysisLedger(projectDir: string, opts: AnalyzeOptions): ResourceLedger {
+  return opts.storeDir ? new ResourceLedger(opts.storeDir) : resourceLedgerForProject(projectDir);
 }
 
-export async function unpinAnalysis(
-  storeDir: string,
-  projectDir: string,
-  source: Source,
-  opts: AnalyzeOptions = {},
-): Promise<void> {
-  const path = resultPath(projectDir, source.sha256, { ...opts, storeDir });
-  const stored = unwrapStored((await inspectArtifact(path)).value);
-  if (!stored) return;
-  const refs = stored.refs.filter((ref) => ref !== projectDir);
-  if (refs.length === stored.refs.length) return;
-  await publishAtomic(path, `${JSON.stringify({
-    ...stored,
-    refs,
-  } satisfies StoredAnalysis, null, 2)}\n`);
+async function isAnalysisPinned(projectDir: string, opts: AnalyzeOptions, sha: string, key: string): Promise<boolean> {
+  const ledger = analysisLedger(projectDir, opts);
+  try { return (await ledger.references(derivativeKey(sha, "analysis", key))).some(owner => owner.projectDir === resolve(projectDir)); }
+  catch (error) { ledger.markIncomplete(error, projectDir); return true; }
+}
+
+export async function pinAnalysis(projectDir: string, source: Pick<Source, "sha256">, opts: AnalyzeOptions = {}): Promise<void> {
+  projectDir = resolve(projectDir);
+  const key = derivativeKey(source.sha256, "analysis", analysisKey(source.sha256, opts.purpose ?? "asr"));
+  const ledger = analysisLedger(projectDir, opts);
+  try { await ledger.addResources({ id: `project:${projectDir}`, kind: "project", projectDir }, [key]); }
+  catch (error) { ledger.markIncomplete(error, projectDir); }
+}
+
+export async function unpinAnalysis(storeDir: string, projectDir: string, source: Source, opts: AnalyzeOptions = {}): Promise<void> {
+  projectDir = resolve(projectDir);
+  const key = derivativeKey(source.sha256, "analysis", analysisKey(source.sha256, opts.purpose ?? "asr"));
+  await analysisLedger(projectDir, { ...opts, storeDir }).releaseResources(`project:${projectDir}`, [key]);
 }
 
 export async function pruneAnalysisStore(
@@ -433,8 +436,11 @@ export async function pruneAnalysisStore(
     }
     for (const key of keys) {
       const keyDir = join(shaDir, key);
-      const stored = unwrapStored((await inspectArtifact(join(keyDir, "analysis.json"))).value);
-      if (!stored || stored.refs.length > 0) continue;
+      const path = join(keyDir, "analysis.json");
+      const raw = (await inspectArtifact(path)).value;
+      await migrateLegacyRefs(path, raw, new ResourceLedger(storeDir), sha, key);
+      const stored = unwrapStored(raw);
+      if (!stored || (await new ResourceLedger(storeDir).references(derivativeKey(sha, "analysis", key))).length > 0) continue;
       if (stored.createdAt <= 0 || now - stored.createdAt <= ttlMs) continue;
       await rm(keyDir, { recursive: true, force: true });
     }

@@ -1,3 +1,4 @@
+import { initializeResourceLedger, safeSyncProject } from "./resource-ledger.ts";
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -198,6 +199,7 @@ async function createCleanupInProjectsRoot(
       // source.json é o manifesto que faz o registro tratar a pasta como
       // Limpeza. A pasta continua na Raiz, mas o arquivo nunca é copiado.
       await claimWorkDir(dir, record.path, now, { flow: "limpeza", displayName });
+      await safeSyncProject(dir, { assembly: { sources: [{ sha256: mediaId }] } });
   });
 }
 
@@ -349,6 +351,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   }
   const projectsRoot = resolve(opts.projectsRoot);
   await mkdir(projectsRoot, { recursive: true });
+  await initializeResourceLedger({ root: env.DECUPA_MEDIA_ROOT ?? projectsRoot, projectsRoot, now: opts.now, env });
   if (opts.projectId) {
     if (!PROJECT_ID_PATTERN.test(opts.projectId)) throw new Error("id de Projeto inválido");
     const initialDir = resolve(opts.projectDir ?? resolve(projectsRoot, opts.projectId));
@@ -1193,6 +1196,7 @@ async function startAssemblyApp(opts: {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
   const dir = resolve(opts.projectDir);
+  await initializeResourceLedger({ root: env.DECUPA_MEDIA_ROOT ?? dir, projectDir: dir, now: opts.now, env });
   const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   const visualEnv = { ...(opts.env ?? process.env) };
   const coordinator = opts.coordinatorDir || opts.providerConfigDir
