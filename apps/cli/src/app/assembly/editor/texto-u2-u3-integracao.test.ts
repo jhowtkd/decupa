@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createState } from "./state.js";
-import { mountTexto } from "./texto.js";
+import { docSignature, mountTexto } from "./texto.js";
 import { El, installDom, type FakeDocument } from "./fake-dom.test-helper.ts";
 
 afterEach(() => {
@@ -190,4 +190,145 @@ it("estende com Shift+seta a seleção entre palavras de cenas vizinhas montadas
   } finally {
     restore();
   }
+});
+
+it("Shift+clique atravessa cenas desmontadas na ordem editorial completa", () => {
+  const { state, document } = mount(project());
+  const restore = virtualGeometry(document);
+  try {
+    const root = document.getElementById("texto")!;
+    const anchor = document.querySelector('[data-scene="s1"][data-word-id="w1"]')!;
+    anchor.click();
+    root.scrollTop = 2_700;
+    root.dispatchEvent({ type: "scroll" });
+    expect(document.querySelector('[data-scene-section="s1"]')!.dataset.sceneMounted).toBe("false");
+
+    const end = document.querySelector('[data-scene="s10"][data-word-id="w10"]')!;
+    end.dispatchEvent({ type: "click", shiftKey: true });
+
+    expect([...state.get("selection")]).toEqual(Array.from({ length: 10 }, (_, i) => `s${i + 1}\0t${i + 1}\0w${i + 1}`));
+  } finally {
+    restore();
+  }
+});
+
+it.each([false, true])("intervalo entre cenas desmontadas inclui omitidos apenas quando abertos (expanded=%s)", (expanded) => {
+  const { state, document } = mount(project());
+  const restore = virtualGeometry(document);
+  try {
+    const root = document.getElementById("texto")!;
+    const first = document.querySelector('[data-scene-section="s1"]')!;
+    if (expanded) toggleDetails(root, first.querySelector('details[data-omitted-source="a"]')!);
+    first.querySelector('[data-scene="s1"][data-word-id="w1"]')!.click();
+    root.scrollTop = 2_700;
+    root.dispatchEvent({ type: "scroll" });
+    expect(first.dataset.sceneMounted).toBe("false");
+
+    document.querySelector('[data-scene="s10"][data-word-id="w10"]')!.dispatchEvent({ type: "click", shiftKey: true });
+
+    const actual = [...state.get("selection")];
+    const expected = ["s1\0t1\0w1"];
+    if (expanded) expected.push(...Array.from({ length: 19 }, (_, i) => `s1\0\0w${i + 2}`));
+    expected.push(...Array.from({ length: 9 }, (_, i) => `s${i + 2}\0t${i + 2}\0w${i + 2}`));
+    expect(actual).toEqual(expected);
+  } finally {
+    restore();
+  }
+});
+
+it("Escape no menu da palavra remonta a cena desmontada e devolve o foco à origem", () => {
+  const { document } = mount(project());
+  const restore = virtualGeometry(document);
+  try {
+    const root = document.getElementById("texto")!;
+    const origin = document.querySelector('[data-scene="s1"][data-word-id="w1"]')!;
+    origin.focus();
+    origin.dispatchEvent({ type: "keydown", key: "Enter" });
+    expect(document.querySelector(".texto-menu")).toBeTruthy();
+
+    root.scrollTop = 2_700;
+    root.dispatchEvent({ type: "scroll" });
+    expect(document.querySelector('[data-scene-section="s1"]')!.dataset.sceneMounted).toBe("false");
+    document.dispatchEvent({ type: "keydown", key: "Escape" });
+
+    expect(document.querySelector('[data-scene-section="s1"]')!.dataset.sceneMounted).toBe("true");
+    expect(document.activeElement?.dataset.scene).toBe("s1");
+    expect(document.activeElement?.dataset.wordId).toBe("w1");
+  } finally {
+    restore();
+  }
+});
+
+it("Escape no menu da cena remonta a cena desmontada e devolve o foco ao acionador", () => {
+  const { document } = mount(project());
+  const restore = virtualGeometry(document);
+  try {
+    const root = document.getElementById("texto")!;
+    const origin = document.querySelector('[data-scene-menu="s1"]')!;
+    origin.click();
+    expect(document.querySelector('[role="menu"]')).toBeTruthy();
+
+    root.scrollTop = 2_700;
+    root.dispatchEvent({ type: "scroll" });
+    expect(document.querySelector('[data-scene-section="s1"]')!.dataset.sceneMounted).toBe("false");
+    document.dispatchEvent({ type: "keydown", key: "Escape" });
+
+    expect(document.querySelector('[data-scene-section="s1"]')!.dataset.sceneMounted).toBe("true");
+    expect(document.activeElement?.dataset.sceneMenu).toBe("s1");
+  } finally {
+    restore();
+  }
+});
+
+it("fechar menu por atualização do projeto não remonta a cena desmontada", () => {
+  const { state, document } = mount(project());
+  const restore = virtualGeometry(document);
+  try {
+    const root = document.getElementById("texto")!;
+    const origin = document.querySelector('[data-scene="s1"][data-word-id="w1"]')!;
+    origin.focus();
+    origin.dispatchEvent({ type: "keydown", key: "Enter" });
+    expect(document.querySelector(".texto-menu")).toBeTruthy();
+
+    root.scrollTop = 2_700;
+    root.dispatchEvent({ type: "scroll" });
+    const first = document.querySelector('[data-scene-section="s1"]')!;
+    expect(first.dataset.sceneMounted).toBe("false");
+    const updated = project();
+    updated.revision = 2;
+    updated.scenes[0]!.objective = "Cena atualizada";
+    state.set("project", updated);
+
+    expect(document.querySelector(".texto-menu")).toBeNull();
+    expect(first.dataset.sceneMounted).toBe("false");
+  } finally {
+    restore();
+  }
+});
+
+it("preserva foco na posição ao realinhar palavras omitidas com assinatura estável", () => {
+  const original = project();
+  original.scenes = original.scenes.slice(0, 10);
+  const { state, document } = mount(original);
+  const root = document.getElementById("texto")!;
+  const section = document.querySelector('[data-scene-section="s1"]')!;
+  const details = section.querySelector('details[data-omitted-source="a"]')!;
+  toggleDetails(root, details);
+  section.querySelector('[data-word-id="w11"]')!.focus();
+
+  const aligned = project();
+  aligned.scenes = aligned.scenes.slice(0, 10);
+  aligned.revision = 2;
+  aligned.corrections = [{ sourceId: "a", status: "aligned", start: 10, end: 12,
+    words: [
+      { id: "a:sha:c:c1:w000011", text: "décima primeira alinhada", start: 10, end: 10.5 },
+      { id: "a:sha:c:c1:w000012", text: "décima segunda alinhada", start: 11, end: 11.5 },
+    ] }];
+  expect(docSignature(aligned)).toBe(docSignature(original));
+  state.set("project", aligned);
+
+  expect(details.open).toBe(true);
+  expect(section.querySelector('details[data-omitted-source="a"]')!.open).toBe(true);
+  expect(document.activeElement?.dataset.wordId).toBe("a:sha:c:c1:w000011");
+  expect(document.activeElement?.closest("details")?.open).toBe(true);
 });
