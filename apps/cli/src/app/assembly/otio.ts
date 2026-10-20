@@ -182,12 +182,23 @@ export function davinciImportSettings(assembly: Assembly) {
   };
 }
 
-export function buildOtio(assembly: Assembly): string {
+export function buildOtio(assembly: Assembly, options?: { sourcePaths: Record<string, string> }): string {
   const valid = validateAssembly(assembly);
   assertTimecodesReadable(valid);
   const fps = fpsNumber(valid);
   const durationFrames = timelineDurationFrames(valid);
-  const sources = new Map(valid.sources.map((source) => [source.id, source]));
+  const sources = new Map(valid.sources.map((source) => {
+    if (!options) return [source.id, source] as const;
+    const path = options.sourcePaths[source.id];
+    if (path !== undefined && (!path || path.startsWith("/") || /[\\:\0]/.test(path)
+      || path.split("/").some(part => !part || part === "." || part === ".."))) {
+      throw new Error(`caminho portátil inválido para ${source.id}`);
+    }
+    if (path === undefined && valid.tracks.some(track => track.clips.some(clip => clip.sourceId === source.id))) {
+      throw new Error(`caminho portátil ausente para ${source.id}`);
+    }
+    return [source.id, { ...source, path: path ?? source.path }] as const;
+  }));
   const tracks = valid.tracks.map((track) => ({
     OTIO_SCHEMA: "Track.1",
     name: track.name,

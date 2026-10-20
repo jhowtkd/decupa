@@ -210,7 +210,7 @@ const player = {
     el.removeAttribute("data-source");
     if (state.get("view") !== "montagem") state.set("view", "montagem");
     if (p && p.previewRevision != null) {
-      const src = projectPath("project/output/" + p.previewRevision + "/mp4");
+      const src = projectPath("project/preview/" + p.previewRevision);
       if (el.getAttribute("data-rev") !== String(p.previewRevision)) {
         el.src = src;
         el.setAttribute("data-rev", String(p.previewRevision));

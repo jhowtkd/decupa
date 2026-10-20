@@ -331,7 +331,7 @@ export class ResourceLedger {
         try {
           const entry = await json<Entry>(join(this.ownersDir, file));
           if (!entry || (entry.owner.kind === "in-progress" && !workAlive(entry.owner))) return;
-          if (["project", "export", "delivery"].includes(entry.owner.kind) && owns(entry.owner)) {
+          if (["project", "export", "delivery", "package"].includes(entry.owner.kind) && owns(entry.owner)) {
             if (!dirSet.has(entry.owner.projectDir ?? "")) { await rm(join(this.ownersDir, file), { force: true }); return; }
           }
           durableOwners.set(entry.owner.id, JSON.stringify(entry));
@@ -359,6 +359,11 @@ export class ResourceLedger {
             if (!manifest?.sources) continue;
             const owner: ResourceOwner = { id: `export:${resolve(dir)}:${revision}`, kind: "export", projectDir: resolve(dir) };
             found.push({ owner, resources: [...new Set(Object.values(manifest.sources).map(mediaKey))] });
+            const packaged = await json<DiskManifest>(join(dir, "exports", revision, "package-manifest.json"));
+            if (packaged?.sources) found.push({
+              owner: { id: `package:${resolve(dir)}:${revision}`, kind: "package", projectDir: resolve(dir) },
+              resources: [...new Set(Object.values(packaged.sources).map(mediaKey))],
+            });
           }
           for (const revision of (await directories(join(dir, "deliveries"))).filter(r => /^\d+$/.test(r))) {
             check();

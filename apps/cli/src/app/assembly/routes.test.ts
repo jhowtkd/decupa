@@ -201,7 +201,7 @@ it("serve a página de montagem, não a de limpeza", async () => {
   expect(js).toContain('import(projectPath("editor/rail.js"))');
   expect(js).toContain("scheduleAutoPreview");
   expect(contexto).toContain("previewPlayer");
-  expect(contexto).toContain('projectPath("project/output/');
+  expect(contexto).toContain('projectPath("project/preview/');
   expect(contexto).toContain("Preparar montagem");
   expect(rail).toContain("Retomar");
   expect(contexto).toContain("download");
@@ -217,11 +217,14 @@ it("serve módulos editor sem build", async () => {
   expect([403, 404]).toContain(bad.status);
 });
 
-it("serve a prévia em rev-N quando ainda não há export", async () => {
+it("serve a prévia registrada pela rota própria sem oferecê-la como download exportado", async () => {
   const { base, dir } = await boot();
   await mkdir(join(dir, "rev-2"), { recursive: true });
   await writeFile(join(dir, "rev-2", "reference.mp4"), "preview-bytes");
-  const res = await fetch(`${base}/project/output/2/mp4`);
+  await saveProject(dir, 0, current => ({ ...current, previewRevision: 2,
+    previewArtifact: { revision: 2, relativePath: "rev-2/reference.mp4", sha256: "a".repeat(64), assemblySha256: "b".repeat(64) } }));
+  expect((await fetch(`${base}/project/output/2/mp4`)).status).toBe(404);
+  const res = await fetch(`${base}/project/preview/2`);
   expect(res.status).toBe(200);
   expect(await res.text()).toBe("preview-bytes");
 });

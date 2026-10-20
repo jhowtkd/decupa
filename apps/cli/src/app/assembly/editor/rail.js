@@ -186,8 +186,9 @@ export function exportView(ui, approved, formats = null) {
  * (legendas.status === "indisponivel"), os dois links somem sem afetar
  * MP4/OTIO — falha de legenda nunca bloqueia a entrega.
  * @param {{legendas?: {status?: string}} | null} [manifest]
+ * @param {{resolve: boolean, primary?: string} | null} [capabilities]
  */
-export function deliveryFormats(project, verificacao, manifest = null) {
+export function deliveryFormats(project, verificacao, manifest = null, capabilities = null) {
   const rev = project?.finalApprovedRevision;
   if (rev == null || rev !== project.revision || !verificacao || verificacao.revision !== rev) return [];
   const href = (kind) => projectPath("project/output/" + rev + "/" + kind);
@@ -197,6 +198,11 @@ export function deliveryFormats(project, verificacao, manifest = null) {
     { id: "instrucoes", file: "importar-no-resolve.txt", label: "Instruções de conferência", href: href("instrucoes") },
     { id: "verificacao", file: "verificacao.json", label: "Dados para conferir a importação", href: href("verificacao") },
   ];
+  if (verificacao.package) {
+    const packaged = { id: "package", file: "decupa-r" + rev + ".tar", label: "Pacote com timeline, fontes e instruções de religação", href: href("package") };
+    if (capabilities?.primary === "package" || capabilities?.resolve === false) { files.shift(); files.splice(1, 0, packaged); }
+    else files.push(packaged);
+  }
   const fonte = manifest ?? verificacao;
   if (fonte?.legendas?.status === "pronto") {
     files.push(
@@ -922,7 +928,12 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
 
 }
 
-export function resolveView(delivery, approved) {
+/** @param {{resolve: boolean, primary?: string} | null} [capabilities] */
+export function resolveView(delivery, approved, capabilities = null) {
+  if (capabilities?.resolve === false) return {
+    disabled: !approved, buttonLabel: "Preparar MP4 + pacote",
+    statusText: "Extraia o pacote e confira a importação no Resolve em uma segunda máquina.", newCopy: false,
+  };
   const stages={connecting:"Conectando ao DaVinci…",created:"Importando montagem…",imported:"Verificando timeline importada…",verified:"Salvando projeto…",saved:"Projeto salvo",exported:"DRP exportado"};
   return {
     disabled:!approved||delivery?.status==="running",

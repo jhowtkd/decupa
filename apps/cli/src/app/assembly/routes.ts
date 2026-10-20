@@ -1,4 +1,7 @@
 import { recoverInterruptedPreparation } from "./preparation-recovery.ts";
+import { projectRuntimeContext } from "../resource-ledger.ts";
+import { servePackage } from "./package.ts";
+import { detectDeliveryCapabilities, type DeliveryCapabilities } from "./delivery-capabilities.ts";
 import { SpaceCapacityError } from "../space.ts";
 import { autoFillerTargets, type FillerSnaps } from "./fillers.ts";
 import { planFillerSnaps } from "./filler-snaps.ts";
@@ -106,6 +109,7 @@ export type AssemblyDeps = FillerObserveDeps & {
   media?: Pick<MediaRuntime, "getMedia">;
   /** Em equipe, o seletor do sistema não aponta para a máquina do editor. */
   teamMode?: boolean;
+  deliveryCapabilities?: () => Promise<DeliveryCapabilities>;
 };
 
 /**
@@ -503,6 +507,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       throw new HttpError(428, "Configure o provedor de texto primeiro");
     }
   }
+
+  const packageDownloads = new Set<Promise<void>>();
+  const capabilities = (deps.deliveryCapabilities ? deps.deliveryCapabilities() : detectDeliveryCapabilities({ env: projectRuntimeContext(dir).env }))
+    .then(value => deps.teamMode ? { ...value, primary: "package" as const } : value);
 
   function snapshot() {
     return { operation };
@@ -935,41 +943,52 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if (parts[1] === "resolve-status" && req.method === "GET") {
-        const project=await loadProject(dir); await sendSnapshot(res,{delivery:await readDelivery(dir,project.revision)}); return true;
+        const project=await loadProject(dir); await sendSnapshot(res,{delivery:await readDelivery(dir,project.revision), capabilities: await capabilities}); return true;
       }
       if (parts[1] === "resolve-drp" && req.method === "GET") {
         const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
         if (!delivery?.drpPath) throw new HttpError(404,"DRP não registrado");
         await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
       }
+      if (parts[1] === "preview" && req.method === "GET") {
+        const project = await loadProject(dir);
+        const artifact = project.previewArtifact;
+        if (!artifact || String(artifact.revision) !== parts[2]) throw new HttpError(404, "prévia não registrada");
+        const path = join(dir, artifact.relativePath);
+        if (isAbsolute(artifact.relativePath) || relative(dir, path).startsWith("..")) throw new HttpError(404, "prévia inválida");
+        try { await serveMedia(req, res, path); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "prévia ausente: gere novamente"); throw error; }
+        return true;
+      }
       if (parts[1] === "output" && req.method === "GET") {
         const revision = parts[2] ?? "";
         const kind = parts[3] ?? "";
-        const file = kind === "otio" ? "timeline.otio"
-          : kind === "mp4" ? "reference.mp4"
-          : kind === "instrucoes" ? "importar-no-resolve.txt"
-          : kind === "vtt" ? "legendas.vtt"
-          : kind === "srt" ? "legendas.srt"
-          : kind === "verificacao" ? "verificacao.json" : "";
-        if (!file) throw new HttpError(404, "saída desconhecida");
-        const type = kind === "otio" || kind === "verificacao" ? "application/json"
-          : kind === "instrucoes" ? "text/plain; charset=utf-8"
-          : kind === "vtt" ? "text/vtt; charset=utf-8"
-          : kind === "srt" ? "application/x-subrip; charset=utf-8" : "video/mp4";
-        const candidates = [join(dir, "exports", revision, file)];
-        if (kind === "mp4") candidates.push(join(dir, `rev-${revision}`, "reference.mp4"));
-        let served = false;
-        for (const path of candidates) {
-          try {
-            await serveMedia(req, res, path, type);
-            served = true;
-            break;
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code !== "ENOENT") throw err;
+        if (!/^\d+$/.test(revision) || parts.length !== 4) throw new HttpError(404, "saída desconhecida");
+        try {
+          if (kind === "package") {
+            const downloading = servePackage(req, res, dir, revision); packageDownloads.add(downloading);
+            try { await downloading; } finally { packageDownloads.delete(downloading); }
+            return true;
           }
+          const file = kind === "otio" ? "timeline.otio"
+            : kind === "mp4" ? "reference.mp4"
+            : kind === "instrucoes" ? "importar-no-resolve.txt"
+            : kind === "manifest" ? "manifest.json"
+            : kind === "handoff" ? "handoff.json"
+            : kind === "vtt" ? "legendas.vtt"
+            : kind === "srt" ? "legendas.srt"
+            : kind === "verificacao" ? "verificacao.json" : "";
+          if (!file) throw new HttpError(404, "saída desconhecida");
+          const type = ["otio", "verificacao", "manifest", "handoff"].includes(kind) ? "application/json"
+            : kind === "instrucoes" ? "text/plain; charset=utf-8"
+            : kind === "vtt" ? "text/vtt; charset=utf-8"
+            : kind === "srt" ? "application/x-subrip; charset=utf-8" : "video/mp4";
+          await serveMedia(req, res, join(dir, "exports", revision, file), type);
+        } catch (error) {
+          if ((error as { status?: number }).status === 409) throw new HttpError(409, (error as Error).message);
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "saída não registrada");
+          throw error;
         }
-        if (!served) throw new HttpError(404, "saída não registrada");
         return true;
       }
 
@@ -1840,6 +1859,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       }
 
       if ((parts[1] === "deliver-resolve" || parts[1] === "export-drp") && req.method === "POST") {
+        if (!(await capabilities).resolve) throw new HttpError(409, "DaVinci Resolve não está instalado nesta máquina; prepare MP4 + pacote.");
         const expected=requireRevision(body);const project=await loadProject(dir);
         if(project.revision!==expected)throw new HttpError(409,"revisão desatualizada");
         try {
@@ -1925,6 +1945,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     close: async (): Promise<void> => {
       abortOperations();
       livePreviews.clear();
+      await Promise.allSettled(packageDownloads);
       await drainProjectWrites(dir);
     },
     snapshot,

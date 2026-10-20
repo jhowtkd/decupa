@@ -132,7 +132,7 @@ it("estados: vazio com briefing no monitor, preparação com etapas e custo vis�
 
 it("entrega: sem emoji, arquivos por deliveryFormats, status sem ' · ' solto", async () => {
   const contexto = await read(CONTEXTO);
-  expect(contexto).toContain("deliveryFormats(project, verificacao)");
+  expect(contexto).toContain("deliveryFormats(project, verificacao, null, deliveryCapabilities)");
   expect(contexto).toContain("verifyView(project, verificacao)");
   expect(contexto).toContain('id="verifyCard"');
   expect(contexto).not.toContain('+" · O .drp depende');
