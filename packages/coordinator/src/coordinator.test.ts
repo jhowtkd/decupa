@@ -38,6 +38,87 @@ function watchAbandoned(run: Promise<unknown>): Promise<unknown> {
 }
 
 describe("createFileCoordinator", () => {
+  it("single-flight: mesmo id com limit 2 executa um build e entrega o resultado aos dois", async () => {
+    const root = dir();
+    const coordinator = createFileCoordinator(root, { limit: 2, pollMs: 5, now: () => 1_000 });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let builds = 0;
+    const build = async () => {
+      builds += 1;
+      await held;
+      return { value: "compartilhado" };
+    };
+    const first = coordinator.run({ id: "shared", stage: "speech", build });
+    await waitUntil("primeiro build", async () => builds === 1);
+    const controller = new AbortController();
+    const second = coordinator.run({ id: "shared", stage: "speech", signal: controller.signal, build });
+    const settled = Promise.allSettled([first, second]);
+    try {
+      await waitUntil("seguidor observado", async () => builds > 1 || getEventListeners(controller.signal, "abort").length > 0);
+    } finally {
+      release();
+    }
+    const results = await settled;
+    expect(builds).toBe(1);
+    expect(results).toEqual([
+      { status: "fulfilled", value: { value: "compartilhado" } },
+      { status: "fulfilled", value: { value: "compartilhado" } },
+    ]);
+  });
+
+  it("single-flight: falha de build encerra o lease e permite nova tentativa", async () => {
+    const root = dir();
+    const coordinator = createFileCoordinator(root, { limit: 2, pollMs: 5, now: () => 1_000 });
+    const error = new Error("falhou o build");
+    await expect(coordinator.run({ id: "retry", stage: "speech", build: () => { throw error; } })).rejects.toBe(error);
+    const record = JSON.parse(await readFile(join(root, "tasks", "retry.json"), "utf8"));
+    expect(record).toMatchObject({ status: "failed", leaseId: null, leaseUntil: 0 });
+    await expect(coordinator.run({ id: "retry", stage: "speech", build: () => "retomado" })).resolves.toBe("retomado");
+  });
+
+  it("single-flight: seguidor não bloqueia outra tarefa no segundo slot", async () => {
+    const root = dir();
+    let t = 1_000;
+    const coordinator = createFileCoordinator(root, { limit: 2, pollMs: 5, now: () => t });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    const owner = coordinator.run({ id: "shared", stage: "speech", build: async () => {
+      started = true;
+      await held;
+      return "owner";
+    } });
+    await waitUntil("owner ocupa primeiro slot", async () => started);
+    t += 1;
+    const controller = new AbortController();
+    let duplicateBuilds = 0;
+    const follower = coordinator.run({ id: "shared", stage: "speech", signal: controller.signal, build: async () => {
+      duplicateBuilds += 1;
+      await held;
+      return "duplicate";
+    } });
+    const settled = Promise.allSettled([owner, follower]);
+    let other: Promise<string> | undefined;
+    let otherStarted = false;
+    try {
+      await waitUntil("seguidor aguarda", async () => duplicateBuilds > 0 || getEventListeners(controller.signal, "abort").length > 0);
+      t += 1;
+      other = coordinator.run({ id: "different", stage: "speech", build: () => {
+        otherStarted = true;
+        return "different";
+      } });
+      await waitUntil("outra tarefa usa segundo slot sem liberar owner", async () => otherStarted, 1_500);
+    } finally {
+      controller.abort();
+      release();
+      await settled;
+      await other;
+    }
+    expect(duplicateBuilds).toBe(0);
+    expect(otherStarted).toBe(true);
+  });
+
   it("dois clientes isolados disputam o mesmo limite", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });
