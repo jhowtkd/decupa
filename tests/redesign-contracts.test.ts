@@ -66,7 +66,8 @@ it("nenhuma concatenação presa dentro de literal de aspas simples", async () =
 });
 
 it("palavra tocando no texto tem destaque no CSS", async () => {
-  expect(await read(TEXTO)).toContain('btn.classList.toggle("ativa"');
+  // U2 troca só a palavra anterior e a atual, sem varrer a prosa.
+  expect(await read(TEXTO)).toMatch(/\.classList\.(?:add|toggle)\("ativa"/);
   expect(await read(CSS)).toMatch(/\.word\.ativa\s*\{/);
 });
 
