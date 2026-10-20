@@ -27,7 +27,7 @@
       <div>
         <p class="eyebrow">Raiz de Projetos</p>
         <h1 id="page-title">Projetos recentes</h1>
-        <p class="subtitle">Continue uma edição ou encontre um Projeto da equipe.</p>
+        <p class="subtitle">Acompanhe o processamento, confira os resultados e continue uma edição.</p>
       </div>
       <button id="newProject" class="primary" type="button">Novo Projeto</button>
     </section>
@@ -47,6 +47,14 @@
       </label>
     </section>
 
+    <section class="batch-toolbar" aria-label="Ações em vários Projetos">
+      <label><input type="checkbox" id="selectVisible"> Selecionar elegíveis visíveis</label>
+      <span id="selectionCount">0 selecionados</span>
+      <button type="button" class="quiet" id="batch-resume" data-batch="resume" hidden>Retomar</button>
+      <button type="button" class="quiet" id="batch-cancel" data-batch="cancel" hidden>Cancelar</button>
+      <button type="button" class="quiet" id="batch-export" data-batch="export" hidden>Exportar</button>
+    </section>
+    <p id="actionStatus" tabindex="-1" class="status" role="status" aria-live="polite"></p>
     <p id="status" class="status" role="status" aria-live="polite">Carregando Projetos…</p>
     <section id="projects" class="project-grid" aria-label="Projetos"></section>
 

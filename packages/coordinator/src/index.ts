@@ -16,6 +16,8 @@ export class AbandonedError extends Error {
 export type CoordinatorRunOptions<T> = {
   id: string;
   stage: string;
+  /** Metadado de observação; não participa da identidade nem do single-flight. */
+  projectId?: string;
   priority?: TaskPriority;
   signal?: AbortSignal;
   /** Falhas não são memorizadas: o executor recebe o erro e seguidores podem tentar de novo. */
@@ -24,6 +26,8 @@ export type CoordinatorRunOptions<T> = {
 
 export type CoordinatorSlotOptions = {
   stage: string;
+  /** Metadado de observação; não participa da identidade nem do single-flight. */
+  projectId?: string;
   priority?: TaskPriority;
   signal?: AbortSignal;
 };
@@ -40,6 +44,8 @@ export type FileCoordinatorOptions = {
 export type FileCoordinator = {
   run<T>(opts: CoordinatorRunOptions<T>): Promise<T>;
   withSlot<T>(opts: CoordinatorSlotOptions, fn: () => Promise<T> | T): Promise<T>;
+  queue?(): Promise<CoordinatorQueueEntry[]>;
+  holders?(): Promise<CoordinatorHolderEntry[]>;
 };
 
 type TaskRecord = {
@@ -52,7 +58,13 @@ type TaskRecord = {
   result?: unknown;
 };
 
+export type CoordinatorHolderEntry = { projectId?: string; stage?: string; startedAt?: number };
+
+export type CoordinatorQueueEntry = { projectId?: string; stage?: string; position: number; at: number };
+
 type Waiter = {
+  projectId?: string;
+  stage?: string;
   waiterId: string;
   taskId: string;
   priority: TaskPriority;
@@ -62,7 +74,7 @@ type Waiter = {
   bypassed?: boolean;
 };
 
-type Slot = { leaseId: string; until: number };
+type Slot = { leaseId: string; until: number; projectId?: string; stage?: string; startedAt?: number };
 
 type Claim =
   | { kind: "done"; result: unknown }
@@ -114,7 +126,7 @@ function lockIsStale(content: string, mtimeMs: number, staleMs: number): boolean
   return !pidAlive(pid);
 }
 
-export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions = {}): FileCoordinator {
+export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions = {}): FileCoordinator & Required<Pick<FileCoordinator, "queue" | "holders">> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 1) {
     throw new Error("limite do coordenador precisa ser um inteiro >= 1");
@@ -265,8 +277,10 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
 
   const rank = (waiter: Waiter): number => (waiter.priority === "interactive" || waiter.bypassed ? 0 : 1);
 
+  const orderedWaiters = (waiters: Waiter[]): Waiter[] => [...waiters].sort((a, b) => rank(a) - rank(b) || a.at - b.at || a.waiterId.localeCompare(b.waiterId));
+
   const isHead = (waiters: Waiter[], waiterId: string): boolean => {
-    const ordered = [...waiters].sort((a, b) => rank(a) - rank(b) || a.at - b.at || a.waiterId.localeCompare(b.waiterId));
+    const ordered = orderedWaiters(waiters);
     return ordered[0]?.waiterId === waiterId;
   };
 
@@ -328,7 +342,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         const slot = await readSlot(i);
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
-        await writeSlot(i, { leaseId, until: t + leaseMs });
+        await writeSlot(i, { leaseId, until: t + leaseMs, projectId: waiter.projectId, stage: waiter.stage, startedAt: t });
         await writeWaiters(afterClaim(waiters, waiter));
         await writeTask({
           id: taskId,
@@ -357,7 +371,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
         const slot = await readSlot(i);
         if (slot && slot.until > t) continue;
         const leaseId = crypto.randomUUID();
-        await writeSlot(i, { leaseId, until: t + leaseMs });
+        await writeSlot(i, { leaseId, until: t + leaseMs, projectId: waiter.projectId, stage: waiter.stage, startedAt: t });
         await writeWaiters(afterClaim(waiters, waiter));
         return { index: i, leaseId };
       }
@@ -381,11 +395,26 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
   };
 
   return {
+    async holders() {
+      const slots = await Promise.all(Array.from({ length: limit }, (_, index) => readSlot(index)));
+      return slots.filter((slot): slot is Slot => slot !== null && slot.until > now()).map(slot => ({
+        ...(typeof slot.projectId === "string" ? { projectId: slot.projectId } : {}),
+        ...(typeof slot.stage === "string" ? { stage: slot.stage } : {}),
+        ...(Number.isFinite(slot.startedAt) ? { startedAt: slot.startedAt } : {}),
+      }));
+    },
+    async queue() {
+      return orderedWaiters(await readWaiters()).map((waiter, index) => ({
+        ...(typeof waiter.projectId === "string" ? { projectId: waiter.projectId } : {}),
+        ...(typeof waiter.stage === "string" ? { stage: waiter.stage } : {}),
+        position: index + 1, at: waiter.at,
+      }));
+    },
     async run<T>(runOpts: CoordinatorRunOptions<T>): Promise<T> {
       const priority = runOpts.priority ?? "batch";
       const waiterId = crypto.randomUUID();
       const enteredAt = now();
-      const waiter = { waiterId, taskId: runOpts.id, priority, at: enteredAt, seenAt: enteredAt };
+      const waiter = { waiterId, taskId: runOpts.id, projectId: runOpts.projectId, stage: runOpts.stage, priority, at: enteredAt, seenAt: enteredAt };
       liveHere.add(waiterId);
       try {
         await enqueue(waiter);
@@ -424,7 +453,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
               await writeTask({ ...current, leaseUntil: now() + leaseMs });
               const currentSlot = await readSlot(slot!.index);
               if (currentSlot?.leaseId === leaseId) {
-                await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
+                await writeSlot(slot!.index, { ...currentSlot, leaseId, until: now() + leaseMs });
               }
             }).catch(() => undefined);
           }, Math.max(10, Math.floor(leaseMs / 3)));
@@ -473,7 +502,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
       const priority = slotOpts.priority ?? "batch";
       const waiterId = crypto.randomUUID();
       const enteredAt = now();
-      const waiter = { waiterId, taskId: waiterId, priority, at: enteredAt, seenAt: enteredAt };
+      const waiter = { waiterId, taskId: waiterId, projectId: slotOpts.projectId, stage: slotOpts.stage, priority, at: enteredAt, seenAt: enteredAt };
       liveHere.add(waiterId);
       try {
         await enqueue(waiter);
@@ -502,7 +531,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
             void withLock(async () => {
               const current = await readSlot(slot!.index);
               if (current?.leaseId !== leaseId) return;
-              await writeSlot(slot!.index, { leaseId, until: now() + leaseMs });
+              await writeSlot(slot!.index, { ...current, leaseId, until: now() + leaseMs });
             }).catch(() => undefined);
           }, Math.max(10, Math.floor(leaseMs / 3)));
         }
@@ -529,4 +558,15 @@ function cancelled(reason?: unknown): CancelledError {
   const error = new CancelledError();
   if (reason instanceof Error) error.cause = reason;
   return error;
+}
+
+/** Vincula observabilidade sem trocar chave, prioridade, lease ou cancelamento. */
+export function coordinatorForProject(coordinator: FileCoordinator | undefined, projectId: string): FileCoordinator | undefined {
+  if (!coordinator) return undefined;
+  return {
+    run: opts => coordinator.run({ ...opts, projectId: opts.projectId ?? projectId }),
+    withSlot: (opts, build) => coordinator.withSlot({ ...opts, projectId: opts.projectId ?? projectId }, build),
+    ...(coordinator.queue ? { queue: () => coordinator.queue!() } : {}),
+    ...(coordinator.holders ? { holders: () => coordinator.holders!() } : {}),
+  };
 }

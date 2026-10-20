@@ -134,13 +134,14 @@ async function sourceUnchanged(
   workDir: string,
   saved: StoredSourceManifest | null,
   current: SourceManifest,
+  refreshManifest = true,
 ): Promise<boolean> {
   if (!saved || saved.path !== current.path || saved.size !== current.size) return false;
   if (saved.mtimeMs === current.mtimeMs) return true;
   if (!saved.sample) return false;
   const sample = await sourceSample(current.path, current.size).catch(() => null);
   if (sample !== saved.sample) return false;
-  await writeManifest(workDir, {
+  if (refreshManifest) await writeManifest(workDir, {
     ...current, sample,
     ...(saved.flow ? { flow: "limpeza" as const } : {}),
     ...(saved.displayName ? { displayName: saved.displayName } : {}),
@@ -202,7 +203,7 @@ export async function claimWorkDir(
  * vídeo com o app aberto misturaria o corte do vídeo antigo com a mídia nova.
  * Devolve a mensagem para quem pediu, ou `null` se a fonte é a mesma.
  */
-export async function sourceMismatch(workDir: string, input: string): Promise<string | null> {
+export async function sourceMismatch(workDir: string, input: string, opts: { refreshManifest?: boolean } = {}): Promise<string | null> {
   const source = await stat(input).catch(() => null);
   if (!source) {
     return `não consegui ler o vídeo em ${input}: ele foi movido ou apagado depois que o app abriu. ` +
@@ -210,7 +211,7 @@ export async function sourceMismatch(workDir: string, input: string): Promise<st
   }
   const saved = await readManifest(workDir);
   // A mesma função da subida: só o mtime mudado não é troca de vídeo.
-  if (await sourceUnchanged(workDir, saved, { path: input, size: source.size, mtimeMs: source.mtimeMs })) return null;
+  if (await sourceUnchanged(workDir, saved, { path: input, size: source.size, mtimeMs: source.mtimeMs }, opts.refreshManifest ?? true)) return null;
   return `o vídeo ${basename(input)} mudou depois que o app abriu (tamanho ou data diferentes do que ` +
     "foi transcrito). Nada foi gerado. Feche e abra o app de novo para transcrever a versão nova.";
 }

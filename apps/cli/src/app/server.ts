@@ -1,3 +1,5 @@
+import { readCoordinatorActivity, type RuntimeActivity } from "./hub-activity.ts";
+import { coordinatorForProject } from "@decupa/coordinator";
 import { initializeResourceLedger, safeSyncProject, type ResourceLedger } from "./resource-ledger.ts";
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
@@ -411,6 +413,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   // retomada e mensagens de erro ficam iguais nos dois lugares.
   const hubScripts = new Map<string, string>([
     ["/hub/page.js", await readFile(join(HERE, "hub", "page.js"), "utf8")],
+    ["/hub/batch.js", await readFile(join(HERE, "hub", "batch.js"), "utf8")],
     ["/hub/gaveta.js", await readFile(join(HERE, "hub", "gaveta.js"), "utf8")],
     ["/hub/media-upload.js", await readFile(join(HERE, "assembly", "editor", "media-upload.js"), "utf8")],
   ]);
@@ -461,13 +464,19 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           providerConfigDir: opts.providerConfigDir, fetchImpl: opts.fetchImpl, env,
           now: opts.now, speech: opts.speech, triageFn: opts.triageFn, autoStart: opts.autoStart,
           speechRuntime,
-          exec, coordinator, visualEnv, visualDir, readStored, loadStored: globalLoadStored,
+          exec, coordinator: coordinatorForProject(coordinator, dir), visualEnv, visualDir, readStored, loadStored: globalLoadStored,
           page: cleanupPage,
         });
         return {
-          handle: async (req, res) => { cleanupSetup.startIngest(); return cleanupSetup.runtime.handle(req, res); },
+          handle: async (req, res) => {
+            // Entrega de um plano persistido não reinicia o ingest ao abrir o runtime.
+            const outputRequest = /^\/jobs\/[^/]+\/(?:export|cancel|download)(?:\/|\?|$)/.test(req.url ?? "");
+            if (!outputRequest) cleanupSetup.startIngest();
+            return cleanupSetup.runtime.handle(req, res);
+          },
           onJevDisabled: cleanupSetup.onJevDisabled,
           isBusy: cleanupSetup.runtime.isBusy,
+          activity: cleanupSetup.activity,
           close: cleanupSetup.close,
         };
       }
@@ -478,7 +487,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         inputs: id === opts.projectId ? opts.inputs : undefined,
         speechRuntime,
         exec,
-        coordinator,
+        coordinator: coordinatorForProject(coordinator, dir),
         visualEnv,
         visualDir,
         readStored,
@@ -498,6 +507,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       return {
         handle: setup.runtime.handle,
         isBusy: setup.runtime.isBusy,
+        activity: setup.runtime.activity,
         onJevDisabled: () => cancelAssemblyFillerNotes(dir),
         close: async () => {
           await setup.runtime.close();
@@ -537,13 +547,14 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           sendJson(res, { error: "método inválido" }, 405);
           return;
         }
-        const entries = await listProjectRootEntries(projectsRoot, opts.now);
+        const entries = await listProjectRootEntries(projectsRoot, opts.now, { runtime: registry.activity, ...await readCoordinatorActivity(coordinator), env });
         sendJson(res, entries.map(project => ({
           id: project.id,
           nome: project.displayName,
           fluxo: project.flow,
           atualizadoEm: project.updatedAt,
           reserva: project.reservation,
+          ...(project.activity ? { atividade: project.activity } : {}),
           ...(project.problem ? { problema: project.problem } : {}),
         })));
         return;
@@ -738,6 +749,7 @@ type CleanupProjectRuntimeSetup = {
   closeSpeech: () => Promise<void>;
   close: () => Promise<void>;
   startIngest: () => void;
+  activity: () => RuntimeActivity;
   onJevDisabled: () => void | Promise<void>;
 };
 
@@ -754,7 +766,10 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   const speechSetup = opts.speechRuntime
     ? { ...opts.speechRuntime.attach(workDir), closeSpeech: async () => undefined }
     : attachResidentSpeech({ dir: workDir, speech: opts.speech, executorInjected: Boolean(opts.executor) });
-  const { speech, closeSpeech } = speechSetup;
+  const closeSpeech = speechSetup.closeSpeech;
+  const speech = speechSetup.speech ? { ...speechSetup.speech,
+    coordinator: opts.prefix ? coordinatorForProject(speechSetup.speech.coordinator, workDir) : speechSetup.speech.coordinator,
+  } : undefined;
   const ingestAbort = new AbortController();
 
   const store = new JobStore();
@@ -949,9 +964,11 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
       && !["ready", "error", "cancelled"].includes(store.get(job.id)!.stage))),
   });
   let initialIngestStarted = false;
+  let ingestStartedAt: number | null = null;
   const startIngest = (): void => {
     if (closing || opts.autoStart === false || initialIngestStarted) return;
     initialIngestStarted = true;
+    ingestStartedAt = (opts.now ?? Date.now)();
     ingestStarted = true;
     ingestFlight = ingest();
   };
@@ -970,6 +987,9 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
     return closing;
   };
   return { runtime, jobId: job.id, exec, closeSpeech, close, startIngest,
+    activity: () => ({ busy: runtime.isBusy(), cancellable: ingestInFlight && !ingestAbort.signal.aborted,
+      startedAt: ingestInFlight ? ingestStartedAt : null,
+      operation: { stage: ingestStarted ? store.get(job.id)?.stage ?? "idle" : "idle", progress: store.get(job.id)?.progress, error: store.get(job.id)?.error } }),
     onJevDisabled: () => { cleanup.cancelNotes(); return cleanup.refreshNotes(); } };
 }
 
@@ -1193,7 +1213,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
       describeClient: opts.describeClient ?? ((opts.allowPaidVisual || opts.providerConfigDir) ? transports.visualClient : undefined),
       resolveOperationDeps,
       fillerFetchImpl: opts.fetchImpl,
-      speech: speech.speech,
+      speech: speech.speech ? { ...speech.speech, coordinator: opts.prefix ? coordinatorForProject(speech.speech.coordinator, opts.dir) : speech.speech.coordinator } : undefined,
       coordinator: opts.coordinator,
       now: opts.now,
       identity: requestIdentity,

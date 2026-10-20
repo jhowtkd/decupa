@@ -1,3 +1,4 @@
+import { recoverInterruptedPreparation } from "./preparation-recovery.ts";
 import { SpaceCapacityError } from "../space.ts";
 import { autoFillerTargets, type FillerSnaps } from "./fillers.ts";
 import { planFillerSnaps } from "./filler-snaps.ts";
@@ -473,6 +474,7 @@ export async function sourceFromMedia(
 
 export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   let operation: AssemblyOperation = null;
+  let activityStartedAt: number | null = null;
   let fillerSnaps: FillerSnaps = {};
   let opGen = 0;
   let cancelled = false;
@@ -506,10 +508,19 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     return { operation };
   }
 
+  function alignmentActive(): boolean {
+    return [...alignActive].some(key => key.startsWith(`${dir}\0`));
+  }
+
+  function hasCancellableOperation(): boolean {
+    return Boolean(controller && !controller.signal.aborted && operation
+      && ["queued", "analyzing", "preparing", "rendering", "proposing"].includes(operation.stage))
+      || Boolean(preparationSignal && !preparationSignal.aborted)
+      || [...livePreviews].some(preview => !preview.signal.aborted);
+  }
+
   function hasActiveOperation(): boolean {
-    return (operation !== null && ["queued", "analyzing", "preparing", "rendering", "proposing"].includes(operation.stage))
-      || (preparationSignal !== null && !preparationSignal.aborted)
-      || [...alignActive].some((key) => key.startsWith(`${dir}\0`));
+    return hasCancellableOperation() || alignmentActive();
   }
 
   async function sendSnapshot(res: ServerResponse, body: Record<string, unknown>, status?: number, includeStale = false): Promise<void> {
@@ -535,6 +546,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     livePreviews.clear();
     controller = new AbortController();
     const gen = ++opGen;
+    activityStartedAt = (deps.now ?? Date.now)();
     operation = { stage, sourceId };
     return { gen, signal: controller.signal };
   }
@@ -546,6 +558,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     const own = new AbortController();
     livePreviews.add(own);
     const gen = ++opGen;
+    activityStartedAt = (deps.now ?? Date.now)();
     operation = { stage: "rendering" };
     return { gen, signal: own.signal, settle: () => { livePreviews.delete(own); } };
   }
@@ -791,27 +804,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       };
 
       if (parts.length === 1 && req.method === "GET") {
-        let project = await loadProject(dir);
-        if (project.preparation?.status === "running" && !isPreparationActive(dir)) {
-          try {
-            await saveProject(dir, project.revision, (current) => {
-              if (current.preparation?.status === "running") {
-                return {
-                  ...current,
-                  preparation: {
-                    ...current.preparation,
-                    status: "interrupted",
-                    error: "preparação interrompida: servidor reiniciado; clique em Retomar",
-                  },
-                };
-              }
-              return current;
-            });
-            project = await loadProject(dir);
-          } catch {
-            // Se falhou o salvamento atômico, devolve o que tem
-          }
-        }
+        const project = await recoverInterruptedPreparation(dir, await loadProject(dir));
         for (const correction of project.corrections) {
           if (correction.status === "pending" && !alignActive.has(alignKey(dir, correction.id))) {
             void alignCorrectionJob(dir, correction.id, project.revision, deps);
@@ -1925,6 +1918,8 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     ensureProject,
     handle: handleAssembly,
     isBusy: hasActiveOperation,
+    activity: () => ({ operation, busy: hasActiveOperation(), cancellable: hasCancellableOperation(), alignmentActive: alignmentActive(),
+      startedAt: hasCancellableOperation() ? activityStartedAt : null }),
     // O runtime não possui servidor nem porta. Encerrar significa apenas
     // interromper operações e prévias que ainda possam manter filhos vivos.
     close: async (): Promise<void> => {
