@@ -1,6 +1,7 @@
+import { withProjectSourceImports } from "./project-source-import.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { publishAtomic } from "@decupa/cache";
 import { processAlive } from "./space.ts";
 import { mapDisk, PROCESS_SESSION, withStorageLock } from "./storage-lock.ts";
@@ -13,8 +14,9 @@ export type ResourceOwner = {
   sessionId?: string;
 };
 type Entry = { owner: ResourceOwner; resources: string[] };
-type Snapshot = { version: 1; entries: Entry[]; problems: string[] };
-type DiskProject = { assembly?: { sources?: { sha256: string }[] }; path?: string };
+type Snapshot = { version: 1; entries: Entry[]; problems: string[]; releases?: Record<string, string[]> };
+export class CleanedResourceError extends Error {}
+type DiskProject = { assembly?: { sources?: { sha256: string; path?: string }[] }; path?: string };
 type DiskManifest = { sources?: Record<string, string> };
 export const mediaKey = (sha: string): string => `media:${sha}`;
 export const derivativeKey = (sha: string, kind: "proxy" | "analysis" | "vision", key: string): string => `${kind}:${sha}:${key}`;
@@ -26,6 +28,7 @@ type LedgerProblem = { message: string; previous?: LedgerProblem; cancelled?: bo
 const incomplete = new Map<string, Map<string, LedgerProblem>>();
 const snapshots = new Map<string, { stamp: string; value: Snapshot }>();
 const turns = new Map<string, Promise<unknown>>();
+const publicationTurns = new Map<string, Promise<unknown>>();
 const RECONCILING = "reconciliação pendente";
 function workAlive(owner: ResourceOwner): boolean {
   return processAlive(owner.pid ?? 0) && !(owner.pid === process.pid && owner.sessionId && owner.sessionId !== PROCESS_SESSION);
@@ -60,6 +63,7 @@ async function collectProjectResources(dir: string, project: DiskProject, signal
     }
     if (await stat(join(dir, "media", source.sha256, "proxy.mp4")).catch(() => null)) resources.push(derivativeKey(source.sha256, "proxy", "proxy.mp4"));
   }
+  for (const key of await directories(join(dir, "preview-cache"))) if (/^[a-f0-9]{64}$/.test(key)) resources.push(`preview:${resolve(dir)}:${key}`);
   return [...new Set(resources)];
 }
 export class ResourceLedger {
@@ -88,7 +92,18 @@ export class ResourceLedger {
         if (entry) entries.push(entry);
       } catch { problems.push(file); }
     }
-    return { version: 1, entries, problems };
+    const releases = await this.readReleases();
+    return { version: 1, entries: entries.map(entry => ({ ...entry, resources: entry.resources.filter(key => !releases[entry.owner.projectDir ?? ""]?.includes(key)) })), problems, releases };
+  }
+  private async readReleases(): Promise<Record<string, string[]>> {
+    const releases: Record<string, string[]> = {};
+    for (const file of await readdir(join(this.root, ".decupa", "resource-releases")).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; })) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const record = await json<{ projectDir: string; resources: string[] }>(join(this.root, ".decupa", "resource-releases", file));
+      if (!record || typeof record.projectDir !== "string" || !Array.isArray(record.resources) || record.resources.some(key => typeof key !== "string")) throw new Error("registro de limpeza ilegível");
+      releases[record.projectDir] = record.resources;
+    }
+    return releases;
   }
   private async write(snapshot: Snapshot) {
     await publishAtomic(this.path, JSON.stringify(snapshot, null, 2) + "\n", { durable: true });
@@ -124,6 +139,91 @@ export class ResourceLedger {
     if (this.pendingReconciliation && dirty?.get(scope) === this.pendingReconciliation) dirty.delete(scope);
     if (!dirty?.size) incomplete.delete(this.root);
   }
+  /** Publicação editorial e limpeza compartilham esta fronteira, sempre antes do references.lock. */
+  async withPublicationLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = () => withStorageLock(join(this.root, ".decupa", "publications.lock"), fn);
+    const turn = (publicationTurns.get(this.root) ?? Promise.resolve()).then(run, run);
+    const tracked = turn.catch(() => undefined); publicationTurns.set(this.root, tracked);
+    try { return await turn; } finally { if (publicationTurns.get(this.root) === tracked) publicationTurns.delete(this.root); }
+  }
+  async newProjectSources(dir: string, project: DiskProject): Promise<{ sha256: string; path?: string }[]> {
+    const current = await json<DiskProject>(join(dir, "project.json")).catch((error: unknown) => { if (error instanceof SyntaxError) return null; throw error; });
+    return (project.assembly?.sources ?? []).filter(source => !current?.assembly?.sources?.some(old => old.sha256 === source.sha256 && old.path === source.path));
+  }
+  async assertSourcePublication(dir: string, project: DiskProject): Promise<void> {
+    const sources = await this.newProjectSources(dir, project);
+    if (!sources.length) return;
+    const pending = await this.pendingCleanups();
+    const releases = await this.readReleases();
+    const canonical = async (path: string): Promise<string> => {
+      try { return await realpath(path); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; const parent = dirname(path); return parent === path ? path : join(await canonical(parent), basename(path)); }
+    };
+    for (const source of sources) {
+      if (!source.path) continue;
+      const path = await canonical(resolve(source.path));
+      for (const tx of pending) if (path.startsWith(`${await canonical(tx.projectDir)}${sep}`)) throw new CleanedResourceError("fonte em limpeza interrompida; reconcilie o Projeto de origem");
+      for (const [projectDir, keys] of Object.entries(releases)) if (keys.includes(mediaKey(source.sha256)) && path.startsWith(`${await canonical(projectDir)}${sep}`)
+        && !await stat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; })) {
+        throw new CleanedResourceError("fonte removida pela limpeza; escolha uma cópia preservada no acervo");
+      }
+    }
+  }
+  async resetProjectRelease(dir: string): Promise<void> {
+    await serial(this.root, async () => {
+      const snapshot = await this.read(); const releases = { ...snapshot.releases }; delete releases[resolve(dir)];
+      await rm(join(this.root, ".decupa", "resource-releases", `${createHash("sha256").update(resolve(dir)).digest("hex")}.json`), { force: true });
+      await this.write({ ...snapshot, releases });
+    });
+  }
+  async cleanupState(dir: string): Promise<{ resources: string[]; released: string[] }> {
+    await this.references("cleanup:completeness", dir);
+    const snapshot = await this.read();
+    return { resources: [...new Set(snapshot.entries.filter(entry => entry.owner.projectDir === resolve(dir)).flatMap(entry => entry.resources))], released: [...(snapshot.releases?.[resolve(dir)] ?? [])] };
+  }
+  private async pendingCleanups(): Promise<{ projectDir: string; resources: string[] }[]> {
+    const dir = join(this.root, ".decupa", "cleanup-transactions");
+    const files = await readdir(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+    const records: { projectDir: string; resources: string[] }[] = [];
+    for (const file of files.filter(file => /^[a-f0-9]{64}\.json$/.test(file))) {
+      const tx = await json<{ projectDir: string; resources: string[] }>(join(dir, file));
+      if (!tx) continue;
+      if (typeof tx.projectDir !== "string" || !Array.isArray(tx.resources) || tx.resources.some(key => typeof key !== "string")) throw new Error("ledger incompleto: transação de limpeza ilegível");
+      records.push(tx);
+    }
+    return records;
+  }
+  private async assertNoCleanup(opts: { projectDir?: string; resources?: string[]; all?: boolean } = {}): Promise<void> {
+    const pending = await this.pendingCleanups();
+    if (pending.some(tx => opts.all || tx.projectDir === opts.projectDir || opts.resources?.some(key => tx.resources.includes(key)))) throw new CleanedResourceError("limpeza interrompida ou em andamento; reinicie o Projeto de origem para reconciliar");
+  }
+  /** A confirmação usa a mesma exclusão de register/sync/reconcile. */
+  async withCleanupLock<T>(fn: (release: (dir: string, resources: string[]) => Promise<void>) => Promise<T>): Promise<T> {
+    return serial(this.root, () => fn(async (dir, resources) => {
+      const snapshot = await this.read();
+      const releases = { ...snapshot.releases, [resolve(dir)]: [...new Set([...(snapshot.releases?.[resolve(dir)] ?? []), ...resources])] };
+      await publishAtomic(join(this.root, ".decupa", "resource-releases", `${createHash("sha256").update(resolve(dir)).digest("hex")}.json`), JSON.stringify({ projectDir: resolve(dir), resources: releases[resolve(dir)] }) + "\n", { durable: true });
+      const entries = snapshot.entries.map(entry => entry.owner.projectDir === resolve(dir)
+        ? { ...entry, resources: entry.resources.filter(key => !resources.includes(key)) } : entry);
+      for (const entry of entries.filter(entry => entry.owner.projectDir === resolve(dir))) await publishAtomic(this.ownerPath(entry.owner.id), JSON.stringify(entry) + "\n", { durable: true });
+      await this.write({ ...snapshot, entries, releases });
+    }));
+  }
+  async pruneDeadDescriptors(): Promise<void> {
+    await serial(this.root, async () => {
+      for (const file of await readdir(this.ownersDir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; })) {
+        if (!file.endsWith(".json")) continue;
+        const entry = await json<Entry>(join(this.ownersDir, file)).catch(() => null);
+        if (entry?.owner.kind === "in-progress" && !workAlive(entry.owner)) await rm(join(this.ownersDir, file), { force: true }).catch(() => {});
+      }
+      const dir = join(this.root, ".reservations");
+      for (const file of await readdir(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; })) {
+        if (!file.endsWith(".json")) continue;
+        const owner = await json<{ pid?: number; sessionId?: string }>(join(dir, file)).catch(() => null);
+        if (owner && !workAlive({ id: file, kind: "in-progress", ...owner })) await rm(join(dir, file), { force: true }).catch(() => {});
+      }
+    });
+  }
   private async put(snapshot: Snapshot, entry: Entry) {
     const previous = snapshot.entries.find(e => e.owner.id === entry.owner.id);
     if (previous && JSON.stringify(previous.owner) === JSON.stringify(entry.owner)
@@ -132,12 +232,19 @@ export class ResourceLedger {
     await this.write({ ...snapshot, entries: [...snapshot.entries.filter(e => e.owner.id !== entry.owner.id), entry] });
   }
   async register(owner: ResourceOwner, resources: string[]): Promise<void> {
-    await serial(this.root, async () => this.put(await this.read(), { owner, resources: [...new Set(resources)] }));
+    await serial(this.root, async () => {
+      await this.assertNoCleanup({ projectDir: owner.projectDir, resources });
+      const snapshot = await this.read();
+      if (owner.projectDir && resources.some(key => snapshot.releases?.[resolve(owner.projectDir!)]?.includes(key))) throw new CleanedResourceError("mídias deste Projeto já foram limpas; crie um novo Projeto para reutilizá-las");
+      await this.put(snapshot, { owner, resources: [...new Set(resources)] });
+    });
   }
   async addResources(owner: ResourceOwner, resources: string[]): Promise<void> {
     await serial(this.root, async () => {
+      await this.assertNoCleanup({ projectDir: owner.projectDir, resources });
       const snapshot = await this.read();
       const current = snapshot.entries.find(e => e.owner.id === owner.id);
+      if (owner.projectDir && resources.some(key => snapshot.releases?.[resolve(owner.projectDir!)]?.includes(key))) throw new CleanedResourceError("mídias deste Projeto já foram limpas");
       await this.put(snapshot, { owner, resources: [...new Set([...(current?.resources ?? []), ...resources])] });
     });
   }
@@ -156,17 +263,26 @@ export class ResourceLedger {
     });
   }
   /** Limpeza futura deve abortar se algum manifesto não pôde ser reconciliado. */
-  async references(key: string): Promise<ResourceOwner[]> {
+  async references(key: string, projectDir?: string): Promise<ResourceOwner[]> {
+    await this.assertNoCleanup({ projectDir, resources: [key], all: key === "cleanup:completeness" && !projectDir });
     const snapshot = await this.read();
     if (incomplete.get(this.root)?.size) throw new Error(`ledger incompleto: ${[...incomplete.get(this.root)!.values()].map(problem => problem.message).join(", ")}`);
     if (snapshot.problems?.length) throw new Error(`ledger incompleto: ${snapshot.problems.join(", ")}`);
     return snapshot.entries.filter(e => e.resources.includes(key) && (e.owner.kind !== "in-progress" || workAlive(e.owner))).map(e => ({ ...e.owner }));
   }
   async hasWork(dir: string): Promise<boolean> {
+    try { await this.assertNoCleanup({ projectDir: projectDirectoryForPath(dir) }); } catch { return true; }
     if (incomplete.get(this.root)?.size) return true;
     try {
       const snapshot = await this.read();
-      return Boolean(snapshot.problems?.length) || snapshot.entries.some(e => e.owner.kind === "in-progress" && e.owner.projectDir === projectDirectoryForPath(dir) && workAlive(e.owner));
+      if (snapshot.problems?.length) return true;
+      const active = snapshot.entries.filter(e => e.owner.kind === "in-progress" && workAlive(e.owner));
+      const projectDir = projectDirectoryForPath(dir);
+      if (active.some(e => e.owner.projectDir === projectDir)) return true;
+      if (!active.length) return false;
+      const canonical = await realpath(projectDir).catch(() => projectDir);
+      for (const entry of active) if (entry.owner.projectDir && await realpath(entry.owner.projectDir).catch(() => entry.owner.projectDir) === canonical) return true;
+      return false;
     } catch (error) { this.markIncomplete(error, dir); return true; }
   }
   async syncProject(dir: string, project: DiskProject): Promise<void> {
@@ -174,7 +290,7 @@ export class ResourceLedger {
       const resources = await collectProjectResources(dir, project);
       const snapshot = await this.read();
       const owner: ResourceOwner = { id: `project:${resolve(dir)}`, kind: "project", projectDir: resolve(dir) };
-      await this.put(snapshot, { owner, resources });
+      await this.put(snapshot, { owner, resources: resources.filter(key => !snapshot.releases?.[resolve(dir)]?.includes(key)) });
     });
   }
   async reconcile(opts: { signal?: AbortSignal } = {}): Promise<void> {
@@ -192,7 +308,7 @@ export class ResourceLedger {
       check();
       const dirs = this.projectDir ? [this.projectDir] : this.projectsRoot ? (await directories(this.projectsRoot)).map(id => join(this.projectsRoot!, id)) : [];
       const dirSet = new Set(dirs);
-      const previous = await this.read().catch(() => ({ version: 1 as const, entries: [], problems: [] }));
+      const previous: Snapshot = await this.read().catch(() => ({ version: 1 as const, entries: [], problems: [] }));
       const owns = (owner: ResourceOwner) => owner.projectDir !== undefined && (
         this.projectDir ? resolve(owner.projectDir) === this.projectDir
           : this.projectsRoot ? dirname(resolve(owner.projectDir)) === this.projectsRoot : false
@@ -202,6 +318,13 @@ export class ResourceLedger {
       const withinScope = (path: string) => this.projectDir ? resolve(path) === this.projectDir : this.projectsRoot ? resolve(path) === this.projectsRoot || dirname(resolve(path)) === this.projectsRoot : false;
       const problems: string[] = (previous.problems ?? []).filter(path => path.includes("/") && !withinScope(path));
       const files = await readdir(this.ownersDir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+      const releases = await this.readReleases();
+      for (const projectDir of Object.keys(releases)) if (owns({ id: "release", kind: "project", projectDir }) && !await stat(projectDir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; })) {
+        check();
+        await rm(join(this.root, ".decupa", "resource-releases", `${createHash("sha256").update(projectDir).digest("hex")}.json`), { force: true });
+        delete releases[projectDir];
+      }
+      check();
       const durableOwners = new Map<string, string>();
       await mapDisk(files.filter(f => f.endsWith(".json")), async file => {
         check();
@@ -254,6 +377,7 @@ export class ResourceLedger {
         return found;
       });
       for (const found of derived) for (const entry of found) entries.set(entry.owner.id, entry);
+      for (const entry of entries.values()) entry.resources = entry.resources.filter(key => !releases[entry.owner.projectDir ?? ""]?.includes(key));
       // Também persiste detentores derivados: outro escopo consegue refazer
       // o índice inteiro quando o arquivo de índice é perdido.
       await mapDisk([...entries.values()], async entry => {
@@ -262,7 +386,7 @@ export class ResourceLedger {
         if (durableOwners.get(entry.owner.id) !== payload) await publishAtomic(this.ownerPath(entry.owner.id), payload + "\n", { durable: true });
       });
       check();
-      await this.write({ version: 1, entries: [...entries.values()], problems });
+      await this.write({ version: 1, entries: [...entries.values()], problems, releases });
       const dirty = incomplete.get(this.root);
       for (const scope of dirty?.keys() ?? []) if (withinScope(scope) || (!this.projectDir && !this.projectsRoot && scope === this.root)) dirty!.delete(scope);
       if (!dirty?.size) incomplete.delete(this.root);
@@ -317,6 +441,28 @@ export async function withResourceWork<T>(dir: string, kind: "preparation" | "re
   const projectDir = projectDirectoryForPath(dir);
   const ledger = resourceLedgerForProject(projectDir); const id = `in-progress:${kind}:${randomUUID()}`;
   try { await ledger.register({ id, kind: "in-progress", projectDir, pid: process.pid, sessionId: PROCESS_SESSION }, sources.map(s => mediaKey(s.sha256))); }
-  catch (error) { ledger.markIncomplete(error, projectDir); }
+  catch (error) { if (error instanceof CleanedResourceError) throw error; ledger.markIncomplete(error, projectDir); }
   try { return await fn(); } finally { try { await ledger.release(id); } catch (error) { ledger.markIncomplete(error, projectDir); } }
+}
+
+/** Protege a publicação e a sincronização posterior, sem converter falha pós-commit em falha editorial. */
+export async function withProjectResourcePublication<T>(dir: string, project: DiskProject, publish: () => Promise<T>, opts: { creating?: boolean } = {}): Promise<T> {
+  const ledger = resourceLedgerForProject(dir);
+  const sources = await ledger.newProjectSources(dir, project);
+  // Metadados não dependem da disponibilidade do ledger antes do commit.
+  if (!sources.length && !opts.creating) return publish();
+  if (!sources.length && opts.creating) {
+    const receipt = join(ledger.root, ".decupa", "resource-releases", `${createHash("sha256").update(resolve(dir)).digest("hex")}.json`);
+    const exists = await stat(receipt).catch(() => null);
+    if (!exists) return publish();
+  }
+  return ledger.withPublicationLock(async () => {
+    await ledger.assertSourcePublication(dir, project);
+    if (opts.creating && !await stat(join(dir, "project.json")).catch(() => null)) await ledger.resetProjectRelease(dir);
+    return withProjectSourceImports(dir, ledger.root, sources, async owner => {
+      const canonicalRoot = await realpath(ledger.root).catch(() => ledger.root);
+      if (await realpath(storageRootForProject(owner)).catch(() => storageRootForProject(owner)) === canonicalRoot) return true;
+      return Boolean(ledger.projectsRoot && dirname(owner) === await realpath(ledger.projectsRoot).catch(() => ledger.projectsRoot));
+    }, publish);
+  });
 }

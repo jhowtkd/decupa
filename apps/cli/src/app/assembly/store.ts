@@ -1,5 +1,5 @@
 import { deriveLifecycle, validateLifecycle } from "../project-lifecycle.ts";
-import { safeSyncProject } from "../resource-ledger.ts";
+import { safeSyncProject, withProjectResourcePublication } from "../resource-ledger.ts";
 import { pruneFillerExceptions, validateFillerCuts } from "./filler-store.ts";
 import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts";
 import { validateAnimationNotes } from "./handoff.ts";
@@ -601,8 +601,10 @@ export function validateProject(value: unknown): Project {
 
 async function writeAtomic(dir: string, project: Project): Promise<void> {
   project.lifecycle = await deriveLifecycle(dir, project.lifecycle, { project });
-  await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`, { durable: true });
-  await safeSyncProject(dir, project);
+  await withProjectResourcePublication(dir, project, async () => {
+    await publishAtomic(projectPath(dir), `${JSON.stringify(project, null, 2)}\n`, { durable: true });
+    await safeSyncProject(dir, project);
+  });
 }
 
 /** Versão anterior do project.json, regravada a cada saveProject. */
@@ -670,14 +672,16 @@ export async function createProject(dir: string, initial: unknown): Promise<void
     await acquireLock(dir);
     try {
       try {
-        const handle = await open(projectPath(dir), "wx");
-        try {
-          await handle.writeFile(`${JSON.stringify(project, null, 2)}\n`);
-          await handle.sync();
-          await safeSyncProject(dir, project);
-        } finally {
-          await handle.close();
-        }
+        await withProjectResourcePublication(dir, project, async () => {
+          const handle = await open(projectPath(dir), "wx");
+          try {
+            await handle.writeFile(`${JSON.stringify(project, null, 2)}\n`);
+            await handle.sync();
+            await safeSyncProject(dir, project);
+          } finally {
+            await handle.close();
+          }
+        }, { creating: true });
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (code === "EEXIST") throw new Error("projeto já existe");
