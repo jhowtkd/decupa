@@ -3,7 +3,9 @@ import { planFillerSnaps } from "./filler-snaps.ts";
 import { observeAssemblyFillers, type FillerObserveDeps } from "./filler-observe.ts";
 import type { AssemblyDecisionContext } from "./assembly-decisions.ts";
 import { createHash } from "node:crypto";
+import { readFile, unlink } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
+import { publishAtomic } from "@decupa/cache";
 import { createOperationMetrics, instrumentCoordinator, instrumentSpeechWorker, type OperationMetrics } from "@decupa/bench";
 import { hashFile } from "@decupa/media";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
@@ -13,7 +15,7 @@ import { ensurePlayback, verifySourceIdentity } from "./media.ts";
 import { describeSource, type VisualMetric } from "./model.ts";
 import { renderAssembly } from "./render.ts";
 import { applyProposalWithFillers, proposalProject, recordPreview } from "./revisions.ts";
-import { proposeScenes } from "./scenes.ts";
+import { proposeScenes, proposalStateKey } from "./scenes.ts";
 import { loadProject, mergeAnalyses, saveProject, writeHistorySnapshot } from "./store.ts";
 import { visualCoverage } from "./visual.ts";
 import { buildPeaks, peaksPath } from "./waveform.ts";
@@ -592,12 +594,40 @@ async function runPreparationOperation(
 
         await atStage("proposal");
         checkAlive();
+        const proposalBase = structuredClone(current);
+        const proposalBaseKey = proposalStateKey(proposalBase);
+        const assertProposalBase = (project: Project): void => {
+          if (proposalStateKey(project) !== proposalBaseKey) {
+            throw new Error("entrada da proposta mudou durante a preparação; edição preservada, retome para prosseguir");
+          }
+        };
+        const checkpointPath = join(dir, ".decupa", "proposal-checkpoint.json");
         let proposal;
         try {
-          proposal = await proposeScenes(current, req.request, signal, { send: operationDeps.proposeSend!, decision: operationDeps.decision, onDecision: async (note) => {
-            checkAlive();
-            await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
-          } });
+          proposal = await proposeScenes(proposalBase, req.request, signal, {
+            send: operationDeps.proposeSend!, decision: operationDeps.decision,
+            configKey: operationDeps.proposalConfigKey ?? operationDeps.fillerConfigKey,
+            checkpoint: {
+              load: async () => {
+                try { return JSON.parse(await readFile(checkpointPath, "utf8")) as unknown; }
+                catch (error) {
+                  if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                  throw error;
+                }
+              },
+              save: async (checkpoint) => {
+                checkAlive();
+                const fresh = await loadProject(dir);
+                if (fresh.preparation?.id !== id) throw new ObsoleteExit();
+                assertProposalBase(fresh);
+                await publishAtomic(checkpointPath, `${JSON.stringify(checkpoint)}\n`, { durable: true });
+                checkAlive();
+              },
+            }, onDecision: async (note) => {
+              checkAlive();
+              await save(p => ({...p, preparation: p.preparation ? {...p.preparation, note} : null}));
+            },
+          });
         } catch (err) {
           checkAlive();
           return await markTerminal(
@@ -607,22 +637,27 @@ async function runPreparationOperation(
         }
         checkAlive();
         try {
-          const proposed = proposalProject(current, proposal);
+          const proposed = proposalProject(proposalBase, proposal);
           const snaps = await planFillerSnaps(proposed, autoFillerTargets(proposed, req.mode === "prepare" ? undefined : proposal.changedSceneIds), { exec: deps.exec, signal });
           checkAlive();
-          await writeHistorySnapshot(dir, current);
+          assertProposalBase(await loadProject(dir));
+          await writeHistorySnapshot(dir, proposalBase);
           checkAlive();
           // As cenas trocadas viram um passo do desfazer. Só o Preparar marca a
           // revisão: o Ajuste com IA parte das cenas atuais, e marcá-lo
           // dispensaria a confirmação de um Retomar depois de edições à mão.
           await saveProject(dir, current.revision, (p) => {
             if (p.preparation?.id !== id) return p;
+            // Functional saveProject callbacks run on the latest bytes, even
+            // when expectedRevision is stale. Check inside the writer as well.
+            assertProposalBase(p);
             const scoped = req.mode === "prepare" ? { ...proposal, changedSceneIds: proposal.scenes.map(s => s.id) } : proposal;
             const next = applyProposalWithFillers(p, scoped, snaps);
             const undone = recordUndo(p, next, req.mode === "adjust" ? "Ajuste com IA" : "Preparar montagem");
             return req.mode === "prepare" ? { ...undone, preparedRevision: next.revision } : undone;
           });
           current = await loadProject(dir);
+          if (current.preparation?.id === id) await unlink(checkpointPath).catch(() => undefined);
         } catch (err) {
           checkAlive();
           return await markTerminal(

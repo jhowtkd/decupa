@@ -24,7 +24,8 @@ export function operationResolver(opts: {
     const transports = resolveAppTransports({ stored, env, fetchImpl: opts.fetchImpl, describeClient: opts.describeClient });
     // Só uma impressão privada para distinguir tentativas com chaves diferentes.
     const fillerConfigKey = createHash("sha256").update(JSON.stringify([env.TYPESAFE_API_KEY, env.DECUPA_TYPESAFE, decision.model, decision.mode])).digest("hex");
-    return { decision, fillerEnv: env, fillerConfigKey,
+    const proposalConfigKey = createHash("sha256").update(JSON.stringify([transports.textKey, fillerConfigKey, raw])).digest("hex");
+    return { decision, fillerEnv: env, fillerConfigKey, proposalConfigKey,
       ...(opts.proposeSend || opts.enableText ? { proposeSend: opts.proposeSend ?? transports.textSend } : {}),
       describeClient: opts.enableVisual ? transports.visualClient : undefined };
   };

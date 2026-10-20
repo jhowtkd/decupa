@@ -2,8 +2,9 @@ import { approvedSnapshot, validateTemplateReport } from "../templates/store.ts"
 import type { Recipe } from "../templates/types.ts";
 import { validateAnimationNotes } from "./handoff.ts";
 import { selectBroll } from "./broll.ts";
-import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, validateDecisionReport } from "./assembly-decisions.ts";
-import { randomUUID } from "node:crypto";
+import { decideAssemblyCuts, resolveCutCandidates, type AssemblyDecisionContext, type CutCandidate, validateDecisionReport } from "./assembly-decisions.ts";
+import { createHash, randomUUID } from "node:crypto";
+import type { TypeSafeRequest, TypeSafeResult } from "@decupa/typesafe";
 import type { Executor } from "../pipeline.ts";
 import { createAnalysisClient } from "@decupa/triage";
 import type {
@@ -507,11 +508,65 @@ export function effectiveSpanText(project: Project, sourceId: string, span: Span
   return words.map((word) => word.text).join(" ");
 }
 
+// Bump when changing decision prompts, candidate construction or replay semantics.
+const PROPOSAL_CHECKPOINT_VERSION = 1;
+
+export type ProposalCheckpoint = {
+  version: 1;
+  key: string;
+  generated: { text: string; proposalId: string; candidates: CutCandidate[] };
+  decisions: Record<string, TypeSafeResult>;
+  requests?: Record<string, TypeSafeRequest>;
+};
+
+export type ProposalCheckpointStore = {
+  load: () => Promise<unknown>;
+  save: (checkpoint: ProposalCheckpoint) => Promise<void>;
+};
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+/** Excludes preparation progress and preview artifacts, which do not edit the input. */
+export function proposalStateKey(project: Project): string {
+  return fingerprint({
+    id: project.id, revision: project.revision, input: project.input,
+    assembly: project.assembly, scenes: project.scenes, analyses: project.analyses,
+    corrections: project.corrections, template: project.template,
+    fillerExceptions: project.fillerExceptions, proposal: project.proposal,
+  });
+}
+
+/** Same validation used by cuts/support before accepting a completed batch. */
+function validCheckpointDecision(value: unknown, request: TypeSafeRequest): value is TypeSafeResult {
+  if (!isRecord(value) || typeof value.model !== "string" || !isRecord(value.answers)) return false;
+  return Object.entries(request.questions).every(([id, question]) => {
+    const answer = value.answers && (value.answers as Record<string, unknown>)[id];
+    if (!isRecord(answer) || answer.type !== question.type) return false;
+    const probability = question.type === "noul" ? answer.noul : answer.confidence;
+    if (typeof probability !== "number" || !Number.isFinite(probability) || probability < 0 || probability > 1) return false;
+    return question.type === "noul" || (typeof answer.choice === "string" && Object.hasOwn(question.criteria, answer.choice));
+  });
+}
+
+function validCheckpointRequest(value: unknown): value is TypeSafeRequest {
+  if (!isRecord(value) || !isRecord(value.questions) || (value.model !== undefined && typeof value.model !== "string")) return false;
+  return Object.values(value.questions).every(question => {
+    if (!isRecord(question) || typeof question.instructions !== "string") return false;
+    if (question.type === "choice") {
+      return isRecord(question.criteria) && Object.values(question.criteria).every(item => item === null || typeof item === "string");
+    }
+    return question.type === "noul" && (question.criteria === undefined ||
+      (isRecord(question.criteria) && typeof question.criteria.true === "string" && typeof question.criteria.false === "string"));
+  });
+}
+
 export async function proposeScenes(
   project: Project,
   input: string,
   signal: AbortSignal,
-  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void> },
+  deps?: { send: (content: unknown[], signal?: AbortSignal) => Promise<string>; model?: string; configKey?: string; template?: Recipe | null; decision?: AssemblyDecisionContext; onDecision?: (note: string) => Promise<void>; checkpoint?: ProposalCheckpointStore },
   _exec?: Executor,
 ): Promise<Proposal> {
   const client = deps ?? {
@@ -587,7 +642,13 @@ export async function proposeScenes(
       ].join("\n\n"),
     },
   ];
-  const generated = await requestValidated(content, (parts, requestSignal) => client.send(parts, requestSignal), (text) => {
+  const context = deps?.decision ?? {mode:"off" as const,model:"jev-latest"};
+  const key = deps?.checkpoint ? fingerprint({
+    version: PROPOSAL_CHECKPOINT_VERSION, state: proposalStateKey(snapshot), content,
+    model: deps?.model ?? null, config: deps?.configKey ?? null,
+    decision: { mode: context.mode, model: context.model, configured: Boolean(context.client) },
+  }) : "";
+  const parseGenerated = (text: string, proposalId: string) => {
     const raw = parseModelJson(text) as Record<string, unknown>;
     if (Array.isArray(raw.scenes)) raw.scenes = raw.scenes.map((item: Record<string, unknown>) => {
       const previous = snapshot.scenes.find(s => s.id === item.id);
@@ -595,17 +656,89 @@ export async function proposeScenes(
       if (!previous?.support.length && Array.isArray(item.support) && item.support.length) throw Error("apoio novo deve ser escolhido pelo Jev, retorne support vazio");
       return item;
     });
-    const proposal = validateProposal({ ...raw, template, templateReport:template?raw.templateReport:[], id: randomUUID(), baseRevision: snapshot.revision }, snapshot);
+    const proposal = validateProposal({ ...raw, template, templateReport:template?raw.templateReport:[], id: proposalId, baseRevision: snapshot.revision }, snapshot);
     return {proposal, candidates: resolveCutCandidates(snapshot, proposal, raw.cutCandidates)};
-  }, signal);
+  };
+  signal.throwIfAborted();
+  let checkpoint: ProposalCheckpoint | undefined;
+  let generated: ReturnType<typeof parseGenerated> | undefined;
+  if (deps?.checkpoint) {
+    const cached = await deps.checkpoint.load();
+    signal.throwIfAborted();
+    if (isRecord(cached) && cached.version === PROPOSAL_CHECKPOINT_VERSION && cached.key === key &&
+        isRecord(cached.generated) && typeof cached.generated.text === "string" &&
+        typeof cached.generated.proposalId === "string" && isRecord(cached.decisions)) {
+      try {
+        const restored = parseGenerated(cached.generated.text, cached.generated.proposalId);
+        if (canonical(restored.candidates) === canonical(cached.generated.candidates)) {
+          generated = restored;
+          checkpoint = { version: PROPOSAL_CHECKPOINT_VERSION, key,
+            generated: { text: cached.generated.text, proposalId: cached.generated.proposalId, candidates: restored.candidates },
+            decisions: {}, requests: {} };
+          // Keep valid later batches when a preceding batch must be retried.
+          // Store the original request so validation does not depend on visit order.
+          if (isRecord(cached.requests)) {
+            for (const [batchKey, request] of Object.entries(cached.requests)) {
+              const response = cached.decisions[batchKey];
+              if (validCheckpointRequest(request) && fingerprint(request) === batchKey && validCheckpointDecision(response, request)) {
+                checkpoint.requests![batchKey] = structuredClone(request);
+                checkpoint.decisions[batchKey] = structuredClone(response);
+              }
+            }
+          }
+        }
+      } catch { /* Invalid or obsolete text/candidates are never replayed. */ }
+    }
+  }
+  if (!generated) {
+    const proposalId = randomUUID();
+    let validatedText = "";
+    generated = await requestValidated(content, (parts, requestSignal) => client.send(parts, requestSignal), (text) => {
+      const result = parseGenerated(text, proposalId);
+      validatedText = text;
+      return result;
+    }, signal);
+    checkpoint = { version: PROPOSAL_CHECKPOINT_VERSION, key,
+      generated: { text: validatedText, proposalId, candidates: generated.candidates }, decisions: {}, requests: {} };
+    await deps?.checkpoint?.save(structuredClone(checkpoint));
+  }
   signal.throwIfAborted();
   if (generated.candidates.length && deps?.decision?.client && deps.decision.mode !== "off") await deps.onDecision?.("Jev avaliando cortes");
   const decisionProject = {...snapshot, preparation: snapshot.preparation ? {...snapshot.preparation, request: input} : null};
   // O pedido adicional também existe na rota legada, sem Preparation persistida.
   if (!decisionProject.preparation) decisionProject.preparation = {id:"decision",revision:snapshot.revision,mode:"adjust",request:input,status:"running",stage:"proposal",sources:{}};
-  const context = deps?.decision ?? {mode:"off" as const,model:"jev-latest"};
-  const decided = await decideAssemblyCuts(decisionProject, generated.proposal, generated.candidates, context, signal);
-  return selectBroll(decisionProject, decided, context, signal, () => deps?.onDecision?.("Jev escolhendo imagens de apoio") ?? Promise.resolve());
+  // Replay through the existing cut/support algorithms: candidates, thresholds,
+  // protection and tournament order retain exactly the same policy.
+  let persistenceError: unknown;
+  let persistenceFailed = false;
+  const decisionClient = context.client;
+  const cachedContext: AssemblyDecisionContext = !deps?.checkpoint || !decisionClient ? context : {
+    ...context, client: { decide: async (request, requestSignal) => {
+      signal.throwIfAborted();
+      if (persistenceFailed) throw persistenceError;
+      const batchKey = fingerprint(request);
+      const cached = checkpoint?.decisions[batchKey];
+      if (validCheckpointDecision(cached, request)) {
+        checkpoint!.decisions[batchKey] = structuredClone(cached);
+        return structuredClone(cached);
+      }
+      const response = await decisionClient.decide(request, requestSignal);
+      signal.throwIfAborted();
+      if (validCheckpointDecision(response, request)) {
+        checkpoint!.decisions[batchKey] = structuredClone(response);
+        checkpoint!.requests![batchKey] = structuredClone(request);
+        try { await deps.checkpoint!.save(structuredClone(checkpoint!)); }
+        catch (error) { persistenceFailed = true; persistenceError = error; throw error; }
+      }
+      return response;
+    } },
+  };
+  const decided = await decideAssemblyCuts(decisionProject, generated.proposal, generated.candidates, cachedContext, signal);
+  if (persistenceFailed) throw persistenceError;
+  const supported = await selectBroll(decisionProject, decided, cachedContext, signal, () => deps?.onDecision?.("Jev escolhendo imagens de apoio") ?? Promise.resolve());
+  if (persistenceFailed) throw persistenceError;
+  signal.throwIfAborted();
+  return supported;
 }
 
 export function setSceneSupport(project: Project, sceneId: string, support: Scene["support"]): Scene[] {
