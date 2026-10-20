@@ -43,8 +43,9 @@ class PrepareModelsTest(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"whisperx": whisper}):
             spec.loader.exec_module(module)
-        with patch.object(sys, "argv", ["transcribe.py", "--prepare-models"]):
+        with patch.object(sys, "argv", ["transcribe.py", "--prepare-models"]), patch.object(module, "prepare_punkt") as prepare:
             self.assertEqual(module.main(), 0)
+            prepare.assert_called_once_with()
             whisper.load_model.assert_called_once_with("small", "cpu", compute_type="int8", language="pt")
             whisper.load_align_model.assert_called_once_with(language_code="pt", device="cpu")
             whisper.load_audio.assert_not_called()
@@ -54,6 +55,20 @@ class PrepareModelsTest(unittest.TestCase):
                 self.assertEqual(module.main(), 1)
             self.assertEqual(error.getvalue().splitlines()[-1], "falha ao preparar modelos de fala: download interrompido")
             self.assertNotIn("Traceback", error.getvalue())
+
+    def test_missing_tokenizer_aborts_before_loading_models(self):
+        whisper = Mock()
+        spec = importlib.util.spec_from_file_location("decupa_transcribe_punkt", Path(__file__).with_name("transcribe.py"))
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"whisperx": whisper}):
+            spec.loader.exec_module(module)
+        with patch.object(sys, "argv", ["transcribe.py", "--prepare-models"]), \
+             patch.object(module, "prepare_punkt", side_effect=RuntimeError("punkt_tab indisponível")), \
+             patch.object(sys, "stderr", io.StringIO()) as error:
+            self.assertEqual(module.main(), 1)
+        whisper.load_model.assert_not_called()
+        whisper.load_align_model.assert_not_called()
+        self.assertIn("punkt_tab indisponível", error.getvalue())
 
 
 if __name__ == "__main__":

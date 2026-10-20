@@ -23,6 +23,7 @@ import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { isCancelledError } from "@decupa/queue";
 import { SpeechWorkerInterruptedError, validateAlignmentCoverage } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
+import { ensurePreviewPlayback } from "./preview-playback.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
 import type { Executor, IngestSpeech } from "../pipeline.ts";
@@ -491,6 +492,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
   // /cancel ou por outra operação, deixa de valer.
   let preparationSignal: AbortSignal | null = null;
   const livePreviews = new Set<AbortController>();
+  const playbackLifetime = new AbortController();
+  const playbackPreparations = new Set<Promise<string>>();
+  let previewPlaybackState: { key: string; failed: boolean } | undefined;
   const templateProposalPath=join(dir,"template-proposal.json");
   const speechProposalPath=join(dir,"speech-proposal.json");
   const supportSwapPath=join(dir,"support-swap.json");
@@ -964,8 +968,38 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!artifact || String(artifact.revision) !== parts[2]) throw new HttpError(404, "prévia não registrada");
         const path = join(dir, artifact.relativePath);
         if (isAbsolute(artifact.relativePath) || relative(dir, path).startsWith("..")) throw new HttpError(404, "prévia inválida");
-        try { await serveMedia(req, res, path); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "prévia ausente: gere novamente"); throw error; }
+        // Falha de uma otimização não bloqueia a referência nem repete FFmpeg a cada Range.
+        const key = `${project.revision}:${artifact.revision}:${artifact.sha256}`;
+        if (previewPlaybackState?.key !== key) previewPlaybackState = { key, failed: false };
+        const playback = previewPlaybackState;
+        const signal = AbortSignal.any([requestSignal(), playbackLifetime.signal]);
+        const metrics = createOperationMetrics({ dir: join(dir, ".decupa", "metrics"), metadata: { operation: "preview-playback" } });
+        const preparing = (async () => {
+          signal.throwIfAborted();
+          if (playback.failed) {
+            metrics.emit("preview-playback-fallback", { reason: "previous-conversion-error" });
+            return path;
+          }
+          try {
+            return await ensurePreviewPlayback(path, deps.exec, {
+              coordinator: deps.coordinator, cacheDir: join(dir, `rev-${artifact.revision}`), sha256: artifact.sha256,
+              signal, onCacheMetric: metric => metrics.emit("cache", metric),
+            });
+          } catch (error) {
+            signal.throwIfAborted();
+            if (isCancelledError(error)) throw error;
+            playback.failed = true;
+            return path;
+          }
+        })().finally(() => metrics.close());
+        playbackPreparations.add(preparing);
+        try {
+          const servedPath = await preparing;
+          // A medição termina com o preparo; streaming/Range não prolonga o journal.
+          await serveMedia(req, res, servedPath);
+        }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "prévia ausente: gere novamente"); throw mediaError(error); }
+        finally { playbackPreparations.delete(preparing); }
         return true;
       }
       if (parts[1] === "output" && req.method === "GET") {
@@ -1953,9 +1987,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     // O runtime não possui servidor nem porta. Encerrar significa apenas
     // interromper operações e prévias que ainda possam manter filhos vivos.
     close: async (): Promise<void> => {
+      playbackLifetime.abort();
       abortOperations();
       livePreviews.clear();
-      await Promise.allSettled(packageDownloads);
+      await Promise.allSettled([...packageDownloads, ...playbackPreparations]);
       await drainProjectWrites(dir);
     },
     snapshot,

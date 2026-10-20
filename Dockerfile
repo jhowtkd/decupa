@@ -102,6 +102,18 @@ RUN if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
     && mkdir -p /home/decupa/.cache /home/decupa/.decupa /data/projects /data/media \
     && chown -R decupa:decupa /home/decupa /data /opt/decupa
 
+# Dados NLTK são separados dos pacotes Python. Instalar fora de /root permite
+# que o usuário de runtime encontre o tokenizador sem downloads na transcrição.
+COPY services/speech/prepare_nltk.py services/speech/prepare_nltk.py
+RUN services/speech/.venv/bin/python services/speech/prepare_nltk.py \
+    --download-dir /usr/local/share/nltk_data
+
+# MediaPipe carrega GLES/EGL mesmo com delegate CPU. O import Python não
+# exercita esse carregamento; o preparo dos modelos abaixo valida o grafo real.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y libgles2 libegl1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # O pnpm liga os pacotes do workspace em node_modules de cada pacote; sem
 # eles, `@decupa/*` não resolve. `packages/` desta etapa só tem package.json e
 # node_modules, e o código chega pelo `COPY . .` logo abaixo.
@@ -124,6 +136,8 @@ ENV HOME=/home/decupa \
 VOLUME ["/home/decupa/.cache", "/home/decupa/.decupa", "/data/projects", "/data/media"]
 
 USER decupa
+RUN services/speech/.venv/bin/python services/speech/prepare_nltk.py --check \
+    && services/vision/.venv/bin/python services/vision/visual_index.py --prepare-models
 EXPOSE 7788
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
   CMD curl --fail --silent http://127.0.0.1:7788/healthz || exit 1

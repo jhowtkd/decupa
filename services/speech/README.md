@@ -18,8 +18,17 @@ O CLI acima continua sendo o processo único por arquivo. O worker residente
 Escreve JSON em stdout. Tempo sempre em milissegundo inteiro — o lado
 TypeScript nunca vê segundo fracionário.
 
-O setup da raiz executa `--prepare-models` para baixar e carregar Whisper small,
-VAD e alinhamento PT-BR antes do primeiro vídeo, reutilizando o cache.
+O setup da raiz executa `--prepare-models` para instalar e validar o tokenizador
+NLTK `punkt_tab` em português antes de baixar e carregar Whisper small, VAD e
+alinhamento PT-BR. Se o recurso não puder ser instalado ou lido, o setup falha.
+Dados já válidos são reutilizados sem novo download.
+
+A imagem Docker instala esses dados em `/usr/local/share/nltk_data` durante o
+build e valida sua leitura como o usuário `decupa`, sem rede. Para verificar
+uma instalação existente sem baixar dados:
+
+    uv run --no-sync python prepare_nltk.py --check
+
 Outros idiomas/modelos ainda podem exigir downloads no processamento.
 Se ele mudar de nome ou sumir, é aqui que se conserta, mantendo o formato de
 saída intacto.

@@ -22,6 +22,8 @@ import sys
 
 import whisperx
 
+from prepare_nltk import prepare_punkt
+
 # O contrato de saída exige JSON puro no stdout. O WhisperX configura o logger
 # "whisperx" com um StreamHandler(sys.stdout) (whisperx.log_utils), o que vaza
 # linhas de log para o stdout e quebraria o parse no lado TypeScript.
@@ -57,6 +59,8 @@ def main() -> int:
 
     if args.prepare_models:
         try:
+            print("Preparando tokenizador de frases em português (NLTK punkt_tab)...", file=sys.stderr, flush=True)
+            prepare_punkt()
             print("Preparando Whisper e detector de fala (CPU)...", file=sys.stderr, flush=True)
             asr = load_asr(args)
             del asr

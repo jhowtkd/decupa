@@ -220,13 +220,15 @@ it("serve módulos editor sem build", async () => {
 it("serve a prévia registrada pela rota própria sem oferecê-la como download exportado", async () => {
   const { base, dir } = await boot();
   await mkdir(join(dir, "rev-2"), { recursive: true });
-  await writeFile(join(dir, "rev-2", "reference.mp4"), "preview-bytes");
+  await copyFile(join(FIXTURES, "clip.mp4"), join(dir, "rev-2", "reference.mp4"));
+  const sha256 = createHash("sha256").update(await readFile(join(dir, "rev-2", "reference.mp4"))).digest("hex");
   await saveProject(dir, 0, current => ({ ...current, previewRevision: 2,
-    previewArtifact: { revision: 2, relativePath: "rev-2/reference.mp4", sha256: "a".repeat(64), assemblySha256: "b".repeat(64) } }));
+    previewArtifact: { revision: 2, relativePath: "rev-2/reference.mp4", sha256, assemblySha256: "b".repeat(64) } }));
   expect((await fetch(`${base}/project/output/2/mp4`)).status).toBe(404);
   const res = await fetch(`${base}/project/preview/2`);
   expect(res.status).toBe(200);
-  expect(await res.text()).toBe("preview-bytes");
+  expect(res.headers.get("content-type")).toContain("video/mp4");
+  expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
 });
 
 it("não chama o provedor visual sem visual=true mesmo com cliente injetado", async () => {

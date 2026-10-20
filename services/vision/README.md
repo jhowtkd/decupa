@@ -24,3 +24,9 @@ delegate CPU. O grafo roda em CPU.
 
 Se o MediaPipe não estiver instalado, o script sai com código ≠ 0 e uma
 mensagem em português apontando para este README.
+
+Na imagem Docker, `libgles2` e `libegl1` são necessárias mesmo usando o delegate
+CPU do MediaPipe. O build executa `--prepare-models` como usuário `decupa`:
+baixa os modelos e abre os dois landmarkers, validando as bibliotecas nativas.
+Um simples `import mediapipe` não detecta bibliotecas ausentes como
+`libGLESv2.so.2` e `libEGL.so.1`.
