@@ -1,7 +1,8 @@
+import { createSpaceManager, withCapacityLock as sharedCapacityLock } from "./space.ts";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
-  mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile,
+  mkdir, open, readdir, readFile, rename, rm, stat, writeFile,
   type FileHandle,
 } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -20,7 +21,6 @@ const JSON_LIMIT = 1024 * 1024;
 const DEFAULT_MAX_GB = 20;
 const DEFAULT_PART_BYTES = 20 * 1024 * 1024;
 const DEFAULT_TTL_HOURS = 24;
-const SPACE_MARGIN_BYTES = 15 * 1024 ** 3;
 
 type ImportStage = "download" | "validation";
 interface ImportQueueState {
@@ -33,7 +33,6 @@ interface ImportQueueState {
  * O deployment tem um único processo serve por raiz; não é um lock entre
  * processos. Runtimes do mesmo PID compartilham a admissão do acervo.
  */
-const capacityLocks = new Map<string, Promise<unknown>>();
 
 interface ImportJob {
   task: Promise<void>;
@@ -284,6 +283,7 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
   const staging = opts.staging ?? createR2Staging(env);
   const drive = opts.drive ?? createDriveImport(env);
   const root = resolve(opts.root);
+  const space = createSpaceManager(root);
   const pool = join(root, "pool");
   const temporary = join(root, ".tmp");
   const completed = join(root, ".completed");
@@ -375,50 +375,11 @@ export async function createMediaRuntime(opts: MediaRuntimeOptions): Promise<Med
     finally { if (locks.get(`hash:${id}`) === current) locks.delete(`hash:${id}`); }
   }
 
-  async function withCapacityLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = capacityLocks.get(root) ?? Promise.resolve();
-    const current = previous.then(fn, fn);
-    capacityLocks.set(root, current);
-    try { return await current; }
-    finally { if (capacityLocks.get(root) === current) capacityLocks.delete(root); }
-  }
+  const withCapacityLock = sharedCapacityLock;
 
   async function assertCapacity(id: string, candidate: UploadState): Promise<void> {
-    try {
-      const paths = [temporary, pool];
-      const devices = await Promise.all(paths.map(async path => String((await stat(path)).dev)));
-      const needed = new Map<string, number>();
-      const add = (dev: string, bytes: number) => needed.set(dev, (needed.get(dev) ?? 0) + bytes);
-      const states: [string, UploadState][] = [[id, candidate]];
-      for (const entry of await readdir(temporary, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !uploadId(entry.name) || entry.name === id) continue;
-        const state = await readState(entry.name).catch(() => null);
-        if (state?.reserva) states.push([entry.name, state]);
-      }
-      // Pico de ingestão: V restante em .tmp + V adicional em pool. No mesmo
-      // device são 2V; em devices distintos, V em cada. O parcial materializado
-      // já reduz bavail e é abatido da reserva. R+B pertence ao orçamento de
-      // render, fora deste runtime. Leia os parciais ANTES de statfs: uma escrita
-      // concorrente entre as leituras pode apenas tornar a conta conservadora.
-      for (const [upload, state] of states) {
-        const size = await stat(partialPath(upload)).then(file => file.size, () => 0);
-        add(devices[0]!, Math.max(0, state.tamanhoTotal - size));
-        add(devices[1]!, state.tamanhoTotal);
-      }
-      const checked = new Set<string>();
-      for (let index = 0; index < paths.length; index++) {
-        const dev = devices[index]!;
-        if (checked.has(dev)) continue;
-        checked.add(dev);
-        const usage = await statfs(paths[index]!);
-        const available = Number(usage.bavail) * Number(usage.bsize);
-        if (!Number.isFinite(available) || available < (needed.get(dev) ?? 0) + SPACE_MARGIN_BYTES) {
-          throw new Error("capacidade insuficiente");
-        }
-      }
-    } catch {
-      throw new UploadHttpError(507, "não há espaço suficiente no volume de Mídias");
-    }
+    try { await space.assertUpload(id, candidate.tamanhoTotal); }
+    catch { throw new UploadHttpError(507, "não há espaço suficiente no volume de Mídias"); }
   }
 
   async function reserve(id: string): Promise<void> {

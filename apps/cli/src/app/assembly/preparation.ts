@@ -1,3 +1,4 @@
+import { withResourceWork } from "../resource-ledger.ts";
 import { autoFillerTargets } from "./fillers.ts";
 import { planFillerSnaps } from "./filler-snaps.ts";
 import { observeAssemblyFillers, type FillerObserveDeps } from "./filler-observe.ts";
@@ -124,7 +125,8 @@ async function withPreparationLock<T>(dir: string, fn: (contended: boolean) => P
   if (prev) await prev.catch(() => undefined);
   prepActive.set(dir, (prepActive.get(dir) ?? 0) + 1);
   try {
-    return await fn(contended);
+    const project = await loadProject(dir);
+    return await withResourceWork(dir, "preparation", project.assembly.sources, () => fn(contended));
   } finally {
     prepActive.set(dir, Math.max(0, (prepActive.get(dir) ?? 1) - 1));
     release();

@@ -1,3 +1,4 @@
+import { SpaceCapacityError } from "../space.ts";
 import { autoFillerTargets, type FillerSnaps } from "./fillers.ts";
 import { planFillerSnaps } from "./filler-snaps.ts";
 import { assemblyFillerSnapshot, type FillerObserveDeps } from "./filler-observe.ts";
@@ -40,7 +41,7 @@ import {
 } from "./revisions.ts";
 import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
-import { createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
+import { drainProjectWrites, createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
 import type { Assembly, Project, Source } from "./types.ts";
 import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
@@ -1905,6 +1906,10 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
       if (err instanceof Error && err.message === "revisão desatualizada") {
         await sendSnapshot(res, { error: err.message }, 409); return true;
       }
+      if (err instanceof SpaceCapacityError) {
+        sendJson(res, { error: err.message }, err.status);
+        return true;
+      }
       if (err instanceof HttpError) {
         await sendSnapshot(res, { error: err.message }, err.status);
         return true;
@@ -1925,6 +1930,7 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     close: async (): Promise<void> => {
       abortOperations();
       livePreviews.clear();
+      await drainProjectWrites(dir);
     },
     snapshot,
   };

@@ -1,3 +1,4 @@
+import type { ProjectLifecycle } from "../project-lifecycle.ts";
 import type { Recipe } from "../templates/types.ts";
 import type { FillerCategory } from "@decupa/triage";
 export type Rate = { num: number; den: number };
@@ -239,6 +240,7 @@ export type PreviewArtifact = {
 };
 
 export type Project = {
+  lifecycle?: ProjectLifecycle;
   fillerExceptions?: { wordId: string; text: string }[];
   template?: Recipe | null;
   /** Relatório da receita aceita — acompanha template; persiste até a próxima proposta de template. */

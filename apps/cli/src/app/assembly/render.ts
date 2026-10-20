@@ -1,3 +1,4 @@
+import { withResourceWork } from "../resource-ledger.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { access, copyFile, link, mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -213,7 +214,7 @@ async function publishTurn<T>(outDir: string, fn: () => Promise<T>): Promise<T> 
   }
 }
 
-export async function renderAssembly(
+async function renderAssemblyOperation(
   a: Assembly,
   outDir: string,
   exec: Executor,
@@ -360,4 +361,10 @@ export async function renderAssembly(
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Protect sources while queued as well as during render and publication. */
+export async function renderAssembly(...args: Parameters<typeof renderAssemblyOperation>): Promise<string> {
+  const [assembly, dir] = args;
+  return withResourceWork(dir, "render", assembly.sources, () => renderAssemblyOperation(...args));
 }

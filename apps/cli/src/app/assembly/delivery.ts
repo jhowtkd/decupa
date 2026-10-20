@@ -1,6 +1,7 @@
+import { mediaKey, resourceLedgerForProject, withResourceWork } from "../resource-ledger.ts";
 import {createHash, randomUUID} from "node:crypto";
 import {mkdir,readFile,rename,stat,writeFile} from "node:fs/promises";
-import {join} from "node:path";
+import {join,resolve} from "node:path";
 import {createServer} from "node:net";
 import {fileURLToPath} from "node:url";
 import type {Executor} from "../pipeline.ts";
@@ -23,7 +24,7 @@ export async function readDelivery(dir:string,revision:number):Promise<DeliveryR
 /** Teto da ponte com o Resolve: um diálogo modal ou a API sem resposta prendiam a porta 47789 para sempre. */
 export const DELIVERY_TIMEOUT_MS=15*60_000;
 const durationLabel=(ms:number)=>ms%60_000===0?`${ms/60_000} minutos`:`${Math.ceil(ms/1000)} s`;
-export async function deliverApproved(project:Project,dir:string,exec:Executor,signal:AbortSignal,options:{exportDrp?:boolean;newCopy?:boolean;timeoutMs?:number}={}):Promise<DeliveryRecord>{
+async function deliverApprovedOperation(project:Project,dir:string,exec:Executor,signal:AbortSignal,options:{exportDrp?:boolean;newCopy?:boolean;timeoutMs?:number}={}):Promise<DeliveryRecord>{
  if(project.finalApprovedRevision!==project.revision)throw Error("aprovação final desatualizada");
  // ponytail: one local Resolve session; the OS releases this mutex on process death.
  const lock=createServer(socket=>socket.destroy());
@@ -46,6 +47,8 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   record={operationId,revision:project.revision,assemblySha256:createHash("sha256").update(JSON.stringify(project.assembly)).digest("hex"),status:"running",stage:"connecting",created:false,projectName:same?previous.projectName:`${project.assembly.name.slice(0,70)}-${project.id.slice(0,8)}-r${project.revision}-${operationId.slice(0,8)}`,pid:process.pid,...(previousReady?{previousReady}:{}),...(same&&previous.drpPath?{drpPath:previous.drpPath}:{})};
   if(same&&previous.assemblySha256!==record.assemblySha256)throw Error("montagem difere da entrega registrada");
   activeOperationId=operationId;active.add(operationId);await atomic(recordPath(dir,project.revision),record);
+  const ledger=resourceLedgerForProject(dir);
+  try{await ledger.register({id:`delivery:${dir}:${project.revision}`,kind:"delivery",projectDir:dir},project.assembly.sources.map(s=>mediaKey(s.sha256)));}catch(error){ledger.markIncomplete(error,dir);}
   const requestPath=join(root,`request-${operationId}.json`);
   const drpPath=options.exportDrp?join(root,`project-${operationId}.drp`):undefined;
   await atomic(requestPath,{...record,mode,projectId:project.id,otioPath:join(dest,"timeline.otio"),assembly:project.assembly,handoff:buildHandoff(project),drpPath});
@@ -75,4 +78,10 @@ export async function deliverApproved(project:Project,dir:string,exec:Executor,s
   if(record&&record.status!=="ready"){record={...(previousReady??record),status:previousReady?"ready":"error",error:error instanceof Error?error.message:String(error)};await atomic(recordPath(dir,project.revision),record);}
   throw error;
  }finally{if(activeOperationId)active.delete(activeOperationId);await new Promise<void>(resolve=>lock.close(()=>resolve()));}
+}
+
+export async function deliverApproved(...args: Parameters<typeof deliverApprovedOperation>): Promise<DeliveryRecord> {
+ args[1]=resolve(args[1]);
+ const [project,dir]=args;
+ return withResourceWork(dir,"export",project.assembly.sources,()=>deliverApprovedOperation(...args));
 }

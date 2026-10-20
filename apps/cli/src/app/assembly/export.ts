@@ -1,3 +1,7 @@
+import { publishAtomic } from "@decupa/cache";
+import { createSpaceManager, type SpaceClaim } from "../space.ts";
+import { mediaKey, projectRuntimeContext, resourceLedgerForProject, storageRootForProject, withResourceWork } from "../resource-ledger.ts";
+import { transitionLifecycle } from "../project-lifecycle.ts";
 import { buildHandoff } from "./handoff.ts";
 import { buildSubtitles } from "./subtitles.ts";
 import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
@@ -11,7 +15,7 @@ import { buildOtio } from "./otio.ts";
 import { hashFile, probe } from "@decupa/media";
 import { verifySourceIdentity } from "./media.ts";
 import { timelineDurationMismatch } from "./render.ts";
-import { loadProject, missingMedia } from "./store.ts";
+import { loadProject, missingMedia, saveProject } from "./store.ts";
 import type { Project } from "./types.ts";
 
 async function sha256(path: string): Promise<string> {
@@ -90,13 +94,17 @@ export async function confirmImportVerification(project: Project, dir: string): 
       reference: typeof manifest.reference === "string" ? manifest.reference : undefined,
     },
     origem: "manual",
-    confirmadaEm: new Date().toISOString(),
+    confirmadaEm: new Date((projectRuntimeContext(dir).now ?? Date.now)()).toISOString(),
     // O status das legendas sobrevive à confirmação (o manifest a tem).
     legendas: (manifest.legendas as VerificationRecord["legendas"]) ?? null,
   };
-  await writeFile(join(dest, "verificacao.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await publishAtomic(join(dest, "verificacao.json"), `${JSON.stringify(record, null, 2)}\n`, { durable: true });
   manifest.verificacao = "confirmada";
-  await writeFile(join(dest, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await publishAtomic(join(dest, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { durable: true });
+  await saveProject(dir, project.revision, current => {
+    if (current.revision !== project.revision || current.finalApprovedRevision !== project.revision) throw new Error("revisão mudou durante a confirmação");
+    return { ...current, lifecycle: transitionLifecycle(current.lifecycle!, "entregue", Date.parse(record.confirmadaEm!), current.revision) };
+  });
   return record;
 }
 
@@ -226,7 +234,7 @@ export function importInstructions(project: Project): string {
   ].join("\n");
 }
 
-export async function exportApproved(project: Project, dir: string): Promise<string> {
+async function exportApprovedOperation(project: Project, dir: string): Promise<string> {
   if (project.finalApprovedRevision !== project.revision) {
     throw new Error("aprovação final desatualizada");
   }
@@ -372,6 +380,23 @@ export async function exportApproved(project: Project, dir: string): Promise<str
     // Prepara e valida toda a substituta ANTES de retirar a entrega
     // existente: falha de gravação nunca apaga o destino anterior (R4).
     const tmp = join(dir, "exports", `.tmp-${project.revision}-${process.pid}-${Date.now()}`);
+    const destDevice = (await stat(dir)).dev;
+    const copyClaims: SpaceClaim[] = [
+      { path: dir, bytes: (await stat(reference)).size, materializedPath: join(tmp, "reference.mp4") },
+      { path: dir, bytes: Buffer.byteLength(otioText) + Buffer.byteLength(handoffText) + Buffer.byteLength(instructionsText) + 1024 * 1024 },
+    ];
+    const copyAliases = new Set<string>();
+    for (const alias of aliases) {
+      const sourceInfo = await stat(alias.sourcePath);
+      if (sourceInfo.dev !== destDevice) {
+        copyAliases.add(alias.relativePath);
+        copyClaims.push({ path: dir, bytes: sourceInfo.size, materializedPath: join(tmp, alias.relativePath) });
+      }
+    }
+    // Retorno idempotente acima não reserva nem grava. No mesmo volume,
+    // aliases são hardlinks; só a cópia real consome reserva de bytes.
+    const reservation = await createSpaceManager(storageRootForProject(dir)).reserve(`export:${project.revision}`, copyClaims);
+    try {
     try {
       await mkdir(tmp, { recursive: true });
       const otioPath = join(tmp, "timeline.otio");
@@ -398,6 +423,11 @@ export async function exportApproved(project: Project, dir: string): Promise<str
         try {
           await link(alias.sourcePath, target);
         } catch {
+          if (!copyAliases.has(alias.relativePath)) {
+            copyClaims.push({ path: dir, bytes: (await stat(alias.sourcePath)).size, materializedPath: target });
+            await reservation.update(copyClaims);
+            copyAliases.add(alias.relativePath);
+          }
           await copyFile(alias.sourcePath, target);
         }
       }
@@ -465,7 +495,19 @@ export async function exportApproved(project: Project, dir: string): Promise<str
       throw err;
     }
     return dest;
+    } finally { await reservation(); }
   } finally {
     await unlink(lock).catch(() => {});
   }
+}
+
+export async function exportApproved(project: Project, dir: string): Promise<string> {
+  return withResourceWork(dir, "export", project.assembly.sources, async () => {
+    const dest = await exportApprovedOperation(project, dir);
+    const ledger = resourceLedgerForProject(dir);
+    try {
+      await ledger.register({ id: `export:${resolve(dir)}:${project.revision}`, kind: "export", projectDir: resolve(dir) }, project.assembly.sources.map(s => mediaKey(s.sha256)));
+    } catch (error) { ledger.markIncomplete(error, dir); }
+    return dest;
+  });
 }
