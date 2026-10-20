@@ -1,4 +1,6 @@
-import { initializeResourceLedger, safeSyncProject, type ResourceLedger } from "./resource-ledger.ts";
+import { reconcileProjectCleanups } from "./project-cleanup.ts";
+import { createProjectCleanupRoutes } from "./hub/cleanup-routes.ts";
+import { initializeResourceLedger, safeSyncProject, CleanedResourceError, type ResourceLedger } from "./resource-ledger.ts";
 import { createTemplateRuntime } from "./templates/routes.ts";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -448,6 +450,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     }
     await binding;
   } : undefined;
+  const projectCleanup = createProjectCleanupRoutes({ ledger, projectsRoot, now: opts.now, env });
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
     now: opts.now,
@@ -532,6 +535,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         res.end(hubScript);
         return;
       }
+      if (await projectCleanup.handle(req, res, url)) return;
       if (url.pathname === "/api/projects") {
         if (req.method !== "GET") {
           sendJson(res, { error: "método inválido" }, 405);
@@ -644,7 +648,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   boundPort = port;
 
   const reconciliationAbort = new AbortController();
-  const reconciliation = ledger.reconcile({ signal: reconciliationAbort.signal }).catch(error => {
+  const reconciliation = reconcileProjectCleanups(ledger, { signal: reconciliationAbort.signal }).catch(error => { if (!(error instanceof CleanedResourceError)) throw error; }).then(() => ledger.reconcile({ signal: reconciliationAbort.signal })).catch(error => {
     if (reconciliationAbort.signal.aborted && error === reconciliationAbort.signal.reason) ledger.cancelPendingReconciliation();
     else ledger.markIncomplete(error);
   });
@@ -655,7 +659,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     close: async () => {
       reconciliationAbort.abort();
       const killed = exec instanceof SpawnExecutor ? exec.terminateAll() : Promise.resolve();
-      const runtimesClosed = registry.close();
+      const runtimesClosed = projectCleanup.close().then(() => registry.close());
       const speechClosed = speechRuntime.close();
       const mediaClosed = media?.close() ?? Promise.resolve();
       const authClosed = auth.close();
@@ -1320,7 +1324,7 @@ async function startAssemblyApp(opts: {
   boundPort = port;
 
   const reconciliationAbort = new AbortController();
-  const reconciliation = ledger.reconcile({ signal: reconciliationAbort.signal }).catch(error => {
+  const reconciliation = reconcileProjectCleanups(ledger, { signal: reconciliationAbort.signal }).catch(error => { if (!(error instanceof CleanedResourceError)) throw error; }).then(() => ledger.reconcile({ signal: reconciliationAbort.signal })).catch(error => {
     if (reconciliationAbort.signal.aborted && error === reconciliationAbort.signal.reason) ledger.cancelPendingReconciliation();
     else ledger.markIncomplete(error);
   });
