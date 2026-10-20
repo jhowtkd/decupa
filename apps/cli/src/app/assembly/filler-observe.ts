@@ -19,8 +19,10 @@ export type FillerObserveDeps = {
   fillerEnv?: Record<string, string | undefined>;
   fillerFetchImpl?: typeof fetch;
   fillerConfigKey?: string;
+  /** Effective text/decision identity, captured once for proposal checkpoints. */
+  proposalConfigKey?: string;
   resolveOperationDeps?: () => Promise<{ decision: AssemblyDecisionContext; fillerEnv: Record<string, string | undefined>;
-    fillerConfigKey?: string; describeClient?: VisualClient; proposeSend?: VisualClient["send"] }>;
+    fillerConfigKey?: string; proposalConfigKey?: string; describeClient?: VisualClient; proposeSend?: VisualClient["send"] }>;
 };
 
 type Envelope = { generation: string; notes: FillerNote[]; eligible: number; excess: number };
