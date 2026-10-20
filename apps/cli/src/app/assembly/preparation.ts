@@ -54,6 +54,8 @@ export type PreparationControl = {
 };
 
 const PREVIEW_IMAGE_PENDING_NOTE = "prévia aguardando proxy e waveform";
+export const CORRECTION_SETTLE_TIMEOUT_MS = 30_000;
+const CORRECTION_SETTLE_POLL_MS = 250;
 const TERMINAL = new Set(["ready", "attention", "interrupted", "cancelled"]);
 
 class CancelledExit extends Error {
@@ -333,6 +335,17 @@ async function runPreparationOperation(
 
       const byId = new Map<string, Source>(current.assembly.sources.map((source) => [source.id, source]));
       const targets = included.filter((source) => byId.has(source.id));
+      const assertSourcesPresent = async (project: Project): Promise<void> => {
+        const missing = targets.filter((source) =>
+          !project.assembly.sources.some((item) => item.id === source.id));
+        if (missing.length > 0) {
+          await markTerminal(
+            "interrupted",
+            `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
+          );
+          throw new InterruptedExit();
+        }
+      };
 
       // Rebase sobre a revisão atual: a edição passou na frente e o save
       // com a revisão capturada falha; aplica fn sobre o estado novo.
@@ -343,8 +356,6 @@ async function runPreparationOperation(
           checkAlive();
           const fresh = await loadProject(dir);
           if (fresh.preparation?.id !== id) throw new ObsoleteExit();
-          const missing = targets.filter((source) =>
-            !fresh.assembly.sources.some((item) => item.id === source.id));
           try {
             await saveProject(dir, fresh.revision, (p) =>
               p.preparation?.id === id ? fn(p) : p);
@@ -352,13 +363,7 @@ async function runPreparationOperation(
             if (!(err instanceof Error) || !/revisão desatualizada/.test(err.message)) throw err;
             continue;
           }
-          if (missing.length > 0) {
-            await markTerminal(
-              "interrupted",
-              `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
-            );
-            throw new InterruptedExit();
-          }
+          await assertSourcesPresent(fresh);
           return;
         }
         await markTerminal("interrupted", "edição concorrente durante a preparação; retome para prosseguir");
@@ -381,15 +386,7 @@ async function runPreparationOperation(
         }
         current = await loadProject(dir);
         if (current.preparation?.id !== id) throw new ObsoleteExit();
-        const missing = targets.filter((source) =>
-          !current.assembly.sources.some((item) => item.id === source.id));
-        if (missing.length > 0) {
-          await markTerminal(
-            "interrupted",
-            `fonte removida durante a preparação: ${missing.map((s) => s.id).join(", ")}; retome para prosseguir`,
-          );
-          throw new InterruptedExit();
-        }
+        await assertSourcesPresent(current);
       };
       const atStage = async (stage: Preparation["stage"]): Promise<void> => {
         metrics.emit("stage", { stage });
@@ -558,42 +555,71 @@ async function runPreparationOperation(
         // cobertura mantém a etapa incompleta e impede proposta/render;
         // Retomar solicita só o faltante. O progresso segue persistido;
         // prosseguir sem a fonte exige excluí-la explicitamente do conjunto.
-        const blocked = targets.filter((source) => {
-          const state = current.preparation?.sources[source.id];
-          if (!state) return true;
-          if (state.media !== "ready" || state.audio !== "ready") return true;
-          if (source.hasVideo && deps.describeClient) {
-            if (state.visual !== "ready") return true;
-            const coverage = current.analyses.find((item) => item.sourceId === source.id)?.visualCoverage;
-            if (!coverage || coverage.missing.length > 0) return true;
-          }
-          const analysis = current.analyses.find((item) => item.sourceId === source.id);
-          if (!analysis || analysis.status !== "ready") return true;
-          return false;
-        });
-        if (blocked.length > 0) {
-          return await markTerminal(
-            "interrupted",
-            `análise necessária pendente nas fontes: ${blocked.map((source) => {
-              const state = current.preparation?.sources[source.id];
-              const analysis = current.analyses.find((item) => item.sourceId === source.id);
+        const proposalBlockedReason = (project: Project): string | null => {
+          const includedIds = new Set(project.assembly.sources.filter((source) => source.included).map((source) => source.id));
+          const blocked = targets.filter((source) => includedIds.has(source.id)).filter((source) => {
+            const state = project.preparation?.sources[source.id];
+            if (!state) return true;
+            if (state.media !== "ready" || state.audio !== "ready") return true;
+            if (source.hasVideo && deps.describeClient) {
+              if (state.visual !== "ready") return true;
+              const coverage = project.analyses.find((item) => item.sourceId === source.id)?.visualCoverage;
+              if (!coverage || coverage.missing.length > 0) return true;
+            }
+            const analysis = project.analyses.find((item) => item.sourceId === source.id);
+            if (!analysis || analysis.status !== "ready") return true;
+            return false;
+          });
+          if (blocked.length > 0) {
+            return `análise necessária pendente nas fontes: ${blocked.map((source) => {
+              const state = project.preparation?.sources[source.id];
+              const analysis = project.analyses.find((item) => item.sourceId === source.id);
               const cause = state?.audio !== "ready" && analysis?.error
                 ? analysis.error
                 : state?.error ?? "evidência necessária incompleta";
               return `${source.id} (${source.name}): ${cause}`;
-            }).join("; ")}; retome ou exclua a fonte para prosseguir`,
-          );
-        }
+            }).join("; ")}; retome ou exclua a fonte para prosseguir`;
+          }
 
-        const speechTotal = current.analyses
-          .filter((analysis) => byId.get(analysis.sourceId)?.included !== false)
-          .flatMap((analysis) => analysis.speech).length;
-        if (speechTotal === 0) {
-          return await markTerminal("interrupted", "sem fala transcrita nas fontes incluídas");
-        }
+          const speechTotal = project.analyses
+            .filter((analysis) => includedIds.has(analysis.sourceId))
+            .flatMap((analysis) => analysis.speech).length;
+          if (speechTotal === 0) return "sem fala transcrita nas fontes incluídas";
+          return null;
+        };
+        const blockedReason = proposalBlockedReason(current);
+        if (blockedReason) return await markTerminal("interrupted", blockedReason);
 
         await atStage("proposal");
         checkAlive();
+        // P4 pode estar aguardando o slot que a análise de áudio acabou de
+        // liberar. Espere sem adquirir slot pesado antes de pagar pelo texto:
+        // o assentamento muda as palavras efetivas e a chave H4 sem revisão.
+        const correctionDeadline = Date.now() + CORRECTION_SETTLE_TIMEOUT_MS;
+        while (current.corrections.some((correction) => correction.status === "pending")) {
+          checkAlive();
+          const remaining = correctionDeadline - Date.now();
+          if (remaining <= 0) {
+            return await markTerminal("interrupted", "correção em alinhamento em background; retome em instantes");
+          }
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              clearTimeout(timer);
+              signal.removeEventListener("abort", finish);
+              resolve();
+            };
+            const timer = setTimeout(finish, Math.min(CORRECTION_SETTLE_POLL_MS, remaining));
+            signal.addEventListener("abort", finish, { once: true });
+            if (signal.aborted) finish();
+          });
+          checkAlive();
+          current = await loadProject(dir);
+          if (current.preparation?.id !== id) throw new ObsoleteExit();
+          await assertSourcesPresent(current);
+        }
+        checkAlive();
+        const settledBlockedReason = proposalBlockedReason(current);
+        if (settledBlockedReason) return await markTerminal("interrupted", settledBlockedReason);
         const proposalBase = structuredClone(current);
         const proposalBaseKey = proposalStateKey(proposalBase);
         const assertProposalBase = (project: Project): void => {

@@ -5,5 +5,5 @@ export {
 } from "./transcribe.ts";
 export type { AlignTextDeps, SidecarResult, TranscribeDeps, SpeechWorkerRequest } from "./transcribe.ts";
 export { runSpeechJob } from "./resident.ts";
-export { createResidentSpeechClient } from "./client.ts";
+export { createResidentSpeechClient, SpeechWorkerInterruptedError } from "./client.ts";
 export type { ResidentSpeechClient, SpeechSpawner } from "./client.ts";

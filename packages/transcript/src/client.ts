@@ -14,6 +14,11 @@ export const PROGRESS_PREFIX = "DECUPA_PROGRESS ";
 /** Sem nenhuma linha de progresso por este tempo, o worker é dado como travado. */
 export const DEFAULT_WATCHDOG_MS = 10 * 60_000;
 
+/** Fechamento/cancelamento solicitado; falhas do processo continuam sendo erros. */
+export class SpeechWorkerInterruptedError extends Error {
+  readonly name = "SpeechWorkerInterruptedError";
+}
+
 export type SpeechSpawnOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -104,7 +109,9 @@ export function createResidentSpeechClient(opts: {
     if (!waiter) return;
     waiters.delete(rec.taskId);
     if (typeof rec.error === "string" && rec.error.length > 0) {
-      waiter.reject(new Error(rec.error));
+      waiter.reject(rec.error === `tarefa cancelada: ${rec.taskId}` || rec.error === "tarefa cancelada"
+        ? new SpeechWorkerInterruptedError(rec.error)
+        : new Error(rec.error));
       return;
     }
     try {
@@ -139,7 +146,7 @@ export function createResidentSpeechClient(opts: {
   };
 
   const ensure = (): ChildProcess => {
-    if (closed) throw new Error("worker de fala encerrou");
+    if (closed) throw new SpeechWorkerInterruptedError("worker de fala encerrou");
     if (child) return child;
     const proc = spawnFn("uv", ["run", "--no-sync", "python", "worker.py", "--serve"], { cwd: speechDir });
     child = proc;
@@ -199,7 +206,7 @@ export function createResidentSpeechClient(opts: {
   const transcribe = (req: SpeechWorkerRequest): Promise<SidecarResult> => {
     const run = (): Promise<SidecarResult> => new Promise((resolvePromise, reject) => {
       if (req.signal?.aborted) {
-        reject(new Error(`tarefa cancelada: ${req.taskId}`));
+        reject(new SpeechWorkerInterruptedError(`tarefa cancelada: ${req.taskId}`));
         return;
       }
       const proc = ensure();
@@ -221,7 +228,7 @@ export function createResidentSpeechClient(opts: {
       const onAbort = (): void => {
         // Fechar e subir de novo: o cancelamento do worker só vale entre
         // etapas, e a transcrição de um vídeo longo é uma etapa só.
-        stop(new Error(`tarefa cancelada: ${req.taskId}`));
+        stop(new SpeechWorkerInterruptedError(`tarefa cancelada: ${req.taskId}`));
       };
       const done = (): void => {
         if (timer) clearTimeout(timer);
@@ -253,12 +260,12 @@ export function createResidentSpeechClient(opts: {
   };
 
   const restart = (): void => {
-    stop(new Error("worker de fala reiniciado"));
+    stop(new SpeechWorkerInterruptedError("worker de fala reiniciado"));
   };
 
   const close = async (): Promise<void> => {
     closed = true;
-    stop(new Error("worker de fala encerrou"));
+    stop(new SpeechWorkerInterruptedError("worker de fala encerrou"));
   };
 
   return { transcribe, cancel, restart, close };

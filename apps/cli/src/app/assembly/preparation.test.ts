@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createProject, loadProject, readHistorySnapshot, saveProject } from "./store.ts";
-import { blankProject } from "./routes.ts";
+import { blankProject, publishCorrection } from "./routes.ts";
 import { fixtureAssembly } from "./fixture.ts";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { writeTimelineReference } from "../../../../../tests/fixtures/timeline-reference.ts";
@@ -853,9 +853,15 @@ describe("runPreparation", () => {
     expect(done.revision).toBe(edited.revision);
   });
 
-  it("edição correct durante o áudio faz rebase: ready sem perder a correção", async () => {
+  it("edição correct durante o áudio faz rebase: ready sem perder a correção assentada", async () => {
     const base = await seed(dir, [["fala.mp4", "fala", "speech"]]);
-    const { deps, blockAudio } = makeFakes();
+    const { deps, calls, blockAudio } = makeFakes();
+    let prompt = "";
+    const send = deps.proposeSend!;
+    deps.proposeSend = (content, ...args) => {
+      prompt = JSON.stringify(content);
+      return send(content, ...args);
+    };
     const gate = blockAudio();
     const run = runPreparation(
       dir,
@@ -873,12 +879,25 @@ describe("runPreparation", () => {
     await saveProject(dir, before.revision, (p) =>
       applyTextEdit(p, { type: "correct", sourceId: "fala", start: 0, end: 1, text: "olá corrigido" }));
     gate.release();
+    // P4 libera o slot após o áudio; o job assenta independentemente da proposta.
+    await vi.waitFor(async () => {
+      expect((await loadProject(dir)).preparation?.stage).toBe("proposal");
+    });
+    const pending = await loadProject(dir);
+    expect(calls.propose).toBe(0);
+    await publishCorrection(dir, pending.revision, pending.corrections[0]!.id, { words: [
+      { text: "olá", start: 0.1, end: 0.4, confidence: 0.9 },
+      { text: "corrigido", start: 0.5, end: 0.9, confidence: 0.9 },
+    ] });
     const done = await run;
     expect(done.preparation?.status).toBe("ready");
     expect(done.revision).toBe(base.revision + 2);
     expect(done.analyses.find((analysis) => analysis.sourceId === "fala")?.status).toBe("ready");
     expect(done.corrections).toHaveLength(1);
     expect(done.corrections[0]).toMatchObject({ sourceId: "fala", text: "olá corrigido" });
+    expect(done.corrections[0]?.status).toBe("aligned");
+    expect(calls.propose).toBe(1);
+    expect(prompt).toContain("olá corrigido");
     expect(done.scenes).toHaveLength(1);
   });
 

@@ -15,7 +15,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { isCancelledError } from "@decupa/queue";
-import { validateAlignmentCoverage } from "@decupa/transcript";
+import { SpeechWorkerInterruptedError, validateAlignmentCoverage } from "@decupa/transcript";
 import { serveMedia } from "../../http/media.ts";
 import { applyCanvasPolicy, canvasForSource } from "./canvas.ts";
 import { parseSourceTimecode } from "./timecode.ts";
@@ -376,7 +376,8 @@ async function alignCorrectionJob(
       return;
     }
     const speech = deps.speech;
-    if (!speech) throw new Error("worker de fala indisponível para alinhar correção");
+    // Sem worker neste processo, GET /project tenta de novo quando ele voltar.
+    if (!speech) return;
     const coordinator = speech.coordinator ?? deps.coordinator
       ?? createFileCoordinator(join(dir, ".decupa", "coordinator"));
     const words = await coordinator.withSlot({ stage: "speech", priority: "interactive" }, async () => {
@@ -427,6 +428,9 @@ async function alignCorrectionJob(
     });
     await publishCorrection(dir, expectedRevision, correctionId, { words });
   } catch (err) {
+    // Encerrar/cancelar o processo não é falha do texto corrigido. O finally
+    // libera o id para o próximo GET retomar o pending (ICE-2 #02).
+    if (err instanceof SpeechWorkerInterruptedError || isCancelledError(err)) return;
     await publishCorrection(dir, expectedRevision, correctionId, {
       error: err instanceof Error ? err.message : String(err),
     }).catch(() => undefined);
