@@ -2,7 +2,9 @@
 
 O compose oficial sobe o Decupa na Raiz de Projetos atrás do Caddy. Somente o
 Caddy publica portas; o serviço Decupa fica acessível apenas na rede interna do
-compose.
+compose. Para uma equipe pequena, o perfil Tailscale troca o Caddy pelo
+`tailscale serve` e não publica porta nenhuma (veja
+[Acesso pela rede Tailscale](#acesso-pela-rede-tailscale)).
 
 Para enviar arquivos diretamente ao Cloudflare R2 e importar para o acervo local,
 veja [Upload pelo R2 como passagem](upload-r2.md). Para a VPS baixar direto do
@@ -33,6 +35,9 @@ domínio precisa resolver para a máquina e as portas escolhidas precisam estar
 livres. Se uma porta HTTP diferente de 80/443 for publicada, inclua o domínio
 com a porta em `DECUPA_ALLOWED_HOSTS`.
 
+Com o perfil Tailscale, o HTTPS vem do certificado `.ts.net` do Tailscale e
+`DECUPA_TLS_MODE` não se aplica.
+
 ## Volumes e bind mounts
 
 Os volumes nomeados são:
@@ -41,7 +46,8 @@ Os volumes nomeados são:
 - `decupa-config`: `~/.decupa`, credenciais, segredo de sessão e fila;
 - `decupa-projects`: `/data/projects`;
 - `decupa-media`: `/data/media`;
-- `caddy-data` e `caddy-config`: certificados e estado do proxy.
+- `caddy-data` e `caddy-config`: certificados e estado do proxy;
+- `tailscale-state`: login e certificado do nó, só com o perfil Tailscale.
 
 Para usar um disco local ou NAS, troque os quatro volumes do Decupa no
 `docker-compose.yml`, por exemplo `/srv/decupa/projects:/data/projects`.
@@ -174,6 +180,111 @@ use um arquivo novo.
 A CI só constrói a variante `cuda` (job `build-cuda`). A execução em GPU fica
 para uma máquina com placa, pelos passos acima.
 
+## Acesso pela rede Tailscale
+
+O perfil Tailscale deixa o Decupa acessível só pelos aparelhos da rede
+Tailscale da equipe (a tailnet), em `https://decupa.<tailnet>.ts.net`. O host
+não publica porta nenhuma e não precisa de IP público nem de redirecionamento no
+roteador. Quando a rede permite, o vídeo vai direto entre o aparelho e o host,
+sem servidor intermediário. O plano gratuito do Tailscale cobre até 6 pessoas.
+
+O perfil sobe um contêiner `tailscale` que entra na tailnet como um nó próprio.
+O `tailscale serve` desse nó termina o HTTPS com o certificado do nome `.ts.net`
+e repassa as requisições ao `decupa`. O Caddy não sobe. O Funnel, que exporia o
+nó na internet, fica desligado: `docker/tailscale/serve.json` não tem
+`AllowFunnel`.
+
+### Pré-requisitos na tailnet
+
+No painel do Tailscale:
+
+1. Em **DNS**, ligue o MagicDNS e habilite **HTTPS Certificates**. Anote o nome
+   da tailnet, por exemplo `tail1234.ts.net`. Sem HTTPS habilitado, o contêiner
+   sobe, mas não aplica o serve, e o log avisa
+   `ensure that HTTPS is enabled for your tailnet`.
+2. Em **Settings → Keys**, gere uma auth key. Uma chave de uso único basta: só a
+   primeira subida usa.
+3. Cada pessoa da equipe instala o Tailscale e entra na mesma tailnet.
+
+O certificado do nó é público nos logs de Certificate Transparency. O nome da
+tailnet e o do nó ficam visíveis, mas o acesso continua restrito à tailnet.
+
+### Ativação
+
+Se o compose já roda com o Caddy, pare antes de trocar o perfil. Fora do perfil,
+o `up` não remove o Caddy em execução, e as portas 80/443 continuariam
+publicadas:
+
+```bash
+docker compose down
+```
+
+No `.env` do host:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.tailscale.yml
+DECUPA_DOMAIN=decupa.tail1234.ts.net
+DECUPA_TAILSCALE_AUTHKEY=tskey-auth-...
+```
+
+`DECUPA_DOMAIN` é o nome completo do nó: `DECUPA_TAILSCALE_HOSTNAME` (padrão
+`decupa`) seguido do nome da tailnet. O perfil recusa subir sem ele, porque o
+Decupa confere esse nome em toda requisição. Com GPU, junte os três arquivos:
+`COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.tailscale.yml`.
+
+```bash
+docker compose up -d
+docker compose exec tailscale tailscale serve status
+```
+
+O `serve status` precisa mostrar `https://decupa.tail1234.ts.net (tailnet only)`
+repassando para `http://decupa:7788`. Se o nome sair diferente (por exemplo
+`decupa-1`, quando `decupa` já existe na tailnet), corrija `DECUPA_DOMAIN` e
+rode `docker compose up -d` de novo. Sem a correção, o Decupa responde 403
+`host não permitido`.
+
+Depois do primeiro login:
+
+- Apague `DECUPA_TAILSCALE_AUTHKEY` do `.env`. O login fica no volume
+  `tailscale-state`, e `TS_AUTH_ONCE` impede um novo login com a chave vencida.
+- No painel, em **Machines**, abra o nó e use **Disable key expiry**. Sem isso,
+  o nó expira (180 dias por padrão) e o acesso cai até um novo login.
+
+### Conferência
+
+De um aparelho da tailnet:
+
+```bash
+curl https://decupa.tail1234.ts.net/healthz
+```
+
+`{"ok":true}` confirma de uma vez o serve, o certificado e o `DECUPA_DOMAIN`. O
+primeiro acesso pode levar alguns segundos enquanto o certificado é emitido. No
+navegador, o login grava o cookie `decupa_session` com `Secure`. Um aparelho
+fora da tailnet não resolve o nome.
+
+### Por que o Caddy fica desligado
+
+O `tailscale serve` já faz o papel do Caddy. Ele repassa ao Decupa o `Host`
+original, `X-Forwarded-Host`, `X-Forwarded-Proto: https` e o IP do aparelho em
+`X-Forwarded-For`, sobrescrevendo o que o cliente mandou. O Decupa confia nesses
+cabeçalhos (`DECUPA_TRUST_PROXY=1`) para marcar o cookie como `Secure` e para
+bloquear tentativas de senha por IP. Um Caddy no meio não confiaria no contêiner
+do Tailscale e trocaria os cabeçalhos pelos dele. O cookie perderia o `Secure`,
+e o bloqueio de login passaria a valer para a equipe inteira, como se todos
+viessem do mesmo IP.
+
+### Voltar ao Caddy
+
+```bash
+docker compose down
+```
+
+Tire `docker-compose.tailscale.yml` de `COMPOSE_FILE`, volte `DECUPA_DOMAIN` e
+`DECUPA_TLS_MODE` para o domínio público e rode `docker compose up -d`. O volume
+`tailscale-state` continua existindo. Se não for usar mais o nó, remova-o no
+painel do Tailscale.
+
 ## Atualização e parada
 
 ```bash
@@ -182,6 +293,9 @@ docker compose build --pull decupa
 docker compose up -d
 docker compose down
 ```
+
+Com o perfil Tailscale, troque `docker compose pull caddy` por
+`docker compose pull tailscale`.
 
 `docker compose down` remove os containers e a rede, mas preserva volumes
 nomeados. Faça backup de `decupa-config`, `decupa-projects` e `decupa-media`.
