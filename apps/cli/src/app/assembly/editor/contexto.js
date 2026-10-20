@@ -458,13 +458,14 @@ export function mountContexto({ state, api, player }) {
   // O formulário só é repopulado quando a cena ou o apoio escolhido mudam (ou
   // quando nada foi mexido ainda): o projeto que chega durante a edição não
   // reverte os campos, e "Aplicar" envia o que a pessoa digitou.
-  const supportEdit = { key: null, touched: false, groups: null, candidates: null };
+  const supportEdit = { key: null, sceneId: null, touched: false, groups: null, candidates: null };
   for (const id of ["supportCandidate","supportStart","supportDuration"]) {
     field(id).addEventListener("input",()=>{supportEdit.touched=true;});
     field(id).addEventListener("change",()=>{supportEdit.touched=true;});
   }
   function renderSupport(project,scene) {
     supportForm.hidden=!scene;
+    supportEdit.sceneId=scene?.id??null;
     if(!scene) { supportEdit.key=null; return; }
     const fps=project.assembly.fps.num/project.assembly.fps.den;
     const groups=supportGroups(project,scene);
@@ -503,10 +504,16 @@ export function mountContexto({ state, api, player }) {
     const candidate=(state.get("brollCandidates")||[]).find(c=>c.id===field("supportCandidate").value);
     field("supportDetail").textContent=candidate?`${candidate.description} · entrada ${candidate.start.toFixed(2)} s · até ${(candidate.end-candidate.start).toFixed(2)} s disponíveis`:"Nenhum apoio observado disponível. Importe mídia como Apoio ou Fala + apoio e prepare os materiais.";
   }
-  field("supportGroup").onchange=()=>state.set("selectedSupport",field("supportGroup").value);
+  field("supportGroup").onchange=()=>{
+    const sceneId=supportEdit.sceneId;
+    const groupId=field("supportGroup").value;
+    state.set("selectedScene",sceneId);
+    state.set("selectedSupport",groupId);
+  };
   field("supportCandidate").onchange=()=>{updateSupportDetail();const c=(state.get("brollCandidates")||[]).find(c=>c.id===field("supportCandidate").value);if(c)field("supportDuration").value=String(Math.min(Number(field("supportDuration").value),c.end-c.start));};
   async function saveSupport(remove) {
-    const p=state.get("project"),scene=selectedScene(p);
+    const p=state.get("project"),scene=p?.scenes.find(item=>item.id===supportEdit.sceneId);
+    if(!scene) return;
     try {
       const fps=p.assembly.fps.num/p.assembly.fps.den;
       const c=(state.get("brollCandidates")||[]).find(c=>c.id===field("supportCandidate").value);
@@ -514,7 +521,10 @@ export function mountContexto({ state, api, player }) {
       const support=replaceSupportGroup(p,scene,field("supportGroup").value,entries);
       const result=await api.call("project/edit",{method:"POST",body:JSON.stringify({baseRevision:p.revision,action:{type:"set-support",sceneId:scene.id,support}}),label:remove?"Removendo apoio…":"Aplicando apoio…"});
       // Salvo: o formulário volta a espelhar o servidor.
-      if(result.res.ok) { supportEdit.key=null; state.set("selectedSupport",entries[0]?entries[0].visualId+":"+entries[0].offsetFrames:null); }
+      if(result.res.ok && selectedScene(state.get("project"))?.id===scene.id) {
+        supportEdit.key=null;
+        state.set("selectedSupport",entries[0]?entries[0].visualId+":"+entries[0].offsetFrames:null);
+      }
     } catch(error) {api.notifyError(error.message||String(error));}
   }
   supportForm.onsubmit=event=>{event.preventDefault();void saveSupport(false);};

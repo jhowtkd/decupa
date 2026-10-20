@@ -12,6 +12,7 @@ import {
   montageWordTimes,
   omittedWords,
   retainedDuration,
+  supportGroups,
   takeWords,
   wordAtPlayhead,
 } from "./montage.js";
@@ -394,7 +395,7 @@ export function partialTranscriptView(stage, previous, next) {
 
 function wordButton(scene, takeId, word, selection, extraClass = "", extraAttrs = "") {
   const key = selectionKey(scene.id, takeId, word.id);
-  return '<button type="button" class="word'
+  return '<button type="button" tabindex="-1" aria-haspopup="menu" class="word'
     + (word.removed ? " riscado" : "")
     + (word.protected ? " protected" : "")
     + (word.corrected ? " corrected" : "") + extraClass + '"'
@@ -489,11 +490,6 @@ function renderCenter(p, selection) {
   const texto = document.getElementById("texto");
   const dropzone = document.getElementById("dropzone");
   if (!p || !texto || !dropzone) return;
-  // Preservação de foco (V8): a palavra focada volta após o re-render.
-  const focused = document.activeElement?.dataset;
-  const focusedKey = focused && focused.wordId !== undefined
-    ? { scene: focused.scene || "", take: focused.take || "", word: focused.wordId }
-    : null;
   if (needsEmptyGuide(p)) {
     dropzone.hidden = true;
     const picker = document.getElementById("filePicker");
@@ -511,12 +507,6 @@ function renderCenter(p, selection) {
     + (p.scenes.length === 0 ? transcriptHtml(p) : renderProse(p, selection))
     + "</div>";
   if (scroller) scroller.scrollTop = top;
-  if (focusedKey) {
-    texto.querySelector(
-      `[data-scene="${CSS.escape(focusedKey.scene)}"][data-take="${CSS.escape(focusedKey.take)}"]`
-      + `[data-word-id="${CSS.escape(focusedKey.word)}"]`,
-    )?.focus();
-  }
 }
 
 /** Atualiza aria-pressed sem re-render (gestos mantêm o DOM). */
@@ -585,7 +575,7 @@ const WORD_ACTION_LABEL = {
   include: "Incluindo trecho…",
 };
 
-/** Limiar de arraste: até 6px é clique; além disso, seleção por retângulo. */
+/** Limiar de arraste: até 6px é clique; além disso, intervalo âncora/foco. */
 const DRAG_PX = 6;
 
 /**
@@ -636,8 +626,9 @@ export async function deleteScene({ state, api, confirm }, sceneId) {
 
 /**
  * Monta a região do texto: renderiza os documentos e instala os gestos
- * (spec, Interações 1-5). Clique em mantida só busca; riscado restaura na
- * hora; arraste abre o menu ancorado; cabeçalho move/exclui a cena (excluir
+ * Clique em mantida seleciona e busca; riscado restaura na hora; arraste
+ * seleciona um intervalo e abre o menu. Setas navegam, Shift estende, e
+ * Enter/Shift+F10 abrem ações; cabeçalho move/exclui a cena (excluir
  * pergunta antes, por `confirm`).
  */
 export function mountTexto({ state, api, player, confirm: confirmAction = (message) => window.confirm(message) }) {
@@ -646,8 +637,69 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   let suppressClick = false;
   let closeMenu = null;
   let correctionMenu = null;
+  let selectionAnchor = null;
+  let selectionFocus = null;
+  const tabWords = new Map();
 
   const selection = () => state.get("selection") || new Set();
+  const wordKey = (btn) => selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.wordId);
+  const blockKey = (btn) => selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.source || "");
+  const wordsInDocument = () => [...(root()?.querySelectorAll("button.word") || [])];
+  const visibleWords = () => wordsInDocument().filter((btn) => {
+    const details = btn.closest("details");
+    return !details || details.open;
+  });
+  const wordForKey = (key) => wordsInDocument().find((btn) => wordKey(btn) === key);
+
+  /** Posição editorial independente dos IDs que o alinhamento substitui. */
+  function focusSnapshot(btn) {
+    if (!btn) return null;
+    return {
+      key: wordKey(btn), block: blockKey(btn), scene: btn.dataset.scene, word: btn.dataset.wordId,
+      offset: [...btn.closest(".prose").querySelectorAll("button.word")].indexOf(btn),
+      visibleIndex: visibleWords().indexOf(btn),
+    };
+  }
+
+  function focusTarget(snapshot) {
+    if (!snapshot) return null;
+    const words = visibleWords();
+    const block = words.filter((btn) => blockKey(btn) === snapshot.block);
+    return words.find((btn) => wordKey(btn) === snapshot.key)
+      // Incluir muda a ocorrência de omitido para take, mantendo a palavra.
+      || words.find((btn) => btn.dataset.scene === snapshot.scene && btn.dataset.wordId === snapshot.word)
+      || block[Math.min(snapshot.offset, block.length - 1)]
+      || words.find((btn) => btn.dataset.scene === snapshot.scene)
+      || words[Math.max(0, Math.min(snapshot.visibleIndex, words.length - 1))];
+  }
+
+  /** Um ponto de Tab por parágrafo; a palavra visitada sobrevive ao render. */
+  function paintWordTabs(focused = null) {
+    for (const block of root()?.querySelectorAll(".prose") || []) {
+      const words = [...block.querySelectorAll("button.word")];
+      if (!words.length) continue;
+      const region = blockKey(words[0]);
+      const picked = words.includes(focused) ? focused
+        : words.find((btn) => wordKey(btn) === tabWords.get(region)) || words[0];
+      tabWords.set(region, wordKey(picked));
+      for (const btn of words) btn.setAttribute("tabindex", btn === picked ? "0" : "-1");
+    }
+  }
+
+  /** Mesmo intervalo para ponteiro e teclado, sem buracos entre linhas. */
+  function selectWord(btn, extend = false, anchor = null) {
+    const words = visibleWords();
+    const key = wordKey(btn);
+    if (anchor) selectionAnchor = anchor;
+    if (!extend || !words.some((word) => wordKey(word) === selectionAnchor)) selectionAnchor = key;
+    selectionFocus = key;
+    const from = words.findIndex((word) => wordKey(word) === selectionAnchor);
+    const to = words.indexOf(btn);
+    state.set("selection", new Set(words.slice(Math.min(from, to), Math.max(from, to) + 1).map(wordKey)));
+    state.set("selectedSupport", null);
+    state.set("selectedScene", btn.dataset.scene);
+    paintWordTabs(btn);
+  }
 
   let lastSig = null;
   function render(p, sig = p ? docSignature(p) : null) {
@@ -659,7 +711,20 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       return;
     }
     lastSig = sig;
+    const before = wordsInDocument();
+    const focused = before.includes(document.activeElement) ? document.activeElement : null;
+    const snapshot = focusSnapshot(focused || wordForKey(selectionFocus));
+    const expanded = new Set([...(root()?.querySelectorAll("details") || [])]
+      .filter((details) => details.open && details.querySelector("button.word"))
+      .map((details) => blockKey(details.querySelector("button.word"))));
     renderCenter(p, selection());
+    for (const details of root()?.querySelectorAll("details") || []) {
+      const word = details.querySelector("button.word");
+      if (word && expanded.has(blockKey(word))) details.open = true;
+    }
+    const nextFocus = focusTarget(snapshot);
+    paintWordTabs(nextFocus);
+    if (focused && nextFocus) nextFocus.focus();
     paintCurrentScene();
     paintProposalBanner(p, state.get("speechProposal"));
     paintSupportSwap(state.get("supportSwap"));
@@ -675,11 +740,16 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     return word ? { scene, take, word } : null;
   }
 
-  function selectScene(sceneId) {
+  function selectScene(sceneId, supportIndex = null) {
     const p = state.get("project");
     if (!p) return;
     const scene = p.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
+    const group = supportIndex == null ? null : supportGroups(p, scene).find((item) => item.indices.includes(supportIndex));
+    state.set("selectedSupport", group?.id ?? null);
+    state.set("selectedScene", scene.id);
+    selectionAnchor = null;
+    selectionFocus = null;
     const next = new Set();
     for (const take of scene.takes) {
       for (const word of takeWords(p, scene, take)) {
@@ -1054,6 +1124,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   /** Liga um menu flutuante ao documento: fora ou Escape fecham, foco no primeiro item. */
   function attachMenu(menu, trigger, anchor, align) {
     const returnTo = trigger || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const returnSnapshot = focusSnapshot(returnTo?.dataset.wordId !== undefined ? returnTo : wordForKey(selectionFocus));
     if (trigger) trigger.setAttribute("aria-expanded", "true");
     menu.style.visibility = "hidden";
     document.body.appendChild(menu);
@@ -1063,7 +1134,25 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       if (!menu.contains(ev.target) && closeMenu) closeMenu();
     };
     const onKey = (ev) => {
-      if (ev.key === "Escape" && closeMenu) closeMenu();
+      if (ev.key === "Escape" && closeMenu) {
+        ev.preventDefault();
+        closeMenu();
+        return;
+      }
+      // O campo de correção conserva setas e atalhos nativos de edição.
+      if (!menu.contains(ev.target) || ev.target.closest("input,textarea,select")) return;
+      if (ev.key === "Tab" && !correctionMenu) {
+        if (closeMenu) closeMenu();
+        return;
+      }
+      const items = [...menu.querySelectorAll('[role="menuitem"]')].filter((btn) => !btn.disabled);
+      const index = items.indexOf(document.activeElement);
+      let next;
+      if (["ArrowRight", "ArrowDown"].includes(ev.key)) next = items[(index + 1) % items.length];
+      else if (["ArrowLeft", "ArrowUp"].includes(ev.key)) next = items[(index - 1 + items.length) % items.length];
+      else if (ev.key === "Home") next = items[0];
+      else if (ev.key === "End") next = items.at(-1);
+      if (next) { ev.preventDefault(); next.focus(); }
     };
     document.addEventListener("pointerdown", onDoc);
     document.addEventListener("keydown", onKey);
@@ -1074,7 +1163,12 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       document.removeEventListener("keydown", onKey);
       menu.remove();
       if (trigger?.isConnected) trigger.setAttribute("aria-expanded", "false");
-      if (returnTo?.isConnected) returnTo.focus();
+      const target = returnTo?.isConnected && (returnTo.dataset.wordId === undefined || visibleWords().includes(returnTo))
+        ? returnTo : focusTarget(returnSnapshot);
+      if (target) {
+        if (target.dataset.wordId !== undefined) paintWordTabs(target);
+        target.focus();
+      }
     };
     menu.querySelector("button:not(:disabled)")?.focus();
   }
@@ -1140,7 +1234,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     meta.classList.toggle("pill-accent", view.accent);
   }
 
-  function openSelectionMenu(anchorRect) {
+  function openSelectionMenu(anchorRect, trigger = null) {
     if (closeMenu) closeMenu();
     const p = state.get("project");
     if (!p) return;
@@ -1168,7 +1262,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       }
       menu.appendChild(btn);
     }
-    attachMenu(menu, null, anchorRect, "start");
+    attachMenu(menu, trigger, anchorRect, "start");
   }
 
   async function sceneEdit(btn) {
@@ -1239,17 +1333,22 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     if (chip && el.contains(chip)) {
       // Chip é localizador, não alça: seleciona a cena (o contexto opera
       // sobre ela e o pedido NL muda o apoio); sem seek e sem edição.
-      selectScene(chip.dataset.scene);
+      selectScene(chip.dataset.scene, Number(chip.dataset.support));
       return;
     }
     const btn = ev.target.closest("button.word");
     if (!btn || !el.contains(btn)) return;
+    // Ativação assistiva sem ponteiro tem o mesmo caminho de Enter.
+    if (ev.detail === 0) {
+      if (!selection().has(wordKey(btn))) selectWord(btn);
+      openSelectionMenu(btn.getBoundingClientRect(), btn);
+      return;
+    }
+    selectWord(btn, ev.shiftKey);
+    if (ev.shiftKey) return;
     if (btn.dataset.take === "") {
       // Zona omitida fora da montagem: clique seleciona e abre o menu.
-      const next = new Set([selectionKey(btn.dataset.scene, "", btn.dataset.wordId)]);
-      state.set("selection", next);
-      paintSelection(el, next);
-      openSelectionMenu(btn.getBoundingClientRect());
+      openSelectionMenu(btn.getBoundingClientRect(), btn);
       return;
     }
     if (btn.classList.contains("riscado")) {
@@ -1271,7 +1370,7 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
       });
       return;
     }
-    // Clique em mantida só busca na montagem, sem alternar seleção (1).
+    // Clique em mantida posiciona a seleção e busca na montagem.
     const found = findWord(btn);
     if (!found) return;
     const t = montageTimeOfWord(state.get("project"), found.scene.id, found.take.id, found.word);
@@ -1282,40 +1381,99 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     }
   }
 
-  function intersects(rect, area) {
-    return rect.left < area.right && rect.right > area.left
-      && rect.top < area.bottom && rect.bottom > area.top;
-  }
-
   function onPointerDown(ev) {
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     // Um arraste anterior pode ter terminado fora do #texto (sem click para
     // consumir a supressão): todo gesto novo começa sem supressão pendente.
     suppressClick = false;
-    drag = { x: ev.clientX, y: ev.clientY };
+    const word = ev.target.closest("button.word");
+    if (!word && ev.target.closest("button,summary,input,textarea,select")) return;
+    drag = { x: ev.clientX, y: ev.clientY, word, extend: ev.shiftKey, moved: false };
+  }
+
+  function nearestWord(x, y, preferLast = false) {
+    let nearest = null;
+    let distance = Infinity;
+    for (const btn of visibleWords()) {
+      const rect = btn.getBoundingClientRect();
+      const d = Math.hypot(Math.max(rect.left - x, 0, x - rect.right), Math.max(rect.top - y, 0, y - rect.bottom));
+      if (d < distance || (preferLast && d === distance)) { nearest = btn; distance = d; }
+    }
+    return nearest;
+  }
+
+  function onPointerMove(ev) {
+    if (!drag || (!drag.moved && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) <= DRAG_PX)) return;
+    const start = drag.word || nearestWord(drag.x, drag.y);
+    // Touch usa captura implícita: event.target pode continuar na âncora.
+    const target = document.elementFromPoint
+      ? document.elementFromPoint(ev.clientX, ev.clientY)?.closest("button.word")
+      : ev.target.closest("button.word");
+    const end = root()?.contains(target) ? target : nearestWord(ev.clientX, ev.clientY, true);
+    if (!start || !end) return;
+    if (!drag.moved) {
+      if (!drag.extend || !selectionAnchor) selectionAnchor = wordKey(start);
+      drag.moved = true;
+    }
+    ev.preventDefault();
+    selectWord(end, true);
   }
 
   function onPointerUp(ev) {
     if (!drag) return;
-    const start = drag;
+    onPointerMove(ev);
+    const moved = drag.moved;
     drag = null;
-    if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) <= DRAG_PX) return;
-    const el = root();
-    if (!el) return;
-    const area = {
-      left: Math.min(start.x, ev.clientX),
-      right: Math.max(start.x, ev.clientX),
-      top: Math.min(start.y, ev.clientY),
-      bottom: Math.max(start.y, ev.clientY),
-    };
-    const hit = [...el.querySelectorAll("button.word")]
-      .filter((btn) => intersects(btn.getBoundingClientRect(), area));
-    if (!hit.length) return;
-    const next = new Set(hit.map((btn) => selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.wordId)));
-    state.set("selection", next);
-    paintSelection(el, next);
+    if (!moved) return;
     suppressClick = true;
-    openSelectionMenu(hit[hit.length - 1].getBoundingClientRect());
+    const end = wordForKey(selectionFocus);
+    if (end) {
+      end.focus();
+      openSelectionMenu(end.getBoundingClientRect(), end);
+    }
+  }
+
+  function onWordKey(ev) {
+    const btn = ev.target.closest("button.word");
+    if (!btn || !root()?.contains(btn) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (["Enter", " ", "ContextMenu"].includes(ev.key) || (ev.key === "F10" && ev.shiftKey)) {
+      ev.preventDefault();
+      if (!selection().has(wordKey(btn))) selectWord(btn);
+      openSelectionMenu(btn.getBoundingClientRect(), btn);
+      return;
+    }
+    const words = visibleWords();
+    const index = words.indexOf(btn);
+    let next = null;
+    if (ev.key === "ArrowLeft") next = words[Math.max(0, index - 1)];
+    else if (ev.key === "ArrowRight") next = words[Math.min(words.length - 1, index + 1)];
+    else if (ev.key === "Home" || ev.key === "End") {
+      const block = [...btn.closest(".prose").querySelectorAll("button.word")];
+      next = ev.key === "Home" ? block[0] : block.at(-1);
+    } else if (ev.key === "ArrowUp" || ev.key === "ArrowDown") {
+      const rect = btn.getBoundingClientRect();
+      const x = (rect.left + rect.right) / 2;
+      const y = (rect.top + rect.bottom) / 2;
+      const direction = ev.key === "ArrowUp" ? -1 : 1;
+      const rows = words.map((word) => ({ word, rect: word.getBoundingClientRect() }))
+        .filter((item) => direction * ((item.rect.top + item.rect.bottom) / 2 - y) > rect.height / 2);
+      // Primeira linha visual na direção escolhida, palavra mais perto de x.
+      rows.sort((a, b) => direction * (a.rect.top - b.rect.top));
+      const row = rows[0]?.rect;
+      next = row ? rows.filter((item) => Math.abs(item.rect.top - row.top) < row.height / 2)
+        .sort((a, b) => Math.abs((a.rect.left + a.rect.right) / 2 - x) - Math.abs((b.rect.left + b.rect.right) / 2 - x))[0]?.word : btn;
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      selectionAnchor = null;
+      selectionFocus = null;
+      state.set("selection", new Set());
+      return;
+    } else return;
+    ev.preventDefault();
+    if (!next) return;
+    const anchor = selectionFocus === wordKey(btn) ? null : wordKey(btn);
+    selectWord(next, ev.shiftKey, anchor);
+    next.focus();
   }
 
   function sameKeys(a, b) {
@@ -1363,6 +1521,12 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
   if (el) {
     el.addEventListener("click", onClick);
     el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("keydown", onWordKey);
+    el.addEventListener("focusin", (ev) => {
+      const word = ev.target.closest("button.word");
+      if (word) paintWordTabs(word);
+    });
+    document.addEventListener("pointermove", onPointerMove);
     document.addEventListener("pointerup", onPointerUp);
     document.addEventListener("pointercancel", () => { drag = null; });
   }
