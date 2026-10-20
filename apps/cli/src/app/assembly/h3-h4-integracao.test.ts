@@ -48,7 +48,7 @@ function decisionClient(budget: TypeSafeBudget, fetchImpl: typeof fetch) {
 
 const signal = () => new AbortController().signal;
 
-it("cobre texto novo com checkpoint pelo orçamento compartilhado e encaminha prazo e tentativa", async () => {
+it("conta texto novo com checkpoint no orçamento compartilhado e encaminha cancelamento e tentativa", async () => {
   const p = project();
   const budget = new TypeSafeBudget({ maxDurationMs: 10_000, maxCalls: 1 });
   const store = memoryStore();

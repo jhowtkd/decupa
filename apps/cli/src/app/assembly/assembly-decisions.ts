@@ -1,5 +1,5 @@
 import { parseDecisionConfig } from "@decupa/typesafe/config";
-import { authorizesCut, TypeSafeHttpError, TypeSafeClient, TypeSafeBudget } from "@decupa/typesafe";
+import { authorizesCut, decisionFailure, TypeSafeClient, TypeSafeBudget } from "@decupa/typesafe";
 import { effectiveSpanText, speechCatalog, validateResolvedProposal } from "./scenes.ts";
 import type { DecisionReport, Project, Proposal } from "./types.ts";
 
@@ -30,13 +30,7 @@ export function resolveCutCandidates(project:Project, proposal:Proposal, raw:unk
   return proposal.scenes.flatMap(s=>s.takes.flatMap(t=>resolved.get(`cut:${s.id}:${t.id}`)??[]));
 }
 
-export function decisionFailure(error:unknown):string {
-  if (error instanceof TypeSafeHttpError) {
-    if ([401,422].includes(error.status)) return "configuração do Jev";
-    if ([429,529].includes(error.status)) return "Jev indisponível";
-  }
-  return "falha na decisão Jev";
-}
+export { decisionFailure };
 
 export async function decideAssemblyCuts(project:Project, proposal:Proposal, candidates:CutCandidate[], context:AssemblyDecisionContext, signal:AbortSignal):Promise<Proposal> {
   signal.throwIfAborted();

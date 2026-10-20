@@ -1,6 +1,6 @@
 import { createLimitedQueue } from "@decupa/queue";
 import { createTracer, type Tracer } from "@decupa/trace";
-import { TypeSafeHttpError } from "@decupa/typesafe";
+import { TypeSafeHttpError, TypeSafeTimeoutError, TypeSafeBudgetExceededError } from "@decupa/typesafe";
 import { acceptedDropIds, verifyClaims, type StructureClaim, type Verdict } from "./claims.ts";
 import { buildEditCatalog, type EditCandidate, type EditCatalog } from "./catalog.ts";
 import { keepListFrom } from "./keeplist.ts";
@@ -66,6 +66,7 @@ export type RouteResult = {
 const structureQueue = createLimitedQueue(1);
 
 function isUnavailable(error: unknown): boolean {
+  if (error instanceof TypeSafeTimeoutError || error instanceof TypeSafeBudgetExceededError) return true;
   if (error instanceof TypeSafeHttpError) return error.status === 429 || error.status === 529;
   return false;
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { publishAtomic } from "@decupa/cache";
 import {
-  TypeSafeClient, TypeSafeHttpError,
+  TypeSafeClient, decisionFailure,
   type TypeSafeClientOptions, type TypeSafeRequest, type TypeSafeResult,
 } from "@decupa/typesafe";
 import type { FillerCandidate } from "./fillers.ts";
@@ -52,14 +52,6 @@ export function matchingFillerNote(raw: unknown, item: FillerObserveItem, model:
     || (note.decisionFailure !== undefined && typeof note.decisionFailure !== "string")) return null;
   return { candidateId: note.candidateId, key: note.key, model, questionVersion: note.questionVersion,
     score: note.score, ...(note.decisionFailure ? { decisionFailure: note.decisionFailure } : {}) };
-}
-
-function decisionFailure(error: unknown): string {
-  if (error instanceof TypeSafeHttpError) {
-    if ([401, 422].includes(error.status)) return "configuração do Jev";
-    if ([429, 529].includes(error.status)) return "Jev indisponível";
-  }
-  return "falha na decisão Jev";
 }
 
 export async function scoreAmbiguous(

@@ -214,4 +214,69 @@ describe("TypeSafe deadlines", () => {
       .catch((error) => isCancelledError(error))).resolves.toBe(true);
     expect(budget.callsUsed).toBe(0);
   });
+
+  it("does not reserve a call when runCalls starts pre-cancelled", async () => {
+    const budget = new TypeSafeBudget({ maxCalls: 1 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(budget.runCalls(async () => "must not run", controller.signal)
+      .catch(error => isCancelledError(error))).resolves.toBe(true);
+    expect(budget.callsUsed).toBe(0);
+  });
+
+  it("runCalls remains outside the exhausted time budget while run is blocked by it", async () => {
+    let now = 0;
+    const budget = new TypeSafeBudget({ maxDurationMs: 5, maxCalls: 4, now: () => now });
+    let finishText!: (value: string) => void;
+    const text = budget.runCalls(() => new Promise<string>(resolve => { finishText = resolve; }));
+    let textSettled = false;
+    void text.then(() => { textSettled = true; }, () => { textSettled = true; });
+
+    await expect(budget.withinTime(async () => {
+      now = 6;
+      return "late Jev result";
+    })).rejects.toMatchObject({ name: "TypeSafeBudgetExceededError", reason: "time" });
+    await expect(budget.run(async () => "must not run")).rejects.toMatchObject({
+      name: "TypeSafeBudgetExceededError", reason: "time",
+    });
+    expect(textSettled).toBe(false);
+    expect(budget.callsUsed).toBe(1);
+
+    finishText("text completed");
+    await expect(text).resolves.toBe("text completed");
+    await expect(budget.runCalls(async () => "new text after Jev expired"))
+      .resolves.toBe("new text after Jev expired");
+    expect(budget.callsUsed).toBe(2);
+  });
+
+  it("runCalls reserves the first attempt, charges retries, and stops at maxCalls", async () => {
+    const budget = new TypeSafeBudget({ maxCalls: 3 });
+    let attempts = 0;
+
+    await expect(budget.runCalls(async (_signal, onAttempt) => {
+      onAttempt(); // primeira tentativa incluída na reserva inicial
+      attempts += 1;
+      onAttempt();
+      attempts += 1;
+      onAttempt();
+      attempts += 1;
+      onAttempt(); // excede o teto ao tentar a quarta tentativa
+      return "não alcançado";
+    })).rejects.toMatchObject({ name: "TypeSafeBudgetExceededError", reason: "calls" });
+
+    expect(attempts).toBe(3);
+    expect(budget.callsUsed).toBe(3);
+  });
+
+  it("runCalls mantém a reserva da chamada quando o trabalho falha", async () => {
+    const budget = new TypeSafeBudget({ maxCalls: 1 });
+    await expect(budget.runCalls(async () => { throw new Error("falha no texto"); }))
+      .rejects.toThrow("falha no texto");
+
+    await expect(budget.runCalls(async () => "must not run")).rejects.toMatchObject({
+      name: "TypeSafeBudgetExceededError", reason: "calls",
+    });
+    expect(budget.callsUsed).toBe(1);
+  });
 });
