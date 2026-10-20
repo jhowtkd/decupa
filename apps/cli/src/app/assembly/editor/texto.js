@@ -992,9 +992,18 @@ export function mountTexto({ state, api, player, confirm: confirmAction = (messa
     if (sig === lastSig) {
       const el = root();
       // Mesmo conteúdo visível pode trazer um catálogo omitido mais recente.
-      // Atualiza a foto e só as regiões cuja assinatura local mudou.
+      // Atualiza a foto e só as regiões cuja assinatura local mudou. Realinhar
+      // omitidos abertos troca IDs sem mudar a assinatura: o foco segue a posição.
+      const active = document.activeElement;
+      const focused = active?.dataset?.wordId !== undefined && el?.contains(active) ? active : null;
+      const snapshot = focused ? focusSnapshot(focused) : null;
       prose?.update(p);
       if (el) paintSelection(el, selection());
+      const nextFocus = snapshot && !focused.isConnected ? focusTarget(snapshot) : null;
+      if (nextFocus) {
+        paintWordTabs(nextFocus);
+        nextFocus.focus();
+      }
       return;
     }
     lastSig = sig;
