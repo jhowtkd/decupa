@@ -1,3 +1,5 @@
+import { PREPARE_CONFIRM, prepareNeedsConfirm } from "./prepare-confirm.js";
+export { PREPARE_CONFIRM, prepareNeedsConfirm };
 import { clock } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedDuration } from "./montage.js";
@@ -389,19 +391,6 @@ export async function prepareAfterBriefing(draft, prepare) {
   if (!(await draft.flush())) return false;
   await prepare();
   return true;
-}
-
-/** Pergunta feita antes de preparar por cima de cenas que mudaram. */
-export const PREPARE_CONFIRM = "Preparar de novo substitui as cenas atuais, inclusive o que você editou à mão. "
-  + "Dá para voltar com Desfazer. Continuar?";
-
-/**
- * Montar/Preparar/Retomar trocam as cenas (puro): pede confirmação quando já
- * há cenas e o projeto mudou desde a última preparação que as aplicou
- * (`preparedRevision`). Projeto antigo, sem o registro, também pergunta.
- */
-export function prepareNeedsConfirm(project) {
-  return !!project && project.scenes.length > 0 && project.revision !== project.preparedRevision;
 }
 
 /** A lista de cenas só é a mesma quando número, título, início e lacuna não mudam. */

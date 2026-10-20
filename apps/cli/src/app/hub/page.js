@@ -1,6 +1,11 @@
+import { eligibleProjects, runProjectAction } from "./batch.js";
 import { DriveMediaImport, ResumableMediaUpload, uploadFingerprint } from "./media-upload.js";
 import { criarGaveta, formatarDuracao, textoDoResumo } from "./gaveta.js";
 
+const actionLabels = { resume: "Retomar", cancel: "Cancelar", export: "Exportar" };
+const selected = new Set();
+let actionRunning = false;
+const actionResults = new Map();
 const state = { projects: [], timer: null, loadToken: 0, acervo: [], acervoToken: 0 };
 const projectsElement = document.getElementById("projects");
 const statusElement = document.getElementById("status");
@@ -67,18 +72,44 @@ function visibleProjects() {
 }
 
 function render() {
+  const focusKey = document.activeElement?.dataset.hubFocus;
+  const openedErrors = new Set([...projectsElement.querySelectorAll(".activity-error[open]")].map(el => el.closest("[data-project]").dataset.project));
   const projects = visibleProjects();
   projectsElement.innerHTML = projects.map((project) => {
     const flowLabel = project.fluxo === "montagem" ? "Montagem" : "Limpeza";
     const problem = project.problema ? `<div class="problem">Problema: ${escapeHtml(project.problema)}</div>` : "";
-    return `<a class="project-card" href="${projectHref(project.id)}">
+    const activity = project.atividade;
+    const actions = Object.entries(actionLabels).filter(([key]) => activity?.actions?.[key])
+      .map(([key, label]) => [key, key === "export" && project.fluxo === "limpeza" ? "Exportar MP4" : label]);
+    const fields = activity ? [
+      ["Fila", activity.queueUnavailable ? "Indisponível" : activity.queuedCount > 0
+        ? `${activity.queuedCount} parte(s) na fila · Posição ${activity.queuePosition}`
+        : activity.queuePosition == null ? "Sem espera informada" : `Posição ${activity.queuePosition}`],
+      ["Etapa", activity.stage], ["Mídia", activity.media],
+      ["Decorrido", activity.elapsedMs == null ? "Indisponível" : formatarDuracao(activity.elapsedMs / 1000)],
+      ["Resultado", activity.result], ["Aprovação", activity.approval],
+      ["Ciclo de vida", activity.lifecycle.state],
+      ...(activity.retentionAt == null ? [] : [["Retenção até", changedLabel(activity.retentionAt)]]),
+    ] : [];
+    const result = actionResults.get(project.id);
+    const titleId = `project-title-${encodeURIComponent(project.id)}`;
+    return `<article class="project-card" data-project="${escapeHtml(project.id)}" aria-labelledby="${titleId}">
       <div class="card-top"><span class="badge ${project.fluxo === "limpeza" ? "clean" : ""}">${flowLabel}</span>
         <span class="${project.reserva ? "reservation" : "free"}">${escapeHtml(reservationLabel(project.reserva))}</span></div>
-      <div class="card-title">${escapeHtml(project.nome)}</div>
+      <div class="card-heading"><h2 class="card-title" id="${titleId}"><a data-hub-focus="open:${escapeHtml(project.id)}" href="${projectHref(project.id)}">${escapeHtml(project.nome)}</a></h2>
+        <input type="checkbox" data-select="${escapeHtml(project.id)}" data-hub-focus="select:${escapeHtml(project.id)}" aria-label="Selecionar ${escapeHtml(project.nome)}" ${selected.has(project.id) ? "checked" : ""} ${!actions.length || actionRunning ? "disabled" : ""}></div>
+      ${activity ? `<p class="activity-label ${activity.error ? "problem" : ""}" ${activity.busy ? 'aria-busy="true"' : ""}>${escapeHtml(activity.text)}</p>
+        <dl class="activity-fields">${fields.map(([label, detail]) => `<dt>${label}</dt><dd>${escapeHtml(detail)}</dd>`).join("")}</dl>
+        ${activity.notice ? `<p class="activity-notice">${escapeHtml(activity.notice)}</p>` : ""}
+        ${activity.error ? `<details class="activity-error" ${openedErrors.has(project.id) ? "open" : ""}><summary data-hub-focus="error:${escapeHtml(project.id)}">Detalhes do erro</summary><p>${escapeHtml(activity.error)}</p></details>` : ""}` : ""}
+      <div class="card-actions">${actions.map(([key, label]) => `<button type="button" class="quiet" data-action="${key}" data-id="${escapeHtml(project.id)}" data-hub-focus="action:${key}:${escapeHtml(project.id)}" aria-label="${label} ${escapeHtml(project.nome)}" ${actionRunning ? "disabled" : ""}>${label}</button>`).join("")}</div>
+      ${result ? `<p class="action-result ${result.error ? "problem" : ""}">${escapeHtml(result.text)}${result.href ? ` <a data-hub-focus="download:${escapeHtml(project.id)}" href="${escapeHtml(result.href)}">${project.fluxo === "limpeza" ? "Baixar MP4" : "Baixar timeline"}</a>` : ""}</p>` : ""}
       <div class="card-bottom"><span>Última alteração</span><time datetime="${new Date(project.atualizadoEm).toISOString()}">${changedLabel(project.atualizadoEm)}</time></div>
       ${problem}
-    </a>`;
+    </article>`;
   }).join("");
+  if (focusKey) restoreHubFocus({ key: focusKey });
+  renderSelection();
   const isEmpty = projects.length === 0;
   emptyElement.hidden = !isEmpty;
   // O erro da última carga fica visível até uma carga dar certo.
@@ -97,6 +128,9 @@ async function load() {
     if (token !== state.loadToken) return;
     if (!Array.isArray(projects)) throw new Error("Resposta inválida do servidor.");
     state.projects = projects;
+    for (const id of selected) {
+      if (!projects.some(project => project.id === id && Object.values(project.atividade?.actions ?? {}).some(Boolean))) selected.delete(id);
+    }
     statusElement.classList.remove("error");
     render();
   } catch (error) {
@@ -104,6 +138,84 @@ async function load() {
     statusElement.classList.add("error");
     statusElement.textContent = error instanceof Error ? error.message : "Não foi possível carregar os Projetos.";
   }
+}
+
+function restoreHubFocus({ key, id } = {}) {
+  const candidate = key ? [...projectsElement.querySelectorAll("[data-hub-focus]")].find(el => el.dataset.hubFocus === key)
+    : id ? document.getElementById(id) : null;
+  const usable = candidate && !candidate.disabled && !candidate.hidden;
+  (usable ? candidate : document.getElementById("actionStatus")).focus();
+}
+
+function renderSelection() {
+  document.getElementById("selectionCount").textContent = `${visibleProjects().filter(project => selected.has(project.id)).length} selecionados visíveis`;
+  const available = visibleProjects().filter(project => Object.values(project.atividade?.actions ?? {}).some(Boolean));
+  const select = document.getElementById("selectVisible");
+  select.disabled = actionRunning || !available.length;
+  select.checked = available.length > 0 && available.every(project => selected.has(project.id));
+  select.indeterminate = !select.checked && available.some(project => selected.has(project.id));
+  for (const button of document.querySelectorAll("[data-batch]")) {
+    const eligible = eligibleProjects(visibleProjects(), selected, button.dataset.batch);
+    const count = eligible.length;
+    const mp4 = button.dataset.batch === "export" ? eligible.filter(project => project.fluxo === "limpeza").length : 0;
+    button.hidden = count === 0;
+    button.disabled = actionRunning;
+    button.textContent = `${actionLabels[button.dataset.batch]} (${count}${mp4 ? ` · ${mp4} MP4` : ""})`;
+  }
+}
+
+async function applyAction(action, projects) {
+  if (actionRunning || !projects.length) return;
+  const origin = { key: document.activeElement?.dataset.hubFocus, id: document.activeElement?.id };
+  actionRunning = true;
+  const feedback = document.getElementById("actionStatus");
+  feedback.textContent = `${actionLabels[action]} em ${projects.length} Projeto(s)…`;
+  feedback.focus();
+  render();
+  let ok = 0;
+  // Série evita rajada de exportações; cada falha fica vinculada ao Projeto.
+  for (const project of projects) {
+    try {
+      const response = await runProjectAction(project, action);
+      const download = typeof response.downloadUrl === "string" && response.downloadUrl.startsWith(projectHref(project.id))
+        ? response.downloadUrl : project.fluxo !== "limpeza" ? `${projectHref(project.id)}project/output/${project.atividade.revision}/otio` : null;
+      actionResults.set(project.id, { text: `${actionLabels[action]}: solicitação aceita.`,
+        ...(action === "export" && download ? { href: download } : {}) });
+      ok++;
+    } catch (error) {
+      actionResults.set(project.id, { error: true, text: `${actionLabels[action]}: ${error.message}` });
+    }
+  }
+  actionRunning = false;
+  feedback.textContent = `${ok} de ${projects.length} solicitações aceitas. Confira o resultado em cada Projeto.`;
+  await load();
+  render();
+  if (document.activeElement === feedback || document.activeElement === document.body) restoreHubFocus(origin);
+}
+
+projectsElement.addEventListener("change", event => {
+  const id = event.target.dataset.select;
+  if (!id) return;
+  if (event.target.checked) selected.add(id); else selected.delete(id);
+  renderSelection();
+});
+projectsElement.addEventListener("click", event => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const project = state.projects.find(item => item.id === button.dataset.id);
+  if (project) void applyAction(button.dataset.action, [project]);
+});
+document.getElementById("selectVisible").addEventListener("change", event => {
+  for (const project of visibleProjects()) {
+    if (!Object.values(project.atividade?.actions ?? {}).some(Boolean)) continue;
+    if (event.target.checked) selected.add(project.id); else selected.delete(project.id);
+  }
+  render();
+});
+for (const button of document.querySelectorAll("[data-batch]")) {
+  button.addEventListener("click", () => {
+    void applyAction(button.dataset.batch, eligibleProjects(visibleProjects(), selected, button.dataset.batch));
+  });
 }
 
 function startPolling() {

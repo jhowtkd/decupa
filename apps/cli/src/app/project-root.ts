@@ -1,3 +1,4 @@
+import { projectActivity, type HubActivity, type HubActivityOptions, type RuntimeActivity } from "./hub-activity.ts";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -14,6 +15,7 @@ type ProjectRuntime = {
   close(): Promise<void>;
   /** Operação local ou trabalho pesado aguardando a fila global. */
   isBusy?: () => boolean;
+  activity?: () => RuntimeActivity;
   onJevDisabled?: () => void | Promise<void>;
 };
 
@@ -75,6 +77,7 @@ export type ProjectRootEntry = {
   updatedAt: number;
   reservation: Pick<EditReservation, "nome" | "ultimoSinal"> | null;
   problem?: string;
+  activity?: HubActivity;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -109,7 +112,7 @@ async function editorialMtime(
   return Math.max(0, ...mtimes.filter((mtime): mtime is number => mtime !== null));
 }
 
-async function projectRootEntry(root: string, id: string, now: () => number): Promise<ProjectRootEntry | null> {
+async function projectRootEntry(root: string, id: string, now: () => number, opts: HubActivityOptions): Promise<ProjectRootEntry | null> {
   const flow = await projectKind(root, id);
   if (!flow) return null;
   const dir = join(root, id);
@@ -120,6 +123,16 @@ async function projectRootEntry(root: string, id: string, now: () => number): Pr
     : undefined;
   const updatedAt = await editorialMtime(dir, flow, manifest.value !== null);
   const reservation = await estado(dir, now()).catch(() => null);
+  let activity: HubActivity | undefined;
+  let activityProblem: string | undefined;
+  if (manifest.value) {
+    try {
+      activity = await projectActivity(dir, id, flow, now, opts);
+      // O Hub não toma a reserva de uma aba do editor. A rota revalida
+      // também para a reserva/revisão que mudar depois deste snapshot.
+      if (reservation) activity.actions = { resume: false, cancel: false, export: false };
+    } catch { activityProblem = "Não foi possível ler a atividade do Projeto"; }
+  }
   if (flow === "assembly") {
     const assembly = record(manifest.value?.assembly);
     return {
@@ -128,7 +141,8 @@ async function projectRootEntry(root: string, id: string, now: () => number): Pr
       flow: "montagem",
       updatedAt,
       reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
-      ...(problem ? { problem } : {}),
+      ...(problem || activityProblem ? { problem: problem || activityProblem } : {}),
+      ...(activity ? { activity } : {}),
     };
   }
   const source = manifest.value;
@@ -138,16 +152,17 @@ async function projectRootEntry(root: string, id: string, now: () => number): Pr
     flow: "limpeza",
     updatedAt,
     reservation: reservation ? { nome: reservation.nome, ultimoSinal: reservation.ultimoSinal } : null,
-    ...(problem ? { problem } : {}),
+    ...(problem || activityProblem ? { problem: problem || activityProblem } : {}),
+    ...(activity ? { activity } : {}),
   };
 }
 
 /** Lista somente Projetos diretos da Raiz; arquivos auxiliares ficam fora. */
-export async function listProjectRootEntries(root: string, now: () => number = Date.now): Promise<ProjectRootEntry[]> {
+export async function listProjectRootEntries(root: string, now: () => number = Date.now, opts: HubActivityOptions = {}): Promise<ProjectRootEntry[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const projects = await Promise.all(entries
     .filter(entry => entry.isDirectory())
-    .map(entry => projectRootEntry(root, entry.name, now)));
+    .map(entry => projectRootEntry(root, entry.name, now, opts)));
   return projects
     .filter((project): project is ProjectRootEntry => project !== null)
     .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
@@ -216,6 +231,12 @@ export function createProjectRuntimeRegistry(opts: {
 
   armSweep();
   return {
+    async activity(id: string): Promise<RuntimeActivity | undefined> {
+      const pending = runtimes.get(id);
+      if (!pending) return undefined;
+      const runtime = await pending;
+      return runtime?.activity?.() ?? (runtime ? { busy: runtime.isBusy?.() ?? false } : undefined);
+    },
     async isProjectPath(url: string | undefined): Promise<boolean> {
       const route = projectRequest(url);
       return route !== null && await projectKind(root, route.id) !== null;
