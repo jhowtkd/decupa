@@ -104,10 +104,18 @@ it.each(["new external reference", "new cleanup file", "new in-progress work"] a
   "refuses a stale cleanup plan after %s appears",
   async change => {
     const f = await fixture();
+    let projectB: string | undefined;
+    if (change === "new external reference") {
+      projectB = join(f.projectsRoot, "other");
+      await mkdir(projectB, { recursive: true });
+      // O Projeto B existe no escopo reconciliado, embora seu pacote histórico
+      // só passe a referenciar esta mídia depois que o plano de A foi criado.
+      await createProject(projectB, blankProject("other-project"));
+    }
     const plan = await planProjectCleanup(f.projectDir, f.opts);
 
     if (change === "new external reference") {
-      await f.ledger.register({ id: "package:other-project", kind: "package", projectDir: join(f.projectsRoot, "other") }, [mediaKey(f.sha)]);
+      await f.ledger.register({ id: "package:other-project", kind: "package", projectDir: projectB! }, [mediaKey(f.sha)]);
     } else if (change === "new cleanup file") {
       await mkdir(join(f.projectDir, ".decupa", "metrics"), { recursive: true });
       await writeFile(join(f.projectDir, ".decupa", "metrics", "after-plan.jsonl"), "new journal");
@@ -121,6 +129,19 @@ it.each(["new external reference", "new cleanup file", "new in-progress work"] a
     expect(await readFile(f.sourcePath, "utf8")).toBe("source media");
   },
 );
+
+it("ignores and prunes a package owner whose project no longer exists", async () => {
+  const f = await fixture();
+  const missingProject = join(f.projectsRoot, "deleted-project");
+  const plan = await planProjectCleanup(f.projectDir, f.opts);
+  await f.ledger.register({ id: "package:deleted-project", kind: "package", projectDir: missingProject }, [mediaKey(f.sha)]);
+
+  await expect(confirm(plan.planId, f.projectDir, f.opts)).resolves.toMatchObject({ eligible: true });
+  await expect(readFile(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await f.ledger.references(mediaKey(f.sha))).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "package:deleted-project", kind: "package" }),
+  ]));
+});
 
 it("counts a project hardlink as zero recoverable bytes when the acervo link remains", async () => {
   const f = await fixture();
