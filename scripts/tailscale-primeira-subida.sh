@@ -81,12 +81,12 @@ pause() {
   read -r _ || true
 }
 
-# confirm "question" is a y/N gate; returns success on yes.
+# confirm "question" is a s/N gate; returns success on sim or yes.
 confirm() {
   local reply=""
-  printf '  %s? %s [y/N] ' "$YELLOW" "$1"
+  printf '  %s? %s [s/N] ' "$YELLOW" "$1"
   read -r reply || true
-  [[ "$reply" =~ ^[Yy] ]]
+  [[ "$reply" =~ ^[SsYy] ]]
 }
 
 # _existing KEY: current value of KEY in ENV_FILE, if any, with write_env's single
@@ -272,6 +272,15 @@ fi
 say "$(compose version)"
 if [[ -f "$ENV_FILE" ]]; then
   note "Usando o $ENV_FILE que já existe em $ROOT."
+  mode=$(stat -L -c %a "$ENV_FILE")
+  if [[ "$mode" != 600 && "$mode" != 400 ]]; then
+    warn "$ENV_FILE está com modo $mode; outras pessoas podem ler os segredos."
+    if confirm "Restringir as permissões com chmod 600?"; then
+      chmod 600 "$ENV_FILE"
+    else
+      SKIPPED+=("chmod 600 $ENV_FILE (restringir a leitura dos segredos)")
+    fi
+  fi
 elif confirm "Não há $ENV_FILE. Criar a partir do .env.example (só você lê)?"; then
   install -m 600 .env.example "$ENV_FILE"
   printf '  %s✓ criei%s %s\n' "$GREEN" "$RESET" "$ENV_FILE"
@@ -291,6 +300,10 @@ else
     ask_secret DECUPA_AUTH_PASSWORD "Nova senha:"
     if [[ "$DECUPA_AUTH_PASSWORD" == "troque-esta-senha" || ${#DECUPA_AUTH_PASSWORD} -lt 12 ]]; then
       warn "Senha curta demais ou ainda a do exemplo."; continue
+    fi
+    if [[ "$DECUPA_AUTH_PASSWORD" == *\'* || "$DECUPA_AUTH_PASSWORD" == *\\* ]]; then
+      warn "A senha não pode conter apóstrofo (') nem barra invertida (\\): o compose não lê esses caracteres neste formato de .env."
+      continue
     fi
     ask_secret PASSWORD_AGAIN "Repita a senha:"
     [[ "$PASSWORD_AGAIN" == "$DECUPA_AUTH_PASSWORD" ]] && break
@@ -324,21 +337,38 @@ stage "Nome do Decupa na tailnet"
 open_url "https://login.tailscale.com/admin/dns"
 step "Confira que MagicDNS está ligado e HTTPS Certificates está habilitado."
 step "Copie o Tailnet name, por exemplo tail1234.ts.net."
-while :; do
-  ask TAILNET "Tailnet name:"
-  TAILNET="${TAILNET,,}"; TAILNET="${TAILNET#https://}"; TAILNET="${TAILNET#.}"; TAILNET="${TAILNET%.}"
-  [[ "$TAILNET" =~ ^[a-z0-9.-]+\.ts\.net$ ]] && break
-  warn "Esperava algo terminado em .ts.net."
-done
-while :; do
-  ask DECUPA_TAILSCALE_HOSTNAME "Nome do nó (Enter vazio usa decupa):"
-  DECUPA_TAILSCALE_HOSTNAME="${DECUPA_TAILSCALE_HOSTNAME:-decupa}"
-  DECUPA_TAILSCALE_HOSTNAME="${DECUPA_TAILSCALE_HOSTNAME,,}"
-  [[ "$DECUPA_TAILSCALE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] && break
-  warn "Use só letras minúsculas, números e hífen."
-done
+current_domain=$(_existing DECUPA_DOMAIN || true)
+if [[ "$current_domain" == *.ts.net ]]; then
+  note "O nome completo já salvo será mantido com Enter, inclusive um sufixo atribuído ao nó."
+  while :; do
+    ask DECUPA_DOMAIN "Nome completo do nó (.ts.net):"
+    DECUPA_DOMAIN="${DECUPA_DOMAIN,,}"; DECUPA_DOMAIN="${DECUPA_DOMAIN#https://}"; DECUPA_DOMAIN="${DECUPA_DOMAIN%.}"
+    [[ "$DECUPA_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9.-]+\.ts\.net$ ]] && break
+    warn "Esperava o nome completo do nó, como decupa.tail1234.ts.net."
+  done
+  DECUPA_TAILSCALE_HOSTNAME=$(_existing DECUPA_TAILSCALE_HOSTNAME || true)
+  DECUPA_TAILSCALE_HOSTNAME="${DECUPA_TAILSCALE_HOSTNAME:-${DECUPA_DOMAIN%%.*}}"
+  if [[ "$DECUPA_DOMAIN" != "$current_domain" ]]; then
+    DECUPA_TAILSCALE_HOSTNAME="${DECUPA_DOMAIN%%.*}"
+  fi
+else
+  while :; do
+    ask TAILNET "Tailnet name:"
+    TAILNET="${TAILNET,,}"; TAILNET="${TAILNET#https://}"; TAILNET="${TAILNET#.}"; TAILNET="${TAILNET%.}"
+    [[ "$TAILNET" =~ ^[a-z0-9.-]+\.ts\.net$ ]] && break
+    warn "Esperava algo terminado em .ts.net."
+  done
+  while :; do
+    ask DECUPA_TAILSCALE_HOSTNAME "Nome do nó (Enter vazio usa decupa):"
+    DECUPA_TAILSCALE_HOSTNAME="${DECUPA_TAILSCALE_HOSTNAME:-decupa}"
+    DECUPA_TAILSCALE_HOSTNAME="${DECUPA_TAILSCALE_HOSTNAME,,}"
+    [[ "$DECUPA_TAILSCALE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] && break
+    warn "Use só letras minúsculas, números e hífen."
+  done
+  DECUPA_DOMAIN="$DECUPA_TAILSCALE_HOSTNAME.$TAILNET"
+fi
 write_env DECUPA_TAILSCALE_HOSTNAME "$DECUPA_TAILSCALE_HOSTNAME"
-write_env DECUPA_DOMAIN "$DECUPA_TAILSCALE_HOSTNAME.$TAILNET"
+write_env DECUPA_DOMAIN "$DECUPA_DOMAIN"
 allowed=$(_existing DECUPA_ALLOWED_HOSTS || true)
 if [[ -n "$allowed" && ",${allowed,,}," != *",$DECUPA_DOMAIN,"* ]]; then
   warn "DECUPA_ALLOWED_HOSTS=$allowed não inclui $DECUPA_DOMAIN."
@@ -368,8 +398,8 @@ else
   step "Gere a chave e copie. Ela começa com tskey-auth-."
   while :; do
     ask_secret DECUPA_TAILSCALE_AUTHKEY "Cole a auth key:"
-    [[ "$DECUPA_TAILSCALE_AUTHKEY" == tskey-* ]] && break
-    warn "Esperava uma chave começando com tskey-."
+    [[ "$DECUPA_TAILSCALE_AUTHKEY" =~ ^tskey-[A-Za-z0-9-]+$ ]] && break
+    warn "Esperava uma chave começando com tskey-, seguida só de letras, números e hífen."
   done
   write_env DECUPA_TAILSCALE_AUTHKEY "$DECUPA_TAILSCALE_AUTHKEY"
   note "Só a primeira subida usa a chave. A etapa 8 apaga ela do $ENV_FILE."
@@ -427,9 +457,12 @@ pause
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
 stage "Guardar o login do nó"
-if [[ -n "$(_existing DECUPA_TAILSCALE_AUTHKEY || true)" ]] \
-  && confirm "Apagar DECUPA_TAILSCALE_AUTHKEY do $ENV_FILE? O login já está no volume."; then
-  remove_env DECUPA_TAILSCALE_AUTHKEY
+if [[ -n "$(_existing DECUPA_TAILSCALE_AUTHKEY || true)" ]]; then
+  if confirm "Apagar DECUPA_TAILSCALE_AUTHKEY do $ENV_FILE? O login já está no volume."; then
+    remove_env DECUPA_TAILSCALE_AUTHKEY
+  else
+    SKIPPED+=("apagar DECUPA_TAILSCALE_AUTHKEY do $ENV_FILE")
+  fi
 fi
 open_url "https://login.tailscale.com/admin/machines"
 step "Ache a máquina ${DECUPA_DOMAIN%%.*}: é o próprio Decupa, não o host."

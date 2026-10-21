@@ -13,7 +13,7 @@ Google Drive a partir de um link, veja [Importação direta do Google Drive](upl
 ## Primeira subida
 
 ```bash
-cp .env.example .env
+install -m 600 .env.example .env
 # edite DECUPA_AUTH_PASSWORD e, para um domínio público, DECUPA_DOMAIN
 docker compose build
 docker compose up -d
@@ -224,6 +224,7 @@ No `.env` do host:
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.tailscale.yml
 DECUPA_DOMAIN=decupa.tail1234.ts.net
+DECUPA_ALLOWED_HOSTS=
 DECUPA_TAILSCALE_AUTHKEY=tskey-auth-...
 ```
 
@@ -231,6 +232,10 @@ DECUPA_TAILSCALE_AUTHKEY=tskey-auth-...
 `decupa`) seguido do nome da tailnet. O perfil recusa subir sem ele, porque o
 Decupa confere esse nome em toda requisição. Com GPU, junte os três arquivos:
 `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.tailscale.yml`.
+
+Esvazie o `DECUPA_ALLOWED_HOSTS` herdado do Caddy, como no bloco acima, para o
+compose derivar a lista de `DECUPA_DOMAIN`. Se preferir manter uma lista
+explícita, inclua nela o nome `.ts.net` completo do nó.
 
 ```bash
 docker compose up -d
@@ -240,8 +245,9 @@ docker compose exec tailscale tailscale serve status
 O `serve status` precisa mostrar `https://decupa.tail1234.ts.net (tailnet only)`
 repassando para `http://decupa:7788`. Se o nome sair diferente (por exemplo
 `decupa-1`, quando `decupa` já existe na tailnet), corrija `DECUPA_DOMAIN` e
-rode `docker compose up -d` de novo. Sem a correção, o Decupa responde 403
-`host não permitido`.
+rode `docker compose up -d` de novo. O Decupa responde 403 `host não permitido`
+quando `DECUPA_DOMAIN` difere do nome do nó ou quando `DECUPA_ALLOWED_HOSTS`
+mantém uma lista antiga sem esse nome `.ts.net`.
 
 Depois do primeiro login:
 

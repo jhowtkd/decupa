@@ -12,6 +12,7 @@ on:
       - .env.example
       - docker/**
       - scripts/docker-smoke.sh
+      - scripts/tailscale-primeira-subida.sh
       - .github/workflows/docker.yml
   workflow_dispatch:
 
@@ -34,6 +35,9 @@ jobs:
       DECUPA_DOMAIN: decupa.exemplo.ts.net
     steps:
       - uses: actions/checkout@v4
+
+      - name: sintaxe do wizard Tailscale
+        run: bash -n scripts/tailscale-primeira-subida.sh
 
       - name: só decupa e tailscale sobem, sem porta publicada
         run: |
