@@ -8,7 +8,7 @@ import { FIXTURES } from "../../../../tests/fixtures/global-setup.ts";
 import { referenceForAssembly } from "../../../../tests/fixtures/timeline-reference.ts";
 import { startApp } from "./server.ts";
 import { confirmProjectCleanup, planProjectCleanup } from "./project-cleanup.ts";
-import { initializeResourceLedger, mediaKey } from "./resource-ledger.ts";
+import { initializeResourceLedger, mediaKey, ResourceLedger } from "./resource-ledger.ts";
 import { confirmImportVerification, exportApproved } from "./assembly/export.ts";
 import { fixtureAssembly } from "./assembly/fixture.ts";
 import { blankProject } from "./assembly/routes.ts";
@@ -116,9 +116,39 @@ it("integra pacote, ledger e limpeza: aviso, reconstrução, mídia compartilhad
   expect(rebuiltPlan.items).toEqual(firstPlan.items);
   expect(rebuiltPlan.warning).toBe(firstPlan.warning);
 
-  const app = await startApp({ projectDir: projectA, port: 0, env: { DECUPA_RESOLVE: "0" } });
-  apps.push(app);
-  await confirmProjectCleanup(projectA, { planId: rebuiltPlan.planId, confirmed: true, acknowledgeOffline: true }, options);
+  let releaseReconciliation!: () => void;
+  const reconciliationGate = new Promise<void>(resolve => { releaseReconciliation = resolve; });
+  let enterReconciliation!: () => void;
+  const reconciliationEntered = new Promise<void>(resolve => { enterReconciliation = resolve; });
+  const reconcile = ResourceLedger.prototype.reconcile;
+  let bootReconciliation!: Promise<void>;
+  const reconciliation = vi.spyOn(ResourceLedger.prototype, "reconcile").mockImplementation(function (this: ResourceLedger, opts) {
+    if (this.root === projectA && opts?.signal) {
+      bootReconciliation = reconciliationGate.then(() => reconcile.call(this, opts));
+      enterReconciliation();
+      return bootReconciliation;
+    }
+    return reconcile.call(this, opts);
+  });
+  let app!: Awaited<ReturnType<typeof startApp>>;
+  try {
+    app = await startApp({ projectDir: projectA, port: 0, env: { DECUPA_RESOLVE: "0" } });
+    apps.push(app);
+    // Escutar HTTP não significa que a reconciliação adiada do ledger terminou.
+    await reconciliationEntered;
+    expect(await new ResourceLedger(projectA).hasWork(projectA)).toBe(true);
+    expect((await planProjectCleanup(projectA, options)).eligible).toBe(false);
+    releaseReconciliation();
+    await bootReconciliation;
+    const readyPlan = await planProjectCleanup(projectA, options);
+    expect(readyPlan.eligible).toBe(true);
+    expect(readyPlan.planId).toBe(rebuiltPlan.planId);
+    expect(readyPlan.items).toEqual(rebuiltPlan.items);
+    await confirmProjectCleanup(projectA, { planId: readyPlan.planId, confirmed: true, acknowledgeOffline: true }, options);
+  } finally {
+    releaseReconciliation();
+    reconciliation.mockRestore();
+  }
   await expect(readFile(ownPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(sharedPath, "utf8")).resolves.toBeTruthy();
   await expect(readFile(poolPath, "utf8")).resolves.toBeTruthy();

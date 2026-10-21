@@ -205,17 +205,27 @@ it("does not memoize cancellation as a conversion failure", async () => {
   let conversions = 0;
   let interrupted!: () => void;
   const aborted = new Promise<void>(resolve => { interrupted = resolve; });
+  let continueAfterWrite!: () => void;
+  const writeReleased = new Promise<void>(resolve => { continueAfterWrite = resolve; });
+  let encodingEntered!: (signal: AbortSignal) => void;
+  const encodingStarted = new Promise<AbortSignal>(resolve => { encodingEntered = resolve; });
   const f = await fixture({
     async run(call) {
       conversions += 1;
       const output = call.args.at(-1)!;
       if (conversions === 1) {
+        if (!call.signal) throw new Error("missing encoding cancellation signal");
+        encodingEntered(call.signal);
         await writeFile(output, "partial mp4");
+        // Hold the gap between writing and listening until cancellation arrives.
+        await writeReleased;
         return new Promise(resolve => {
-          call.signal?.addEventListener("abort", () => {
+          const onAbort = () => {
             interrupted();
             resolve({ code: 1, stdout: "", stderr: "cancelled" });
-          }, { once: true });
+          };
+          if (call.signal?.aborted) onAbort();
+          else call.signal?.addEventListener("abort", onAbort, { once: true });
         });
       }
       await copyFile(f.reference, output);
@@ -225,8 +235,16 @@ it("does not memoize cancellation as a conversion failure", async () => {
   try {
     const controller = new AbortController();
     const canceledRequest = fetch(`${f.base}/project/preview/1`, { signal: controller.signal }).catch(error => error);
-    await vi.waitFor(() => expect(conversions).toBe(1));
+    const encodingSignal = await encodingStarted;
+    expect(conversions).toBe(1);
+    const abortReachedExecutor = new Promise<void>(resolve => {
+      if (encodingSignal.aborted) resolve();
+      else encodingSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
     controller.abort();
+    await abortReachedExecutor;
+    expect(encodingSignal.aborted).toBe(true);
+    continueAfterWrite();
     await aborted;
     await canceledRequest;
     const metricDir = join(f.dir, ".decupa", "metrics");
@@ -244,6 +262,7 @@ it("does not memoize cancellation as a conversion failure", async () => {
     expect(streams.paths[0]).toMatch(/rev-1\/playback-v1-[a-f0-9]{64}\.mp4$/);
     expect((await readdir(join(f.dir, "rev-1"))).some(name => name.endsWith(".tmp.mp4"))).toBe(false);
   } finally {
+    continueAfterWrite();
     await f.close();
   }
 });
