@@ -1,0 +1,35 @@
+/* studio.css — hub no studio (DECUPA_EDITOR_UI=studio), carregada depois de
+   page.css: só composição, com os mesmos ids e o mesmo page.js. Cores e
+   componentes vêm de page.css; a linguagem visual das outras telas é do PR 7.
+   Seções: lista, gaveta. */
+
+/* == lista == */
+/* "Novo Projeto" mora na linha da busca e do filtro. */
+.intro { margin-bottom: 22px; }
+.toolbar { align-items: center; }
+.toolbar #newProject { flex: none; }
+/* A barra de lote só aparece quando há Projeto elegível visível (o page.js
+   desabilita a seleção e esconde os botões quando não há). */
+.batch-toolbar:has(#selectVisible:disabled):not(:has([data-batch]:not([hidden]))) { display: none; }
+
+/* == gaveta == */
+/* A fila vem logo depois de "Enviar do computador", com o resumo e o Pausar
+   presos no topo enquanto a lista rola; Drive e acervo ficam recolhidos. */
+.fila-envio { margin-top: 18px; }
+.fila-envio-head {
+  position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
+  margin: 0 -24px; padding: 10px 24px 8px; background: var(--card); border-bottom: 1px solid var(--hairline);
+}
+.fila-envio-head .subhead { flex: 1 1 auto; margin: 0; }
+.fila-envio-head .pause { margin: 0; }
+.fila-envio-head .status { flex: 1 1 100%; min-height: 0; margin: 0; }
+.fila-envio-head .status:empty { display: none; }
+.fila-envio #mediaEmpty { margin-top: 10px; }
+.fila-envio .media-queue { margin-top: 10px; }
+details.origem { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--hairline); }
+details.origem > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+details.origem > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+details.origem[open] > summary { margin-bottom: 8px; }
+@media (max-width: 680px) {
+  .toolbar #newProject { width: 100%; }
+}

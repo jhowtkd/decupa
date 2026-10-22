@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="decupa-media-enabled" content="">
+  <meta name="decupa-drive-enabled" content="">
+  <meta name="decupa-editor-ui" content="studio">
+  <title>Projetos · Decupa</title>
+  <link rel="stylesheet" href="/hub/page.css">
+  <link rel="stylesheet" href="/hub/studio.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Decupa, Projetos">
+      <span class="brand-mark" aria-hidden="true">◆</span>
+      <span>decupa</span><span class="brand-context">/ projetos</span>
+    </a>
+    <nav class="navigation" aria-label="Navegação principal">
+      <a href="/cleanup">Limpar arquivos</a>
+      <a href="/templates">Receitas</a>
+      <a href="/settings">Configurações</a>
+      <span class="user-name">__DECUPA_USER__</span>
+      <form action="/logout" method="post"><button type="submit" class="quiet">Sair</button></form>
+    </nav>
+  </header>
+
+  <main class="shell">
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Raiz de Projetos</p>
+        <h1 id="page-title">Projetos recentes</h1>
+        <p class="subtitle">Acompanhe o processamento, confira os resultados e continue uma edição.</p>
+      </div>
+    </section>
+
+    <section class="toolbar" aria-label="Filtros de Projetos">
+      <label class="search">
+        <span class="sr-only">Buscar por nome</span>
+        <input id="nameFilter" type="search" placeholder="Buscar por nome…" autocomplete="off">
+      </label>
+      <label class="flow-filter">
+        <span class="sr-only">Filtrar por Fluxo</span>
+        <select id="flowFilter">
+          <option value="todos">Todos os Fluxos</option>
+          <option value="montagem">Montagem</option>
+          <option value="limpeza">Limpeza</option>
+        </select>
+      </label>
+      <button id="newProject" class="primary" type="button">Novo Projeto</button>
+    </section>
+
+    <section class="batch-toolbar" aria-label="Ações em vários Projetos">
+      <label><input type="checkbox" id="selectVisible"> Selecionar elegíveis visíveis</label>
+      <span id="selectionCount">0 selecionados</span>
+      <button type="button" class="quiet" id="batch-resume" data-batch="resume" hidden>Retomar</button>
+      <button type="button" class="quiet" id="batch-cancel" data-batch="cancel" hidden>Cancelar</button>
+      <button type="button" class="quiet" id="batch-export" data-batch="export" hidden>Exportar</button>
+    </section>
+    <p id="actionStatus" tabindex="-1" class="status" role="status" aria-live="polite"></p>
+    <p id="status" class="status" role="status" aria-live="polite">Carregando Projetos…</p>
+    <section id="projects" class="project-grid" aria-label="Projetos"></section>
+
+    <section id="empty" class="empty-state" hidden>
+      <div class="empty-icon" aria-hidden="true">＋</div>
+      <h2>Nenhum Projeto encontrado</h2>
+      <p>Crie um Projeto para começar uma Montagem ou uma Limpeza de fala.</p>
+      <button id="emptyNewProject" class="primary" type="button">Novo Projeto</button>
+    </section>
+  </main>
+
+  <dialog id="newProjectDialog" class="drawer" aria-labelledby="new-project-title" aria-describedby="new-project-copy">
+    <form id="newProjectForm" class="drawer-form" novalidate>
+      <div class="dialog-head drawer-head">
+        <div><p class="eyebrow">Começar</p><h2 id="new-project-title">Novo Projeto</h2></div>
+        <button id="closeDialog" class="icon" type="button" aria-label="Fechar">×</button>
+      </div>
+      <div class="drawer-body">
+        <p id="new-project-copy" class="dialog-copy">Dê um nome, escolha o Fluxo e envie as Mídias. Quando o Projeto estiver pronto, ele abre sozinho.</p>
+        <label for="projectName">Nome do Projeto</label>
+        <input id="projectName" name="nome" maxlength="200" placeholder="Ex.: Podcast Ep. 14" autocomplete="off" aria-describedby="projectNameError">
+        <p id="projectNameError" class="form-error" role="alert" hidden></p>
+        <fieldset>
+          <legend>Fluxo</legend>
+          <label class="flow-option"><input type="radio" name="fluxo" value="montagem" checked><span><strong>Montagem</strong><small>Componha um vídeo a partir de uma ou mais Mídias.</small></span></label>
+          <label class="flow-option"><input type="radio" name="fluxo" value="limpeza"><span><strong>Limpeza</strong><small>Remova repetições e cacoetes de uma Mídia.</small></span></label>
+        </fieldset>
+        <section class="midias" aria-labelledby="midias-title">
+          <h3 id="midias-title">Mídias</h3>
+          <p id="midiasRule" class="field-copy">Uma ou mais Mídias.</p>
+          <label class="dropzone">
+            <span class="dropzone-title">Enviar do computador</span>
+            <small>Vídeo ou áudio. Se a conexão cair, o envio retoma daqui.</small>
+            <input id="mediaFiles" type="file" accept="video/*,audio/*" multiple>
+          </label>
+          <section class="fila-envio" aria-labelledby="fila-title">
+            <div class="fila-envio-head">
+              <h4 id="fila-title" class="subhead">No Projeto</h4>
+              <button id="pauseUploads" class="quiet pause" type="button" hidden>Pausar envio</button>
+              <p id="uploadStatus" class="status" role="status" aria-live="polite"></p>
+            </div>
+            <p id="mediaEmpty" class="field-copy">Nenhuma Mídia escolhida ainda.</p>
+            <ul id="mediaQueue" class="media-queue" aria-label="Mídias do Projeto"></ul>
+          </section>
+          <details id="driveImport" class="drive-import origem" hidden>
+            <summary>Do Google Drive</summary>
+            <p class="field-copy">Compartilhe como “qualquer pessoa com o link” e cole o link. A VPS baixa direto do Google.</p>
+            <div class="drive-row">
+              <input id="driveUrl" type="url" placeholder="https://drive.google.com/file/d/…" autocomplete="off" aria-label="Link do arquivo no Google Drive">
+              <button id="driveAdd" class="quiet" type="button">Importar</button>
+            </div>
+          </details>
+          <details class="origem">
+            <summary id="libraryTitle">Do acervo</summary>
+            <p id="libraryStatus" class="field-copy" role="status">Carregando o acervo…</p>
+            <ul id="library" class="library" aria-labelledby="libraryTitle"></ul>
+          </details>
+        </section>
+      </div>
+      <div class="drawer-foot">
+        <p id="formError" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button id="cancelDialog" class="quiet" type="button">Cancelar</button><button id="createProject" class="primary" type="submit">Criar Projeto</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/hub/page.js"></script>
+</body>
+</html>

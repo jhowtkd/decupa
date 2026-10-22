@@ -31,7 +31,7 @@ import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
 import { blankProject, createAssemblyRuntime, sourceFromMedia, withCanvasPolicy, type AssemblyDeps } from "./assembly/routes.ts";
-import { editorUiFromEnv } from "./assembly/editor-ui.ts";
+import { editorUiFromEnv, type EditorUi } from "./assembly/editor-ui.ts";
 import type { Source } from "./assembly/types.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
@@ -409,9 +409,13 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
-  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(env);
-  const hubPage = await readFile(join(HERE, "hub", "page.html"), "utf8");
+  // Lida uma vez: a Montagem, o hub (com a gaveta) e as receitas seguem o mesmo shell.
+  const editorUi = editorUiFromEnv(env);
+  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(editorUi);
+  // Um script, dois shells: o do studio reorganiza a página com os mesmos ids.
+  const hubPage = await readFile(join(HERE, "hub", editorUi === "studio" ? "studio.html" : "page.html"), "utf8");
   const hubCss = await readFile(join(HERE, "hub", "page.css"), "utf8");
+  const hubStudioCss = editorUi === "studio" ? await readFile(join(HERE, "hub", "studio.css"), "utf8") : undefined;
   // O envio da gaveta é o cliente do editor da Montagem, servido daqui e não copiado:
   // retomada e mensagens de erro ficam iguais nos dois lugares.
   const hubScripts = new Map<string, string>([
@@ -426,6 +430,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const allowPaidVisual = opts.allowPaidVisual === true;
   const templatesRoot = opts.templatesRoot ?? join(opts.providerConfigDir ?? homedir(), ".decupa", "templates");
   const templates = createTemplateRuntime(templatesRoot, {
+    editorUi,
+    // Com projeto fixo, "/" leva à Montagem; senão, ao hub de Projetos.
+    voltar: opts.projectId ? "Montagem" : "Projetos",
     getMedia: media ? id => media.getMedia(id) : undefined,
     port: () => boundPort,
     originConfig: network,
@@ -539,6 +546,11 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
       if (req.method === "GET" && url.pathname === "/hub/page.css") {
         res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
         res.end(hubCss);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/hub/studio.css" && hubStudioCss !== undefined) {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+        res.end(hubStudioCss);
         return;
       }
       const hubScript = req.method === "GET" ? hubScripts.get(url.pathname) : undefined;
@@ -1139,7 +1151,7 @@ export function withCleanupProject(page: string, prefix = ""): string {
  * Um bootstrap (page.js) e dois shells: `DECUPA_EDITOR_UI` só troca o HTML e,
  * no studio, acrescenta studio.css. page.css segue servido nas duas variantes.
  */
-async function loadAssemblyPageAssets(env: Record<string, string | undefined>): Promise<{
+async function loadAssemblyPageAssets(editorUi: EditorUi): Promise<{
   page: string;
   projectPathJs: string;
   editReservationUiJs: string;
@@ -1147,7 +1159,7 @@ async function loadAssemblyPageAssets(env: Record<string, string | undefined>): 
   studioCss?: string;
   pageJs: string;
 }> {
-  const studio = editorUiFromEnv(env) === "studio";
+  const studio = editorUi === "studio";
   return {
     page: await readFile(join(HERE, "assembly", studio ? "studio.html" : "page.html"), "utf8"),
     projectPathJs: await readFile(join(HERE, "project-path.js"), "utf8"),
@@ -1283,7 +1295,8 @@ async function startAssemblyApp(opts: {
   const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
-  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(env);
+  const editorUi = editorUiFromEnv(env);
+  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(editorUi);
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -1314,6 +1327,7 @@ async function startAssemblyApp(opts: {
   });
   const { runtime, project, loadStored, transports, speech, closeSpeech } = setup;
   const templates=createTemplateRuntime(templatesRoot,{
+    editorUi,voltar:"Montagem",
     getMedia: media ? id => media.getMedia(id) : undefined,
     port:()=>boundPort,originConfig:network,selectFn:opts.selectFn,exec,speech,
     send:transports.textSend,visualClient:transports.visualClient,
