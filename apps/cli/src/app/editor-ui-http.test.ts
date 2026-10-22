@@ -12,15 +12,21 @@ const ORIGINAL = [{ start: 0, end: 0.5 }];
 async function sobe(root: string, variante: Variante) {
   const app = await startApp({ projectsRoot: root, port: 0, executor, env: envDe(variante) });
   const base = `http://127.0.0.1:${app.port}/projects/alpha`;
-  const projeto = async () => {
+  // Confere o shell servido: sem isto, um env que não chegasse ao servidor
+  // faria o caso studio testar a legacy sem ninguém perceber.
+  const pagina = await fetch(`${base}/`);
+  expect(pagina.status).toBe(200);
+  expect((await pagina.text()).includes('name="decupa-editor-ui" content="studio"'), variante).toBe(variante === "studio");
+  const corpo = async () => {
     const res = await fetch(`${base}/project`);
     expect(res.status).toBe(200);
-    return (await res.json() as Resposta).project;
+    return await res.json() as Resposta;
   };
+  const projeto = async () => (await corpo()).project;
   const post = (rota: string, corpo: unknown) => fetch(`${base}/${rota}`, {
     method: "POST", headers: { ...TAB, "content-type": "application/json" }, body: JSON.stringify(corpo),
   });
-  return { app, base, projeto, post };
+  return { app, base, corpo, projeto, post };
 }
 
 const removidos = (p: Resposta["project"]) => p.scenes[0]!.takes[0]!.removed;
@@ -30,7 +36,6 @@ it.each(VARIANTES)("%s: abre, corta, desfaz e persiste ao reiniciar o servidor",
   try {
     let s = await sobe(root, variante);
     try {
-      expect((await fetch(`${s.base}/`)).status).toBe(200);
       expect((await s.post("reservation", {})).status).toBe(200);
       const aberto = await s.projeto();
       expect(removidos(aberto)).toEqual(ORIGINAL);
@@ -51,13 +56,16 @@ it.each(VARIANTES)("%s: abre, corta, desfaz e persiste ao reiniciar o servidor",
     // "Recarregar" = servidor novo na mesma Raiz.
     s = await sobe(root, variante);
     try {
-      const recarregado = await s.projeto();
+      const { project: recarregado, undoRevision } = await s.corpo();
       expect(removidos(recarregado)).toContainEqual({ start: 1, end: 2 });
       expect(removidos(recarregado)).toHaveLength(2);
+      // O botão Desfazer só se habilita com o undoRevision do GET: ele tem de
+      // sobreviver ao reinício, lido do snapshot em disco pelo runtime novo.
+      expect(undoRevision).toBe(recarregado.revision - 1);
       expect((await s.post("reservation", {})).status).toBe(200);
 
       const desfez = await s.post("project/undo", {
-        baseRevision: recarregado.revision, revision: recarregado.revision - 1,
+        baseRevision: recarregado.revision, revision: undoRevision,
       });
       expect(desfez.status).toBe(200);
       const desfeito = await s.projeto();

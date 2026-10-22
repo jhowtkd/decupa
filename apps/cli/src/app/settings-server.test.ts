@@ -137,7 +137,7 @@ it("/settings/test exige Origin e nunca grava credenciais mesmo com sucesso", as
 
 it("engrenagem com rótulo acessível 'Configurações' aponta para /settings em todas as telas, incluindo ela mesma", async () => {
   const root = new URL("./", import.meta.url);
-  for (const file of ["page.html", "assembly/page.html", "templates/page.html", "settings.html"]) {
+  for (const file of ["page.html", "assembly/page.html", "assembly/studio.html", "templates/page.html", "settings.html"]) {
     const html = await readFile(new URL(file, root), "utf8");
     expect(html, file).toMatch(/<a href="\/settings" aria-label="Configurações"/);
   }

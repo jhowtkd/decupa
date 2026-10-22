@@ -32,13 +32,6 @@ it("o studio carrega o mesmo page.js, que monta a UI da Reserva", async () => {
 
 it.each(PAGINAS)("%s: outra aba dona → Modo Leitura, controles desabilitados, faixa visível", async (pagina) => {
   const document = installDom(await body(pagina));
-  // O DOM falso não entende listas de seletores (a,b) nem tem matches().
-  const nativo = document.querySelectorAll;
-  document.querySelectorAll = (seletor) => [...new Set(seletor.split(",").flatMap((parte) => nativo(parte.trim())))];
-  const proto = Object.getPrototypeOf(document.body) as { matches?: (seletor: string) => boolean; closest(seletor: string): unknown };
-  proto.matches = function (this: typeof proto, seletor) {
-    return seletor.split(",").some((parte) => this.closest(parte.trim()) === this);
-  };
   vi.stubGlobal("MutationObserver", class { observe() {} });
   vi.stubGlobal("navigator", {});
   vi.stubGlobal("fetch", vi.fn(async () => ({

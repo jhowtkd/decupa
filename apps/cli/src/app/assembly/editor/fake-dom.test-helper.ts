@@ -231,8 +231,9 @@ export class El {
   }
   contains(node: El | null) { for (let cur: El | null = node; cur; cur = cur.parentElement) if (cur === this) return true; return false; }
   closest(selector: string) {
-    return chainFrom(this).find((node) => matches(node, selector)) ?? null;
+    return chainFrom(this).find((node) => matchesList(node, selector)) ?? null;
   }
+  matches(selector: string) { return matchesList(this, selector); }
   querySelector(selector: string) { return queryAll(this, selector)[0] ?? null; }
   querySelectorAll(selector: string) { return queryAll(this, selector); }
 }
@@ -345,6 +346,36 @@ function matches(el: El, part: string) {
   return !tag || el.tag === tag;
 }
 
+/** Alternativas de uma lista de seletores (`a, b`), sem cortar vírgulas dentro de aspas, colchetes ou parênteses. */
+function selectorList(selector: string): string[] {
+  const list: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let depth = 0;
+  for (const ch of selector) {
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "\"" || ch === "'") quote = ch;
+    if (ch === "[" || ch === "(") depth += 1;
+    if (ch === "]" || ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      list.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  list.push(current.trim());
+  return list.filter(Boolean);
+}
+
+function matchesList(el: El, selector: string) {
+  return selectorList(selector).some((part) => matches(el, part));
+}
+
 /** Partes de um seletor, sem cortar espaços dentro de aspas ou colchetes. */
 function selectorParts(selector: string): string[] {
   const parts: string[] = [];
@@ -375,7 +406,13 @@ function selectorParts(selector: string): string[] {
   return parts;
 }
 
-function queryAll(root: El, selector: string) {
+function queryAll(root: El, selector: string): El[] {
+  const list = selectorList(selector);
+  if (list.length > 1) {
+    // Lista de seletores: união na ordem do documento, como no navegador.
+    const hits = new Set(list.flatMap((item) => queryAll(root, item)));
+    return descendants(root).filter((el) => hits.has(el));
+  }
   let scope = [root];
   for (const part of selectorParts(selector)) {
     scope = scope.flatMap((base) => descendants(base).filter((el) => matches(el, part)));
