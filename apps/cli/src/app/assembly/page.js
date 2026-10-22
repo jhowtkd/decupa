@@ -23,6 +23,8 @@ const [
   { activityView, mountActivity },
   studioBancada,
   studioBusca,
+  studioMateriais,
+  studioRenomear,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -38,6 +40,8 @@ const [
   // Só o studio baixa a bancada; a legacy não pede o módulo.
   editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
   editorUi === "studio" ? import(projectPath("editor/studio-busca.js")) : null,
+  editorUi === "studio" ? import(projectPath("editor/studio-materiais.js")) : null,
+  editorUi === "studio" ? import(projectPath("editor/studio-renomear.js")) : null,
 ]);
 
 const state = createState({
@@ -581,7 +585,7 @@ async function uploadTeamFiles(files) {
 
 mountStage({ state, api, player });
 mountContexto({ state, api, player });
-mountRail({ state, api, player });
+mountRail({ state, api, player, ui: editorUi });
 mountTemplates({state,api});
 mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
@@ -713,6 +717,23 @@ document.getElementById("stages").addEventListener("click", (event) => {
 });
 // Ação principal do rail (revisar/entregar) navega sem chamada paga.
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
+// Studio: fila de Materiais com todos os arquivos escolhidos já à vista, e
+// renomear a montagem com o aviso de invalidação antes de confirmar.
+const materiais = editorUi === "studio" ? studioMateriais.mountMateriais({
+  state, api, setStage, teamMode, mediaEnabled,
+  readOnly: () => ui.readOnly,
+  onAtividade: ({ importando, rotulo }) => {
+    ui.importing = importando;
+    ui.label = rotulo;
+    renderStatus();
+  },
+}) : null;
+if (editorUi === "studio") studioRenomear.mountRenomear({ state, api });
+/** Seletor e arraste: no studio vão para a fila; a legacy segue com o envio de antes. */
+function sendFiles(files) {
+  if (materiais) return materiais.adicionar(files);
+  return teamMode ? uploadTeamFiles(files) : importFiles(files);
+}
 if (bancada) {
   setStage(bancada.initialStage);
 } else {
@@ -795,10 +816,10 @@ dropzone.addEventListener("dragleave", () => dropzone.classList.remove("over"));
 dropzone.addEventListener("drop", (ev) => {
   ev.preventDefault();
   dropzone.classList.remove("over");
-  if (ev.dataTransfer.files.length) void (teamMode ? uploadTeamFiles([...ev.dataTransfer.files]) : importFiles([...ev.dataTransfer.files]));
+  if (ev.dataTransfer.files.length) void sendFiles([...ev.dataTransfer.files]);
 });
 filePicker.addEventListener("change", () => {
-  if (filePicker.files.length) void (teamMode ? uploadTeamFiles([...filePicker.files]) : importFiles([...filePicker.files]));
+  if (filePicker.files.length) void sendFiles([...filePicker.files]);
   filePicker.value = "";
 });
 
@@ -810,7 +831,7 @@ textoEl.addEventListener("dragover", (ev) => {
 textoEl.addEventListener("drop", (ev) => {
   if (ev.dataTransfer.files.length) {
     ev.preventDefault();
-    void (teamMode ? uploadTeamFiles([...ev.dataTransfer.files]) : importFiles([...ev.dataTransfer.files]));
+    void sendFiles([...ev.dataTransfer.files]);
   }
 });
 

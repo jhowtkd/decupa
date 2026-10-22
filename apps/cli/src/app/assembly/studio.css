@@ -8,7 +8,8 @@
    sai do documento, então o player não pausa nem volta ao início.
    As condições de etapa vão em :where() para não somar especificidade: a
    ordem do arquivo decide, e o projeto vazio (no fim) sempre vence.
-   Seções: tokens, casca, topo, regiões, texto, etapas, vazio, gavetas, responsivo. */
+   Seções: tokens, casca, topo, regiões, texto, etapas, vazio, materiais,
+   renomear, gavetas, responsivo. */
 
 /* == tokens == */
 :root {
@@ -86,12 +87,16 @@ body:has(> #visual-provider-notice:not([hidden])) {
 @media (prefers-reduced-motion: reduce) { .word.alinhando { animation: none; opacity: .6; } }
 
 /* == etapas == */
-/* Materiais: arquivos, papéis e briefing (rail) ao lado do monitor e da preparação. */
+/* Materiais: arquivos, fila de envios e papéis (rail) ao lado do monitor, do
+   briefing com a duração desejada e da preparação. O briefing só existe aqui. */
 :where(body[data-stage="materiais"]) #bancada {
   grid-template: "rail palco" minmax(0, 1fr) / minmax(300px, .85fr) minmax(0, 1.15fr);
 }
 :where(body[data-stage="materiais"]) :is(#center, #inspector, #faixa) { display: none; }
 :where(body[data-stage="materiais"]) #rail { padding: 16px 14px 14px; }
+/* O monitor encolhe em Materiais: o original ainda toca, e briefing e preparação cabem na coluna. */
+:where(body[data-stage="materiais"]) #stage > .preview-screen { flex: none; max-height: 34dvh; }
+:where(body:not([data-stage="materiais"])) #materiaisBriefing { display: none; }
 
 /* Edição: transcrição à esquerda, vídeo no centro, propriedades à direita e a
    sequência embaixo, de ponta a ponta das colunas de edição. O rail fixado
@@ -136,13 +141,61 @@ body:has(> #visual-provider-notice:not([hidden])) {
 :where(body[data-inspector="recolhido"]) #inspector { display: none; }
 
 /* == vazio == */
-/* Sem material, em qualquer etapa: o guia de importar e o briefing ao lado. */
-body.is-empty #bancada { grid-template: "center inspector" minmax(0, 1fr) / minmax(0, 1fr) 420px; }
-body.is-empty #center, body.is-empty #inspector { display: flex; }
-body.is-empty #inspector { position: static; width: auto; }
-body.is-empty :is(#rail, #palco, #faixa) { display: none; }
-body.is-empty #inspector > :not(#monitorBriefing) { display: none; }
+/* Sem material, em qualquer etapa: o guia de importar e o briefing ao lado
+   (o briefing mora no palco; sem material o monitor não tem o que tocar). */
+body.is-empty #bancada { grid-template: "center palco" minmax(0, 1fr) / minmax(0, 1fr) 420px; }
+body.is-empty #center, body.is-empty #palco { display: flex; }
+body.is-empty :is(#rail, #inspector, #faixa) { display: none; }
+body.is-empty #palco > :not(#materiaisBriefing) { display: none; }
+body.is-empty #materiaisBriefing { display: flex; }
 body.is-empty .painel-toggle { display: none; }
+/* Sem material mas com arquivos na fila (body[data-fila], studio-materiais.js):
+   a fila no rail vence o guia, que só diria para importar o que já está indo. */
+body.is-empty[data-fila] #bancada { grid-template: "rail palco" minmax(0, 1fr) / minmax(300px, .85fr) minmax(0, 1.15fr); }
+body.is-empty[data-fila] #rail { display: flex; padding: 16px 14px 14px; }
+body.is-empty[data-fila] #center { display: none; }
+
+/* == materiais == */
+.materiais-briefing { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--radius-sub); background: var(--card-2); }
+.materiais-briefing .briefing-title { font-size: 14px; }
+.materiais-briefing .briefing-form textarea { min-height: 96px; }
+body.is-empty .materiais-briefing { padding: 8px; background: none; }
+body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
+.fila { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; padding: 12px; border-radius: var(--radius-sub); background: var(--card-2); }
+.fila-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.fila-head .ttl { flex: 1 1 auto; }
+.fila-resumo { order: 3; flex: 1 1 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.fila-acoes { display: flex; flex-wrap: wrap; gap: 2px; }
+.fila-acoes button { height: 28px; padding: 0 10px; }
+/* Cinquenta arquivos não empurram a lista de materiais para fora: a fila rola sozinha. */
+.fila-lista { display: flex; flex-direction: column; gap: 2px; max-height: min(44dvh, 420px); overflow-y: auto; }
+.fila-item { display: flex; flex-direction: column; gap: 4px; padding: 7px 8px; border-radius: 8px; }
+.fila-item:hover, .fila-item:focus-within { background: var(--tint); }
+.fila-item-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.fila-nome { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.fila-estado { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fila-item[data-estado="enviando"] .fila-estado, .fila-item[data-estado="adicionando"] .fila-estado { color: var(--accent); }
+.fila-item[data-estado="pronto"] .fila-estado { color: var(--green); }
+.fila-item[data-estado="erro"] .fila-estado { color: var(--red); }
+.fila-item progress { display: block; width: 100%; height: 4px; accent-color: var(--accent); }
+.fila-msg { margin: 0; font-size: 11px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.fila-item[data-estado="erro"] .fila-msg { color: var(--red); }
+.fila-item-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+.fila-item-acoes:empty { display: none; }
+.fila-item-acoes button { height: 26px; padding: 0 10px; font-size: 11px; }
+#rail.over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+/* == renomear == */
+.rename-dialog { width: min(480px, 92vw); }
+.rename-dialog h2 { margin: 0 0 12px; font-size: 17px; color: var(--ink); }
+.rename-dialog label { margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.rename-error { margin: 8px 0 0; font-size: 12px; color: var(--red); }
+.rename-warning, .rename-result { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sub); font-size: 12px; line-height: 1.5; }
+.rename-warning { background: var(--red-tint); color: var(--ink); }
+.rename-result { background: var(--green-tint); color: var(--ink); }
+.rename-lead { margin: 0 0 6px; font-weight: 600; }
+.rename-warning ul, .rename-result ul { margin: 0; padding-left: 1.1rem; }
+.rename-dialog .dialog-actions { justify-content: flex-end; margin: 18px 0 0; }
 
 /* == gavetas == */
 /* Sem largura para fixar, o painel aberto sobrepõe a bancada abaixo do topo. */

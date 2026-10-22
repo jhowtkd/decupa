@@ -10,6 +10,11 @@ const read = (name: string) => readFile(new URL(name, ASSEMBLY), "utf8");
 
 /** Ids que só a gaveta do monitor da legacy usa (mountLegacyMonitor). */
 const SO_LEGACY = ["monitor", "monitorToggle", "closeMonitor"];
+/**
+ * Ids que um módulo comum só consulta com `ui === "studio"` (rail.js: o
+ * briefing de Materiais). A legacy não os tem; o studio.html sim.
+ */
+const SO_STUDIO = ["materiaisBriefing"];
 /** Ids que o servidor injeta no HTML servido (withVisualNotice), fora do shell. */
 const DO_SERVIDOR = ["visual-provider-notice"];
 
@@ -49,7 +54,11 @@ it("studio.html contém todo id que page.js, a Reserva e os editor/*.js consulta
 
 it("page.html (legacy) segue com todo id que o cliente dela consulta, inclusive o monitor", async () => {
   const legacy = await read("page.html");
-  for (const id of [...await idsDoShell("legacy"), ...SO_LEGACY]) expect(legacy, id).toContain(`id="${id}"`);
+  for (const id of [...await idsDoShell("legacy"), ...SO_LEGACY]) {
+    if (SO_STUDIO.includes(id)) continue;
+    expect(legacy, id).toContain(`id="${id}"`);
+  }
+  for (const id of SO_STUDIO) expect(legacy, id).not.toContain(`id="${id}"`);
 });
 
 it("studio.html tem uma tab por etapa do topbar.js", async () => {
