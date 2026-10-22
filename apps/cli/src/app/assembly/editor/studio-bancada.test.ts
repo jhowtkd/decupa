@@ -158,9 +158,9 @@ it("estadoPainel: existência por etapa, fixo só com largura, gaveta aberta", (
     ["rail", "edicao", { fixavel: false, escolha: "fixo", aberto: null }, "recolhido"],
     ["rail", "edicao", { fixavel: false, escolha: "fixo", aberto: "rail" }, "aberto"],
     ["rail", "edicao", { fixavel: false, escolha: undefined, aberto: "inspector" }, "recolhido"],
-    // Largura que fixa vence a gaveta; escolha recolhida deixa a gaveta valer.
+    // Com largura para fixar não há gaveta: vale a escolha gravada.
     ["rail", "edicao", { fixavel: true, escolha: "fixo", aberto: "rail" }, "fixo"],
-    ["rail", "edicao", { fixavel: true, escolha: "recolhido", aberto: "rail" }, "aberto"],
+    ["rail", "edicao", { fixavel: true, escolha: "recolhido", aberto: "rail" }, "recolhido"],
     // Inspector: Edição e Revisão; padrão fixo.
     ["inspector", "materiais", { fixavel: true, escolha: undefined, aberto: null }, null],
     ["inspector", "entrega", { fixavel: true, escolha: "fixo", aberto: "inspector" }, null],
@@ -409,6 +409,12 @@ it("seta na tablist chama preventDefault (não rola a página)", () => {
   expect(eventos[0]!.defaultPrevented).toBe(true);
 });
 
+it("seta fora de uma tab não navega, mesmo com o body carregando data-stage", () => {
+  const t = monta({});
+  t.pressiona(t.document.getElementById("stages")!, "ArrowRight");
+  expect(t.state.get("stage")).toBe("materiais");
+});
+
 // ---- 6. Painéis ----
 
 it("botões existem só onde o painel existe, com aria-expanded e data-* coerentes", () => {
@@ -561,9 +567,14 @@ it("a largura que fixa é por etapa: a 1280 px o inspector fixa na Revisão e vi
   t.setStage("revisao");
   t.document.getElementById("inspectorToggle")!.click();
   expect(t.body.dataset.inspector).toBe("aberto");
-  // A escolha gravada (recolhido) vence a largura; a gaveta aberta segue aberta.
+  // Ganhar largura para fixar fecha a gaveta e vale a escolha gravada (recolhido);
+  // o foco que estava nela volta ao botão, e estreitar de novo não a reabre.
+  expect(t.document.activeElement).toBe(t.document.getElementById("inspector"));
   t.set(1400);
-  expect(t.body.dataset.inspector).toBe("aberto");
+  expect(t.body.dataset.inspector).toBe("recolhido");
+  expect(t.document.activeElement).toBe(t.document.getElementById("inspectorToggle"));
+  t.set(1023);
+  expect(t.body.dataset.inspector).toBe("recolhido");
 });
 
 // ---- 1 e 2. Player único e navegação sem API ----

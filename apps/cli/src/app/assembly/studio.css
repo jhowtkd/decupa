@@ -92,6 +92,9 @@ body, body.is-empty {
   grid-template: "center palco" minmax(0, 1fr) / minmax(0, 1.6fr) minmax(300px, 1fr);
 }
 :where(body[data-stage="entrega"]) :is(#rail, #inspector, #faixa) { display: none; }
+/* Coluna estreita: a origem do formato desce inteira em vez de quebrar letra a letra. */
+.format-row { flex-wrap: wrap; }
+#formatOrigin { flex: 1 1 14rem; }
 
 /* Painel auxiliar recolhido some; o botão do topo o traz de volta. */
 :where(body[data-rail="recolhido"]) #rail,
@@ -118,7 +121,7 @@ body.is-empty .painel-toggle { display: none; }
 
 /* == responsivo == */
 /* O topo passa as etapas para a segunda linha antes de espremer status e ações. */
-@media (max-width: 1180px) {
+@media (max-width: 1360px) {
   #topbar { flex-wrap: wrap; row-gap: 6px; padding-top: 4px; padding-bottom: 4px; }
   /* Quebra de linha antes das etapas, que ficam centralizadas na segunda. */
   #topbar::after { content: ""; order: 2; flex-basis: 100%; }
@@ -127,10 +130,15 @@ body.is-empty .painel-toggle { display: none; }
 /* Empilhado: a página rola na vertical e o painel aberto entra no fluxo. */
 @media (max-width: 900px) {
   body, body.is-empty { height: auto; min-height: 100dvh; overflow: visible; }
+  /* Projeto, ações e etapas, cada um na sua linha (como a legacy no celular). */
+  .topbar-project, .topbar-actions { flex: 1 1 100%; }
+  .topbar-actions { flex-wrap: wrap; justify-content: flex-start; }
   #bancada, body.is-empty #bancada { display: flex; flex-direction: column; }
   #palco, #inspector { overflow: visible; }
   #rail { max-height: none; overflow: visible; }
   #center { height: 72dvh; min-height: 0; }
+  /* O guia de importar cresce com o conteúdo; o texto rola dentro do cartão. */
+  body.is-empty #center { height: auto; min-height: 72dvh; }
   #stage > .preview-screen { max-height: 45dvh; }
   :where(body[data-rail="aberto"]) #rail,
   :where(body[data-inspector="aberto"]) #inspector { position: static; width: auto; box-shadow: var(--shadow-card); }

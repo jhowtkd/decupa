@@ -9,13 +9,14 @@ const STAGE_IDS = new Set(STAGES.map((stage) => stage.id));
 
 /**
  * Painéis auxiliares: em que etapas existem, a partir de que largura cabem
- * fixos ao lado do texto e do vídeo, e como começam sem escolha gravada. Em
- * Materiais o rail é o conteúdo da etapa, não painel; em Edição ele começa
- * recolhido para a transcrição ficar na borda esquerda.
+ * fixos sem espremer texto e vídeo (por etapa), e como começam sem escolha
+ * gravada. Em Materiais o rail é o conteúdo da etapa, não painel; em Edição
+ * ele começa recolhido para a transcrição ficar na borda esquerda. Na
+ * Revisão não há texto ao lado, então as pendências cabem fixas mais cedo.
  */
 export const PAINEIS = {
-  rail: { etapas: ["edicao"], fixa: "(min-width: 1100px)", padrao: "recolhido" },
-  inspector: { etapas: ["edicao", "revisao"], fixa: "(min-width: 1400px)", padrao: "fixo" },
+  rail: { fixa: { edicao: "(min-width: 1100px)" }, padrao: "recolhido" },
+  inspector: { fixa: { edicao: "(min-width: 1400px)", revisao: "(min-width: 1024px)" }, padrao: "fixo" },
 };
 
 /** Chave da preferência local: etapa por projeto e escolha de cada painel. */
@@ -66,11 +67,14 @@ export function etapaDerivada(project) {
   return stepperState(project, null).find((item) => item.id === "entrega").locked ? "edicao" : "entrega";
 }
 
-/** `fixo` | `recolhido` | `aberto` (gaveta), ou null quando o painel não existe na etapa. */
+/**
+ * `fixo` | `recolhido` | `aberto` (gaveta), ou null quando o painel não existe
+ * na etapa. Com largura para fixar não há gaveta: vale a escolha gravada.
+ */
 export function estadoPainel(nome, etapa, { fixavel, escolha, aberto }) {
   const painel = PAINEIS[nome];
-  if (!painel.etapas.includes(etapa)) return null;
-  if (fixavel && (escolha ?? painel.padrao) === "fixo") return "fixo";
+  if (!Object.hasOwn(painel.fixa, etapa)) return null;
+  if (fixavel) return (escolha ?? painel.padrao) === "fixo" ? "fixo" : "recolhido";
   return aberto === nome ? "aberto" : "recolhido";
 }
 
@@ -113,11 +117,16 @@ export function mountBancada({
   const body = document.body;
   const tabs = [...document.querySelectorAll("#stages [data-stage]")];
   const preferencia = readPreferencia(storage);
+  // Uma consulta por painel e etapa: `fixaveis.inspector.revisao.matches`.
   const fixaveis = {};
   for (const [nome, painel] of Object.entries(PAINEIS)) {
-    fixaveis[nome] = media(painel.fixa);
-    fixaveis[nome].addEventListener?.("change", () => render());
+    fixaveis[nome] = {};
+    for (const [etapaDoPainel, query] of Object.entries(painel.fixa)) {
+      fixaveis[nome][etapaDoPainel] = media(query);
+      fixaveis[nome][etapaDoPainel].addEventListener?.("change", () => render());
+    }
   }
+  const fixavel = (nome) => fixaveis[nome][etapa]?.matches === true;
   const gravada = preferencia.etapas.get(projeto);
   // Sem etapa gravada, a primeira resposta do projeto decide (uma vez).
   let decidir = gravada === undefined;
@@ -126,10 +135,12 @@ export function mountBancada({
 
   const toggle = (nome) => document.querySelector('[data-painel="' + nome + '"]');
   const estado = (nome) => estadoPainel(nome, etapa, {
-    fixavel: fixaveis[nome].matches, escolha: preferencia.paineis[nome], aberto,
+    fixavel: fixavel(nome), escolha: preferencia.paineis[nome], aberto,
   });
 
   function render() {
+    // A gaveta que a largura fechou não reabre sozinha quando a tela estreita de novo.
+    if (aberto && estado(aberto) !== "aberto") aberto = null;
     for (const nome of Object.keys(PAINEIS)) {
       const atual = estado(nome);
       const button = toggle(nome);
@@ -176,7 +187,7 @@ export function mountBancada({
   function alternar(nome) {
     const atual = estado(nome);
     if (atual === null) return;
-    if (fixaveis[nome].matches) {
+    if (fixavel(nome)) {
       // Com largura para fixar, o botão fixa ou recolhe, e a escolha fica gravada.
       preferencia.paineis[nome] = atual === "fixo" ? "recolhido" : "fixo";
       aberto = null;
@@ -192,7 +203,7 @@ export function mountBancada({
 
   for (const nome of Object.keys(PAINEIS)) toggle(nome)?.addEventListener("click", () => alternar(nome));
   document.getElementById("stages")?.addEventListener("keydown", (event) => {
-    const tab = event.target.closest?.("[data-stage]");
+    const tab = tabs.find((item) => item.contains(event.target));
     const next = tab ? abaPorTecla(tab.dataset.stage, event.key) : null;
     if (!next) return;
     event.preventDefault();
