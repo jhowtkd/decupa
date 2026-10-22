@@ -26,6 +26,7 @@ services:
       DECUPA_R2_SECRET_ACCESS_KEY: "${DECUPA_R2_SECRET_ACCESS_KEY:-}"
       DECUPA_DRIVE_API_KEY: "${DECUPA_DRIVE_API_KEY:-}"
       DECUPA_JOB_CONCURRENCY: "${DECUPA_JOB_CONCURRENCY:-1}"
+      DECUPA_EDITOR_UI: "${DECUPA_EDITOR_UI:-legacy}"
       DECUPA_NO_BROWSER: "1"
       HF_HOME: /home/decupa/.cache/huggingface
       TORCH_HOME: /home/decupa/.cache/torch

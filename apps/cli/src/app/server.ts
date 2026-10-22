@@ -31,6 +31,7 @@ import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
 import { blankProject, createAssemblyRuntime, sourceFromMedia, withCanvasPolicy, type AssemblyDeps } from "./assembly/routes.ts";
+import { editorUiFromEnv } from "./assembly/editor-ui.ts";
 import type { Source } from "./assembly/types.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
@@ -408,7 +409,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
-  const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(env);
   const hubPage = await readFile(join(HERE, "hub", "page.html"), "utf8");
   const hubCss = await readFile(join(HERE, "hub", "page.css"), "utf8");
   // O envio da gaveta é o cliente do editor da Montagem, servido daqui e não copiado:
@@ -498,6 +499,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         projectPathJs,
         editReservationUiJs,
         pageCss,
+        studioCss,
         pageJs,
         media,
         teamMode,
@@ -1123,6 +1125,7 @@ export function withProjectDir(
     .replace('<meta name="decupa-media-enabled" content="">',
       () => `<meta name="decupa-media-enabled" content="${opts.mediaEnabled === true ? "true" : "false"}">`)
     .replace("__DECUPA_PROJECT_CSS__", projectUrl("page.css", prefix))
+    .replace("__DECUPA_STUDIO_CSS__", projectUrl("studio.css", prefix))
     .replace("__DECUPA_PROJECT_JS__", projectUrl("page.js", prefix));
 }
 
@@ -1132,17 +1135,24 @@ export function withCleanupProject(page: string, prefix = ""): string {
     () => `<meta name="decupa-project-prefix" content="${prefix}">`);
 }
 
-async function loadAssemblyPageAssets(): Promise<{
+/**
+ * Um bootstrap (page.js) e dois shells: `DECUPA_EDITOR_UI` só troca o HTML e,
+ * no studio, acrescenta studio.css. page.css segue servido nas duas variantes.
+ */
+async function loadAssemblyPageAssets(env: Record<string, string | undefined>): Promise<{
   page: string;
   projectPathJs: string;
   editReservationUiJs: string;
   pageCss: string;
+  studioCss?: string;
   pageJs: string;
 }> {
+  const studio = editorUiFromEnv(env) === "studio";
   return {
-    page: await readFile(join(HERE, "assembly", "page.html"), "utf8"),
+    page: await readFile(join(HERE, "assembly", studio ? "studio.html" : "page.html"), "utf8"),
     projectPathJs: await readFile(join(HERE, "project-path.js"), "utf8"),
     pageCss: await readFile(join(HERE, "assembly", "page.css"), "utf8"),
+    ...(studio ? { studioCss: await readFile(join(HERE, "assembly", "studio.css"), "utf8") } : {}),
     pageJs: await readFile(join(HERE, "assembly", "page.js"), "utf8"),
     editReservationUiJs: await readFile(join(HERE, "edit-reservation-ui.js"), "utf8"),
   };
@@ -1160,6 +1170,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
   projectPathJs: string;
   editReservationUiJs: string;
   pageCss: string;
+  studioCss?: string;
   pageJs: string;
   templatesRoot: string;
   port: () => number;
@@ -1202,6 +1213,7 @@ async function createAssemblyProjectRuntime(opts: Omit<StartAppOptions, "port"> 
         mediaEnabled: Boolean(opts.media),
       }), keyProviderState(opts.visualEnv, await loadStored()).notice),
       pageCss: opts.pageCss,
+      studioCss: opts.studioCss,
       pageJs: opts.pageJs,
       projectPathJs: opts.projectPathJs,
       editReservationUiJs: opts.editReservationUiJs,
@@ -1271,7 +1283,7 @@ async function startAssemblyApp(opts: {
   const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
-  const { page, projectPathJs, editReservationUiJs, pageCss, pageJs } = await loadAssemblyPageAssets();
+  const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(env);
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -1290,6 +1302,7 @@ async function startAssemblyApp(opts: {
     projectPathJs,
     editReservationUiJs,
     pageCss,
+    studioCss,
     pageJs,
     media,
     teamMode,
