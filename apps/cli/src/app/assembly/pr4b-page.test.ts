@@ -146,6 +146,62 @@ it("409 reconcilia com o servidor mesmo quando ele voltou a uma revisão menor",
   ]);
 });
 
+async function callWithReservation(box: ReturnType<typeof callSandbox>) {
+  const js = await pageJs();
+  const reservationUI = { handleConflict: vi.fn() };
+  const call = runInNewContext(
+    slice(js, "async function call(", "const player") + "\n;call",
+    { ui: box.ui, client: box.client, state: box.state, reservationUI, renderStatus: vi.fn(), maybeScheduleAutoPreview: vi.fn() },
+  ) as (path: string, opts?: unknown) => Promise<unknown>;
+  return { call, reservationUI };
+}
+
+it("resposta da mesma revisão é aceita: correção que termina em segundo plano substitui o projeto e as chaves laterais", async () => {
+  const box = callSandbox(5);
+  (box.state.get("project") as Record<string, unknown>).corrections = [{ id: "c1", status: "pending" }];
+  const { call } = await callWithReservation(box);
+  box.client.call.mockResolvedValueOnce({
+    res: { ok: true, status: 200 },
+    body: {
+      project: { revision: 5, corrections: [{ id: "c1", status: "done" }] },
+      undoRevision: 4,
+      operation: { stage: "idle" },
+    },
+  });
+  await call("/project");
+  expect(box.state.get("project")).toEqual({ revision: 5, corrections: [{ id: "c1", status: "done" }] });
+  expect(box.sets.filter(([key]) => key !== "project")).toEqual([
+    ["undoRevision", 4],
+    ["operation", { stage: "idle" }],
+  ]);
+});
+
+it("409 com dono avisa a UI da Reserva e ainda reconcilia pelo GET autoritativo", async () => {
+  const box = callSandbox(10);
+  const { call, reservationUI } = await callWithReservation(box);
+  const dono = { nome: "outra pessoa", ultimoSinal: 123 };
+  const conflito = { error: "Projeto em edição", dono };
+  box.client.call.mockResolvedValueOnce({ res: { ok: false, status: 409 }, body: conflito });
+  box.client.call.mockResolvedValueOnce({
+    res: { ok: true, status: 200 },
+    body: { project: { revision: 8 }, operation: { stage: "idle" } },
+  });
+  await call("/project/edit", { method: "POST", label: "Salvando…" });
+  expect(reservationUI.handleConflict).toHaveBeenCalledTimes(1);
+  expect(reservationUI.handleConflict).toHaveBeenCalledWith(conflito);
+  expect(box.client.call.mock.calls.map(([path]) => path)).toEqual(["/project/edit", "project"]);
+  expect(box.state.get("project")).toEqual({ revision: 8 });
+});
+
+it("409 sem dono não chama a UI da Reserva", async () => {
+  const box = callSandbox(10);
+  const { call, reservationUI } = await callWithReservation(box);
+  box.client.call.mockResolvedValueOnce({ res: { ok: false, status: 409 }, body: { error: "revisão desatualizada" } });
+  box.client.call.mockResolvedValueOnce({ res: { ok: true, status: 200 }, body: { project: { revision: 10 } } });
+  await call("/project/edit", { method: "POST", label: "Salvando…" });
+  expect(reservationUI.handleConflict).not.toHaveBeenCalled();
+});
+
 it("erro de ação sobrevive ao GET de fundo e some na ação seguinte", async () => {
   const js = await pageJs();
   const box = callSandbox(5);
