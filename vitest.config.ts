@@ -33,6 +33,8 @@ export default defineConfig({
       DECUPA_R2_ACCESS_KEY_ID: "",
       DECUPA_R2_SECRET_ACCESS_KEY: "",
       DECUPA_DRIVE_API_KEY: "",
+      // Sem isto, quem desenvolve com o studio ligado veria os testes da legacy falharem.
+      DECUPA_EDITOR_UI: "",
     },
   },
 });

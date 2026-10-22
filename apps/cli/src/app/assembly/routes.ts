@@ -85,6 +85,8 @@ export type AssemblyOperation = {
 export type AssemblyDeps = FillerObserveDeps & {
   page?: () => Promise<string>;
   pageCss?: string;
+  /** Só no shell studio (DECUPA_EDITOR_UI=studio); a legacy não serve /studio.css. */
+  studioCss?: string;
   pageJs?: string;
   projectPathJs?: string;
   editReservationUiJs?: string;
@@ -761,6 +763,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
     if (url.pathname === "/page.css" && deps.pageCss !== undefined) {
       res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
       res.end(deps.pageCss);
+      return true;
+    }
+    if (url.pathname === "/studio.css" && deps.studioCss !== undefined) {
+      res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+      res.end(deps.studioCss);
       return true;
     }
     if (url.pathname === "/project-path.js" && deps.projectPathJs !== undefined) {

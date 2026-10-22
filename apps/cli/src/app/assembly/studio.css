@@ -1,0 +1,6 @@
+/* studio.css — shell studio da Montagem (DECUPA_EDITOR_UI=studio).
+   Por enquanto herda a bancada inteira de page.css; tokens e composição do
+   studio entram aqui, nunca acima do marcador de base de page.css, que é de
+   onde Configurações corta os tokens dela. O import é relativo para seguir o
+   prefixo /projects/<id>/ da Raiz de Projetos. */
+@import url("page.css");
