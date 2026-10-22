@@ -22,6 +22,7 @@ const [
   { ResumableMediaUpload, UploadPausedError },
   { activityView, mountActivity },
   studioBancada,
+  studioBusca,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -36,6 +37,7 @@ const [
   import(projectPath("editor/progress.js")),
   // Só o studio baixa a bancada; a legacy não pede o módulo.
   editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
+  editorUi === "studio" ? import(projectPath("editor/studio-busca.js")) : null,
 ]);
 
 const state = createState({
@@ -546,8 +548,10 @@ mountStage({ state, api, player });
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
 mountTemplates({state,api});
-mountTexto({ state, api, player });
+mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
+// Busca no texto do studio: lê o projeto do estado e não recebe api.
+if (studioBusca) studioBusca.mountBusca({ state });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");

@@ -53,11 +53,23 @@ it("a legacy chama mountLegacyMonitor() e abre em Materiais; o studio usa a banc
   expect(js).toContain("const showStage = bancada ? bancada.show : applyStageDom;");
 });
 
-it("o único mount* que recebe ui é mountSequencia", () => {
+it("só mountTexto e mountSequencia recebem ui", () => {
   const chamadas = [...js.matchAll(/^mount[A-Z]\w*\((\{[^}]*\})?\)/gm)];
   expect(chamadas.length).toBeGreaterThan(4);
   const comUi = chamadas.filter((chamada) => /\bui\b/.test(chamada[0]));
-  expect(comUi.map((chamada) => chamada[0])).toEqual(["mountSequencia({ state, api, player, ui: editorUi })"]);
+  expect(comUi.map((chamada) => chamada[0])).toEqual([
+    "mountTexto({ state, api, player, ui: editorUi })",
+    "mountSequencia({ state, api, player, ui: editorUi })",
+  ]);
+});
+
+it("studio-busca.js só carrega no studio e a busca é montada sem api", () => {
+  const usos = linhas().filter((linha) => linha.includes("studio-busca"));
+  expect(usos).toHaveLength(1);
+  expect(usos[0]).toMatch(/editorUi === "studio" \? import\(projectPath\("editor\/studio-busca\.js"\)\) : null,/);
+  const boot = /await Promise\.all\(\[([\s\S]*?)\]\);/.exec(js)?.[1];
+  expect(boot).toContain(usos[0]!.trim());
+  expect(js).toContain("if (studioBusca) studioBusca.mountBusca({ state });");
 });
 
 it("page.html segue sem nada da bancada do studio", () => {
