@@ -216,7 +216,7 @@ function esc(text) {
  * Monta a faixa: blocos proporcionais, clique→seek, arraste→scrub,
  * playhead→linha + bloco .ativa. `player` expõe `seek(seconds)` e `el()`.
  */
-export function mountSequencia({ state, api, player }) {
+export function mountSequencia({ state, api, player, ui = "legacy" }) {
   const root = () => document.getElementById("faixa");
 
   /**
@@ -568,6 +568,40 @@ export function mountSequencia({ state, api, player }) {
       ev.preventDefault();
       void undoEdit();
     });
+  }
+
+  /**
+   * Studio: fora de Edição/Revisão a faixa fica display:none, e a waveform
+   * hidratada ali não desenhou (canvas sem largura). Redesenha só com os
+   * peaks já em cache: nenhum pedido novo, e sem tocar no waveGen, então
+   * uma hidratação ainda em voo desenha sozinha quando chegar.
+   */
+  function redrawCachedWaves() {
+    const p = state.get("project");
+    const strip = root()?.querySelector(".seq-strip");
+    if (!p || !strip) return;
+    const segments = retainedSegments(p);
+    for (const node of strip.querySelectorAll('.seq-bloco[data-kind="scene"]')) {
+      const scene = p.scenes.find((item) => item.id === node.dataset.scene);
+      const start = Number(node.dataset.start);
+      const end = Number(node.dataset.end);
+      const canvas = node.querySelector("canvas.seq-wave");
+      if (!scene || !canvas || !(end > start)) continue;
+      const sourceIds = [...new Set(scene.takes.map((take) => take.sourceId))];
+      const bySource = new Map(sourceIds.map((id) => [id, peaksCache.get(id) ?? null]));
+      if (![...bySource.values()].some(Boolean)) continue;
+      const inBlock = segments.filter((seg) => seg.montageEnd > start && seg.montageStart < end);
+      drawSceneWave(canvas, inBlock, bySource, start, end - start);
+    }
+  }
+  if (ui === "studio" && typeof ResizeObserver === "function" && root()) {
+    let width = 0;
+    new ResizeObserver((entries) => {
+      const next = Math.round(entries[0]?.contentRect.width || 0);
+      if (next === width) return;
+      width = next;
+      if (next > 0) redrawCachedWaves();
+    }).observe(root());
   }
 
   bind();

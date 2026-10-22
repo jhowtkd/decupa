@@ -65,17 +65,13 @@ it.each(VARIANTES)("%s: serve com o prefixo CSS, page.js, project-path, reserva 
   });
 });
 
-it("studio: o @import do studio.css resolvido contra a URL do próprio CSS cai em page.css do Projeto", async () => {
+it("studio: o HTML liga page.css e depois studio.css, os dois com o prefixo do Projeto", async () => {
   await comRaiz("studio", async (base) => {
-    const studioUrl = new URL("/projects/alpha/studio.css", base);
-    const css = await (await fetch(studioUrl)).text();
-    const alvo = /@import\s+url\(\s*["']?([^"')]+)["']?\s*\)/.exec(css)![1]!;
-    const resolvido = new URL(alvo, studioUrl);
-    expect(resolvido.pathname).toBe("/projects/alpha/page.css");
-    const res = await fetch(resolvido);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toMatch(/^text\/css/);
-    expect(await res.text()).toBe(await (await fetch(`${base}/projects/alpha/page.css`)).text());
+    const html = await (await fetch(`${base}/projects/alpha/`)).text();
+    const links = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)">/g)].map((m) => m[1]);
+    expect(links).toEqual(["/projects/alpha/page.css", "/projects/alpha/studio.css"]);
+    // Sem @import: os dois CSS saem em paralelo, sem ida e volta em série.
+    expect(await (await fetch(`${base}/projects/alpha/studio.css`)).text()).not.toMatch(/@import/);
   });
 });
 

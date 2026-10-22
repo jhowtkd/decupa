@@ -17,7 +17,7 @@ it("page.html tem as regiões da bancada e preserva os mounts", async () => {
 
 it("page.js monta as cinco regiões e fia stages/tools", async () => {
   const js = await readFile(JS_URL, "utf8");
-  for (const call of ["mountRail({ state, api, player })", "mountContexto({ state, api, player })", "mountTexto({ state, api, player })", "mountSequencia({ state, api, player })", "mountStage({ state, api, player })"]) {
+  for (const call of ["mountRail({ state, api, player })", "mountContexto({ state, api, player })", "mountTexto({ state, api, player })", "mountSequencia({ state, api, player, ui: editorUi })", "mountStage({ state, api, player })"]) {
     expect(js).toContain(call);
   }
   expect(js).toContain("STAGE_TARGET");
