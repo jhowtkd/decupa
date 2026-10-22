@@ -216,7 +216,7 @@ function esc(text) {
  * Monta a faixa: blocos proporcionais, clique→seek, arraste→scrub,
  * playhead→linha + bloco .ativa. `player` expõe `seek(seconds)` e `el()`.
  */
-export function mountSequencia({ state, api, player }) {
+export function mountSequencia({ state, api, player, ui = "legacy" }) {
   const root = () => document.getElementById("faixa");
 
   /**
@@ -391,13 +391,12 @@ export function mountSequencia({ state, api, player }) {
   // o token descarta a hidratação que perdeu a corrida.
   let waveGen = 0;
 
-  /** Busca os peaks das fontes da cena e desenha os trechos retidos. */
-  async function hydrateWaves(p) {
-    if (!p || typeof fetch !== "function") return;
-    const token = ++waveGen;
-    const el = root();
-    const strip = el && el.querySelector(".seq-strip");
-    if (!strip) return;
+  /**
+   * Desenha os trechos retidos em cada bloco de cena do strip. `peaksDe(ids)`
+   * dá os peaks na ordem das fontes (do fetch ou só do cache); `vivo()` falso
+   * depois da espera para o desenho que perdeu a corrida.
+   */
+  async function drawBlocks(p, strip, peaksDe, vivo) {
     const segments = retainedSegments(p);
     const scenes = new Map(p.scenes.map((scene) => [scene.id, scene]));
     const nodes = [...strip.querySelectorAll('.seq-bloco[data-kind="scene"]')];
@@ -408,8 +407,8 @@ export function mountSequencia({ state, api, player }) {
       const canvas = node.querySelector("canvas.seq-wave");
       if (!scene || !canvas || !(end > start)) continue;
       const sourceIds = [...new Set(scene.takes.map((take) => take.sourceId))];
-      const fetched = await Promise.all(sourceIds.map((id) => peaksFor(id)));
-      if (token !== waveGen) return;
+      const fetched = await peaksDe(sourceIds);
+      if (!vivo()) return;
       // O strip pode ter sido re-renderizado enquanto o fetch voava.
       if (!canvas.isConnected) continue;
       const bySource = new Map(sourceIds.map((id, i) => [id, fetched[i]]));
@@ -419,6 +418,16 @@ export function mountSequencia({ state, api, player }) {
       );
       drawSceneWave(canvas, inBlock, bySource, start, end - start);
     }
+  }
+
+  /** Busca os peaks das fontes da cena e desenha os trechos retidos. */
+  async function hydrateWaves(p) {
+    if (!p || typeof fetch !== "function") return;
+    const token = ++waveGen;
+    const el = root();
+    const strip = el && el.querySelector(".seq-strip");
+    if (!strip) return;
+    await drawBlocks(p, strip, (sourceIds) => Promise.all(sourceIds.map((id) => peaksFor(id))), () => token === waveGen);
   }
 
   /**
@@ -568,6 +577,28 @@ export function mountSequencia({ state, api, player }) {
       ev.preventDefault();
       void undoEdit();
     });
+  }
+
+  /**
+   * Studio: fora de Edição/Revisão a faixa fica display:none, e a waveform
+   * hidratada ali não desenhou (canvas sem largura). Redesenha só com os
+   * peaks já em cache: nenhum pedido novo, e sem tocar no waveGen, então
+   * uma hidratação ainda em voo desenha sozinha quando chegar.
+   */
+  function redrawCachedWaves() {
+    const p = state.get("project");
+    const strip = root()?.querySelector(".seq-strip");
+    if (!p || !strip) return;
+    void drawBlocks(p, strip, (sourceIds) => sourceIds.map((id) => peaksCache.get(id) ?? null), () => true);
+  }
+  if (ui === "studio" && typeof ResizeObserver === "function" && root()) {
+    let width = 0;
+    new ResizeObserver((entries) => {
+      const next = Math.round(entries[0]?.contentRect.width || 0);
+      if (next === width) return;
+      width = next;
+      if (next > 0) redrawCachedWaves();
+    }).observe(root());
   }
 
   bind();

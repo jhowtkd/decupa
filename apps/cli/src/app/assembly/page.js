@@ -4,6 +4,11 @@
 import { mountEditReservationUI } from "./edit-reservation-ui.js";
 import { projectHeaders, projectPath } from "./project-path.js";
 
+// Shell servido (DECUPA_EDITOR_UI), lido uma vez: a legacy não traz a meta.
+// Onde o comportamento diverge, vai explícito para o mount* que precisa.
+const editorUi = document.querySelector('meta[name="decupa-editor-ui"]')?.getAttribute("content") === "studio"
+  ? "studio" : "legacy";
+
 const [
   { mountTemplates },
   { createState },
@@ -16,6 +21,7 @@ const [
   { ICON },
   { ResumableMediaUpload, UploadPausedError },
   { activityView, mountActivity },
+  studioBancada,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -28,6 +34,8 @@ const [
   import(projectPath("editor/icons.js")),
   import(projectPath("editor/media-upload.js")),
   import(projectPath("editor/progress.js")),
+  // Só o studio baixa a bancada; a legacy não pede o módulo.
+  editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
 ]);
 
 const state = createState({
@@ -539,7 +547,7 @@ mountContexto({ state, api, player });
 mountRail({ state, api, player });
 mountTemplates({state,api});
 mountTexto({ state, api, player });
-mountSequencia({ state, api, player });
+mountSequencia({ state, api, player, ui: editorUi });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");
@@ -548,9 +556,6 @@ const closeMonitor = document.getElementById("closeMonitor");
 const narrowViewport = matchMedia("(max-width: 1100px)");
 let monitorOpener = monitorToggle;
 let monitorFocus = null;
-document.addEventListener("focusin", (event) => {
-  monitorFocus = monitor.contains(event.target) ? event.target : null;
-});
 /** Tela estreita: o monitor vira gaveta sobre a bancada. */
 function showMonitor(show = true) {
   const wasOpen = document.body.classList.contains("monitor-open");
@@ -578,6 +583,23 @@ function showMonitor(show = true) {
     if (target === monitor) monitor.tabIndex = -1;
     target.focus({ preventScroll: true });
   }
+}
+/** Legacy: gaveta do monitor, seus controles e o Esc. O studio não tem monitor. */
+function mountLegacyMonitor() {
+  document.addEventListener("focusin", (event) => {
+    monitorFocus = monitor.contains(event.target) ? event.target : null;
+  });
+  monitorToggle.onclick = () => showMonitor(!document.body.classList.contains("monitor-open"));
+  closeMonitor.onclick = () => showMonitor(false);
+  narrowViewport.addEventListener("change", () => showMonitor(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("monitor-open")
+      && !document.querySelector("dialog[open]")) {
+      event.preventDefault();
+      showMonitor(false);
+    }
+  });
+  showMonitor(false);
 }
 function applyTranscriptNotice(text) {
   const el = document.getElementById("transcriptNotice");
@@ -637,10 +659,14 @@ function applyStageDom(stage) {
 }
 function setStage(stage) {
   if (!STAGE_TARGET[stage]) return;
-  if (state.get("stage") === stage) applyStageDom(stage);
+  if (state.get("stage") === stage) showStage(stage);
   else state.set("stage", stage);
 }
-state.subscribe("stage", applyStageDom);
+// Legacy: a etapa é alvo de foco e rolagem. Studio: a etapa é uma vista da
+// bancada (CSS sobre as mesmas regiões; o player nunca sai do lugar).
+const bancada = editorUi === "studio" ? studioBancada.mountBancada({ state, setStage, paintStages }) : null;
+const showStage = bancada ? bancada.show : applyStageDom;
+state.subscribe("stage", showStage);
 state.subscribe("transcriptNotice", applyTranscriptNotice);
 document.getElementById("stages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-stage]");
@@ -648,18 +674,12 @@ document.getElementById("stages").addEventListener("click", (event) => {
 });
 // Ação principal do rail (revisar/entregar) navega sem chamada paga.
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
-monitorToggle.onclick = () => showMonitor(!document.body.classList.contains("monitor-open"));
-closeMonitor.onclick = () => showMonitor(false);
-narrowViewport.addEventListener("change", () => showMonitor(false));
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && document.body.classList.contains("monitor-open")
-    && !document.querySelector("dialog[open]")) {
-    event.preventDefault();
-    showMonitor(false);
-  }
-});
-showMonitor(false);
-setStage("materiais");
+if (bancada) {
+  setStage(bancada.initialStage);
+} else {
+  mountLegacyMonitor();
+  setStage("materiais");
+}
 
 // O player emite o tempo; a faixa-bússola assina "playhead" (Task 7).
 // O elemento persiste (só o src troca), então uma fiação basta.

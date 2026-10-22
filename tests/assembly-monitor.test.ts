@@ -103,19 +103,17 @@ function createHarness(width: number) {
 
   async function controller() {
     const js = await jsPromise;
+    // O trecho do controlador inclui mountLegacyMonitor (focusin, Monitor, Esc e showMonitor(false)).
     const from = js.indexOf("const STAGE_TARGET");
     const throughController = js.indexOf("function applyTranscriptNotice", from);
     const fromStage = js.indexOf("function applyStageDom(stage)", throughController);
     const throughStage = js.indexOf("function setStage(stage)", fromStage);
-    const fromHandlers = js.indexOf("monitorToggle.onclick =", throughStage);
-    const throughHandlers = js.indexOf("\nshowMonitor(false);", fromHandlers);
-    const offsets = [from, throughController, fromStage, throughStage, fromHandlers, throughHandlers];
+    const offsets = [from, throughController, fromStage, throughStage];
     expect(offsets.every(offset => offset >= 0)).toBe(true);
     return runInNewContext(
       js.slice(from, throughController)
         + js.slice(fromStage, throughStage)
-        + js.slice(fromHandlers, throughHandlers)
-        + "\nshowMonitor(false);\n;({ showMonitor, applyStageDom })",
+        + "\nmountLegacyMonitor();\n;({ showMonitor, applyStageDom })",
       {
         document,
         matchMedia: (query: string) => { media.query = query; return media; },

@@ -109,3 +109,14 @@ Run [39834944978](https://github.com/jhowtkd/decupa/actions/runs/39834944978), t
   - `apps/cli/src/app/assembly/preparation.test.ts` › runPreparation › edição correct durante o áudio faz rebase: ready sem perder a correção assentada. O `vi.waitFor` viu o stage `visual` antes de `proposal`.
   - `apps/cli/src/app/r2-upload.test.ts` › limpa a pasta temporária após queda entre publicação e remoção do estado. O `expect.poll` estourou o prazo; no `main`, outros seis testes do mesmo arquivo falham no Windows.
   - No sentido inverso, `cleanup-project-root-http.test.ts` › serve Montagem e Limpeza da mesma Raiz sob prefixos distintos, que está na lista do Windows, passou nesta rodada.
+
+### Intermitências vistas no CI sobre `f2146bf` (Windows)
+
+Run [39839574637](https://github.com/jhowtkd/decupa/actions/runs/39839574637) e rerun do job [120036713849](https://github.com/jhowtkd/decupa/actions/runs/39839574637/job/120036713849). Todas são de arquivos que a pilha não toca:
+
+- `apps/cli/src/app/pipeline-spawn-abort.additional.test.ts` › SpawnExecutor com signal previamente abortado › cancela um processo local que terminaria com sucesso. Falhou nas 2 tentativas deste run e passou no run [39834944978](https://github.com/jhowtkd/decupa/actions/runs/39834944978) e no `main`. É uma corrida: o `exit(0)` em 50 ms chega antes do kill.
+- `apps/cli/src/app/r2-upload.test.ts`, só na 1ª tentativa (500 ≠ 202), e os dois passaram no rerun:
+  - › inicia o app mesmo com uma exclusão pendente sem resposta
+  - › libera o parcial local após falha de importação…
+- `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém correção pending após encerramento/cancelamento…. Só na 2ª tentativa: o `waitFor` viu `pending` ≠ `aligned`.
+- `apps/cli/src/app/drive-upload.test.ts` › expira download parado e conserva falha para retry explícito. Só na 2ª tentativa: o `expect.poll` no `.tmp` estourou o prazo.

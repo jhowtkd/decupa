@@ -10,6 +10,7 @@
 <meta name="decupa-team-mode" content="">
 <meta name="decupa-media-enabled" content="">
 <meta name="decupa-editor-ui" content="studio">
+<link rel="stylesheet" href="__DECUPA_PROJECT_CSS__">
 <link rel="stylesheet" href="__DECUPA_STUDIO_CSS__">
 </head>
 <body data-stage="materiais">
@@ -27,13 +28,14 @@
         <p id="projectDirLine" class="project-dir" hidden>Pasta do projeto <span id="projectDir" class="mono"></span></p>
       </div>
     </details>
+    <button type="button" id="railToggle" class="quiet small painel-toggle" data-painel="rail" aria-controls="rail" aria-expanded="true" hidden>Projeto</button>
   </div>
-  <nav id="stages" aria-label="Etapas">
-    <button type="button" data-stage="materiais" aria-current="page"><span class="step-mark" aria-hidden="true"></span>Materiais</button>
-    <button type="button" data-stage="edicao"><span class="step-mark" aria-hidden="true"></span>Edição</button>
-    <button type="button" data-stage="revisao"><span class="step-mark" aria-hidden="true"></span>Revisão</button>
-    <button type="button" data-stage="entrega"><span class="step-mark" aria-hidden="true"></span>Entrega</button>
-  </nav>
+  <div id="stages" role="tablist" aria-label="Etapas">
+    <button type="button" role="tab" id="etapa-materiais" data-stage="materiais" aria-controls="bancada" aria-selected="true" tabindex="0"><span class="step-mark" aria-hidden="true"></span>Materiais</button>
+    <button type="button" role="tab" id="etapa-edicao" data-stage="edicao" aria-controls="bancada" aria-selected="false" tabindex="-1"><span class="step-mark" aria-hidden="true"></span>Edição</button>
+    <button type="button" role="tab" id="etapa-revisao" data-stage="revisao" aria-controls="bancada" aria-selected="false" tabindex="-1"><span class="step-mark" aria-hidden="true"></span>Revisão</button>
+    <button type="button" role="tab" id="etapa-entrega" data-stage="entrega" aria-controls="bancada" aria-selected="false" tabindex="-1"><span class="step-mark" aria-hidden="true"></span>Entrega</button>
+  </div>
   <div class="topbar-actions">
     <a href="/settings" aria-label="Configurações" title="Configurações"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9.5 3-.7 2.2-2 .9-2.1-.5L2.6 9l1.5 1.7v2.6L2.6 15l2.1 3.4 2.1-.5 2 .9.7 2.2h5l.7-2.2 2-.9 2.1.5 2.1-3.4-1.5-1.7v-2.6L21.4 9l-2.1-3.4-2.1.5-2-.9-.7-2.2z"/><circle cx="12" cy="12" r="3"/></svg></a>
     <span id="transcriptNotice" class="pill pill-accent" hidden></span>
@@ -42,30 +44,33 @@
       <button type="button" id="reservationTake" class="small primary">Assumir Edição</button>
     </span>
     <span id="status" class="pill" role="status" aria-live="polite">carregando…</span>
-    <button type="button" id="monitorToggle" class="only-narrow" aria-controls="monitor" aria-expanded="false">Monitor</button>
     <span id="primaryAction"></span>
+    <button type="button" id="inspectorToggle" class="quiet small painel-toggle" data-painel="inspector" aria-controls="inspector" aria-expanded="true" hidden>Propriedades</button>
   </div>
 </header>
-<aside id="rail" class="card" aria-label="Projeto"></aside>
-<main id="center" class="card" aria-label="Texto">
-  <div id="textoHead" class="card-head">
-    <h1>Texto</h1>
-    <span id="textoMeta" class="pill mono" hidden></span>
-    <span class="spacer"></span>
-    <span id="undoSlot"></span>
-  </div>
-  <section id="texto" aria-label="Texto"></section>
-</main>
-<aside id="monitor" class="card" aria-label="Monitor">
-  <button type="button" id="closeMonitor" class="quiet only-narrow">Fechar monitor</button>
-  <section id="stage" aria-label="Prévia">
-    <video id="previewPlayer" controls preload="metadata"></video>
+<div id="bancada" role="tabpanel" aria-labelledby="etapa-materiais">
+  <aside id="rail" class="card" aria-label="Projeto" tabindex="-1"></aside>
+  <main id="center" class="card" aria-label="Texto">
+    <div id="textoHead" class="card-head">
+      <h1>Texto</h1>
+      <span id="textoMeta" class="pill mono" hidden></span>
+      <span class="spacer"></span>
+      <span id="undoSlot"></span>
+    </div>
+    <section id="texto" aria-label="Texto"></section>
+  </main>
+  <section id="palco" class="card" aria-label="Monitor">
+    <section id="stage" aria-label="Prévia">
+      <video id="previewPlayer" controls preload="metadata"></video>
+    </section>
+    <section id="activity" aria-label="Andamento da montagem" hidden></section>
   </section>
-  <section id="activity" aria-label="Andamento da montagem" hidden></section>
-  <section id="faixa" aria-label="Sequência"></section>
-  <section id="contexto" aria-label="Revisão e ajustes"></section>
-  <section id="monitorBriefing" aria-label="Briefing" hidden></section>
-</aside>
+  <aside id="inspector" class="card" aria-label="Propriedades e sugestões" tabindex="-1">
+    <section id="contexto" aria-label="Revisão e ajustes"></section>
+    <section id="monitorBriefing" aria-label="Briefing" hidden></section>
+  </aside>
+  <section id="faixa" class="card" aria-label="Sequência"></section>
+</div>
 <div id="dropzone" hidden tabindex="0" role="button" aria-label="Enviar arquivos de mídia">
   Arraste arquivos para cá ou clique para escolher
   <input type="file" id="filePicker" accept="video/*,audio/*" multiple hidden>

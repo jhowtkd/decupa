@@ -52,12 +52,14 @@ it.each(PAGINAS)("%s: outra aba dona → Modo Leitura, controles desabilitados, 
   const faixa = document.getElementById("editReservation")!;
   expect(faixa.hidden).toBe(false);
   expect(document.getElementById("editReservationText")!.textContent).toContain("Maria");
-  // Controles de edição ficam desabilitados; o "Assumir Edição" e as etapas, não.
+  // Controles de edição ficam desabilitados; o "Assumir Edição", as etapas e
+  // o que só mostra região (Monitor na legacy, painéis no studio), não.
   const travados = document.querySelectorAll("button, input, textarea, select")
     .filter((el) => el.disabled).map((el) => el.id);
   expect(travados).toContain("newProject");
   expect(document.getElementById("reservationTake")!.disabled).toBe(false);
-  expect(document.getElementById("monitorToggle")!.disabled).toBe(false);
+  const navegacao = pagina === "studio.html" ? ["railToggle", "inspectorToggle"] : ["monitorToggle", "closeMonitor"];
+  for (const id of navegacao) expect(document.getElementById(id)!.disabled, id).toBe(false);
   for (const etapa of document.querySelectorAll("[data-stage]")) expect(etapa.disabled).toBe(false);
 
   // Sem dono, volta ao normal.
