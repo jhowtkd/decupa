@@ -2,7 +2,7 @@
 
 Data: 22/10/2026. Commit medido: **`2b7ef06`** (`main` intocado, antes de qualquer mudança do PR 1 da pilha “Decupa Studio”). Ramo `studio/pr01-base-alternancia`, worktree limpo, `pnpm install --frozen-lockfile` recém-feito. Nenhum segredo neste arquivo; a suíte roda com as chaves zeradas por `vitest.config.ts`.
 
-Ambiente: Linux 6.8.0 x86_64 · Node v24.21.0 · pnpm 10.32.1.
+Ambiente: Linux 6.8.0 x86_64 · Node v24.21.0 · pnpm 10.32.1. A medição é local: o CI roda Node 22 em Ubuntu, macOS e Windows e ainda não rodou sobre esta base, então as intermitências abaixo podem aparecer de outro jeito lá.
 
 ## Resultado
 
