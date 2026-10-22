@@ -67,36 +67,47 @@ it("sem ui (ou legacy) a faixa não cria ResizeObserver; com studio cria um, sob
   expect(FakeObserver.todos[0]!.observados).toEqual([document.getElementById("faixa")]);
 });
 
+/** Canvas do DOM falso com contexto espião; `largura` faz o canvas "aparecer" (clientWidth/Height > 0). */
+function instrumenta(document: ReturnType<typeof installDom>) {
+  const canvas = document.querySelector("canvas.seq-wave")! as unknown as {
+    clientWidth: number; clientHeight: number; getContext: (tipo: string) => unknown;
+  };
+  const fillRect = vi.fn();
+  canvas.getContext = () => ({ clearRect: vi.fn(), fillRect });
+  const largura = (w: number) => { canvas.clientWidth = w; canvas.clientHeight = w > 0 ? 40 : 0; };
+  return { canvas, fillRect, largura };
+}
+
 it("studio: largura 0→N redesenha só com o cache, sem fetch novo; 0 e a mesma largura não redesenham", async () => {
   const { document, fetchMock, api } = monta("studio");
   await cheio();
-  const canvas = document.querySelector("canvas.seq-wave")!;
+  const { canvas, fillRect, largura } = instrumenta(document);
   expect(canvas).not.toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  // Marca o canvas como "não desenhado": drawSceneWave sempre o revela antes de medir.
-  const apagado = () => { canvas.hidden = true; };
   const observer = FakeObserver.todos[0]!;
 
-  apagado();
+  largura(0);
   observer.largura(0);
   await cheio();
-  expect(canvas.hidden).toBe(true);
+  expect(fillRect).not.toHaveBeenCalled();
 
+  largura(640);
   observer.largura(640);
   await cheio();
-  expect(canvas.hidden).toBe(false);
+  expect(fillRect).toHaveBeenCalled();
 
-  apagado();
+  fillRect.mockClear();
   observer.largura(640);
   await cheio();
-  expect(canvas.hidden).toBe(true);
+  expect(fillRect).not.toHaveBeenCalled();
 
   observer.largura(0);
   await cheio();
-  expect(canvas.hidden).toBe(true);
+  expect(fillRect).not.toHaveBeenCalled();
+  largura(320);
   observer.largura(320);
   await cheio();
-  expect(canvas.hidden).toBe(false);
+  expect(fillRect).toHaveBeenCalled();
 
   await cheio();
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -106,11 +117,11 @@ it("studio: largura 0→N redesenha só com o cache, sem fetch novo; 0 e a mesma
 it("studio: fonte sem waveform (204) fica sem desenho e a largura nova não refaz o pedido", async () => {
   const { document, fetchMock } = monta("studio", false);
   await cheio();
-  const canvas = document.querySelector("canvas.seq-wave")!;
-  canvas.hidden = true;
+  const { fillRect, largura } = instrumenta(document);
+  largura(500);
   FakeObserver.todos[0]!.largura(500);
   await cheio();
-  expect(canvas.hidden).toBe(true);
+  expect(fillRect).not.toHaveBeenCalled();
   await cheio();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });

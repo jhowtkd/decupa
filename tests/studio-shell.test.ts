@@ -79,3 +79,31 @@ it("page.html (legacy) não conhece a meta nem o studio.css", async () => {
 it("studio.css não importa page.css (o HTML já liga os dois em paralelo)", async () => {
   expect(await read("studio.css")).not.toMatch(/@import/);
 });
+
+/** Regras de seletor { declarações } (blocos mais internos, também dentro de @media), sem comentários. */
+function regras(css: string): Array<{ seletor: string; corpo: string }> {
+  const limpo = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...limpo.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map((m) => ({ seletor: m[1]!.trim(), corpo: m[2]! }))
+    .filter((regra) => !regra.seletor.startsWith("@"));
+}
+
+it("studio.css: o vídeo mora em #palco e nada o esconde com display:none, salvo no estado vazio", async () => {
+  const todas = regras(await read("studio.css"));
+  expect(todas.length).toBeGreaterThan(30);
+  const escondem = todas.filter((regra) => /display\s*:\s*none/.test(regra.corpo));
+  expect(escondem.length).toBeGreaterThan(3);
+  const ofensoras = escondem.filter((regra) => /#(palco|stage|previewPlayer)(?![\w-])/.test(regra.seletor) && !regra.seletor.includes("body.is-empty"));
+  expect(ofensoras.map((regra) => regra.seletor)).toEqual([]);
+});
+
+it("studio.css: o aviso de chaves pendentes reserva a altura no padding do body, em toda largura", async () => {
+  const css = await read("studio.css");
+  const regra = regras(css).find((item) => item.seletor.includes("body:has(> #visual-provider-notice:not([hidden]))"));
+  expect(regra).toBeDefined();
+  expect(regra!.corpo).toMatch(/padding-bottom\s*:[^;]*var\(--visual-notice-height/);
+  // Fora de @media: a regra não está dentro de nenhum bloco condicional.
+  const limpo = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const antes = limpo.slice(0, limpo.indexOf("body:has(> #visual-provider-notice"));
+  expect((antes.match(/\{/g) ?? []).length).toBe((antes.match(/\}/g) ?? []).length);
+});

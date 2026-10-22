@@ -93,13 +93,16 @@ function projeto(over: Record<string, unknown> = {}) {
 type Opcoes = {
   storage?: ReturnType<typeof fakeStorage>;
   largura?: number;
-  projeto?: string;
+  /** null: não passa `projeto` (a chave vem da meta ou de location.pathname). */
+  projeto?: string | null;
   project?: unknown;
+  /** HTML extra no body (a meta decupa-project-dir). */
+  extra?: string;
 };
 
 /** Bancada montada como no page.js: setStage valida e delega, "stage" assina o show. */
-function monta({ storage = fakeStorage(), largura: inicial = ESTREITO, projeto: nome = "p1", project }: Opcoes = {}) {
-  const document = installDom(BODY);
+function monta({ storage = fakeStorage(), largura: inicial = ESTREITO, projeto: nome = "p1", project, extra = "" }: Opcoes = {}) {
+  const document = installDom(BODY + extra);
   const state = createState({});
   if (project !== undefined) state.set("project", project);
   const largura = fakeMedia(inicial);
@@ -115,7 +118,8 @@ function monta({ storage = fakeStorage(), largura: inicial = ESTREITO, projeto: 
     else state.set("stage", stage);
   };
   Object.assign(bancada, mountBancada({
-    state, setStage, paintStages, storage: storage as never, media: largura.media as never, projeto: nome,
+    state, setStage, paintStages, storage: storage as never, media: largura.media as never,
+    ...(nome === null ? {} : { projeto: nome }),
   }));
   state.subscribe("stage", bancada.show!);
   document.getElementById("stages")!.addEventListener("click", (event) => {
@@ -709,4 +713,159 @@ it("navegar e abrir/fechar painel não chama a API nem o fetch", async () => {
   const proibidas = /project\/(prepare|adjust|preview|export|approve-final|edit|undo)/;
   expect([...chamadas, ...api.call.mock.calls.map((call) => String(call[0])), ...fetchMock.mock.calls.map((call) => String(call[0]))]
     .filter((url) => proibidas.test(url))).toEqual([]);
+});
+
+// ---- Ajustes da revisão do PR 2 ----
+
+const SEM_MIDIA = { assembly: { fps: { num: 25, den: 1 }, sources: [], tracks: [] } };
+const espera = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+it("a chave do projeto vem da meta decupa-project-dir; sem meta ou com content vazio, de location.pathname", () => {
+  vi.stubGlobal("location", { pathname: "/projects/alpha/" });
+  const comMeta = monta({ projeto: null, extra: '<meta name="decupa-project-dir" content="/raiz/alpha">' });
+  comMeta.setStage("edicao");
+  expect(Object.keys(comMeta.storage.json().etapas)).toEqual(["/raiz/alpha"]);
+  expect(comMeta.storage.json().etapas["/raiz/alpha"]).toBe("edicao");
+
+  for (const extra of ["", '<meta name="decupa-project-dir" content="">']) {
+    const t = monta({ projeto: null, extra });
+    t.setStage("revisao");
+    expect(t.storage.json().etapas, extra).toEqual({ "/projects/alpha/": "revisao" });
+  }
+});
+
+it("projeto sem Mídia: a etapa gravada em Entrega cede a Materiais na primeira resposta", async () => {
+  const t = monta({ storage: prefs({ etapas: { p1: "entrega" }, paineis: {} }) });
+  expect(t.state.get("stage")).toBe("entrega");
+  t.state.set("project", projeto({ ...SEM_MIDIA }));
+  await Promise.resolve();
+  expect(t.state.get("stage")).toBe("materiais");
+  expect(t.body.dataset.stage).toBe("materiais");
+  expect(t.document.getElementById("texto")!.hidden).toBe(false);
+  expect(t.storage.json().etapas.p1).toBe("materiais");
+});
+
+it("projeto com Mídia mantém a Entrega gravada, com a tab travada se a versão não está aprovada", async () => {
+  const t = monta({ storage: prefs({ etapas: { p1: "entrega" }, paineis: {} }) });
+  t.state.set("project", projeto());
+  await Promise.resolve();
+  expect(t.state.get("stage")).toBe("entrega");
+  expect(t.tab("entrega").classList.contains("is-locked")).toBe(true);
+  expect(t.document.getElementById("texto")!.hidden).toBe(true);
+});
+
+it("em Entrega, #texto e #delivery seguem o material: sem fontes o guia volta, com fontes a Entrega reaplica", async () => {
+  const t = monta({ storage: prefs({ etapas: { p1: "entrega" }, paineis: {} }) });
+  const delivery = t.document.createElement("section");
+  delivery.id = "delivery";
+  t.document.getElementById("center")!.appendChild(delivery);
+  t.state.set("project", projeto());
+  await espera();
+  const texto = t.document.getElementById("texto")!;
+  const cabeca = t.document.getElementById("textoHead")!;
+  expect([texto.hidden, cabeca.hidden, delivery.hidden]).toEqual([true, true, false]);
+
+  t.state.set("project", projeto({ ...SEM_MIDIA }));
+  expect([texto.hidden, cabeca.hidden, delivery.hidden]).toEqual([false, false, true]);
+  await espera();
+  expect(t.state.get("stage")).toBe("entrega");
+
+  t.state.set("project", projeto({ revision: 5 }));
+  expect([texto.hidden, cabeca.hidden, delivery.hidden]).toEqual([true, true, false]);
+});
+
+it("navegar antes da primeira resposta vence, mesmo com projeto vazio", async () => {
+  const gravada = monta({ storage: prefs({ etapas: { p1: "entrega" }, paineis: {} }) });
+  gravada.tab("edicao").click();
+  gravada.state.set("project", projeto({ ...SEM_MIDIA }));
+  await espera();
+  expect(gravada.state.get("stage")).toBe("edicao");
+
+  const sem = monta({});
+  sem.tab("revisao").click();
+  sem.state.set("project", projeto({ ...SEM_MIDIA }));
+  await espera();
+  expect(sem.state.get("stage")).toBe("revisao");
+});
+
+it("etapaDerivada: sem fontes é Materiais, mesmo havendo cenas", () => {
+  expect(projeto({ ...SEM_MIDIA }).scenes).toHaveLength(1);
+  expect(etapaDerivada(projeto({ ...SEM_MIDIA }))).toBe("materiais");
+  expect(etapaDerivada(projeto({ ...SEM_MIDIA, finalApprovedRevision: 3 }))).toBe("materiais");
+});
+
+it("duas abas sobre o mesmo storage: etapas de projetos diferentes e escolhas de painéis diferentes se somam", () => {
+  const storage = fakeStorage();
+  // As duas leram a preferência vazia no boot; nenhuma relê depois por conta própria.
+  const a = monta({ storage, largura: LARGO, projeto: "pA" });
+  const b = monta({ storage, largura: LARGO, projeto: "pB" });
+  const em = (t: typeof a, fn: () => void) => { vi.stubGlobal("document", t.document); fn(); };
+
+  em(a, () => a.setStage("edicao"));
+  em(b, () => b.setStage("revisao"));
+  expect(storage.json().etapas).toEqual({ pA: "edicao", pB: "revisao" });
+
+  em(a, () => a.document.getElementById("railToggle")!.click());
+  em(b, () => b.document.getElementById("inspectorToggle")!.click());
+  expect(a.body.dataset.rail).toBe("fixo");
+  expect(b.body.dataset.inspector).toBe("recolhido");
+  expect(storage.json().paineis).toEqual({ rail: "fixo", inspector: "recolhido" });
+  expect(storage.json().etapas).toEqual({ pA: "edicao", pB: "revisao" });
+
+  // A volta não apaga o que a outra gravou, nem uma nova etapa apaga as escolhas.
+  em(a, () => a.setStage("revisao"));
+  expect(storage.json().etapas).toEqual({ pA: "revisao", pB: "revisao" });
+  expect(storage.json().paineis).toEqual({ rail: "fixo", inspector: "recolhido" });
+});
+
+// ---- Foco que sai da gaveta ----
+
+/** Gaveta aberta (largura não fixável) e o disparo manual de focusout, que o DOM falso não gera. */
+function gaveta(painel: "rail" | "inspector") {
+  const t = monta({});
+  t.setStage("edicao");
+  const botao = t.document.getElementById(painel + "Toggle")!;
+  const el = t.document.getElementById(painel)!;
+  const dentro = t.document.createElement("button");
+  el.appendChild(dentro);
+  botao.click();
+  expect(t.body.dataset[painel]).toBe("aberto");
+  const sai = (destino: unknown) => el.dispatchEvent({ type: "focusout", relatedTarget: destino } as never);
+  return { t, botao, el, dentro, sai };
+}
+
+it.each(["inspector", "rail"] as const)("gaveta do %s: o foco que sai para um controle de fora fecha", (painel) => {
+  for (const fora of [(t: ReturnType<typeof monta>) => t.tab("revisao"), (t: ReturnType<typeof monta>) => t.document.getElementById("textoHead")!]) {
+    const g = gaveta(painel);
+    g.sai(fora(g.t));
+    expect(g.t.body.dataset[painel]).toBe("recolhido");
+    expect(g.botao.getAttribute("aria-expanded")).toBe("false");
+  }
+});
+
+it.each(["inspector", "rail"] as const)("gaveta do %s: foco para dentro, para o próprio botão ou sem destino não fecha", (painel) => {
+  const g = gaveta(painel);
+  for (const destino of [g.dentro, g.el, g.botao, null]) {
+    g.sai(destino);
+    expect(g.t.body.dataset[painel], String(destino)).toBe("aberto");
+    expect(g.botao.getAttribute("aria-expanded")).toBe("true");
+  }
+});
+
+it.each(["inspector", "rail"] as const)("gaveta do %s: empilhada (position static) o foco que sai não fecha", (painel) => {
+  const g = gaveta(painel);
+  vi.stubGlobal("getComputedStyle", () => ({ position: "static" }));
+  g.sai(g.t.tab("revisao"));
+  expect(g.t.body.dataset[painel]).toBe("aberto");
+  // Fora do empilhado volta a fechar.
+  vi.stubGlobal("getComputedStyle", () => ({ position: "fixed" }));
+  g.sai(g.t.tab("revisao"));
+  expect(g.t.body.dataset[painel]).toBe("recolhido");
+});
+
+it("focusout sem gaveta aberta não faz nada", () => {
+  const t = monta({ largura: LARGO });
+  t.setStage("edicao");
+  t.document.getElementById("inspector")!.dispatchEvent({ type: "focusout", relatedTarget: t.tab("revisao") } as never);
+  expect(t.body.dataset.inspector).toBe("fixo");
 });
