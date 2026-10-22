@@ -79,18 +79,23 @@ it("studio: largura 0→N redesenha só com o cache, sem fetch novo; 0 e a mesma
 
   apagado();
   observer.largura(0);
+  await cheio();
   expect(canvas.hidden).toBe(true);
 
   observer.largura(640);
+  await cheio();
   expect(canvas.hidden).toBe(false);
 
   apagado();
   observer.largura(640);
+  await cheio();
   expect(canvas.hidden).toBe(true);
 
   observer.largura(0);
+  await cheio();
   expect(canvas.hidden).toBe(true);
   observer.largura(320);
+  await cheio();
   expect(canvas.hidden).toBe(false);
 
   await cheio();
@@ -104,6 +109,7 @@ it("studio: fonte sem waveform (204) fica sem desenho e a largura nova não refa
   const canvas = document.querySelector("canvas.seq-wave")!;
   canvas.hidden = true;
   FakeObserver.todos[0]!.largura(500);
+  await cheio();
   expect(canvas.hidden).toBe(true);
   await cheio();
   expect(fetchMock).toHaveBeenCalledTimes(1);

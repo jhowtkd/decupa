@@ -31,8 +31,11 @@ it("editorUi vem só da meta decupa-editor-ui com content studio; o resto é leg
 it("studio-bancada.js só é importado quando editorUi é studio", () => {
   const usos = linhas().filter((linha) => linha.includes("studio-bancada"));
   expect(usos).toHaveLength(1);
-  expect(usos[0]).toMatch(/editorUi === "studio" \? await import\(projectPath\("editor\/studio-bancada\.js"\)\) : null/);
+  expect(usos[0]).toMatch(/editorUi === "studio" \? import\(projectPath\("editor\/studio-bancada\.js"\)\) : null,/);
   expect(js).not.toMatch(/^import .*studio-bancada/m);
+  // Dentro do Promise.all do boot: nenhuma ida e volta em série depois dos módulos.
+  const boot = /await Promise\.all\(\[([\s\S]*?)\]\);/.exec(js)?.[1];
+  expect(boot).toContain(usos[0]!.trim());
 });
 
 it("a legacy chama mountLegacyMonitor() e abre em Materiais; o studio usa a bancada", () => {

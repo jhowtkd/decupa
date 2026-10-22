@@ -22,6 +22,12 @@ body, body.is-empty {
   display: grid; height: 100dvh; overflow: hidden;
   grid-template: "topbar" auto "bancada" minmax(0, 1fr) / minmax(0, 1fr);
 }
+/* O aviso fixo do servidor (withVisualNotice: bottom 16px, altura medida em
+   --visual-notice-height) não cobre a faixa: a bancada termina acima dele.
+   No empilhado, o fim da página rola para cima do aviso. */
+body:has(> #visual-provider-notice:not([hidden])) {
+  padding-bottom: calc(var(--visual-notice-height, 64px) + 16px + var(--gap));
+}
 #bancada { grid-area: bancada; position: relative; min-width: 0; min-height: 0; display: grid; gap: var(--gap); }
 #bancada > * { min-width: 0; min-height: 0; }
 
@@ -121,7 +127,7 @@ body.is-empty .painel-toggle { display: none; }
 
 /* == responsivo == */
 /* O topo passa as etapas para a segunda linha antes de espremer status e ações. */
-@media (max-width: 1360px) {
+@media (max-width: 1560px) {
   #topbar { flex-wrap: wrap; row-gap: 6px; padding-top: 4px; padding-bottom: 4px; }
   /* Quebra de linha antes das etapas, que ficam centralizadas na segunda. */
   #topbar::after { content: ""; order: 2; flex-basis: 100%; }

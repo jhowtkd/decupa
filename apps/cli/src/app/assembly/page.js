@@ -21,6 +21,7 @@ const [
   { ICON },
   { ResumableMediaUpload, UploadPausedError },
   { activityView, mountActivity },
+  studioBancada,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -33,8 +34,9 @@ const [
   import(projectPath("editor/icons.js")),
   import(projectPath("editor/media-upload.js")),
   import(projectPath("editor/progress.js")),
+  // Só o studio baixa a bancada; a legacy não pede o módulo.
+  editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
 ]);
-const studioBancada = editorUi === "studio" ? await import(projectPath("editor/studio-bancada.js")) : null;
 
 const state = createState({
   project: null, operation: null, selection: new Set(), playhead: null,

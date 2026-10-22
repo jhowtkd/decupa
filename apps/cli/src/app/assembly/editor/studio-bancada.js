@@ -47,8 +47,19 @@ export function readPreferencia(storage) {
   return { etapas, paineis };
 }
 
-/** Grava sem deixar a falha do storage (cota, modo privado) chegar à bancada. */
-export function writePreferencia(storage, { etapas, paineis }) {
+/**
+ * Grava uma mudança só: a etapa de um projeto (`{ projeto, etapa }`) ou a
+ * escolha de um painel (`{ painel, escolha }`). Relê o storage antes, então
+ * outra aba que gravou outro projeto ou outro painel não é apagada. Falha do
+ * storage (cota, modo privado) não chega à bancada.
+ */
+export function writePreferencia(storage, mudanca) {
+  const { etapas, paineis } = readPreferencia(storage);
+  if (mudanca.projeto !== undefined) {
+    etapas.delete(mudanca.projeto);
+    etapas.set(mudanca.projeto, mudanca.etapa);
+  }
+  if (mudanca.painel !== undefined) paineis[mudanca.painel] = mudanca.escolha;
   const recentes = [...etapas].slice(-MAX_PROJETOS);
   try {
     storage?.setItem(PREFERENCIA, JSON.stringify({ etapas: Object.fromEntries(recentes), paineis }));
@@ -57,13 +68,19 @@ export function writePreferencia(storage, { etapas, paineis }) {
   }
 }
 
+/** Projeto carregado sem nenhuma Mídia (o estado vazio do page.js); null ainda não se sabe. */
+function semMaterial(project) {
+  return project != null && (project.assembly?.sources?.length ?? 0) === 0;
+}
+
 /**
- * Etapa de quem abre o projeto sem preferência gravada (pura): sem cena fica
- * em Materiais, onde está a preparação; com cena, Edição, ou Entrega quando a
- * versão atual já está aprovada (a mesma trava do stepper).
+ * Etapa de quem abre o projeto sem preferência gravada, ou sem material
+ * (pura): sem material ou sem cena fica em Materiais, onde estão a
+ * importação e a preparação; com cena, Edição, ou Entrega quando a versão
+ * atual já está aprovada (a mesma trava do stepper).
  */
 export function etapaDerivada(project) {
-  if (!project?.scenes?.length) return "materiais";
+  if (semMaterial(project) || !project?.scenes?.length) return "materiais";
   return stepperState(project, null).find((item) => item.id === "entrega").locked ? "edicao" : "entrega";
 }
 
@@ -128,7 +145,10 @@ export function mountBancada({
   }
   const fixavel = (nome) => fixaveis[nome][etapa]?.matches === true;
   const gravada = preferencia.etapas.get(projeto);
-  // Sem etapa gravada, a primeira resposta do projeto decide (uma vez).
+  // Até a primeira resposta do projeto, se a pessoa não navegou: sem etapa
+  // gravada, ela decide; com etapa gravada, projeto sem material volta a
+  // Materiais (o vazio vence). `decidir` também segura a gravação até lá.
+  let primeira = true;
   let decidir = gravada === undefined;
   let etapa = null;
   let aberto = null;
@@ -154,12 +174,24 @@ export function mountBancada({
     }
   }
 
+  /**
+   * A entrega toma o lugar do texto no cartão central, como na legacy. Sem
+   * material o guia de importar (que mora no #texto) vence a etapa.
+   */
+  function placeEntrega() {
+    const entrega = etapa === "entrega" && !semMaterial(state.get("project"));
+    document.getElementById("texto").hidden = entrega;
+    document.getElementById("textoHead").hidden = entrega;
+    const delivery = document.getElementById("delivery");
+    if (delivery) delivery.hidden = !entrega;
+  }
+
   function show(next) {
     if (!STAGE_IDS.has(next)) return;
     // A gaveta não atravessa etapas; navegar antes da primeira resposta vence a decisão.
     if (next !== etapa) {
       aberto = null;
-      if (etapa !== null) decidir = false;
+      if (etapa !== null) primeira = decidir = false;
     }
     etapa = next;
     body.dataset.stage = next;
@@ -169,19 +201,10 @@ export function mountBancada({
       tab.tabIndex = on ? 0 : -1;
       if (on) document.getElementById("bancada")?.setAttribute("aria-labelledby", tab.id);
     }
-    // A entrega toma o lugar do texto no cartão central, como na legacy.
-    const entrega = next === "entrega";
-    document.getElementById("texto").hidden = entrega;
-    document.getElementById("textoHead").hidden = entrega;
-    const delivery = document.getElementById("delivery");
-    if (delivery) delivery.hidden = !entrega;
+    placeEntrega();
     render();
     paintStages();
-    if (!decidir) {
-      preferencia.etapas.delete(projeto);
-      preferencia.etapas.set(projeto, next);
-      writePreferencia(storage, preferencia);
-    }
+    if (!decidir) writePreferencia(storage, { projeto, etapa: next });
   }
 
   function alternar(nome) {
@@ -191,7 +214,7 @@ export function mountBancada({
       // Com largura para fixar, o botão fixa ou recolhe, e a escolha fica gravada.
       preferencia.paineis[nome] = atual === "fixo" ? "recolhido" : "fixo";
       aberto = null;
-      writePreferencia(storage, preferencia);
+      writePreferencia(storage, { painel: nome, escolha: preferencia.paineis[nome] });
       render();
       return;
     }
@@ -201,7 +224,20 @@ export function mountBancada({
     if (aberto === nome) document.getElementById(nome)?.focus();
   }
 
-  for (const nome of Object.keys(PAINEIS)) toggle(nome)?.addEventListener("click", () => alternar(nome));
+  for (const nome of Object.keys(PAINEIS)) {
+    toggle(nome)?.addEventListener("click", () => alternar(nome));
+    // A gaveta não tem fundo: o foco que sai dela (Tab, clique em controle)
+    // fecha, senão ele cairia em controles cobertos. Para o próprio botão,
+    // quem fecha é o clique; empilhado, o painel está no fluxo e fica.
+    const painel = document.getElementById(nome);
+    painel?.addEventListener("focusout", (event) => {
+      const destino = event.relatedTarget;
+      if (aberto !== nome || !destino || painel.contains(destino) || destino === toggle(nome)) return;
+      if (globalThis.getComputedStyle?.(painel).position === "static") return;
+      aberto = null;
+      render();
+    });
+  }
   document.getElementById("stages")?.addEventListener("keydown", (event) => {
     const tab = tabs.find((item) => item.contains(event.target));
     const next = tab ? abaPorTecla(tab.dataset.stage, event.key) : null;
@@ -217,13 +253,18 @@ export function mountBancada({
     render();
   });
   state.subscribe("project", (project) => {
-    if (!decidir || !project) return;
+    // Ganhar ou perder todo o material muda quem ocupa o cartão central.
+    placeEntrega();
+    if (!primeira || !project) return;
     // Depois do set("project") terminar: o state.js ainda compara a etapa que
     // leu antes do aviso, e a troca de etapa dele (transcrição chegando) vence.
     queueMicrotask(() => {
-      if (!decidir) return;
+      if (!primeira) return;
+      primeira = false;
+      const atual = state.get("project");
+      if (!decidir && !semMaterial(atual)) return;
       decidir = false;
-      setStage(etapaDerivada(state.get("project")));
+      setStage(etapaDerivada(atual));
     });
   });
 

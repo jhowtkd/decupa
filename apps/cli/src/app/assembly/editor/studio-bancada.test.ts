@@ -186,19 +186,18 @@ it("etapaDerivada: sem cena Materiais, com cena Edição, versão atual aprovada
 
 it("readPreferencia/writePreferencia: ida e volta, e o limite de 30 projetos fica com os mais recentes", () => {
   const storage = fakeStorage();
-  const etapas = new Map<string, string>();
-  for (let i = 0; i < 35; i += 1) etapas.set("p" + i, "edicao");
-  writePreferencia(storage, { etapas, paineis: { rail: "fixo" } });
+  for (let i = 0; i < 35; i += 1) writePreferencia(storage, { projeto: "p" + i, etapa: "edicao" });
+  writePreferencia(storage, { painel: "rail", escolha: "fixo" });
   expect(storage.setItem).toHaveBeenCalledWith(PREFERENCIA, expect.any(String));
   const lida = readPreferencia(storage);
   expect([...lida.etapas.keys()]).toEqual(Array.from({ length: 30 }, (_, i) => "p" + (i + 5)));
   expect(lida.paineis).toEqual({ rail: "fixo" });
   // Sem storage ou com storage que lança, vira o padrão e a escrita não propaga.
   expect(readPreferencia(null)).toEqual({ etapas: new Map(), paineis: {} });
-  expect(() => writePreferencia(null, lida)).not.toThrow();
+  expect(() => writePreferencia(null, { projeto: "p1", etapa: "edicao" })).not.toThrow();
   const quebrado = { getItem: () => { throw new Error("negado"); }, setItem: () => { throw new Error("cota"); } };
   expect(readPreferencia(quebrado)).toEqual({ etapas: new Map(), paineis: {} });
-  expect(() => writePreferencia(quebrado, lida)).not.toThrow();
+  expect(() => writePreferencia(quebrado, { painel: "rail", escolha: "fixo" })).not.toThrow();
 });
 
 // ---- 3. Preferência ausente ou corrompida ----
