@@ -77,6 +77,7 @@ export class El {
   showCount = 0;
   clientWidth = 0;
   clientHeight = 0;
+  tabIndex = 0;
   currentTime = 0;
   duration = Number.NaN;
   seeking = false;
@@ -99,6 +100,11 @@ export class El {
       set: (_target, key, value) => {
         if (typeof key !== "string") return false;
         this.attrs.set(name(key), String(value));
+        return true;
+      },
+      // `delete el.dataset.x` remove o atributo, como no navegador.
+      deleteProperty: (_target, key) => {
+        if (typeof key === "string") this.attrs.delete(name(key));
         return true;
       },
     });
