@@ -24,3 +24,7 @@ Caused by: Error: Matcher did not succeed in time.
 ```
 
 O `expect.poll` da linha 665 espera o parcial do Drive reaparecer e estoura o prazo quando a suíte inteira disputa a máquina. Rodando só o arquivo, passou nas três tentativas (22/22 cada). É intermitência de carga em código que o redesign não toca; não é regressão. Os PRs da pilha comparam contra esta tabela: essa falha, se aparecer, não conta como nova.
+
+## Outra intermitência, vista no fim do PR 1
+
+Na primeira rodada completa sobre o PR 1, `apps/cli/src/app/assembly/editor/montage-hot.test.ts` › *uma atualização de projeto grande fica abaixo de 16 ms* mediu `16.51` ms contra o teto de `16`. É um teto de tempo de relógio: o PR 1 não toca `editor/`, o arquivo isolado passou nas três tentativas e a segunda rodada completa saiu inteira verde (2926 passaram, 5 pulados). Conta como intermitência de carga, como a de cima.
