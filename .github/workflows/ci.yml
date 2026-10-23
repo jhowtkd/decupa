@@ -135,6 +135,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Plano B, desligado: se o render real quebrar com o FFmpeg do apt,
+      # DECUPA_E2E_MOTOR=sintetico no `pnpm e2e` troca só o compositor por um
+      # MP4 liso na duração da timeline (e2e/apoio/motor-sintetico). Registrar no PR.
       - name: motor de render (bundle do repositório)
         run: node scripts/setup.mjs --engine-only
 

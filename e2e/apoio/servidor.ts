@@ -45,10 +45,14 @@ export class Servidor {
     await mkdir(home, { recursive: true });
     await mkdir(tmp, { recursive: true });
     // Ambiente mínimo e explícito: nenhuma chave de IA nem configuração de quem roda.
-    const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: tmp, LANG: "C.UTF-8", TZ: "UTC" };
+    const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: tmp, LANG: "C.UTF-8", TZ: "UTC",
+      PYTHONDONTWRITEBYTECODE: "1" };
     if (variante) env.DECUPA_EDITOR_UI = variante;
     if (senha) env.DECUPA_AUTH_PASSWORD = senha;
+    // Plano B, desligado: DECUPA_E2E_MOTOR=sintetico troca só o compositor
+    // por um MP4 liso do FFmpeg na duração da timeline (e2e/apoio/motor-sintetico).
     if (semMotor) env.VE_PLUGIN_ROOT = join(base, "sem-motor");
+    else if (process.env.DECUPA_E2E_MOTOR === "sintetico") env.VE_PLUGIN_ROOT = join(REPO, "e2e/apoio/motor-sintetico");
     const filho = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", CLI, "serve",
       "--projects-root", raiz, "--port", String(this.porta)], { cwd: base, env, stdio: ["ignore", "pipe", "pipe"] });
     this.filho = filho;
