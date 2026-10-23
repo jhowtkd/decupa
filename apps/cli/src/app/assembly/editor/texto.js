@@ -240,10 +240,12 @@ function eachCited(project, cited, visit) {
 
 /**
  * Seleção depois de um catálogo novo (pura; studio). A ocorrência que segue
- * no catálogo fica; a que sumiu dá lugar às palavras novas que cobrem o
- * intervalo de mídia dela: no mesmo take (o alinhamento de uma correção
- * troca os IDs do intervalo) ou, se ela estava numa zona omitida, na zona ou
- * num take da mesma cena (Incluir leva a palavra para um take). Sem take ou
+ * no catálogo fica; as que sumiram dão lugar às palavras novas dentro do
+ * envelope de mídia delas (do menor início ao maior fim, por grupo e
+ * Mídia): no mesmo take (o alinhamento de uma correção troca os IDs do
+ * intervalo, e pode pôr palavra numa pausa) ou, se estavam numa zona
+ * omitida, na zona ou num take da mesma cena (Incluir leva a palavra para um
+ * take). A seleção é contígua, então o envelope não abre buraco. Sem take ou
  * cena equivalente, cai. Palavra que já existia fora da seleção não entra,
  * só as cenas citadas são percorridas, e o resultado sai na ordem do
  * documento.
@@ -264,13 +266,22 @@ export function reconcileSelection(previous, next, selection) {
   eachCited(next, cited, (key, word, sourceId) => after.push({ key, word, sourceId }));
   const present = new Set(after.map((entry) => entry.key));
   const group = (key) => key.slice(0, key.lastIndexOf("\0"));
+  // Envelope do que sumiu, por grupo (take ou zona) e Mídia.
   const gone = new Map();
   for (const key of selection) {
     const old = before.get(key);
     if (present.has(key) || !old) continue;
-    if (!gone.has(group(key))) gone.set(group(key), []);
-    gone.get(group(key)).push(old);
+    const id = group(key) + "\0" + old.sourceId;
+    const envelope = gone.get(id);
+    if (envelope) {
+      envelope.start = Math.min(envelope.start, old.start);
+      envelope.end = Math.max(envelope.end, old.end);
+    } else gone.set(id, { ...old });
   }
+  const covers = (id, word) => {
+    const envelope = gone.get(id);
+    return !!envelope && word.start < envelope.end && envelope.start < word.end;
+  };
   for (const { key, word, sourceId } of after) {
     if (selection.has(key)) {
       out.add(key);
@@ -278,8 +289,7 @@ export function reconcileSelection(previous, next, selection) {
     }
     if (before.has(key)) continue;
     const zone = key.slice(0, key.indexOf("\0") + 1);
-    const ranges = [...(gone.get(group(key)) || []), ...(group(key) === zone ? [] : gone.get(zone) || [])];
-    if (ranges.some((range) => range.sourceId === sourceId && word.start < range.end && range.start < word.end)) out.add(key);
+    if (covers(group(key) + "\0" + sourceId, word) || (group(key) !== zone && covers(zone + "\0" + sourceId, word))) out.add(key);
   }
   return out;
 }
@@ -992,6 +1002,49 @@ function collectSelected(project, selection) {
   return out;
 }
 
+/**
+ * O que Ouvir toca no studio (puro). Um trecho só: a Mídia original, do
+ * início da primeira palavra ao fim da última. Seleção entre trechos: a
+ * montagem, do início da primeira palavra mantida ao fim da última; sem
+ * mantida, só o primeiro trecho, na Mídia original.
+ * @returns {{ kind: "original", sourceId: string, start: number, end: number }
+ *   | { kind: "montagem", start: number, end: number } | null}
+ */
+export function listenTarget(project, selection) {
+  if (!selection?.size) return null;
+  const groups = [];
+  const { starts } = montageWordTimes(project);
+  let start = Infinity;
+  let end = -Infinity;
+  for (const scene of project.scenes) {
+    for (const take of scene.takes) {
+      const words = [];
+      for (const word of takeWords(project, scene, take)) {
+        const key = selectionKey(scene.id, take.id, word.id);
+        if (!selection.has(key)) continue;
+        words.push(word);
+        if (word.removed) continue;
+        const at = starts.get(key);
+        start = Math.min(start, at);
+        end = Math.max(end, at + Math.max(0, (word.cutEnd ?? word.end) - (word.cutStart ?? word.start)));
+      }
+      if (words.length) groups.push({ sourceId: take.sourceId, words });
+    }
+    for (const source of project.assembly.sources) {
+      const words = omittedWords(project, scene, source.id).filter((word) => selection.has(selectionKey(scene.id, "", word.id)));
+      if (words.length) groups.push({ sourceId: source.id, words });
+    }
+  }
+  if (!groups.length) return null;
+  if (groups.length > 1 && end > start) return { kind: "montagem", start, end };
+  const first = groups[0];
+  return {
+    kind: "original", sourceId: first.sourceId,
+    start: Math.min(...first.words.map((word) => word.start)),
+    end: Math.max(...first.words.map((word) => word.end)),
+  };
+}
+
 /** Bandeiras da seleção no formato que menuActionsFor entende. */
 function selectedFlags(project, selection) {
   const flags = [];
@@ -1104,6 +1157,9 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
   let barSignature = null;
   let barFrame = null;
   let barModelFor = { project: null, keys: null, model: null };
+  // Palavra onde Enter abriu a barra, e o tamanho medido da barra (só muda com o conteúdo).
+  let barAnchorKey = null;
+  let barSize = null;
 
   const selection = () => state.get("selection") || new Set();
   const wordKey = (btn) => selectionKey(btn.dataset.scene, btn.dataset.take, btn.dataset.wordId);
@@ -1166,6 +1222,7 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     const from = keys.indexOf(selectionAnchor);
     const to = keys.indexOf(key);
     barDismissed = false;
+    barAnchorKey = null;
     state.set("selection", new Set(from < 0 || to < 0 ? [key]
       : keys.slice(Math.min(from, to), Math.max(from, to) + 1)));
     state.set("selectedSupport", null);
@@ -1249,6 +1306,7 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     selectionAnchor = null;
     selectionFocus = null;
     barDismissed = false;
+    barAnchorKey = null;
     const next = new Set();
     for (const take of scene.takes) {
       for (const word of takeWords(p, scene, take)) {
@@ -1264,6 +1322,14 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
   function listenSelection() {
     const p = state.get("project");
     if (!p) return;
+    if (studio) {
+      // Studio: seleção entre trechos ouve a montagem, como a pessoa vê na sequência.
+      const target = listenTarget(p, selection());
+      if (target?.kind === "montagem") player.playMontage(target.start, target.end);
+      else if (target) player.playOriginal(target.sourceId, Math.max(0, target.start - LISTEN_PAD), target.end);
+      else api.notifyError("Selecione palavras de um mesmo trecho.");
+      return;
+    }
     const found = collectSelected(p, selection());
     if (!found.length) {
       api.notifyError("Selecione palavras de um mesmo trecho.");
@@ -1858,7 +1924,7 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     // Ativação assistiva sem ponteiro tem o mesmo caminho de Enter.
     if (ev.detail === 0) {
       if (!selection().has(wordKey(btn))) selectWord(btn);
-      if (studio) focusBar();
+      if (studio) focusBar(btn);
       else openSelectionMenu(btn.getBoundingClientRect(), btn);
       return;
     }
@@ -1963,7 +2029,7 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     if (["Enter", " ", "ContextMenu"].includes(ev.key) || (ev.key === "F10" && ev.shiftKey)) {
       ev.preventDefault();
       if (!selection().has(wordKey(btn))) selectWord(btn);
-      if (studio) focusBar();
+      if (studio) focusBar(btn);
       else openSelectionMenu(btn.getBoundingClientRect(), btn);
       return;
     }
@@ -2027,10 +2093,17 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     if (studio) {
       marks.set("alinhando", aligningKeys(p));
       if (lost) {
-        // As pontas que sumiram passam às do intervalo reconciliado.
+        // As pontas que sumiram passam às do intervalo reconciliado, na mesma
+        // direção: seleção feita de trás para frente segue estendendo pela frente.
+        const old = [...selection()];
+        const from = old.indexOf(selectionAnchor);
+        const to = old.indexOf(selectionFocus);
+        const backwards = from >= 0 && to >= 0 && from > to;
         const keys = [...pruned];
-        if (!pruned.has(selectionAnchor)) selectionAnchor = keys[0] ?? null;
-        if (!pruned.has(selectionFocus)) selectionFocus = keys.at(-1) ?? null;
+        const first = keys[0] ?? null;
+        const last = keys.at(-1) ?? null;
+        if (!pruned.has(selectionAnchor)) selectionAnchor = backwards ? last : first;
+        if (!pruned.has(selectionFocus)) selectionFocus = backwards ? first : last;
       }
     }
     if (lost) state.set("selection", pruned);
@@ -2102,25 +2175,41 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     return { text: "", warn: false };
   }
 
-  /** Palavra-foco da seleção, se está montada e visível dentro do #texto. */
+  /** Pontas preferidas da barra: a palavra do Enter, o foco da seleção e a última selecionada. */
+  function anchorKeys(keys) {
+    return [barAnchorKey, selectionFocus, [...keys].at(-1)].filter((key) => key != null && keys.has(key));
+  }
+
+  /**
+   * Onde a barra se ancora: a primeira ponta preferida montada e visível
+   * dentro do #texto; sem nenhuma, a primeira palavra selecionada visível
+   * (seleção de cena ou de zona inteira não tem foco).
+   */
   function barAnchor(el, keys) {
-    const key = keys.has(selectionFocus) ? selectionFocus : [...keys].at(-1);
-    const btn = wordIndex(el).buttons.get(key);
-    if (!btn?.isConnected) return null;
-    const rect = btn.getBoundingClientRect();
     const box = el.getBoundingClientRect();
     // Empilhada (≤900 px) a página rola: a parte visível é o #texto dentro da janela.
     const bounds = { left: box.left, right: box.right, width: box.width,
       top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight || box.bottom) };
-    if (!(rect.height > 0) || rect.bottom <= bounds.top || rect.top >= bounds.bottom) return null;
-    return { rect, bounds };
+    const { buttons } = wordIndex(el);
+    const visible = (key) => {
+      const btn = buttons.get(key);
+      if (!btn?.isConnected) return null;
+      const rect = btn.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > bounds.top && rect.top < bounds.bottom ? rect : null;
+    };
+    for (const key of [...anchorKeys(keys), ...keys]) {
+      const rect = visible(key);
+      if (rect) return { rect, bounds };
+    }
+    return null;
   }
 
+  /** Repinta o conteúdo da barra quando ele muda; diz se mudou (então é preciso medir de novo). */
   function renderBar(model) {
     if (barForm && !sameKeys(barForm, selection())) barForm = null;
     const status = barStatus(model);
     const signature = JSON.stringify([model.count, model.actions.map((item) => item.action), status.text, barBusy, !!barForm]);
-    if (signature === barSignature) return;
+    if (signature === barSignature) return false;
     barSignature = signature;
     bar.setAttribute("aria-busy", String(barBusy));
     bar.querySelector(".barra-resumo").textContent = model.count === 1 ? "1 palavra" : model.count + " palavras";
@@ -2147,9 +2236,14 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     const target = buttons.find((btn) => btn.dataset.barAction === focused) || buttons[0];
     target?.setAttribute("tabindex", "0");
     if (focused !== undefined && !barForm) target?.focus();
+    return true;
   }
 
-  /** Mostra, preenche e posiciona a barra; sem seleção visível na Edição, some. */
+  /**
+   * Mostra, preenche e posiciona a barra; sem seleção visível na Edição, some.
+   * Lê as posições antes de escrever, e só mede a barra quando o conteúdo ou
+   * a largura mudam: rolar com seleção não força layout a cada quadro.
+   */
   function paintBar() {
     barFrame = null;
     if (!bar) return;
@@ -2161,14 +2255,19 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
       bar.hidden = true;
       return;
     }
-    renderBar(barModel());
+    const changed = renderBar(barModel());
+    const maxWidth = Math.max(0, anchor.bounds.width - 16);
+    const shown = !bar.hidden;
     bar.hidden = false;
-    // Mede fora do caminho e só então coloca, como o menu flutuante.
-    bar.style.maxWidth = Math.max(0, anchor.bounds.width - 16) + "px";
-    bar.style.top = "0px";
-    bar.style.left = "0px";
-    const size = bar.getBoundingClientRect();
-    const box = selectionBarBox(anchor.rect, { width: size.width, height: size.height }, anchor.bounds);
+    if (changed || !shown || barSize?.maxWidth !== maxWidth) {
+      // Mede fora do caminho e só então coloca, como o menu flutuante.
+      bar.style.maxWidth = maxWidth + "px";
+      bar.style.top = "0px";
+      bar.style.left = "0px";
+      const rect = bar.getBoundingClientRect();
+      barSize = { width: rect.width, height: rect.height, maxWidth };
+    }
+    const box = selectionBarBox(anchor.rect, barSize, anchor.bounds);
     bar.style.top = box.top + "px";
     bar.style.left = box.left + "px";
     bar.dataset.placement = box.placement;
@@ -2180,20 +2279,26 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     barFrame = requestAnimationFrame(paintBar);
   }
 
-  /** Enter, Space e Shift+F10 na palavra: o foco entra na barra (ou no campo do Corrigir aberto). */
-  function focusBar() {
+  /**
+   * Enter, Space e Shift+F10 na palavra: a barra se ancora nela (se está na
+   * seleção) e o foco entra na barra, ou no campo do Corrigir aberto.
+   */
+  function focusBar(btn = null) {
     barDismissed = false;
+    const key = btn ? wordKey(btn) : null;
+    barAnchorKey = key && selection().has(key) ? key : null;
     paintBar();
     if (bar.hidden) return;
     (barForm ? bar.querySelector("form input") : bar.querySelector('.barra-acoes [tabindex="0"]'))?.focus();
   }
 
-  /** Devolve o foco à palavra-foco da seleção (Esc na barra, fim de uma ação). */
+  /** Devolve o foco à palavra onde a barra se ancora (Esc na barra, fim de uma ação). */
   function focusSelectionWord() {
     const el = root();
+    if (!el) return;
+    const { buttons } = wordIndex(el);
     const keys = selection();
-    const key = keys.has(selectionFocus) ? selectionFocus : [...keys].at(-1);
-    const btn = el && key ? wordIndex(el).buttons.get(key) : null;
+    const btn = [...anchorKeys(keys), ...keys].map((key) => buttons.get(key)).find((item) => item?.isConnected);
     if (!btn) return;
     paintWordTabs(btn);
     btn.focus({ preventScroll: true });

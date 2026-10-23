@@ -107,10 +107,11 @@ it("palavra cortada continua pesquisável e projeto sem cenas não tem ocorrênc
   expect(ocorrencias({ ...p, scenes: [] }, "um")).toEqual([]);
 });
 
-it("indiceDeBusca reaproveita o índice do mesmo projeto", () => {
+it("indiceDeBusca reaproveita o índice enquanto o conteúdo não muda, mesmo com objeto novo", () => {
   const p = base();
   expect(indiceDeBusca(p)).toBe(indiceDeBusca(p));
-  expect(indiceDeBusca(base())).not.toBe(indiceDeBusca(p));
+  expect(indiceDeBusca(base())).toBe(indiceDeBusca(p));
+  expect(indiceDeBusca({ ...base(), revision: 2 })).not.toBe(indiceDeBusca(p));
 });
 
 it("contadorDaBusca: n de m, nenhuma ocorrência e fora da montagem", () => {

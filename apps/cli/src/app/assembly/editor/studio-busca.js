@@ -19,8 +19,22 @@ function novoTrecho(cena, tipo, fonte, sourceId) {
   return { cena, tipo, fonte, sourceId, inicio: Infinity, texto: "", de: [], ate: [], chaves: [] };
 }
 
+// Termos já normalizados: o vocabulário falado é pequeno e se repete muito.
+const termos = new Map();
+const MAX_TERMOS = 50_000;
+
+function termoDe(text) {
+  let termo = termos.get(text);
+  if (termo === undefined) {
+    if (termos.size >= MAX_TERMOS) termos.clear();
+    termo = normalizarBusca(text);
+    termos.set(text, termo);
+  }
+  return termo;
+}
+
 function acrescentar(trecho, chave, word) {
-  const termo = normalizarBusca(word.display || word.text);
+  const termo = termoDe(word.display || word.text);
   if (!termo) return;
   if (trecho.texto) trecho.texto += " ";
   trecho.de.push(trecho.texto.length);
@@ -87,21 +101,36 @@ function construirIndice(project) {
   return { trechos, posicoes };
 }
 
-const indices = new WeakMap();
+/**
+ * O que muda as palavras pesquisáveis. Cada resposta traz um objeto de
+ * projeto novo, mesmo sem mudar o texto (poll, prévia); cenas e cortes só
+ * mudam com revisão nova, e o que muda na mesma revisão (correção que
+ * termina em segundo plano, transcrição que chega) aparece no status e na
+ * contagem.
+ */
+function chaveDeConteudo(project) {
+  return [
+    project.id, project.revision,
+    (project.corrections || []).map((item) => item.id + ":" + item.status).join(","),
+    (project.analyses || []).map((item) => item.sourceId + ":" + item.status + ":" + (item.words?.length ?? 0)).join(","),
+    project.assembly.sources.map((source) => source.id).join(","),
+  ].join("|");
+}
+
+let ultimoIndice = { chave: null, valor: null };
 
 /**
  * Trechos pesquisáveis na ordem do documento e a posição de cada ocorrência
- * (puro, um por objeto de projeto): a fala de cada cena, com palavras
- * mantidas e cortadas, e o material de cada Mídia que nenhum take usa.
- * Palavra que encosta num take não conta como não usada.
+ * (puro, reaproveitado enquanto o conteúdo não muda): a fala de cada cena,
+ * com palavras mantidas e cortadas, e o material de cada Mídia que nenhum
+ * take usa. Palavra que encosta num take não conta como não usada.
  */
 export function indiceDeBusca(project) {
-  const deps = [project.scenes, project.analyses, project.corrections, project.assembly.sources];
-  const hit = indices.get(project);
-  if (hit && hit.deps.every((dep, i) => dep === deps[i])) return hit.value;
-  const value = project.scenes.length ? construirIndice(project) : { trechos: [], posicoes: new Map() };
-  indices.set(project, { deps, value });
-  return value;
+  const chave = chaveDeConteudo(project);
+  if (ultimoIndice.chave === chave) return ultimoIndice.valor;
+  const valor = project.scenes.length ? construirIndice(project) : { trechos: [], posicoes: new Map() };
+  ultimoIndice = { chave, valor };
+  return valor;
 }
 
 /**
@@ -178,8 +207,15 @@ export function mountBusca({ state, head = document.getElementById("textoHead"),
   let aberta = false;
   let lista = [];
   let atual = -1;
-  // Ocorrência de onde a busca parte: a primeira selecionada ao abrir, depois a atual.
+  // Ocorrência de onde a busca parte: a primeira selecionada ao abrir, depois
+  // a atual. A posição fica junto para quando a chave some (correção nela).
   let ancora = null;
+  let ancoraPosicao = null;
+
+  function ancorar(chave, posicoes) {
+    ancora = chave;
+    ancoraPosicao = chave == null ? null : posicoes.get(chave) ?? null;
+  }
 
   function publicar(revelar) {
     const corrente = lista[atual];
@@ -197,30 +233,43 @@ export function mountBusca({ state, head = document.getElementById("textoHead"),
     const project = state.get("project");
     lista = project ? ocorrencias(project, input.value) : [];
     const posicoes = lista.length ? indiceDeBusca(project).posicoes : new Map();
-    const desde = ancora == null ? -1 : posicoes.get(ancora) ?? -1;
-    atual = lista.length ? Math.max(0, lista.findIndex((item) => (posicoes.get(item.chaves[0]) ?? 0) >= desde)) : -1;
-    if (lista[atual]) ancora = lista[atual].chaves[0];
+    const posicao = (item) => posicoes.get(item.chaves[0]) ?? 0;
+    const exata = ancora == null ? undefined : posicoes.get(ancora);
+    if (!lista.length) atual = -1;
+    else if (exata !== undefined) atual = Math.max(0, lista.findIndex((item) => posicao(item) >= exata));
+    else if (ancoraPosicao != null) {
+      // A ocorrência de antes sumiu: segue na mais perto de onde ela estava.
+      atual = 0;
+      for (const [i, item] of lista.entries()) {
+        if (Math.abs(posicao(item) - ancoraPosicao) < Math.abs(posicao(lista[atual]) - ancoraPosicao)) atual = i;
+      }
+    } else atual = 0;
+    if (lista[atual]) ancorar(lista[atual].chaves[0], posicoes);
     publicar(revelar);
   }
 
   function passo(delta) {
     if (!lista.length) return;
     atual = (atual + delta + lista.length) % lista.length;
-    ancora = lista[atual].chaves[0];
+    ancorar(lista[atual].chaves[0], indiceDeBusca(state.get("project")).posicoes);
     publicar(true);
   }
 
-  function primeiraSelecionada() {
+  /** A busca parte da primeira palavra selecionada que ela conhece; sem seleção, do começo. */
+  function ancorarNaSelecao() {
     const project = state.get("project");
     const selecao = state.get("selection");
-    if (!project || !selecao?.size) return null;
+    if (!project || !selecao?.size) {
+      ancorar(null);
+      return;
+    }
     const { posicoes } = indiceDeBusca(project);
     let melhor = null;
     for (const chave of selecao) {
       const posicao = posicoes.get(chave);
       if (posicao !== undefined && (melhor === null || posicao < posicoes.get(melhor))) melhor = chave;
     }
-    return melhor;
+    ancorar(melhor, posicoes);
   }
 
   function abrir() {
@@ -228,7 +277,7 @@ export function mountBusca({ state, head = document.getElementById("textoHead"),
       aberta = true;
       box.hidden = false;
       toggle.setAttribute("aria-expanded", "true");
-      ancora = primeiraSelecionada();
+      ancorarNaSelecao();
       if (normalizarBusca(input.value)) buscar();
     }
     input.focus();
@@ -271,10 +320,11 @@ export function mountBusca({ state, head = document.getElementById("textoHead"),
       passo(ev.shiftKey ? -1 : 1);
     }
   });
-  // Ctrl/Cmd+F no cartão do texto: a busca do navegador não vê as cenas virtualizadas.
+  // Ctrl/Cmd+F no texto: a busca do navegador não vê as cenas virtualizadas.
+  // Com o texto escondido (a Entrega ocupa o cartão), o atalho segue com o navegador.
   document.addEventListener("keydown", (ev) => {
     if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.key?.toLowerCase() !== "f" || toggle.hidden) return;
-    if (!center.contains(ev.target)) return;
+    if (head.hidden || texto.hidden || !center.contains(ev.target)) return;
     ev.preventDefault();
     abrir();
   });
@@ -286,5 +336,10 @@ export function mountBusca({ state, head = document.getElementById("textoHead"),
     else if (aberta && normalizarBusca(input.value)) buscar(false);
   }
   state.subscribe("project", paintToggle);
+  // Fora da Edição o texto some: a busca fecha, como a barra da seleção, e
+  // nenhum projeto novo refaz a lista sem ninguém ver.
+  state.subscribe("stage", (stage) => {
+    if (stage !== "edicao") fechar(false);
+  });
   paintToggle(state.get("project"));
 }
