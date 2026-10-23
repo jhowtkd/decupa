@@ -7,10 +7,11 @@ import {
   mountTexto,
   reconcileSelection,
   selectionBarActions,
+  listenTarget,
   selectionBarBox,
   selectionKey,
 } from "./texto.js";
-import { installDom, type El, type FakeDocument } from "./fake-dom.test-helper.ts";
+import { El, installDom, type FakeDocument } from "./fake-dom.test-helper.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -70,7 +71,7 @@ function montar(ui?: "studio" | "legacy", p: Projeto = projeto(), stage = "edica
     call: vi.fn(async (..._args: unknown[]) => ({ res: { ok: true, status: 200 }, body: {} })),
     notifyError: vi.fn(),
   };
-  const player = { seek: vi.fn(), playOriginal: vi.fn(), previewBusy: () => false };
+  const player = { seek: vi.fn(), playOriginal: vi.fn(), playMontage: vi.fn(), previewBusy: () => false };
   mountTexto({ state, api, player, ...(ui ? { ui } : {}) });
   state.set("project", p);
   return { state, api, player, document };
@@ -522,4 +523,190 @@ it("legado: correção alinhada tira da seleção as chaves que sumiram, sem rec
   expect(selecionados(state)).toHaveLength(3);
   state.set("project", projeto({ revision: 4, corrections: [alinhada()] }));
   expect(selecionados(state)).toEqual([chave("s1", "t1", "w3")]);
+});
+
+/* ---------- revisão do PR 3: envelope, Ouvir, âncora, direção, reflow ---------- */
+
+const EU_FUI: Palavra[] = [
+  { id: "w1", text: "eu", start: 1, end: 1.3 },
+  { id: "w2", text: "fui", start: 1.8, end: 2 },
+];
+const euFui = () => projeto({ takes: [[take("t1", 1, 2)]], palavras: EU_FUI });
+const euJaFui = () => projeto({
+  revision: 4,
+  takes: [[take("t1", 1, 2)]],
+  palavras: EU_FUI,
+  corrections: [{
+    id: "c1", sourceId: "a", start: 1, end: 2, text: "eu já fui", status: "aligned",
+    words: [
+      { id: "a:sha:c:c1:w000000", text: "eu", start: 1, end: 1.3 },
+      { id: "a:sha:c:c1:w000001", text: "já", start: 1.4, end: 1.7 },
+      { id: "a:sha:c:c1:w000002", text: "fui", start: 1.8, end: 2 },
+    ],
+  }],
+});
+const NOVAS = ["a:sha:c:c1:w000000", "a:sha:c:c1:w000001", "a:sha:c:c1:w000002"];
+
+it("reconcileSelection por envelope: a palavra que a correção põe na pausa entra na seleção", () => {
+  const selecao = new Set([chave("s1", "t1", "w1"), chave("s1", "t1", "w2")]);
+  expect([...reconcileSelection(euFui(), euJaFui(), selecao)]).toEqual(NOVAS.map((id) => chave("s1", "t1", id)));
+});
+
+it("reconcileSelection: a revisão que volta devolve as chaves originais", () => {
+  const novas = new Set(NOVAS.map((id) => chave("s1", "t1", id)));
+  expect([...reconcileSelection(euJaFui(), euFui(), novas)]).toEqual([chave("s1", "t1", "w1"), chave("s1", "t1", "w2")]);
+});
+
+it("a correção que preenche a pausa deixa a seleção com as 3 palavras e Cortar envia as 3", async () => {
+  const { document, api, state } = montar("studio", euFui());
+  selecionar(document, "s1", "w1", "w2");
+  state.set("project", euJaFui());
+  expect(selecionados(state)).toEqual(NOVAS.map((id) => chave("s1", "t1", id)));
+  acao(document, "cortar").click();
+  await vi.waitFor(() => expect(api.call).toHaveBeenCalledTimes(1));
+  expect(corpos(api)[0].action).toEqual({ type: "remove", sceneId: "s1", takeId: "t1", wordIds: NOVAS });
+});
+
+it("a revisão que volta, pelo estado, devolve a seleção às palavras originais", () => {
+  const { document, state } = montar("studio", euFui());
+  selecionar(document, "s1", "w1", "w2");
+  state.set("project", euJaFui());
+  state.set("project", euFui());
+  expect(selecionados(state)).toEqual([chave("s1", "t1", "w1"), chave("s1", "t1", "w2")]);
+});
+
+const duasCenas = () => projeto({ takes: [[take("t1", 0, 1.5)], [take("t2", 2, 3)]] });
+
+it("listenTarget: um grupo ouve a Mídia original; entre trechos, a montagem pelas mantidas", () => {
+  const p = duasCenas();
+  const sel = (...ids: Array<[string, string, string]>) => new Set(ids.map(([c, t, w]) => chave(c, t, w)));
+  expect(listenTarget(p, new Set())).toBeNull();
+  expect(listenTarget(p, sel(["s1", "t1", "w2"], ["s1", "t1", "w3"])))
+    .toEqual({ kind: "original", sourceId: "a", start: 0.5, end: 1.5 });
+  // w3 começa em 1,0 na montagem; w5 vem depois dos 1,5 s da cena 1 e dura 0,5 s.
+  expect(listenTarget(p, sel(["s1", "t1", "w3"], ["s2", "t2", "w5"])))
+    .toEqual({ kind: "montagem", start: 1, end: 2 });
+  expect(listenTarget(p, sel(["s1", "t1", "w1"], ["s2", "t2", "w6"])))
+    .toEqual({ kind: "montagem", start: 0, end: 2.5 });
+});
+
+it("listenTarget: sem palavra mantida entre trechos, só o primeiro grupo na Mídia original", () => {
+  const p = projeto({ takes: [
+    [take("t1", 0, 1.5, { removed: [{ start: 0.5, end: 1 }] })],
+    [take("t2", 2, 3, { removed: [{ start: 2, end: 2.5 }] })],
+  ] });
+  expect(listenTarget(p, new Set([chave("s1", "t1", "w2"), chave("s2", "t2", "w5")])))
+    .toEqual({ kind: "original", sourceId: "a", start: 0.5, end: 1 });
+});
+
+it("Ouvir entre trechos toca a montagem; num trecho só, a Mídia original com 0,7 s de contexto", () => {
+  const { document, player, state } = montar("studio", duasCenas());
+  clicar(palavra(document, "s1", "w3"));
+  clicar(palavra(document, "s2", "w5"), { shiftKey: true });
+  player.seek.mockClear();
+  acao(document, "ouvir").click();
+  expect(player.playMontage).toHaveBeenCalledWith(1, 2);
+  expect(player.playOriginal).not.toHaveBeenCalled();
+
+  state.set("selection", new Set());
+  clicar(palavra(document, "s1", "w3"));
+  acao(document, "ouvir").click();
+  expect(player.playMontage).toHaveBeenCalledTimes(1);
+  const [fonte, inicio, fim] = player.playOriginal.mock.calls[0]!;
+  expect(fonte).toBe("a");
+  expect(inicio).toBeCloseTo(0.3);
+  expect(fim).toBe(1.5);
+});
+
+it("Enter na palavra do meio ancora a barra nela e Esc devolve o foco a ela, não à última", () => {
+  const { document } = montar("studio");
+  selecionar(document, "s1", "w1", "w3");
+  palavra(document, "s1", "w2").dispatchEvent({ type: "keydown", key: "Enter" });
+  expect(document.activeElement?.dataset.barAction).toBe("ouvir");
+  document.activeElement!.dispatchEvent({ type: "keydown", key: "Escape" });
+  expect(document.activeElement?.dataset.wordId).toBe("w2");
+});
+
+it("seleção de cena pelo chip, sem foco: a barra aparece e Esc volta a uma palavra selecionada", () => {
+  const p = projeto();
+  p.analyses[0]!.visual = [{ id: "v1", sourceId: "a", start: 0, end: 1, text: "Plano" }] as never[];
+  p.scenes[0]!.support = [{ visualId: "v1", offsetFrames: 0, durationFrames: 10 }] as never[];
+  const { document, state } = montar("studio", p);
+  document.querySelector(".chip-apoio")!.click();
+  expect(selecionados(state)).toHaveLength(3);
+  expect(barra(document)!.hidden).toBe(false);
+  const ouvir = acao(document, "ouvir");
+  ouvir.focus();
+  ouvir.dispatchEvent({ type: "keydown", key: "Escape" });
+  const foco = document.activeElement!;
+  expect(foco.dataset.wordId).toBeDefined();
+  expect((state.get("selection") as Set<string>).has(chave(foco.dataset.scene!, foco.dataset.take!, foco.dataset.wordId!))).toBe(true);
+});
+
+it("com a palavra-foco fora dos limites do texto, a barra se ancora numa selecionada visível", () => {
+  const original = El.prototype.getBoundingClientRect;
+  const rect = (top: number, left = 30) => ({ left, top, right: left + 30, bottom: top + 20, width: 30, height: 20 });
+  El.prototype.getBoundingClientRect = function (this: El) {
+    if (this.id === "texto") return { left: 0, top: 0, right: 500, bottom: 600, width: 500, height: 600 };
+    if (this.dataset.wordId === "w1") return rect(100);
+    if (this.dataset.wordId === "w3") return rect(5000);
+    return original.call(this);
+  };
+  try {
+    const { document } = montar("studio");
+    selecionar(document, "s1", "w1", "w3");
+    const caixa = barra(document)!;
+    expect(caixa.hidden).toBe(false);
+    // Acima de w1 (100 − 8 − altura 20), alinhada à esquerda de w1.
+    expect({ top: caixa.style.top, left: caixa.style.left, lugar: caixa.dataset.placement })
+      .toEqual({ top: "72px", left: "30px", lugar: "above" });
+  } finally {
+    El.prototype.getBoundingClientRect = original;
+  }
+});
+
+it("seleção feita de trás para frente segue estendendo pela esquerda depois de a correção trocar os IDs", () => {
+  const { document, state } = montar("studio", projeto({ takes: [[take("t1", 0, 2.5)]] }));
+  clicar(palavra(document, "s1", "w4"));
+  clicar(palavra(document, "s1", "w2"), { shiftKey: true });
+  expect(selecionados(state)).toHaveLength(3);
+  const novas = ["n1", "n2", "n3"].map((n) => `a:sha:c:c1:${n}`);
+  state.set("project", projeto({
+    revision: 4,
+    takes: [[take("t1", 0, 2.5)]],
+    corrections: [{
+      id: "c1", sourceId: "a", start: 0.5, end: 2, text: "x y z", status: "aligned",
+      words: [
+        { id: novas[0]!, text: "x", start: 0.5, end: 1 },
+        { id: novas[1]!, text: "y", start: 1, end: 1.5 },
+        { id: novas[2]!, text: "z", start: 1.5, end: 2 },
+      ],
+    }],
+  }));
+  expect(selecionados(state)).toEqual(novas.map((id) => chave("s1", "t1", id)));
+  palavra(document, "s1", novas[0]!).dispatchEvent({ type: "keydown", key: "ArrowLeft", shiftKey: true });
+  expect(selecionados(state)).toEqual([chave("s1", "t1", "w1"), ...novas.map((id) => chave("s1", "t1", id))]);
+});
+
+it("depois da primeira pintura, rolar ou repintar sem mudar a seleção não mede a barra de novo", () => {
+  const original = El.prototype.getBoundingClientRect;
+  let medidas = 0;
+  El.prototype.getBoundingClientRect = function (this: El) {
+    if (this.classList.contains("texto-barra")) medidas += 1;
+    return original.call(this);
+  };
+  try {
+    const { document, state } = montar("studio");
+    selecionar(document, "s1", "w1", "w2");
+    expect(medidas).toBeGreaterThan(0);
+    const antes = medidas;
+    document.getElementById("texto")!.dispatchEvent({ type: "scroll", bubbles: false });
+    state.set("selection", new Set(selecionados(state)));
+    expect(medidas).toBe(antes);
+    // Seleção maior muda o resumo da barra: aí sim ela é medida de novo.
+    clicar(palavra(document, "s1", "w3"), { shiftKey: true });
+    expect(medidas).toBeGreaterThan(antes);
+  } finally {
+    El.prototype.getBoundingClientRect = original;
+  }
 });

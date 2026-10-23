@@ -102,6 +102,8 @@ it("o material fora da montagem conta uma vez só, na zona da cena mais próxima
 
 it("palavra cortada continua pesquisável e projeto sem cenas não tem ocorrência", () => {
   const p = base();
+  // Outra revisão: o índice em cache do conteúdo anterior não vale para o projeto mutado.
+  p.revision = 77;
   p.scenes[0]!.takes[0]!.removed = [{ start: 0.5, end: 1 }] as never[];
   expect(ocorrencias(p, "dois")).toHaveLength(1);
   expect(ocorrencias({ ...p, scenes: [] }, "um")).toEqual([]);
@@ -112,6 +114,27 @@ it("indiceDeBusca reaproveita o índice enquanto o conteúdo não muda, mesmo co
   expect(indiceDeBusca(p)).toBe(indiceDeBusca(p));
   expect(indiceDeBusca(base())).toBe(indiceDeBusca(p));
   expect(indiceDeBusca({ ...base(), revision: 2 })).not.toBe(indiceDeBusca(p));
+});
+
+const correcao = (status: "pending" | "aligned", words: Palavra[] = []) =>
+  ({ id: "c1", sourceId: "a", start: 2, end: 2.5, text: "tres", status, words });
+const treNova: Palavra = { id: "a:sha:c:c1:w000000", text: "tres", start: 2, end: 2.5 };
+
+it("indiceDeBusca: a correção que passa de pending a aligned na mesma revisão gera outro índice", () => {
+  const pendente = { ...base(), corrections: [correcao("pending")] };
+  const alinhada = { ...base(), corrections: [correcao("aligned", [treNova])] };
+  expect(indiceDeBusca({ ...base(), corrections: [correcao("pending")] })).toBe(indiceDeBusca(pendente));
+  expect(indiceDeBusca(alinhada)).not.toBe(indiceDeBusca(pendente));
+  expect(ocorrencias(alinhada, "tres").map((o) => o.chaves[0])).toContain(k("s1", "", treNova.id));
+  expect(ocorrencias(pendente, "tres").map((o) => o.chaves[0])).toContain(k("s1", "", "w5"));
+});
+
+it("indiceDeBusca: análise com outro número de palavras ou status gera outro índice", () => {
+  const p = base();
+  const mais = { ...base(), analyses: [{ ...p.analyses[0]!, words: [...PALAVRAS, { id: "w10", text: "dez", start: 7, end: 7.5 }] }] };
+  const outroStatus = { ...base(), analyses: [{ ...p.analyses[0]!, status: "running" }] };
+  expect(indiceDeBusca(mais)).not.toBe(indiceDeBusca(p));
+  expect(indiceDeBusca(outroStatus)).not.toBe(indiceDeBusca(mais));
 });
 
 it("contadorDaBusca: n de m, nenhuma ocorrência e fora da montagem", () => {
@@ -369,4 +392,63 @@ it("ocorrência fora da montagem em cena desmontada abre a zona ao montar a cena
   } finally {
     geometria.restore();
   }
+});
+
+/* ---------- revisão do PR 3 ---------- */
+
+it("Ctrl+F com o texto escondido não abre a caixa nem tira o atalho do navegador", () => {
+  const { document, state } = montar();
+  state.set("project", base());
+  const prevenidos: boolean[] = [];
+  document.addEventListener("keydown", (ev) => prevenidos.push(ev.defaultPrevented));
+  const entrega = document.createElement("div");
+  entrega.id = "delivery";
+  document.getElementById("center")!.appendChild(entrega);
+
+  document.getElementById("textoHead")!.hidden = true;
+  document.getElementById("texto")!.hidden = true;
+  document.dispatchEvent({ type: "keydown", key: "f", ctrlKey: true, target: entrega });
+  expect(caixa(document).hidden).toBe(true);
+  expect(prevenidos).toEqual([false]);
+
+  document.getElementById("textoHead")!.hidden = false;
+  document.getElementById("texto")!.hidden = false;
+  document.dispatchEvent({ type: "keydown", key: "f", ctrlKey: true, target: entrega });
+  expect(caixa(document).hidden).toBe(false);
+  expect(prevenidos).toEqual([false, true]);
+});
+
+it("fora da Edição a busca fecha, limpa as marcas, não foca nada e não reabre sozinha", () => {
+  const { document, state } = montar();
+  state.set("project", base());
+  toggle(document).click();
+  digitar(document, "tres");
+  expect((state.get("busca") as { chaves: string[] }).chaves.length).toBeGreaterThan(0);
+
+  state.set("stage", "revisao");
+  expect(caixa(document).hidden).toBe(true);
+  expect(toggle(document).getAttribute("aria-expanded")).toBe("false");
+  const busca = state.get("busca") as { chaves: string[]; omitidas: string[]; atuais: string[]; focar: boolean; revelar: unknown };
+  expect(busca).toMatchObject({ chaves: [], omitidas: [], atuais: [], focar: false, revelar: null });
+  expect(document.activeElement?.dataset.wordId).toBeUndefined();
+  expect(botao(document, "s1", "w3").className).not.toContain("busca");
+
+  state.set("stage", "edicao");
+  expect(caixa(document).hidden).toBe(true);
+});
+
+it("a ocorrência atual que some segue na mais perto de onde estava", () => {
+  const { document, state } = montar();
+  state.set("project", base());
+  toggle(document).click();
+  digitar(document, "tres");
+  tecla(document, "Enter");
+  expect(contador(document)).toBe("2 de 3 · fora da montagem");
+
+  // A palavra da 2ª ocorrência (w5) é refeita por uma correção alinhada, com ID novo e o mesmo texto.
+  const corrigido = { ...base(), revision: 2, corrections: [correcao("aligned", [treNova])] };
+  state.set("project", corrigido);
+  expect(contador(document)).toBe("2 de 3 · fora da montagem");
+  const busca = state.get("busca") as { atuais: string[] };
+  expect(busca.atuais).toEqual([k("s1", "", treNova.id)]);
 });
