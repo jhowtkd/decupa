@@ -1,0 +1,11 @@
+/* studio.css — receitas no studio (DECUPA_EDITOR_UI=studio), carregada depois
+   de page.css: só composição. A biblioteca vem antes do formulário de nova
+   receita; a linguagem visual das outras telas é do PR 7, sem tokens aqui. */
+aside { display: flex; flex-direction: column; }
+aside > h1 { margin-bottom: 4px; }
+.library-title, .create-title { margin: 22px 0 0; font-size: 13px; font-weight: 600; color: #929cab; letter-spacing: .02em; }
+/* Biblioteca vazia: sem título solto; o formulário assume o lugar. */
+.library-title:has(+ nav:empty) { display: none; }
+nav { margin-top: 10px; }
+#create { margin-top: 6px; padding-top: 4px; border-top: 1px solid #303741; }
+.library-title:has(+ nav:empty) + nav + #create { border-top: 0; }

@@ -8,6 +8,7 @@ import {serveMedia} from "../../http/media.ts";
 import {originAllowed,type HostConfig,type ResolvedHostConfig} from "../../http/origin.ts";
 import type {SelectResult} from "../assembly/select.ts";
 import type {MediaRuntime} from "../media-runtime.ts";
+import type {EditorUi} from "../assembly/editor-ui.ts";
 import {analyzeRecipe,relinkRecipe,type RecipeAnalysisDeps} from "./analysis.ts";
 import {approveRecipe,listRecipes,loadRecipe,saveRecipe,validateRecipe,recipeId} from "./store.ts";
 import type {Recipe} from "./types.ts";
@@ -19,7 +20,9 @@ async function body(req:IncomingMessage):Promise<Record<string,unknown>>{
  const parts:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw new HttpError(413,"pedido excede 1 MiB");parts.push(Buffer.from(chunk));}
  try{const value=JSON.parse(Buffer.concat(parts).toString()||"{}");if(!value||typeof value!=="object"||Array.isArray(value))throw Error();return value;}catch{throw new HttpError(400,"JSON inválido");}
 }
-type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;originConfig?:HostConfig|ResolvedHostConfig;selectFn?:()=>Promise<SelectResult>;getMedia?:MediaRuntime["getMedia"]};
+// editorUi escolhe o shell (DECUPA_EDITOR_UI, lida pelo server.ts); voltar é o
+// destino de "/" para o link do topo do studio: o hub ("Projetos") ou a Montagem.
+type Deps=Omit<RecipeAnalysisDeps,"workDir"|"persist">&{port:()=>number;originConfig?:HostConfig|ResolvedHostConfig;selectFn?:()=>Promise<SelectResult>;getMedia?:MediaRuntime["getMedia"];editorUi?:EditorUi;voltar?:"Projetos"|"Montagem"};
 export function createTemplateRuntime(root:string,deps:Deps){
  async function reference(input:Record<string,unknown>):Promise<{cancelled:true}|{path:string;mediaId?:string}>{
   if(input.mediaId!==undefined){
@@ -57,8 +60,9 @@ export function createTemplateRuntime(root:string,deps:Deps){
   const url=new URL(req.url??"/","http://localhost");if(url.pathname!=="/templates"&&!url.pathname.startsWith("/templates/"))return false;
   try{
    if(req.method!=="GET"&&!originAllowed(req.headers.origin,deps.port(),deps.originConfig))throw new HttpError(403,"origem não permitida");
-   const staticFiles:Record<string,[string,string]>={"/templates":["page.html","text/html"],"/templates/":["page.html","text/html"],"/templates/page.js":["page.js","text/javascript"],"/templates/page.css":["page.css","text/css"],"/templates/media-upload.js":["../assembly/editor/media-upload.js","text/javascript"]};
-   const asset=staticFiles[url.pathname];if(req.method==="GET"&&asset){res.writeHead(200,{"content-type":asset[1]+"; charset=utf-8","cache-control":"no-store"});res.end(await readFile(join(HERE,asset[0]),"utf8"));return true;}
+   const studio=deps.editorUi==="studio";const shell=studio?"studio.html":"page.html";
+   const staticFiles:Record<string,[string,string]>={"/templates":[shell,"text/html"],"/templates/":[shell,"text/html"],"/templates/page.js":["page.js","text/javascript"],"/templates/page.css":["page.css","text/css"],"/templates/media-upload.js":["../assembly/editor/media-upload.js","text/javascript"],...(studio?{"/templates/studio.css":["studio.css","text/css"]}:{})};
+   const asset=staticFiles[url.pathname];if(req.method==="GET"&&asset){const file=await readFile(join(HERE,asset[0]),"utf8");res.writeHead(200,{"content-type":asset[1]+"; charset=utf-8","cache-control":"no-store"});res.end(asset[0]==="studio.html"?file.replace("__DECUPA_VOLTAR__",deps.voltar??"Projetos"):file);return true;}
    const parts=url.pathname.split("/").filter(Boolean);if(parts[1]!=="api"||parts.length>4)throw new HttpError(404,"rota desconhecida");
    const input=req.method==="GET"?{}:await body(req);
    if(parts.length===2){

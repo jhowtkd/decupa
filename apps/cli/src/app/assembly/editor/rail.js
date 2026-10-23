@@ -435,7 +435,13 @@ export function briefingSummary(input, durationSeconds) {
   return { text: input?.text ?? "", target, duration, over, fill, note };
 }
 
-export function mountRail({ state, api, player, confirm: confirmAction = (message) => window.confirm(message) }) {
+/**
+ * `ui` é a variante do shell (page.js lê a meta uma vez). No studio o
+ * briefing e a duração desejada moram em Materiais (#materiaisBriefing), ao
+ * lado do monitor, com ou sem material; "Editar" leva até lá em vez de abrir
+ * o diálogo. A legacy segue com o diálogo e o briefing inline do vazio.
+ */
+export function mountRail({ state, api, player, ui = "legacy", confirm: confirmAction = (message) => window.confirm(message) }) {
   const root = document.getElementById("rail");
   root.replaceChildren();
 
@@ -494,6 +500,7 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
   const briefingForm = document.getElementById("briefingForm");
   const inlineBriefing = document.getElementById("monitorBriefing");
   inlineBriefing.innerHTML = '<h2 class="briefing-title">Briefing</h2>';
+  const studioBriefing = ui === "studio" ? document.getElementById("materiaisBriefing") : null;
   const kindField = document.getElementById("kind");
   const textField = document.getElementById("inputText");
   const targetField = document.getElementById("target");
@@ -528,16 +535,29 @@ export function mountRail({ state, api, player, confirm: confirmAction = (messag
     field.addEventListener("input", () => briefing.edit());
     field.addEventListener("change", () => {
       briefing.edit();
-      // Inline (projeto vazio) não tem "Guardar" à vista: salva ao confirmar o campo.
-      if (briefingForm.parentElement === inlineBriefing) void briefing.flush();
+      // Fora do diálogo (projeto vazio; no studio, Materiais) salva ao confirmar o campo.
+      if (briefingForm.parentElement !== briefingDialog) void briefing.flush();
     });
   }
   // Fechar e Esc só recolhem o diálogo; descartar exige uma ação explícita.
-  document.getElementById("openBriefing").onclick = () => { if (!briefingDialog.open) briefingDialog.showModal(); };
+  document.getElementById("openBriefing").onclick = () => {
+    if (studioBriefing) {
+      // No studio o briefing é parte de Materiais: navegar não chama a API.
+      window.dispatchEvent(new CustomEvent("decupa:set-stage", { detail: "materiais" }));
+      textField.focus();
+      return;
+    }
+    if (!briefingDialog.open) briefingDialog.showModal();
+  };
   document.getElementById("closeBriefing").onclick = () => briefingDialog.close();
   document.getElementById("discardBriefing").onclick = () => briefing.discard(state.get("project")?.input);
   /** Projeto vazio: o briefing sai do diálogo e fica ao lado da área de importar. */
   function placeBriefing(project) {
+    if (studioBriefing) {
+      inlineBriefing.hidden = true;
+      if (briefingForm.parentElement !== studioBriefing) studioBriefing.appendChild(briefingForm);
+      return;
+    }
     const empty = project.assembly.sources.length === 0;
     inlineBriefing.hidden = !empty;
     if (empty && briefingForm.parentElement !== inlineBriefing) {
