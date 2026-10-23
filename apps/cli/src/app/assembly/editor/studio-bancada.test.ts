@@ -869,3 +869,51 @@ it("focusout sem gaveta aberta não faz nada", () => {
   t.document.getElementById("inspector")!.dispatchEvent({ type: "focusout", relatedTarget: t.tab("revisao") } as never);
   expect(t.body.dataset.inspector).toBe("fixo");
 });
+
+// ---- Zoom da sequência ----
+
+const lerZoom = (storage: ReturnType<typeof fakeStorage>) => (JSON.parse(storage.raw() ?? "null") as { zoom?: number } | null)?.zoom;
+
+it("zoom: gravado e lido; inválido vira ausente (a faixa abre em 1×); etapa e painel gravados depois não o apagam", () => {
+  const storage = fakeStorage();
+  expect(readPreferencia(storage).zoom).toBeUndefined();
+  writePreferencia(storage, { zoom: 4 });
+  expect(readPreferencia(storage).zoom).toBe(4);
+  writePreferencia(storage, { projeto: "p1", etapa: "revisao" });
+  writePreferencia(storage, { painel: "rail", escolha: "recolhido" });
+  const lida = readPreferencia(storage);
+  expect(lida.zoom).toBe(4);
+  expect(lida.etapas.get("p1")).toBe("revisao");
+  expect(lida.paineis).toEqual({ rail: "recolhido" });
+  // Zoom inválido na escrita não troca o gravado.
+  writePreferencia(storage, { zoom: 3 });
+  writePreferencia(storage, { zoom: "8" as never });
+  expect(readPreferencia(storage).zoom).toBe(4);
+  writePreferencia(storage, { zoom: 8 });
+  expect(readPreferencia(storage).zoom).toBe(8);
+  // Zoom inválido já no storage vira ausente.
+  for (const ruim of [0, 3, -1, "2", null, 1.5]) {
+    expect(readPreferencia(prefs({ etapas: {}, paineis: {}, zoom: ruim })).zoom, String(ruim)).toBeUndefined();
+  }
+  expect(readPreferencia(prefs({ etapas: {}, paineis: {}, zoom: 2 })).zoom).toBe(2);
+});
+
+it("mountBancada: o zoom gravado entra em zoomSequencia e cada mudança é gravada sem apagar o resto", () => {
+  const storage = prefs({ etapas: { p1: "edicao" }, paineis: { rail: "fixo" }, zoom: 4 });
+  const t = monta({ storage, project: projeto() });
+  expect(t.state.get("zoomSequencia")).toBe(4);
+  t.state.set("zoomSequencia", 2);
+  expect(lerZoom(storage)).toBe(2);
+  const gravado = storage.json() as { etapas: Record<string, string>; paineis: Record<string, string> };
+  expect(gravado.etapas.p1).toBe("edicao");
+  expect(gravado.paineis).toEqual({ rail: "fixo" });
+  // Navegar entre etapas grava a etapa e mantém o zoom.
+  t.setStage("revisao");
+  t.setStage("edicao");
+  expect(lerZoom(storage)).toBe(2);
+});
+
+it("mountBancada: sem zoom gravado ou com zoom lixo, zoomSequencia fica sem valor (1×)", () => {
+  expect(monta({ project: projeto() }).state.get("zoomSequencia")).toBeUndefined();
+  expect(monta({ storage: prefs({ etapas: {}, paineis: {}, zoom: 7 }), project: projeto() }).state.get("zoomSequencia")).toBeUndefined();
+});

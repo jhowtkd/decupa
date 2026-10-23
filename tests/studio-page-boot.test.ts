@@ -122,3 +122,14 @@ it("o Modo Leitura pausa a fila de Materiais e o conflito do POST local chega à
   expect(onReadOnly).toContain("if (owner) materiais?.pausarPorReserva();");
   expect(js).toMatch(/studio\.materiais\.mountMateriais\(\{[\s\S]*?onConflitoDeReserva: \(body\) => reservationUI\.handleConflict\(body\),/);
 });
+
+it("legendas e formato só montam no studio: cada chamada vive numa linha guardada por editorUi === \"studio\"", () => {
+  for (const chamada of ["studio.legendas.mountLegendas(", "studio.formato.mountFormato("]) {
+    const usos = linhas().filter((linha) => linha.includes(chamada));
+    expect(usos, chamada).toHaveLength(1);
+    expect(usos[0]!.trim().startsWith('if (editorUi === "studio") '), chamada).toBe(true);
+  }
+  // A legacy não ganha o #legendaMonitor nem o diálogo de formato do studio.
+  expect(legacyHtml).not.toContain("legendaMonitor");
+  expect(legacyHtml).not.toContain("formatoDialog");
+});
