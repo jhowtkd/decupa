@@ -137,12 +137,13 @@ it("entrega: bloqueada, a preparar, disponível e legendas indisponíveis", () =
     project: aprovado, exibida: exibida(6), verificacao: verificacao(6, { legendas: { status: "indisponivel" } }),
   }), "entrega");
   expect(semLegenda.valor).toBe("v6");
-  expect(semLegenda.detalhe).toContain("legendas indisponível");
+  expect(semLegenda.detalhe).toContain("legendas indisponíveis");
 });
 
 function painel(over: { project?: Over | null; view?: string; data?: Over } = {}) {
   const document = installDom('<div id="stage"></div>');
-  const state = createState({});
+  // O painel só pinta na etapa Revisão.
+  const state = createState({ stage: "revisao" });
   const video = document.createElement("video");
   const rev = (over.data?.rev as string | undefined) ?? "6";
   if (rev !== "") video.setAttribute("data-rev", rev);

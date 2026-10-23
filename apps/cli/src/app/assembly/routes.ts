@@ -17,7 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractAudio, hashFile, probe, readPcm } from "@decupa/media";
 import { isCancelledError } from "@decupa/queue";
@@ -989,6 +989,9 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const revision = parts[2] !== undefined ? Number(parts[2]) : (await loadProject(dir)).revision;
         const delivery = await readDelivery(dir, revision);
         if (!delivery?.drpPath || delivery.revision !== revision) throw new HttpError(404, "DRP não registrado");
+        // Só sai o que está na pasta da entrega daquela revisão (onde a ponte grava o .drp).
+        const drp = relative(resolve(dir, "deliveries", String(revision)), resolve(delivery.drpPath));
+        if (!drp || drp.startsWith("..") || isAbsolute(drp)) throw new HttpError(404, "DRP não registrado");
         await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
       }
       if (parts[1] === "preview" && req.method === "GET") {

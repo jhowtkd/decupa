@@ -79,9 +79,13 @@ export function blocosDaRevisao({ project, watched = null, coverage = null, veri
     entrega = { valor: "A preparar", detalhe: v(atual) + " aprovada: prepare os arquivos na Entrega.", tom: "" };
   } else {
     const nomes = prontos.map((item, i) => i === 0 ? item.title : item.title.toLowerCase());
+    // Concorda com o que falta: "legendas indisponíveis" (plural) ou "vídeo indisponível".
+    const plural = faltam.length > 1 || faltam.some((item) => item.id === "legendas");
     entrega = {
       valor: v(atual),
-      detalhe: lista(nomes) + (faltam.length ? "; " + lista(faltam.map((item) => item.title.toLowerCase())) + " indisponível" : "") + ".",
+      detalhe: lista(nomes) + (faltam.length
+        ? "; " + lista(faltam.map((item) => item.title.toLowerCase())) + (plural ? " indisponíveis" : " indisponível")
+        : "") + ".",
       tom: "ok",
     };
   }
@@ -97,7 +101,9 @@ export function blocosDaRevisao({ project, watched = null, coverage = null, veri
 
 /**
  * Monta o painel dentro do #stage, depois do cartão de revisão. `player.el()`
- * é o <video> único: daqui só se lê a revisão que ele mostra.
+ * é o <video> único: daqui só se lê a revisão que ele mostra. Fora da etapa
+ * Revisão o painel está escondido e não recalcula (a cobertura muda a cada
+ * timeupdate); entrar na Revisão repinta com o estado de agora.
  */
 export function mountRevisao({ state, player }) {
   const stage = document.getElementById("stage");
@@ -112,6 +118,7 @@ export function mountRevisao({ state, player }) {
   stage.append(painel);
 
   function paint() {
+    if (state.get("stage") !== "revisao") return;
     const project = state.get("project");
     painel.hidden = !project?.scenes?.length;
     if (painel.hidden) return;
@@ -144,7 +151,7 @@ export function mountRevisao({ state, player }) {
       return item;
     }));
   }
-  for (const key of ["project", "watched", "watchCoverage", "verificacao", "view", "previewBusy", "operation"]) {
+  for (const key of ["stage", "project", "watched", "watchCoverage", "verificacao", "view", "previewBusy", "operation"]) {
     state.subscribe(key, paint);
   }
   paint();

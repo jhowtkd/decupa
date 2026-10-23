@@ -31,7 +31,8 @@ async function registra(dir: string, revision: number, extra: Partial<DeliveryRe
   await mkdir(raiz, { recursive: true });
   let drpPath: string | undefined;
   if (conteudo !== undefined) {
-    drpPath = join(dir, `projeto-r${revision}.drp`);
+    // A ponte grava o .drp na pasta da entrega da revisão; a rota só serve de lá.
+    drpPath = join(raiz, `projeto-r${revision}.drp`);
     await writeFile(drpPath, conteudo);
   }
   const record: DeliveryRecord = {
