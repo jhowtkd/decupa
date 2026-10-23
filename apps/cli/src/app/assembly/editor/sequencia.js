@@ -894,6 +894,16 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     el.addEventListener("pointercancel", stop);
   }
 
+  /**
+   * Studio: o atalho só age com os botões à vista. Fora da Edição o #undoSlot
+   * some (Materiais e Revisão escondem o texto, a Entrega o cabeçalho), e um
+   * Ctrl+Z por hábito criaria revisão sem nada na tela e derrubaria a aprovação.
+   */
+  function historyShown() {
+    const slot = document.getElementById("undoSlot");
+    return !slot || typeof slot.getClientRects !== "function" || slot.getClientRects().length > 0;
+  }
+
   // Atalhos document-level de desfazer e refazer (`historyKey`): ignoram foco
   // em campo editável para não roubar o desfazer/refazer nativo do texto.
   if (!undoKeyBound) {
@@ -901,6 +911,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     document.addEventListener("keydown", (ev) => {
       const kind = historyKey(ev, ui);
       if (!kind) return;
+      if (ui === "studio" && !historyShown()) return;
       const target = ev.target;
       if (target instanceof HTMLElement) {
         if (target.isContentEditable) return;

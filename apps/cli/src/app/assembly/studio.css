@@ -379,9 +379,12 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 @media (max-width: 700px) {
   #stages button { flex: 1 1 0; min-width: 0; padding: 0 8px; }
   /* O cabeçalho do texto não cabe o rótulo: fica o ícone, e o nome segue
-     acessível. A pílula de duração encurta antes do Desfazer. */
+     acessível. Buscar e Desfazer ficam só com o ícone, como o Refazer; o
+     passo do Desfazer segue no title e no aria-label. */
   .texto-busca-toggle { width: 32px; padding: 0; }
   .texto-busca-toggle .rotulo { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #undo.has-label { width: 32px; padding: 0; }
+  #undo .undo-what { display: none; }
   #textoMeta { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 24px; }
   .texto-busca { padding-left: 14px; }
   /* A barra cabe numa linha sem a contagem de palavras. */

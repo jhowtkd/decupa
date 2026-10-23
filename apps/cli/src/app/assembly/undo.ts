@@ -107,7 +107,9 @@ function readSteps(value: unknown, head: number): UndoStep[] | undefined {
 
 /**
  * Pilha gravada; formato inválido vira "sem desfazer" em vez de projeto
- * ilegível. Ramo do refazer inválido vira só "sem refazer".
+ * ilegível. Ramo do refazer inválido vira só "sem refazer", e também o que
+ * nenhuma gravação produz: revisão nas duas listas ou mais de 20 passos
+ * somados (desfazer e refazer só trocam passos entre elas).
  */
 export function readUndoStack(value: unknown): UndoStack | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -115,5 +117,9 @@ export function readUndoStack(value: unknown): UndoStack | undefined {
   if (!Number.isSafeInteger(head) || (head as number) < 0) return undefined;
   const undoSteps = readSteps(steps, head as number);
   if (!undoSteps) return undefined;
-  return stack(head as number, undoSteps, readSteps(redo, head as number) ?? []);
+  const redoSteps = readSteps(redo, head as number) ?? [];
+  const inUndo = new Set(undoSteps.map((step) => step.revision));
+  const coherent = undoSteps.length + redoSteps.length <= UNDO_LIMIT
+    && redoSteps.every((step) => !inUndo.has(step.revision));
+  return stack(head as number, undoSteps, coherent ? redoSteps : []);
 }
