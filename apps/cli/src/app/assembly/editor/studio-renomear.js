@@ -26,7 +26,7 @@ export function efeitosDeRenomear(project, undoRevision) {
     ? "A aprovação da v" + atual + " é desfeita: assista à nova prévia e aprove de novo antes de entregar."
     : "Nenhuma aprovação vale para a v" + proxima + ": a entrega segue travada até aprovar.");
   efeitos.push(undoRevision != null
-    ? "O Desfazer fica indisponível até a próxima edição, e ele não volta o nome."
+    ? "As edições feitas até aqui deixam de poder ser desfeitas; o Desfazer também não volta o nome."
     : "O Desfazer não volta o nome.");
   return efeitos;
 }
@@ -40,6 +40,19 @@ export function validarNome(valor, atual) {
   return { valido: true, nome };
 }
 
+/**
+ * Recusa do POST (pura) → texto. Três 409 diferentes: a Reserva passou para
+ * outra aba (`dono`), o envio local em curso segura alterações (o call() responde
+ * sem ir ao servidor, revisão igual) e a revisão andou (o call() reconcilia).
+ */
+export function mensagemDeRecusa(status, body, antes, agora) {
+  if (status === 409 && body?.dono) return body.error || "Projeto reservado para edição";
+  if (status === 409 && agora && antes && agora.revision !== antes.revision) {
+    return "A montagem mudou enquanto você renomeava. Confira os avisos e confirme de novo.";
+  }
+  return body?.error || "Não foi possível renomear.";
+}
+
 /** Depois de renomear (puro): o estado que a tela passa a refletir. */
 export function resultadoDeRenomear(antes, depois) {
   return [
@@ -48,7 +61,7 @@ export function resultadoDeRenomear(antes, depois) {
       : depois.scenes?.length ? "Prévia desatualizada: a da v" + depois.revision + " está sendo gerada."
       : "Sem prévia: a montagem ainda não tem cenas.",
     "Aprovação: pendente. Assista à prévia e aprove de novo antes de entregar.",
-    "Desfazer: indisponível até a próxima edição.",
+    "Desfazer: as edições anteriores ao novo nome não podem mais ser desfeitas.",
   ];
 }
 
@@ -139,11 +152,9 @@ export function mountRenomear({ state, api }) {
         label: "Renomeando montagem…",
       });
       if (!res.ok) {
-        // 409: a montagem mudou nesta ou noutra aba; o aviso volta com a revisão nova.
+        // O aviso volta com a revisão que o call() reconciliou, se mudou.
         pintarAviso();
-        mostrarErro(res.status === 409
-          ? "A montagem mudou enquanto você renomeava. Confira os avisos e confirme de novo."
-          : body?.error || "Não foi possível renomear.");
+        mostrarErro(mensagemDeRecusa(res.status, body, antes, state.get("project")));
         return;
       }
       const depois = state.get("project");
