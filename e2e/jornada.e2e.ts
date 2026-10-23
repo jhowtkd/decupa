@@ -102,7 +102,9 @@ test("jornada do studio: editar, histórico, reinício, arraste, revisão, aprov
   const video = page.locator("#previewPlayer");
   await expect(video).toHaveAttribute("data-rev", "6");
   await video.evaluate((el) => { const v = el as unknown as { currentTime: number; play(): Promise<void> }; v.currentTime = 0; return v.play(); });
-  await page.waitForTimeout(4500);
+  // Espera o vídeo andar de verdade (decodificar pode demorar num runner lento), não o relógio.
+  await expect.poll(() => video.evaluate((el) => (el as unknown as { currentTime: number }).currentTime), { timeout: 30_000 })
+    .toBeGreaterThan(2);
   await video.evaluate((el) => (el as unknown as { pause(): void }).pause());
   await expect(bloco("cobertura")).not.toHaveText("0%");
   await expect(bloco("cobertura")).not.toHaveText("100%");

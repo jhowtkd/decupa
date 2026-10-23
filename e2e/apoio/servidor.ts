@@ -23,6 +23,17 @@ export type OpcoesServidor = {
   semMotor?: boolean;
 };
 
+// Grupo de processos (POSIX): o servidor sobe como líder de grupo e o parar()
+// varre o grupo inteiro. Os renders, que o próprio servidor põe em grupos
+// deles, ele encerra no close(). Se o worker do Playwright cair antes do
+// teardown, a saída do processo ainda derruba os grupos que sobraram.
+const GRUPO = process.platform !== "win32";
+const vivos = new Set<number>();
+let saidaArmada = false;
+function matarGrupo(pid: number, sinal: NodeJS.Signals): void {
+  try { process.kill(GRUPO ? -pid : pid, sinal); } catch { /* grupo já vazio */ }
+}
+
 export class Servidor {
   url = "";
   private porta = 0;
@@ -58,8 +69,18 @@ export class Servidor {
     if (semMotor) env.VE_PLUGIN_ROOT = join(base, "sem-motor");
     else if (process.env.DECUPA_E2E_MOTOR === "sintetico") env.VE_PLUGIN_ROOT = join(REPO, "e2e/apoio/motor-sintetico");
     const filho = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", CLI, "serve",
-      "--projects-root", raiz, "--port", String(this.porta)], { cwd: base, env, stdio: ["ignore", "pipe", "pipe"] });
+      "--projects-root", raiz, "--port", String(this.porta)], { cwd: base, env, stdio: ["ignore", "pipe", "pipe"], detached: GRUPO });
     this.filho = filho;
+    const pid = filho.pid;
+    if (pid) {
+      vivos.add(pid);
+      // Saiu sozinho: o PID pode ser reaproveitado, então não entra mais na varredura da saída.
+      filho.once("exit", () => vivos.delete(pid));
+    }
+    if (!saidaArmada) {
+      saidaArmada = true;
+      process.once("exit", () => { for (const pid of vivos) matarGrupo(pid, "SIGKILL"); });
+    }
     const guardar = (parte: Buffer) => {
       this.saida.push(parte.toString("utf8"));
       if (this.saida.length > 400) this.saida.splice(0, this.saida.length - 400);
@@ -67,9 +88,12 @@ export class Servidor {
     filho.stderr!.on("data", guardar);
     this.url = await new Promise<string>((ok, falha) => {
       const prazo = setTimeout(() => falha(new Error(`servidor não subiu em 30 s:\n${this.log()}`)), 30_000);
+      // Só a saída deste processo: depois de um reinício, o log ainda tem o "pronto" do anterior.
+      let deste = "";
       filho.stdout!.on("data", (parte: Buffer) => {
         guardar(parte);
-        const achado = PRONTO.exec(this.log());
+        deste += parte.toString("utf8");
+        const achado = PRONTO.exec(deste);
         if (achado) { clearTimeout(prazo); ok(achado[1]!); }
       });
       filho.once("exit", (code) => { clearTimeout(prazo); falha(new Error(`servidor saiu (código ${code}):\n${this.log()}`)); });
@@ -77,17 +101,32 @@ export class Servidor {
     this.porta = Number(new URL(this.url).port);
   }
 
-  /** SIGTERM e espera o encerramento limpo; SIGKILL se travar. */
-  async parar(): Promise<void> {
+  /** PID do processo do servidor no ar (líder do grupo no POSIX). */
+  get pid(): number | undefined {
+    return this.filho?.pid;
+  }
+
+  /**
+   * SIGTERM ao servidor e espera o encerramento limpo (ele fecha os renders
+   * dele); travado, SIGKILL no grupo depois do prazo. No fim, varre o grupo
+   * para não deixar órfão.
+   */
+  async parar(prazoMs = 15_000): Promise<void> {
     const filho = this.filho;
     if (!filho) return;
     this.filho = null;
-    if (filho.exitCode !== null || filho.signalCode !== null) return;
-    const saiu = new Promise<void>((ok) => filho.once("exit", () => ok()));
-    filho.kill("SIGTERM");
-    const prazo = setTimeout(() => filho.kill("SIGKILL"), 15_000);
-    await saiu;
-    clearTimeout(prazo);
+    const pid = filho.pid;
+    if (filho.exitCode === null && filho.signalCode === null) {
+      const saiu = new Promise<void>((ok) => filho.once("exit", () => ok()));
+      filho.kill("SIGTERM");
+      const prazo = setTimeout(() => { if (pid) matarGrupo(pid, "SIGKILL"); }, prazoMs);
+      await saiu;
+      clearTimeout(prazo);
+    }
+    if (pid) {
+      matarGrupo(pid, "SIGKILL");
+      vivos.delete(pid);
+    }
   }
 
   /** Reinício de verdade: processo novo na mesma porta, opcionalmente com outra variante. */
