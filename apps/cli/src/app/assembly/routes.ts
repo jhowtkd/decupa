@@ -41,8 +41,7 @@ import {
 } from "./rhythm.ts";
 import { renderAssembly } from "./render.ts";
 import { buildTemplateReport } from "./template-report.ts";
-import { subtitleRecord } from "./subtitles.ts";
-import { subtitleSource } from "./subtitles-revision.ts";
+import { revisionSubtitles } from "./subtitles-revision.ts";
 import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyFillerEdit, applyHistorySnapshot, applyProposalWithFillers, proposalProject, approveFinal, recordPreview,
@@ -1068,11 +1067,11 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         if (!/^\d+$/.test(revision) || parts.length !== 4 || !["vtt", "srt", "json"].includes(kind)) {
           throw new HttpError(404, "legenda desconhecida");
         }
-        const source = await subtitleSource(dir, await loadProject(dir), Number(revision));
-        if (!source.ok) throw new HttpError(404, source.motivo);
-        const { legendas, subtitles } = subtitleRecord(source.project);
+        const found = await revisionSubtitles(dir, await loadProject(dir), Number(revision));
+        if (!found.ok) throw new HttpError(404, found.motivo);
+        const { legendas, subtitles } = found;
         if (kind === "json") {
-          sendJson(res, { revision: Number(revision), origem: source.origem, legendas, cues: subtitles?.cues ?? [] });
+          sendJson(res, { revision: Number(revision), origem: found.origem, legendas, cues: subtitles?.cues ?? [] });
           return true;
         }
         if (!subtitles) throw new HttpError(404, legendas.status === "indisponivel" ? legendas.motivo : "legenda indisponível");

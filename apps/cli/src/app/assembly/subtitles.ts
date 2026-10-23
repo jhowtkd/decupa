@@ -46,6 +46,22 @@ export function formatVtt(cues: SubtitleCue[]): string {
   return `WEBVTT\n\n${cues.map((c) => `${vttTimestamp(c.startMs)} --> ${vttTimestamp(c.endMs)}\n${c.text}\n`).join("\n")}`;
 }
 
+/** Volta do `formatVtt`: os cues de um VTT gravado por ele (a entrega de uma revisão). */
+export function parseVtt(vtt: string): SubtitleCue[] {
+  const ms = (stamp: string): number => {
+    const [h, m, rest] = stamp.split(":");
+    const [s, milli] = (rest ?? "").split(".");
+    return ((Number(h) * 60 + Number(m)) * 60 + Number(s)) * 1000 + Number(milli);
+  };
+  const cues: SubtitleCue[] = [];
+  for (const block of vtt.split(/\n\n+/)) {
+    const [timing, ...text] = block.split("\n");
+    const match = /^(\d{2,}:\d{2}:\d{2}\.\d{3}) --> (\d{2,}:\d{2}:\d{2}\.\d{3})$/.exec(timing ?? "");
+    if (match) cues.push({ startMs: ms(match[1]!), endMs: ms(match[2]!), text: text.join("\n").trim() });
+  }
+  return cues;
+}
+
 export function formatSrt(cues: SubtitleCue[]): string {
   return cues
     .map((c, i) => `${i + 1}\n${srtTimestamp(c.startMs)} --> ${srtTimestamp(c.endMs)}\n${c.text}\n`)
