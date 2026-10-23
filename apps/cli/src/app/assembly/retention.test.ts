@@ -88,6 +88,20 @@ it("protege o json da pilha e poda o diretório da mesma revisão", async () => 
   }).toEqual({ json: true, dir: false, recente: true });
 });
 
+it("protege o json do ramo do refazer, mesmo fora das K revisões recentes", async () => {
+  const dir = await fixture({ revisoes: [1, 2, 8, 9, 10], atual: 10, historico: [1, 2, 8, 9, 10] });
+  const projeto = JSON.parse(await readFile(join(dir, "project.json"), "utf8")) as Record<string, unknown>;
+  projeto.undo = { head: 10, steps: [{ revision: 1, label: "a" }], redo: [{ revision: 2, label: "b" }] };
+  await writeFile(join(dir, "project.json"), JSON.stringify(projeto));
+  await pruneProject(dir, { revisions: 1 });
+  expect({
+    pilha: await existe(join(dir, "history", "rev-1.json")),
+    ramo: await existe(join(dir, "history", "rev-2.json")),
+    ramoDir: await existe(join(dir, "rev-2")),
+    fora: await existe(join(dir, "history", "rev-8.json")),
+  }).toEqual({ pilha: true, ramo: true, ramoDir: false, fora: false });
+});
+
 it("history acompanha", async () => {
   const dir = await fixture({ revisoes: [1, 5], atual: 5, historico: [1, 5] });
   const resultado = await pruneProject(dir, { revisions: 1 });
