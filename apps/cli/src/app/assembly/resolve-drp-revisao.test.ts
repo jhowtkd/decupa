@@ -4,7 +4,7 @@
 // ("recusa proposta obsoleta e prévia atrasada") e export.test.ts ("recusa export
 // com aprovação final desatualizada"); aqui ficam as rotas, que é o que o
 // studio usa.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -14,15 +14,16 @@ import { blankProject } from "./routes.ts";
 import { createProject } from "./store.ts";
 import type { Project } from "./types.ts";
 
-let stop: (() => Promise<void>) | null = null;
-afterEach(async () => { await stop?.(); stop = null; });
+const cleanups: Array<() => Promise<unknown>> = [];
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 async function boot(over: Partial<Project>) {
   const dir = await mkdtemp(join(tmpdir(), "assembly-revisao-"));
   const project = { ...blankProject("p"), ...over } as Project;
   await createProject(dir, project);
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const app = await startApp({ projectDir: dir, port: 0 });
-  stop = app.close;
+  cleanups.push(app.close);
   return { dir, base: `http://127.0.0.1:${app.port}` };
 }
 
@@ -86,17 +87,26 @@ it("resolve-drp/<rev> responde 404 sem entrega, sem drpPath, com revisão invál
 
 const artefato = (revision: number) => ({ revision, assemblySha256: "a".repeat(64), relativePath: "p.mp4", sha256: "b".repeat(64) });
 
-it("approve-final recusa prévia de revisão anterior e watchedRevision diferente da atual", async () => {
+const erro = async (res: Response) => ((await res.json()) as { error?: string }).error ?? "";
+
+// Ordem das guardas em approveFinal (revisions.ts): artefato da revisão atual,
+// previewRevision atual, e só então a revisão assistida.
+it("approve-final recusa prévia de revisão anterior com o motivo da prévia", async () => {
   const { base } = await boot({ revision: 2, previewRevision: 1, previewArtifact: artefato(1), finalApprovedRevision: null });
-  // Prévia antiga: nem declarando a revisão atual nem a da prévia a aprovação passa.
-  expect((await post(base, "/project/approve-final", { baseRevision: 2, watchedRevision: 2 })).status).toBe(409);
-  expect((await post(base, "/project/approve-final", { baseRevision: 2, watchedRevision: 1 })).status).toBe(409);
+  for (const watchedRevision of [2, 1]) {
+    const res = await post(base, "/project/approve-final", { baseRevision: 2, watchedRevision });
+    expect(res.status).toBe(409);
+    expect(await erro(res)).toMatch(/prévia desatualizada/);
+  }
   const aprovada = await fetch(`${base}/project`).then((r) => r.json()) as { project: { finalApprovedRevision: number | null } };
   expect(aprovada.project.finalApprovedRevision).toBeNull();
+});
 
-  // Prévia atual, mas assistida de outra revisão: recusa com 400.
-  const atual = await boot({ revision: 2, previewRevision: 2, previewArtifact: artefato(2), finalApprovedRevision: null });
-  expect((await post(atual.base, "/project/approve-final", { baseRevision: 2, watchedRevision: 1 })).status).toBe(400);
+it("approve-final com prévia atual recusa watchedRevision diferente pela guarda da revisão assistida", async () => {
+  const { base } = await boot({ revision: 2, previewRevision: 2, previewArtifact: artefato(2), finalApprovedRevision: null });
+  const res = await post(base, "/project/approve-final", { baseRevision: 2, watchedRevision: 1 });
+  expect(res.status).toBe(400);
+  expect(await erro(res)).toMatch(/revisão assistida/);
 });
 
 it("export recusa quando só uma revisão anterior foi aprovada", async () => {
@@ -104,4 +114,35 @@ it("export recusa quando só uma revisão anterior foi aprovada", async () => {
   const res = await post(base, "/project/export", { baseRevision: 2 });
   expect(res.status).toBe(409);
   expect(((await res.json()) as { error?: string }).error ?? "").toMatch(/aprovação final/);
+});
+
+it("drpPath fora de deliveries/<rev>/ dá 404 nas duas rotas; dentro da pasta dá 200", async () => {
+  const { dir, base } = await boot({ revision: 5, previewRevision: 5, finalApprovedRevision: 5 });
+  await mkdir(join(dir, "deliveries", "6"), { recursive: true });
+  const fora = join(dir, "solto.drp");
+  const daOutra = join(dir, "deliveries", "6", "projeto-r6.drp");
+  const segredo = join(dir, "segredo.txt");
+  await writeFile(fora, "fora");
+  await writeFile(daOutra, "da-6");
+  await writeFile(segredo, "segredo");
+  const cenarios: Array<[string, string]> = [
+    ["raiz do projeto", fora],
+    ["pasta da revisão 6", daOutra],
+    ["escapa com ..", join(dir, "deliveries", "5", "..", "..", "segredo.txt")],
+  ];
+  for (const [nome, drpPath] of cenarios) {
+    await registra(dir, 5, { drpPath });
+    for (const rota of ["resolve-drp/5", "resolve-drp"]) {
+      const res = await fetch(`${base}/project/${rota}`);
+      expect(res.status, `${nome} em ${rota}`).toBe(404);
+      expect(await res.text(), `${nome} em ${rota}`).not.toMatch(/fora|da-6|segredo$/);
+    }
+  }
+  // Controle: o mesmo registro apontando para dentro da pasta é servido.
+  await registra(dir, 5, {}, "drp-da-5");
+  for (const rota of ["resolve-drp/5", "resolve-drp"]) {
+    const res = await fetch(`${base}/project/${rota}`);
+    expect(res.status, rota).toBe(200);
+    expect(await res.text()).toBe("drp-da-5");
+  }
 });

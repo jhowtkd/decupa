@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountCobertura } from "./cobertura.js";
+import { activityView } from "./progress.js";
 import { mountContexto, mountStage } from "./contexto.js";
 import { createState } from "./state.js";
 import { mountBancada } from "./studio-bancada.js";
@@ -297,4 +298,33 @@ it("legacy: o checklist 'Revisão pronta' vale qualquer aprovação, como antes"
 
 it("page.html (legacy) não tem nada do painel nem dos itens da Entrega do studio", () => {
   for (const marca of ["revisaoPainel", "entregaItens", "revisao-painel"]) expect(PAGE, marca).not.toContain(marca);
+});
+
+// ---- Atividade › Cobertura (legacy) com o rastreio real ----
+
+const textoCobertura = (state: ReturnType<typeof createState>) => activityView({
+  project: state.get("project"), watched: state.get("watched"), coverage: state.get("watchCoverage"),
+} as never) as unknown as Record<string, unknown>;
+
+/** Acha o texto da cobertura na projeção da Atividade, onde quer que ela o ponha. */
+function acha(view: unknown, trecho: RegExp): boolean {
+  return JSON.stringify(view).match(trecho) !== null;
+}
+
+it("legacy: a Atividade mostra os segundos vistos da prévia e, no Original, cobertura não confirmada", () => {
+  const t = monta();
+  t.state.set("project", projeto());
+  expect(t.video.getAttribute("data-rev")).toBe("3");
+  for (let segundo = 1; segundo <= 5; segundo += 1) toca(t.video, segundo);
+  expect(acha(textoCobertura(t.state), /Prévia v3 · 0:05 de 0:10 vistos/)).toBe(true);
+
+  // playOriginal troca o src sem data-rev: a cobertura da prévia deixa de valer.
+  t.video.removeAttribute("data-rev");
+  t.video.dataset.source = "a";
+  t.video.src = "/project/original/a";
+  Object.defineProperty(t.video, "duration", { value: 42, configurable: true });
+  t.video.dispatchEvent({ type: "loadstart" });
+  const visao = textoCobertura(t.state);
+  expect(acha(visao, /Prévia v3 · cobertura não confirmada nesta sessão/)).toBe(true);
+  expect(acha(visao, /0:42|vistos/)).toBe(false);
 });

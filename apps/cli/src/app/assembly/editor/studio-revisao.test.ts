@@ -140,10 +140,10 @@ it("entrega: bloqueada, a preparar, disponível e legendas indisponíveis", () =
   expect(semLegenda.detalhe).toContain("legendas indisponíveis");
 });
 
-function painel(over: { project?: Over | null; view?: string; data?: Over } = {}) {
+function painel(over: { project?: Over | null; view?: string; data?: Over; stage?: string } = {}) {
   const document = installDom('<div id="stage"></div>');
   // O painel só pinta na etapa Revisão.
-  const state = createState({ stage: "revisao" });
+  const state = createState({ stage: over.stage ?? "revisao" });
   const video = document.createElement("video");
   const rev = (over.data?.rev as string | undefined) ?? "6";
   if (rev !== "") video.setAttribute("data-rev", rev);
@@ -190,6 +190,43 @@ it("o painel mostra prévia anterior, Original e some sem cenas", () => {
   expect(sem.el().hidden).toBe(true);
   sem.state.set("project", projeto());
   expect(sem.el().hidden).toBe(false);
+});
+
+it("fora da etapa Revisão o painel não recalcula; entrar nela repinta com o estado de agora", () => {
+  const t = painel({ stage: "edicao" });
+  const dados = t.el().children[0]!;
+  const repinta = vi.spyOn(dados, "replaceChildren");
+  expect(repinta).not.toHaveBeenCalled();
+
+  // "Reprodução" na Edição: cobertura, projeto e verificação mudam sem tocar no DOM do painel.
+  for (let segundo = 1; segundo <= 8; segundo += 1) t.state.set("watchCoverage", medida(6, segundo / 10, segundo * 10 + "% assistido"));
+  t.state.set("project", projeto({ finalApprovedRevision: 6 }));
+  t.state.set("verificacao", verificacao(6));
+  t.state.set("view", "montagem");
+  t.state.set("operation", { stage: "rendering" });
+  expect(repinta).not.toHaveBeenCalled();
+  expect(dados.children).toHaveLength(0);
+
+  // Trocar de etapa N vezes fora da Revisão também não repinta.
+  for (const etapa of ["materiais", "edicao", "entrega", "edicao", "materiais"]) t.state.set("stage", etapa);
+  expect(repinta).not.toHaveBeenCalled();
+
+  t.state.set("stage", "revisao");
+  expect(repinta).toHaveBeenCalledTimes(1);
+  expect(t.bloco("cobertura").valor).toBe("80%");
+  expect(t.bloco("aprovada").valor).toBe("v6");
+  expect(t.bloco("entrega").valor).toBe("v6");
+
+  // Na Revisão volta a acompanhar o estado; ao sair, congela de novo no último texto.
+  t.state.set("watchCoverage", medida(6, 0.9, "90% assistido"));
+  expect(t.bloco("cobertura").valor).toBe("90%");
+  const chamadas = repinta.mock.calls.length;
+  t.state.set("stage", "edicao");
+  t.state.set("watchCoverage", medida(6, 1));
+  expect(repinta.mock.calls.length).toBe(chamadas);
+  expect(t.bloco("cobertura").valor).toBe("90%");
+  t.state.set("stage", "revisao");
+  expect(t.bloco("cobertura").valor).toBe("100%");
 });
 
 // ---- 2. Prévia antiga nunca libera entrega nova ----
