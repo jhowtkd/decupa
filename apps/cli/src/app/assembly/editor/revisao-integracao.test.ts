@@ -223,6 +223,9 @@ const verificacao = (revision: number) => ({ revision, status: "pendente", packa
 const entrega = { status: "ready", revision: 3, drpPath: "/x/projeto.drp" };
 
 /** Deixa o fetch de resolve-status (capacidades e registro do Resolve) resolver. */
+type Link = El & { href: string; download: string };
+/** Os <a> de um trecho do DOM; href e download são propriedades soltas no DOM falso. */
+const links = (raiz: El) => raiz.querySelectorAll("a") as Link[];
 /** O <li> "Revisão pronta" do checklist (o rótulo é um filho do li no DOM falso). */
 const itemPronto = (document: ReturnType<typeof installDom>) => document.getElementById("deliveryChecklist")!.children
   .find((li) => li.children.some((filho) => filho.textContent === "Revisão pronta"))!;
@@ -235,19 +238,19 @@ it("studio: #entregaItens substitui #downloads e cada <a download> bate com a p�
   t.state.set("project", projeto({ finalApprovedRevision: 3 }));
   const itens = t.document.getElementById("entregaItens")!;
   expect(itens.querySelectorAll("li.entrega-item").map((li) => li.dataset.item)).toEqual(["video", "legendas", "continuidade"]);
-  let links = 0;
+  let total = 0;
   for (const li of itens.querySelectorAll("li.entrega-item")) {
     const pilula = li.querySelector(".entrega-rev")!.textContent;
     expect(pilula).toBe("v3");
     expect(li.dataset.estado).toBe("disponivel");
-    for (const a of li.querySelectorAll("a")) {
-      links += 1;
+    for (const a of links(li)) {
+      total += 1;
       expect(a.href).toMatch(new RegExp(`/${pilula.slice(1)}(/|$)`));
       expect(a.download).toMatch(new RegExp(`^decupa-r${pilula.slice(1)}(-|\\.)`));
     }
   }
-  expect(links).toBeGreaterThan(4);
-  const ancora = (nome: string) => itens.querySelectorAll("a").find((a) => a.download === nome);
+  expect(total).toBeGreaterThan(4);
+  const ancora = (nome: string) => links(itens).find((a) => a.download === nome);
   expect(ancora("decupa-r3-projeto.drp")!.href).toMatch(/project\/resolve-drp\/3$/);
   expect(ancora("decupa-r3.tar")).toBeDefined();
   expect(itens.querySelector('[data-item="legendas"] .entrega-nota')!.textContent).toContain("não é gravada no MP4");
@@ -278,7 +281,7 @@ it("legacy: lista plana #downloads com os nomes de sempre, .drp sem revisão e s
   const nomes = t.document.getElementById("downloads")!.querySelectorAll("li .file-name").map((el) => el.textContent);
   expect(nomes).toEqual(expect.arrayContaining(["reference.mp4", "importar-no-resolve.txt", "verificacao.json", "legendas.vtt", "legendas.srt", "decupa-r3.tar", "projeto.drp"]));
   expect(nomes.some((nome) => nome.startsWith("decupa-r3-"))).toBe(false);
-  const ancoras = t.document.getElementById("downloads")!.querySelectorAll("a");
+  const ancoras = links(t.document.getElementById("downloads")!);
   const drp = ancoras.find((a) => a.download === "projeto.drp")!;
   expect(drp.href).toMatch(/project\/resolve-drp$/);
   const mp4 = ancoras.find((a) => a.download === "reference.mp4")!;

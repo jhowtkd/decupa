@@ -228,7 +228,7 @@ it("todo href leva a revisão do item e todo download leva decupa-r<rev>", () =>
   const caps = { resolve: true, primary: "package" };
   for (const revisao of [3, 6, 12]) {
     const itens = deliveryItems(projeto({ revision: revisao, previewRevision: revisao, finalApprovedRevision: revisao }),
-      verificacao(revisao), caps, { status: "ready", revision: revisao, drpPath: "/x.drp" });
+      verificacao(revisao), caps as never, { status: "ready", revision: revisao, drpPath: "/x.drp" });
     const arquivos = itens.flatMap((item) => item.files.map((file) => ({ item, file })));
     expect(arquivos.length).toBeGreaterThan(4);
     for (const { item, file } of arquivos) {
