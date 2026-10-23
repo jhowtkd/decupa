@@ -606,7 +606,7 @@ async function uploadTeamFiles(files) {
 mountStage({ state, api, player });
 mountContexto({ state, api, player, ui: editorUi });
 mountRail({ state, api, player, ui: editorUi });
-mountTemplates({state,api});
+mountTemplates({ state, api, ui: editorUi });
 mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
 // Busca no texto do studio: lê o projeto do estado e não recebe api.
