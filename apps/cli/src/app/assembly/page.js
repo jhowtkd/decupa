@@ -184,7 +184,7 @@ async function call(path, opts = {}) {
     }
     const current = !body.project || fresh(body.project);
     if (current) {
-      for (const key of ["fillerReport", "undoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
+      for (const key of ["fillerReport", "undoRevision", "redoRevision", "brollCandidates", "templateProposal", "verificacao", "speechProposal", "supportSwap", "rhythmProposal", "rhythmProfiles", "templateReport"]) {
         if (Object.hasOwn(body, key)) state.set(key, body[key]);
       }
     }

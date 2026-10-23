@@ -266,14 +266,19 @@ export type Project = {
   preparedRevision?: number;
 };
 
-/** Passo do desfazer: a foto `history/rev-<revision>.json` tirada antes de `label`. */
+/**
+ * Passo do desfazer: a foto `history/rev-<revision>.json` tirada antes de
+ * `label`. No ramo do refazer, a foto é a do estado que o desfazer deixou.
+ */
 export type UndoStep = { revision: number; label: string };
 
 /**
  * Pilha do desfazer, o passo mais recente por último. Só vale enquanto
  * `head` for a revisão atual: mudança de revisão sem foto quebra a pilha.
+ * `redo` (opcional, ausente quando vazio) é o ramo do refazer, o próximo por
+ * último; versão anterior do Decupa o ignora e grava a pilha sem ele.
  */
-export type UndoStack = { head: number; steps: UndoStep[] };
+export type UndoStack = { head: number; steps: UndoStep[]; redo?: UndoStep[] };
 
 /** Formato do projeto antes da migração — somente leitura e migração. */
 export type LegacyAnalysis = {

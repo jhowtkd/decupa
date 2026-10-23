@@ -40,10 +40,13 @@ function inteiro(valor: unknown): number | null {
   return typeof valor === "number" && Number.isInteger(valor) && valor >= 0 ? valor : null;
 }
 
-/** Revisões das fotos na pilha do desfazer (`project.undo.steps`). */
+/**
+ * Revisões das fotos na pilha do desfazer e no ramo do refazer
+ * (`project.undo.steps` e `project.undo.redo`).
+ */
 function passosDaPilha(undo: unknown): Set<number> {
-  const passos = typeof undo === "object" && undo !== null ? (undo as Record<string, unknown>)["steps"] : null;
-  if (!Array.isArray(passos)) return new Set();
+  const pilha = typeof undo === "object" && undo !== null ? undo as Record<string, unknown> : {};
+  const passos = [pilha["steps"], pilha["redo"]].flatMap((lista) => Array.isArray(lista) ? lista as unknown[] : []);
   return new Set(passos.map((passo: unknown) =>
     typeof passo === "object" && passo !== null ? inteiro((passo as Record<string, unknown>)["revision"]) : null,
   ).filter((n): n is number => n !== null));
@@ -67,7 +70,8 @@ async function ehArquivoReal(path: string): Promise<boolean> {
  * Mantém sempre: a revisão atual (`project.json`), revisões com diretório
  * em `exports/`, e as referenciadas por `previewArtifact`/`previewRevision`/
  * `finalApprovedRevision`. Das demais, mantém as `K` mais recentes. A foto
- * `history/rev-N.json` de cada passo da pilha do desfazer também fica. Uma
+ * `history/rev-N.json` de cada passo da pilha do desfazer e do ramo do
+ * refazer também fica. Uma
  * entrada do `preview-cache/` fica enquanto alguma `rev-N/` mantida a
  * registra em `preview-cache.json`; sem registro, sai.
  *
@@ -169,8 +173,8 @@ export async function pruneProject(
   for (const [n, nome] of [...dirsRev.entries()].sort((a, b) => a[0] - b[0])) {
     if (!manter.has(n)) alvos.push(nome);
   }
-  // Fotos da pilha do desfazer ficam, mas só o JSON: o rev-N/ do mesmo passo
-  // segue a regra geral.
+  // Fotos da pilha do desfazer e do ramo do refazer ficam, mas só o JSON: o
+  // rev-N/ do mesmo passo segue a regra geral.
   const pilha = passosDaPilha(projeto["undo"]);
   for (const [n, nome] of [...arquivosHistory.entries()].sort((a, b) => a[0] - b[0])) {
     if (!manter.has(n) && !pilha.has(n)) alvos.push(`history/${nome}`);

@@ -11,8 +11,11 @@ export function nomeDaMontagem(project) {
   return nome && nome !== project.id ? nome : "";
 }
 
-/** O que muda com o nome (puro): revisão, prévia, aprovação e desfazer. */
-export function efeitosDeRenomear(project, undoRevision) {
+/**
+ * O que muda com o nome (puro): revisão, prévia, aprovação, desfazer e refazer.
+ * @param {number | null} [redoRevision]
+ */
+export function efeitosDeRenomear(project, undoRevision, redoRevision = null) {
   const atual = project.revision;
   const proxima = atual + 1;
   const aprovada = project.finalApprovedRevision != null && project.finalApprovedRevision === atual;
@@ -28,6 +31,8 @@ export function efeitosDeRenomear(project, undoRevision) {
   efeitos.push(undoRevision != null
     ? "As edições feitas até aqui deixam de poder ser desfeitas; o Desfazer também não volta o nome."
     : "O Desfazer não volta o nome.");
+  // O renomear também encerra o ramo do refazer (revisão nova sem passo).
+  if (redoRevision != null) efeitos.push("O que foi desfeito deixa de poder ser refeito.");
   return efeitos;
 }
 
@@ -111,7 +116,7 @@ export function mountRenomear({ state, api }) {
   function pintarAviso() {
     const project = state.get("project");
     if (!project) return;
-    lista($("renameEffects"), efeitosDeRenomear(project, state.get("undoRevision")));
+    lista($("renameEffects"), efeitosDeRenomear(project, state.get("undoRevision"), state.get("redoRevision")));
   }
 
   function abrir() {
@@ -183,4 +188,5 @@ export function mountRenomear({ state, api }) {
   // O aviso acompanha o projeto enquanto o diálogo está aberto e ainda não confirmou.
   state.subscribe("project", () => { if (dialog.open && result.hidden) pintarAviso(); });
   state.subscribe("undoRevision", () => { if (dialog.open && result.hidden) pintarAviso(); });
+  state.subscribe("redoRevision", () => { if (dialog.open && result.hidden) pintarAviso(); });
 }

@@ -459,3 +459,24 @@ it("permite repetir a adição ao Projeto sem reenviar Mídia já concluída", a
   expect(starts).toHaveLength(1);
   expect(additions).toBe(2);
 });
+
+it("redoRevision é aceito em resposta fresca e ignorado em resposta atrasada", async () => {
+  const js = await pageJs();
+  const rodar = async (revisaoAtual: number, revisaoResposta: number) => {
+    const box = callSandbox(revisaoAtual);
+    const call = runInNewContext(
+      slice(js, "async function call(", "const player") + "\n;call",
+      { ui: box.ui, client: box.client, state: box.state, renderStatus: vi.fn(), maybeScheduleAutoPreview: vi.fn() },
+    ) as (path: string, opts?: unknown) => Promise<unknown>;
+    box.client.call.mockResolvedValueOnce({
+      res: { ok: true, status: 200 },
+      body: { project: { revision: revisaoResposta }, undoRevision: 2, redoRevision: 3 },
+    });
+    await call("/project");
+    return box.sets.filter(([key]) => key === "redoRevision");
+  };
+  expect({ fresca: await rodar(5, 5), atrasada: await rodar(5, 3) }).toEqual({
+    fresca: [["redoRevision", 3]],
+    atrasada: [],
+  });
+});

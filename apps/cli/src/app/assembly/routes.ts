@@ -49,8 +49,8 @@ import {
 import { compileScenes, proposeScenes, rescaleSupport, validateProposal } from "./scenes.ts";
 import { selectLocalFiles, type SelectResult } from "./select.ts";
 import { drainProjectWrites, createProject, loadProject, mergeAnalyses, readHistorySnapshot, saveProject, writeHistorySnapshot } from "./store.ts";
-import type { Assembly, Project, Source } from "./types.ts";
-import { editLabel, popUndo, recordUndo, undoTop } from "./undo.ts";
+import type { Assembly, Project, Source, UndoStep } from "./types.ts";
+import { editLabel, popRedo, popUndo, recordUndo, redoTop, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
 import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
 import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
@@ -852,18 +852,17 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             runBackground(() => alignCorrectionJob(dir, correction.id, project.revision, deps, runtimeLifetime.signal));
           }
         }
-        // Desfazer só aparece com a foto do topo da pilha legível; histórico
-        // ausente ou corrompido vira "sem desfazer", nunca 500.
-        let undoRevision: number | null = null;
-        const undoStep = undoTop(project);
-        if (undoStep) {
-          undoRevision = await readHistorySnapshot(dir, undoStep.revision).then(() => undoStep.revision, () => null);
-        }
+        // Desfazer e Refazer só aparecem com a foto do topo legível; histórico
+        // ausente ou corrompido vira "sem desfazer"/"sem refazer", nunca 500.
+        const readable = async (step: UndoStep | null): Promise<number | null> =>
+          step ? readHistorySnapshot(dir, step.revision).then(() => step.revision, () => null) : null;
+        const undoRevision = await readable(undoTop(project));
+        const redoRevision = await readable(redoTop(project));
         const fps=project.assembly.fps.num/project.assembly.fps.den;
         const listed=brollCandidates(project),index=brollIndex(project,listed);
         const candidates=listed.map(candidate=>({...candidate,entries:candidateSupport(project,candidate,0,Math.round(candidate.end*fps)-Math.round(candidate.start*fps),index)}));
         await sendSnapshot(res, {
-          project, undoRevision,
+          project, undoRevision, redoRevision,
           templateProposal:await readTemplateProposal(),
           speechProposal: await readSpeechProposal(),
           supportSwap: await readSupportSwap(),
@@ -1867,20 +1866,23 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         return true;
       }
 
-      if (parts[1] === "undo" && req.method === "POST") {
+      if ((parts[1] === "undo" || parts[1] === "redo") && req.method === "POST") {
+        const redo = parts[1] === "redo";
+        const top = redo ? redoTop : undoTop;
+        const verb = redo ? "refazer" : "desfazer";
         const baseRevision = requireRevision(body);
         const target = Number(body.revision);
         if (!Number.isSafeInteger(target) || target < 0) {
-          throw new HttpError(400, "revision inválida para desfazer");
+          throw new HttpError(400, `revision inválida para ${verb}`);
         }
         const loaded = await loadProject(dir);
         if (loaded.revision !== baseRevision) {
           throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${loaded.revision}`);
         }
-        // Só o topo da pilha se desfaz: pedir outro passo (ou um alvo já
-        // desfeito) é conflito, não um salto no histórico.
-        if (undoTop(loaded)?.revision !== target) {
-          throw new HttpError(409, "nada a desfazer nessa revisão");
+        // Só o topo da pilha (ou do ramo do refazer) se aplica: pedir outro
+        // passo, ou um alvo já aplicado, é conflito, não um salto no histórico.
+        if (top(loaded)?.revision !== target) {
+          throw new HttpError(409, `nada a ${verb} nessa revisão`);
         }
         let snap;
         try {
@@ -1888,15 +1890,19 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         } catch (err) {
           throw new HttpError(404, err instanceof Error ? err.message : String(err));
         }
+        // A foto do estado de agora é o passo de volta: o refazer de um
+        // desfazer, o desfazer de um refazer. Gravada antes do projeto, como
+        // nas edições; se o projeto não chegar a gravar, sobra uma foto fiel.
+        await writeHistorySnapshot(dir, loaded);
         try {
           // Forma funcional: substitui o conteúdo editorial (sem unir correções
-          // antigas de volta) e valida antes de gravar. O estado desfeito não
-          // vira foto nem passo: o próximo desfazer volta mais um, nunca refaz.
+          // antigas de volta) e valida antes de gravar. Desfazer e refazer são
+          // revisões novas; a revisão nunca volta.
           await saveProject(dir, baseRevision, (current) => {
-            if (current.revision !== baseRevision || undoTop(current)?.revision !== target) {
+            if (current.revision !== baseRevision || top(current)?.revision !== target) {
               throw new Error(`revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
             }
-            return popUndo(current, applyHistorySnapshot(current, snap));
+            return (redo ? popRedo : popUndo)(current, applyHistorySnapshot(current, snap));
           });
         } catch (err) {
           throw new HttpError(409, err instanceof Error ? err.message : String(err));

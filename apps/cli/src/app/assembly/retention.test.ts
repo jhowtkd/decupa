@@ -1,8 +1,13 @@
-import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { pruneProject } from "./retention.ts";
+
+const pastas: string[] = [];
+afterEach(async () => {
+  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true });
+});
 
 async function existe(path: string): Promise<boolean> {
   return access(path).then(() => true, () => false);
@@ -15,6 +20,7 @@ async function fixture(opcoes: {
   historico?: number[];
 }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "assembly-retention-"));
+  pastas.push(dir);
   for (const n of opcoes.revisoes) {
     await mkdir(join(dir, `rev-${n}`), { recursive: true });
     await writeFile(join(dir, `rev-${n}`, "reference.mp4"), `previa-${n}`);
@@ -88,6 +94,20 @@ it("protege o json da pilha e poda o diretório da mesma revisão", async () => 
   }).toEqual({ json: true, dir: false, recente: true });
 });
 
+it("protege o json do ramo do refazer, mesmo fora das K revisões recentes", async () => {
+  const dir = await fixture({ revisoes: [1, 2, 8, 9, 10], atual: 10, historico: [1, 2, 8, 9, 10] });
+  const projeto = JSON.parse(await readFile(join(dir, "project.json"), "utf8")) as Record<string, unknown>;
+  projeto.undo = { head: 10, steps: [{ revision: 1, label: "a" }], redo: [{ revision: 2, label: "b" }] };
+  await writeFile(join(dir, "project.json"), JSON.stringify(projeto));
+  await pruneProject(dir, { revisions: 1 });
+  expect({
+    pilha: await existe(join(dir, "history", "rev-1.json")),
+    ramo: await existe(join(dir, "history", "rev-2.json")),
+    ramoDir: await existe(join(dir, "rev-2")),
+    fora: await existe(join(dir, "history", "rev-8.json")),
+  }).toEqual({ pilha: true, ramo: true, ramoDir: false, fora: false });
+});
+
 it("history acompanha", async () => {
   const dir = await fixture({ revisoes: [1, 5], atual: 5, historico: [1, 5] });
   const resultado = await pruneProject(dir, { revisions: 1 });
@@ -100,6 +120,7 @@ it("history acompanha", async () => {
 it("recusa history simbólico sem remover arquivos externos", async () => {
   const dir = await fixture({ revisoes: [1], atual: 5, historico: [] });
   const outside = await mkdtemp(join(tmpdir(), "retention-outside-"));
+  pastas.push(outside);
   await writeFile(join(outside, "rev-1.json"), "{}");
   await symlink(outside, join(dir, "history"));
   await expect(pruneProject(dir, { revisions: 0 })).rejects.toThrow(/simbólico/);
