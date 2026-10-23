@@ -198,6 +198,8 @@ export function criarFila({
 }) {
   let itens = [];
   let ativo = null;
+  // A limpeza usa a impressão do arquivo: outro envio dela só pode começar depois.
+  const cancelando = new Set();
   let pausado = false;
   /** Por que a fila parou sozinha (conexão, Reserva); null quando foi a pessoa. */
   let motivoDaPausa = null;
@@ -279,7 +281,7 @@ export function criarFila({
   // espera o primeiro projeto (o envio precisa da revisão e das fontes).
   function proximo() {
     if (pausado || ativo || !restaurada) return;
-    const seguinte = itens.find((item) => item.estado === "aguardando");
+    const seguinte = itens.find((item) => item.estado === "aguardando" && !cancelando.has(item.chave));
     if (seguinte) void iniciar(seguinte);
   }
 
@@ -507,14 +509,26 @@ export function criarFila({
     proximo();
   }
 
+  async function cancelarEnvio(item) {
+    try {
+      await cancelar(item);
+    } catch {
+      // Remover continua tirando o item da fila mesmo se a limpeza falhar.
+    } finally {
+      cancelando.delete(item.chave);
+      proximo();
+    }
+  }
+
   function remover(chave) {
     const item = itens.find((outro) => outro.chave === chave);
     if (!item || item.estado === "adicionando") return;
     item.removido = true;
     if (ativo === item) ativo = null;
     // Para o envio e apaga o parcial no servidor; o que já está no acervo ou no projeto fica.
-    if (!item.mediaId && item.estado !== "pronto" && !item.invalido) {
-      void Promise.resolve(cancelar(item)).catch(() => {});
+    if (!item.mediaId && item.estado !== "pronto" && !item.invalido && !cancelando.has(item.chave)) {
+      cancelando.add(item.chave);
+      void cancelarEnvio(item);
     }
     itens = itens.filter((outro) => outro !== item);
     notificar();
