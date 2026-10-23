@@ -671,7 +671,8 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const foco = document.activeElement?.closest?.("[data-zoom]")?.dataset.zoom;
     const alcaFoco = document.activeElement?.closest?.(".bloco-alca")?.dataset.alca;
     el.replaceChildren(head, corpo, anuncio);
-    if (Number.isFinite(centro) && rolagem.scrollWidth > 0) {
+    // No 1× não há o que rolar: os poucos px da última marca da régua não contam.
+    if (z > 1 && Number.isFinite(centro) && rolagem.scrollWidth > 0) {
       rolagem.scrollLeft = Math.max(0, centro * rolagem.scrollWidth - rolagem.clientWidth / 2);
     }
     if (foco) {
