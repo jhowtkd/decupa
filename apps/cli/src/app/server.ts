@@ -31,7 +31,7 @@ import type { ReviewUnitFlag } from "./review.ts";
 import { editorialStats } from "./stats.ts";
 import { claimWorkDir, cleanupWorkDir, readSourceManifest } from "./session.ts";
 import { blankProject, createAssemblyRuntime, sourceFromMedia, withCanvasPolicy, type AssemblyDeps } from "./assembly/routes.ts";
-import { editorUiFromEnv, type EditorUi } from "./assembly/editor-ui.ts";
+import { editorUiFromEnv, withStudioShell, type EditorUi } from "./assembly/editor-ui.ts";
 import type { Source } from "./assembly/types.ts";
 import { createProject } from "./assembly/store.ts";
 import type { VisualClient } from "./assembly/model.ts";
@@ -372,7 +372,9 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   // Mesmo portão dos modos legados: este é o modo que a CLI usa, então
   // escutar fora do loopback sem senha não sobe.
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
-  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  // Lida uma vez: a Montagem, o hub (com a gaveta), as Receitas e as outras telas seguem o mesmo shell.
+  const editorUi = editorUiFromEnv(env);
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now, editorUi });
   const media = await configuredMediaRuntime(opts.env, opts.now);
   const teamMode = auth.enabled || !isLoopbackBind(network.bindHost);
   if (opts.providerConfigDir) {
@@ -409,8 +411,6 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
   const globalLoadStored = () => readAnalysisCredentials(projectsRoot, visualDir, readStored);
   const globalStored = await globalLoadStored();
   const globalTransports = resolveAppTransports({ ...opts, stored: globalStored, loadStored: globalLoadStored });
-  // Lida uma vez: a Montagem, o hub (com a gaveta) e as receitas seguem o mesmo shell.
-  const editorUi = editorUiFromEnv(env);
   const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(editorUi);
   // Um script, dois shells: o do studio reorganiza a página com os mesmos ids.
   const hubPage = await readFile(join(HERE, "hub", editorUi === "studio" ? "studio.html" : "page.html"), "utf8");
@@ -425,6 +425,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     ["/hub/media-upload.js", await readFile(join(HERE, "assembly", "editor", "media-upload.js"), "utf8")],
   ]);
   const cleanupPage = await readFile(join(HERE, "page.html"), "utf8");
+  const cleanupStudioCss = editorUi === "studio" ? await readFile(join(HERE, "studio.css"), "utf8") : undefined;
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
   const allowPaidVisual = opts.allowPaidVisual === true;
@@ -461,7 +462,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
     }
     await binding;
   } : undefined;
-  const projectCleanup = createProjectCleanupRoutes({ ledger, projectsRoot, now: opts.now, env });
+  const projectCleanup = createProjectCleanupRoutes({ ledger, projectsRoot, now: opts.now, env, editorUi });
   const registry = createProjectRuntimeRegistry({
     projectsRoot,
     now: opts.now,
@@ -477,6 +478,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
           speechRuntime,
           exec, coordinator: coordinatorForProject(coordinator, dir), visualEnv, visualDir, readStored, loadStored: globalLoadStored,
           page: cleanupPage,
+          studioCss: cleanupStudioCss,
         });
         return {
           handle: async (req, res) => {
@@ -578,7 +580,7 @@ async function startProjectRootApp(opts: StartAppOptions & { projectsRoot: strin
         return;
       }
       if (media && await media.handle(req, res)) return;
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => registry.notifyJevDisabled() })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored: globalLoadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: () => registry.notifyJevDisabled(), editorUi })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if (await templates.handleTemplates(req, res)) return;
       const projectNew = req.method === "POST" && (url.pathname === "/project/new" || /^\/projects\/[^/]+\/project\/new$/.test(url.pathname));
@@ -758,6 +760,8 @@ type CleanupProjectRuntimeOptions = {
   readStored: ReturnType<typeof createCredentialsReader>;
   loadStored: () => ReturnType<typeof readAnalysisCredentials>;
   page: string;
+  /** Só no studio: a página vira o shell derivado e o runtime serve esta CSS. */
+  studioCss?: string;
 };
 
 type CleanupProjectRuntimeSetup = {
@@ -970,12 +974,15 @@ async function createCleanupProjectRuntime(opts: CleanupProjectRuntimeOptions): 
   }
 
   let ingestStarted = false;
+  // O script da Limpeza é inline: o studio é o mesmo HTML com a meta e a CSS do studio.
+  const shell = opts.studioCss === undefined ? opts.page : withStudioShell(opts.page, projectUrl("studio.css", opts.prefix ?? ""));
   const runtime = createCleanupRuntime({
     input, workDir, displayName: opts.displayName, provider: opts.provider, providerConfigDir: opts.providerConfigDir,
     fetchImpl: opts.fetchImpl, visualEnv, exec, pipelineJob, job, store, cleanup, ingestAbort,
     audioReady: () => audioReady, loadStored: opts.loadStored,
     prefix: opts.prefix,
-    page: async () => withCleanupProject(withVisualNotice(opts.page.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await opts.loadStored(), false).notice), opts.prefix ?? ""),
+    page: async () => withCleanupProject(withVisualNotice(shell.replace("window.__JOB__", JSON.stringify(job.id)), keyProviderState(visualEnv, await opts.loadStored(), false).notice), opts.prefix ?? ""),
+    studioCss: opts.studioCss,
     replan, triageReply, triageRequestKey, otioClipsForPlan,
     coordinator: opts.coordinator, now: opts.now, identity: requestIdentity,
     busy: () => ingestInFlight || (ingestStarted && Boolean(store.get(job.id)?.stage
@@ -1031,7 +1038,8 @@ async function startCleanupApp(opts: {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
-  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  const editorUi = editorUiFromEnv(env);
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now, editorUi });
   if (opts.providerConfigDir) await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   const input = resolve(opts.input);
   const exec = opts.executor ?? new SpawnExecutor();
@@ -1047,9 +1055,10 @@ async function startCleanupApp(opts: {
   const readStored = createCredentialsReader();
   const loadStored = () => readAnalysisCredentials(process.cwd(), visualDir, readStored);
   const page = await readFile(join(HERE, "page.html"), "utf8");
+  const studioCss = editorUi === "studio" ? await readFile(join(HERE, "studio.css"), "utf8") : undefined;
   const workDir = opts.workDir ?? cleanupWorkDir(input);
   const setup = await createCleanupProjectRuntime({ ...opts, input, workDir, exec, coordinator,
-    visualEnv, visualDir, readStored, loadStored, page, speechRuntime });
+    visualEnv, visualDir, readStored, loadStored, page, studioCss, speechRuntime });
   const { runtime, jobId, closeSpeech, close: closeRuntime, startIngest } = setup;
   let boundPort = opts.port ?? 7788;
   const media = await configuredMediaRuntime(opts.env, opts.now);
@@ -1069,7 +1078,7 @@ async function startCleanupApp(opts: {
       if (await auth.handlePublic(req, res, url)) return;
       if (!auth.authorize(req, res, url)) return;
       if (media && await media.handle(req, res)) return;
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: setup.onJevDisabled })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), includeAssemblyTextNotice: false, onJevDisabled: setup.onJevDisabled, editorUi })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       startIngest();
       const handled = await runtime.handle(req, res);
@@ -1279,7 +1288,8 @@ async function startAssemblyApp(opts: {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
-  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now });
+  const editorUi = editorUiFromEnv(env);
+  const auth = await createAuthRuntime({ env, configDir: opts.providerConfigDir, network, now: opts.now, editorUi });
   if (opts.providerConfigDir) {
     await installCompanyCredentials(opts.providerConfigDir, opts.env ?? process.env);
   }
@@ -1295,7 +1305,6 @@ async function startAssemblyApp(opts: {
   const speechRuntime = opts.speechRuntime ?? createServerSpeechRuntime({
     speech: opts.speech, executorInjected: Boolean(opts.executor), env, now: opts.now,
   });
-  const editorUi = editorUiFromEnv(env);
   const { page, projectPathJs, editReservationUiJs, pageCss, studioCss, pageJs } = await loadAssemblyPageAssets(editorUi);
   let boundPort = opts.port ?? 7788;
   const allowPaidModel = opts.allowPaidModel === true;
@@ -1347,7 +1356,7 @@ async function startAssemblyApp(opts: {
       if (await auth.handlePublic(req, res, url)) return;
       if (!auth.authorize(req, res, url)) return;
       if (media && await media.handle(req, res)) return;
-      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir) })) return;
+      if (await providerVisual(req, res, { dir: visualDir, env: visualEnv, loadStored, invalidateStored: readStored.invalidate, fetchImpl: opts.fetchImpl, loadUser: () => readStored(visualDir), onJevDisabled: () => cancelAssemblyFillerNotes(dir), editorUi })) return;
       if (opts.providerConfigDir && await providerSetup(req, res, opts.providerConfigDir, readStored)) return;
       if(await templates.handleTemplates(req,res))return;
       const handled = await runtime.handle(req, res);

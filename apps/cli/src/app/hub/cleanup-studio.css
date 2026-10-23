@@ -1,0 +1,80 @@
+/* cleanup-studio.css — Limpar arquivos no studio (DECUPA_EDITOR_UI=studio),
+   com o mesmo cleanup.js e os mesmos ids da legacy. Não fica por cima de
+   cleanup.css: aquela folha é quase só a paleta verde antiga, e cada regra
+   teria de ser desfeita. Os tokens vêm de /settings/tokens.css (os da
+   bancada); aqui não se declara token. Seções: casca, topo, lista, plano. */
+
+/* == casca == */
+* { box-sizing: border-box; }
+html { background: var(--ground); color-scheme: dark; }
+body { margin: 0; min-height: 100dvh; background: var(--ground); color: var(--ink); font: 14px/1.5 var(--sans-ui); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+button, input { font: inherit; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.card { border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow-card); }
+button { min-height: 38px; padding: 0 17px; border: 0; border-radius: var(--radius-pill); background: rgb(255 255 255 / .07); color: var(--ink); font-weight: 600; cursor: pointer; }
+button:hover:enabled { background: var(--tint-strong); }
+button:disabled { opacity: .45; cursor: default; }
+
+/* == topo == */
+/* O mesmo topo das Receitas e das Configurações no studio: voltar, marca, engrenagem. */
+.topbar { min-height: 58px; display: flex; align-items: center; gap: 12px 20px; padding: 0 clamp(18px, 4vw, 48px); border-bottom: 1px solid var(--hairline); background: #0f1012; }
+.topbar .back { padding: 7px 12px; margin-left: -12px; border-radius: var(--radius-pill); color: var(--muted); font-size: 13px; text-decoration: none; }
+.topbar .back:hover { background: var(--tint); color: var(--ink); }
+.brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; white-space: nowrap; }
+.brand-mark { color: var(--accent); font-size: 15px; }
+.brand span:not(.brand-mark) { color: var(--muted); font-weight: 400; }
+.topbar a[href="/settings"] { display: inline-flex; margin-left: auto; padding: 6px; border-radius: 50%; color: var(--muted); }
+.topbar a[href="/settings"]:hover { background: var(--tint); color: var(--ink); }
+
+main { width: min(1000px, calc(100% - 36px)); margin: 0 auto; padding: 48px 0 72px; }
+.eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin: 0 0 12px; font-size: clamp(25px, 4vw, 34px); line-height: 1.1; letter-spacing: -.03em; }
+.intro { max-width: 760px; margin: 0 0 10px; font-size: 16px; line-height: 1.6; }
+.note { max-width: 760px; margin: 0; color: var(--muted); }
+#status { min-height: 24px; margin: 22px 0 12px; color: var(--muted); }
+
+/* == lista == */
+/* Uma linha por Projeto, dentro de um cartão; sem Projeto, o cartão some e o status explica. */
+#projects:empty { display: none; }
+.project { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 22px; }
+.project + .project { border-top: 1px solid var(--hairline); }
+.project h2 { margin: 0 0 4px; font-size: 16px; }
+.project p { margin: 0; color: var(--muted); font-size: 13px; }
+.project button { flex: none; }
+
+/* == plano == */
+/* A lista do que sai vem antes da confirmação, como na legacy. */
+#plan { margin-top: 24px; padding: 24px; }
+#plan h2 { margin: 0 0 8px; font-size: 20px; letter-spacing: -.01em; }
+#summary { margin: 0 0 16px; color: var(--muted); }
+#plan h3 { margin: 22px 0 8px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+ul { margin: 0; padding-left: 20px; }
+li { padding: 5px 0; line-height: 1.5; overflow-wrap: anywhere; }
+#items { padding: 6px 12px 6px 30px; border-radius: var(--radius-sub); background: var(--card-2); font-family: var(--mono); font-size: 12.5px; }
+.warning { margin: 0 0 8px; padding: 14px 16px; border-left: 3px solid var(--accent); border-radius: var(--radius-sub); background: var(--accent-tint); line-height: 1.6; }
+details { margin: 20px 0 0; }
+summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; }
+summary:hover { color: var(--ink); }
+#preserved { margin-top: 8px; color: var(--muted); font-size: 13px; }
+#confirmation { margin-top: 22px; padding-top: 6px; border-top: 1px solid var(--hairline); }
+#confirmation label { display: flex; gap: 10px; align-items: flex-start; margin: 16px 0; line-height: 1.5; }
+input[type="checkbox"] { width: 16px; height: 16px; margin: 3px 0 0; flex: none; accent-color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+/* Remover é a ação destrutiva: o mesmo vermelho do Cancelar da Limpeza de fala. */
+#confirm { background: var(--red-tint); color: var(--red); }
+#confirm:hover:enabled { background: rgb(239 170 160 / .2); }
+
+@media (max-width: 600px) {
+  /* Topo em duas linhas: marca e engrenagem em cima, voltar embaixo. */
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-top: 10px; padding-bottom: 10px; }
+  .brand { grid-row: 1; min-width: 0; }
+  .topbar a[href="/settings"] { grid-row: 1; grid-column: 2; }
+  .topbar .back { grid-row: 2; grid-column: 1 / -1; justify-self: start; }
+  main { padding-top: 30px; }
+  .project { flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; }
+  #plan { padding: 18px; }
+  .actions button { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }

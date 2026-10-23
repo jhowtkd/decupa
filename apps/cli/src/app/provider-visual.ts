@@ -6,6 +6,7 @@ import { optionalProviderKey, validateTextProvider } from "./provider-validation
 import { saveProviderFields } from "./provider-store.ts";
 import { SettingsInputError, textProviderFields, textProviderState } from "./settings-text.ts";
 import { testProviderKey, NO_FREE_KEY_TEST } from "./settings-test.ts";
+import { withStudioShell, type EditorUi } from "./assembly/editor-ui.ts";
 
 /** Sem a divisão conhecida, CSS da bancada não pode vazar para Configurações. */
 export function settingsTokens(css: string): string {
@@ -70,8 +71,11 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
   onJevDisabled?: () => void | Promise<void>;
   fetchImpl?: typeof fetch;
   loadUser?: () => Promise<Credentials | null>;
+  /** Shell da tela; o servidor lê `DECUPA_EDITOR_UI` uma vez e repassa. */
+  editorUi?: EditorUi;
 }): Promise<boolean> {
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
+  const studio = opts.editorUi === "studio";
   if (req.method === "GET" && path === "/visual-notice.js") {
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     res.end(await readFile(new URL("./visual-notice.js", import.meta.url), "utf8"));
@@ -82,6 +86,11 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
     res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
     res.end(css); return true;
   }
+  // Só o studio tem esta CSS: ela vem por cima do estilo inline de settings.html.
+  if (studio && req.method === "GET" && path === "/settings/studio.css") {
+    res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+    res.end(await readFile(new URL("./settings-studio.css", import.meta.url), "utf8")); return true;
+  }
   if (path === "/provider/visual" || (path === "/provider/keys" && req.method === "GET" && req.headers.accept?.includes("text/html"))) {
     res.writeHead(307, { location: "/settings", "cache-control": "no-store" }); res.end(); return true;
   }
@@ -89,6 +98,11 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
   const json = (status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
+  };
+  // O script é inline: o studio é o mesmo HTML com a meta e a CSS do studio.
+  const settingsPage = async () => {
+    const html = await readFile(new URL("./settings.html", import.meta.url), "utf8");
+    return studio ? withStudioShell(html, "/settings/studio.css") : html;
   };
   let user: Credentials | null;
   try { user = validateTextProvider(await (opts.loadUser?.() ?? readCredentials(opts.dir))); }
@@ -111,7 +125,7 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
     if (req.method === "GET" && (path === "/settings" || path === "/settings/state" || path === "/provider/keys")) {
       if (path === "/settings") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" });
-        res.end(await readFile(new URL("./settings.html", import.meta.url), "utf8"));
+        res.end(await settingsPage());
       } else json(200, await state());
       return true;
     }
@@ -155,7 +169,7 @@ export async function providerVisual(req: IncomingMessage, res: ServerResponse, 
   if (req.method === "GET") {
     if (path === "/settings") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" });
-      res.end(await readFile(new URL("./settings.html", import.meta.url), "utf8"));
+      res.end(await settingsPage());
     } else json(200, await state());
   } else if (req.method === "POST" && path !== "/settings/state") {
     try {

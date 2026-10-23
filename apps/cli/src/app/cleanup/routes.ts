@@ -81,6 +81,8 @@ export interface CleanupRuntimeDeps {
   audioReady: () => boolean;
   loadStored: () => Promise<Credentials | null>;
   page: () => Promise<string>;
+  /** Só no studio (DECUPA_EDITOR_UI=studio): a CSS que o shell derivado pede; a legacy não serve /studio.css. */
+  studioCss?: string;
   replan: (keepList?: string) => Promise<void>;
   triageReply: () => Promise<Record<string, unknown>>;
   triageRequestKey: () => Promise<string>;
@@ -154,6 +156,12 @@ export function createCleanupRuntime(opts: CleanupRuntimeDeps): CleanupRuntime {
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(await page());
+        return true;
+      }
+
+      if (opts.studioCss !== undefined && url.pathname === "/studio.css" && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+        res.end(opts.studioCss);
         return true;
       }
 
