@@ -11,7 +11,10 @@ export function nomeDaMontagem(project) {
   return nome && nome !== project.id ? nome : "";
 }
 
-/** O que muda com o nome (puro): revisão, prévia, aprovação, desfazer e refazer. */
+/**
+ * O que muda com o nome (puro): revisão, prévia, aprovação, desfazer e refazer.
+ * @param {number | null} [redoRevision]
+ */
 export function efeitosDeRenomear(project, undoRevision, redoRevision = null) {
   const atual = project.revision;
   const proxima = atual + 1;

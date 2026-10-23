@@ -113,7 +113,7 @@ describe("studio", () => {
     expect(chamadas).toEqual([]);
   });
 
-  it("Ctrl+Z desfaz e Ctrl+Shift+Z não desfaz", async () => {
+  it("Ctrl+Z continua desfazendo no studio", async () => {
     const { tecla, chamadas } = await monta("studio");
     tecla({ key: "z", ctrlKey: true });
     expect(chamadas).toEqual([{ path: "project/undo", body: { baseRevision: 7, revision: 5 } }]);

@@ -98,19 +98,19 @@ it.each(VARIANTES)("%s: nova edição depois de desfazer e recarregar não deixa
     try {
       expect((await s.post("reservation", {})).status).toBe(200);
       const aberto = (await s.corpo()).project;
-      await s.post("project/edit", {
+      expect((await s.post("project/edit", {
         baseRevision: aberto.revision,
         action: { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w2"] },
-      });
+      })).status).toBe(200);
       const c = await s.corpo();
-      await s.post("project/undo", { baseRevision: c.project.revision, revision: c.undoRevision });
+      expect((await s.post("project/undo", { baseRevision: c.project.revision, revision: c.undoRevision })).status).toBe(200);
       const d = await s.corpo();
       const alvo = d.redoRevision;
       expect(alvo).not.toBeNull();
-      await s.post("project/edit", {
+      expect((await s.post("project/edit", {
         baseRevision: d.project.revision,
         action: { type: "remove", sceneId: "s1", takeId: "t1", wordIds: ["w1"] },
-      });
+      })).status).toBe(200);
     } finally {
       await s.app.close();
     }
