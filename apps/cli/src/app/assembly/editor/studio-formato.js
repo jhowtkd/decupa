@@ -26,10 +26,17 @@ export function opcoesDeFormato(assembly) {
   });
 }
 
-/** Texto (a) do plano, com o fps que fica (puro). */
-export function avisoDeReenquadrar(assembly) {
-  return "Mudar a proporção não reenquadra: cada plano entra inteiro no quadro novo, com faixas escuras onde sobrar espaço. "
-    + "O fps (" + fpsLabel(assembly.fps).replace(" fps", "") + ") continua o mesmo.";
+/**
+ * Texto (a) do plano conforme a escolha (puro). As faixas escuras valem para
+ * qualquer formato; "o fps continua" só vale para as proporções, que levam o
+ * fps de agora. A fonte adota o fps dela (o aviso da fonte diz qual) e o
+ * personalizado usa o do campo.
+ */
+export function avisoDeReenquadrar(assembly, escolha = "") {
+  const faixas = "Mudar a proporção não reenquadra: cada plano entra inteiro no quadro novo, com faixas escuras onde sobrar espaço.";
+  if (escolha === "fonte") return faixas;
+  if (escolha === "personalizado") return faixas + " O fps passa a ser o do campo.";
+  return faixas + " O fps (" + fpsLabel(assembly.fps).replace(" fps", "") + ") continua o mesmo.";
 }
 
 /** "30000/1001" ou "29,97" → {num, den} inteiros, ou null (puro). */
@@ -137,28 +144,34 @@ export function mountFormato({ state, api }) {
       aviso.textContent = "Adota o tamanho e o fps de " + fonte.name + (fonte.fps ? " (" + fpsLabel(fonte.fps) + ")" : "")
         + ", não só a proporção.";
     }
+    $("formatoReenquadra").textContent = avisoDeReenquadrar(p.assembly, escolha);
     const atual = escolha && opcoesDeFormato(p.assembly).find((item) => item.id === escolha)?.atual;
     $("formatoAplicar").disabled = busy || !escolha || Boolean(atual);
   }
 
-  function preencher(p) {
+  /**
+   * Opções a partir do projeto. Com o diálogo aberto o projeto pode mudar
+   * (409 reconciliado, outra aba): a escolha feita fica, e o personalizado
+   * guarda o que foi digitado. O erro mostrado não é apagado aqui.
+   */
+  function preencher(p, manter = null) {
     const assembly = p.assembly;
     $("formatoAgora").textContent = formatChip(assembly);
-    $("formatoReenquadra").textContent = avisoDeReenquadrar(assembly);
     $("formatoProporcoes").innerHTML = opcoesDeFormato(assembly).map((item) => '<label class="formato-opcao'
       + (item.atual ? " is-atual" : "") + '"><input type="radio" name="formatoEscolha" value="' + item.id + '"'
       + (item.atual ? " checked" : "") + '><span class="formato-nome">' + item.id + '</span><span class="mono">'
       + item.width + "×" + item.height + '</span><span class="formato-uso">' + item.uso + (item.atual ? " · atual" : "")
       + "</span></label>").join("");
-    const atual = escolhas().find((input) => input.value === opcoesDeFormato(assembly).find((item) => item.atual)?.id);
-    for (const input of escolhas()) input.checked = input === atual;
+    const marcada = manter?.escolha || opcoesDeFormato(assembly).find((item) => item.atual)?.id;
+    for (const input of escolhas()) input.checked = input.value === marcada;
     const select = $("formatoFonte");
     select.replaceChildren(...assembly.sources.filter((item) => item.hasVideo).map((item) => new Option(item.name, item.id)));
+    if (manter?.sourceId && assembly.sources.some((item) => item.id === manter.sourceId && item.hasVideo)) select.value = manter.sourceId;
     select.disabled = select.childElementCount === 0;
-    $("formatoLargura").value = assembly.width;
-    $("formatoAltura").value = assembly.height;
-    $("formatoFps").value = assembly.fps.num + "/" + assembly.fps.den;
-    mostrarErro("");
+    const digitado = manter?.escolha === "personalizado";
+    $("formatoLargura").value = digitado ? manter.width : assembly.width;
+    $("formatoAltura").value = digitado ? manter.height : assembly.height;
+    $("formatoFps").value = digitado ? manter.fps : assembly.fps.num + "/" + assembly.fps.den;
     pintarEscolha();
   }
 
@@ -166,6 +179,7 @@ export function mountFormato({ state, api }) {
     const p = state.get("project");
     if (!p || dialog.open) return;
     devolverFoco = document.activeElement;
+    mostrarErro("");
     preencher(p);
     dialog.showModal();
     (escolhas().find((input) => input.checked) || escolhas()[0])?.focus();
@@ -216,6 +230,13 @@ export function mountFormato({ state, api }) {
     pintarEscolha();
   });
   $("formatoForm").addEventListener("submit", aplicar);
+  state.subscribe("project", (p) => {
+    if (!dialog.open || !p) return;
+    preencher(p, {
+      escolha: escolhida(), sourceId: $("formatoFonte").value,
+      width: $("formatoLargura").value, height: $("formatoAltura").value, fps: $("formatoFps").value,
+    });
+  });
   $("formatoCancelar").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
     // A faixa redesenha com o formato novo: o botão de antes pode ter saído.
