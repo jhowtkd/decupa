@@ -28,7 +28,8 @@ function projeto(sobre: Record<string, unknown> = {}, cenas = [cena("s1", 4), ce
 
 type Pedido = { path: string; opts: { body: string; label?: string } };
 
-async function monta(opcoes: { ui?: "studio" | "legacy"; project?: unknown; undoRevision?: number | null; selectedScene?: string } = {}) {
+async function monta(opcoes: { ui?: "studio" | "legacy"; project?: unknown; undoRevision?: number | null; selectedScene?: string;
+  modo?: "pendente" | "ok" | "rejeita" | "409"; legendas?: unknown; playhead?: number } = {}) {
   const document = installDom('<section id="faixa"></section><span id="undoSlot"></span>');
   vi.stubGlobal("HTMLElement", El);
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}) })));
@@ -40,12 +41,17 @@ async function monta(opcoes: { ui?: "studio" | "legacy"; project?: unknown; undo
   const api = {
     call: vi.fn((path: string, opts: { body: string; label?: string }) => {
       pedidos.push({ path, opts });
+      if (opcoes.modo === "ok") return Promise.resolve({ res: { ok: true }, body: {} });
+      if (opcoes.modo === "rejeita") return Promise.reject(new Error("sem rede"));
+      if (opcoes.modo === "409") return Promise.resolve({ res: { ok: false, status: 409 }, body: {} });
       return new Promise((resolve) => { pendentes.push(() => resolve({ res: { ok: true }, body: {} })); });
     }),
   };
   const player = { seek: vi.fn(), el: () => null };
   state.set("undoRevision", opcoes.undoRevision === undefined ? null : opcoes.undoRevision);
   if (opcoes.selectedScene) state.set("selectedScene", opcoes.selectedScene);
+  if (opcoes.legendas !== undefined) state.set("legendasFaixa", opcoes.legendas);
+  if (opcoes.playhead !== undefined) state.set("playhead", opcoes.playhead);
   state.set("project", opcoes.project ?? projeto());
   mod.mountSequencia({ state, api, player, ui: opcoes.ui ?? "studio" } as never);
   const faixa = document.getElementById("faixa")!;
@@ -489,5 +495,225 @@ describe("guarda do gesto", () => {
     expect(edits()).toHaveLength(0);
     expect(pedidos.map((p) => p.path)).toEqual(["project/undo"]);
     expect(faixa.classList.contains("reordenando")).toBe(false);
+  });
+});
+
+const PROJ_UNDO = () => projeto({ undo: { head: 3, steps: [{ revision: 2, label: "Tirar trecho" }] } });
+const vazio = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+describe("rolagem na borda", () => {
+  type Rolagem = El & { scrollLeft: number; offsetWidth: number };
+
+  /** Fila manual de quadros no lugar de requestAnimationFrame. */
+  function quadros() {
+    let fila: Array<() => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (fn: () => void) => { fila.push(fn); return fila.length; });
+    const cancelar = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelar);
+    const rodar = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        const atuais = fila;
+        fila = [];
+        for (const fn of atuais) fn();
+      }
+    };
+    return Object.assign(rodar, { cancelar });
+  }
+
+  /** Vista de 500 px sobre trilhas de `largura` px (zoom 2× = 1000), rolada até `scrollLeft`. */
+  async function comVista(largura: number, scrollLeft = 0) {
+    const rodar = quadros();
+    const m = await monta();
+    const rolagem = m.faixa.querySelector(".faixa-rolagem") as Rolagem;
+    const trilhas = m.faixa.querySelector(".faixa-trilhas") as Rolagem;
+    rolagem.clientWidth = 500;
+    rolagem.scrollLeft = scrollLeft;
+    rolagem.getBoundingClientRect = () => ({ left: 0, top: 0, right: 500, bottom: 60, width: 500, height: 60 });
+    trilhas.offsetWidth = largura;
+    return { ...m, rolagem, rodar };
+  }
+
+  it("zoom 2×: perto da borda direita, depois de andar para a direita, rola e nunca passa de maxRolagem", async () => {
+    const { alca, ponteiro, rolagem, rodar } = await comVista(1000);
+    const a = alca("s2");
+    ponteiro(a, "pointerdown", 300);
+    ponteiro(a, "pointermove", 490);
+    rodar(3);
+    expect(rolagem.scrollLeft).toBeGreaterThan(0);
+    rodar(200);
+    expect(rolagem.scrollLeft).toBe(500);
+    rodar(200);
+    expect(rolagem.scrollLeft).toBe(500);
+  });
+
+  it("1×: segurar na borda direita não rola", async () => {
+    const { alca, ponteiro, rolagem, rodar } = await comVista(500);
+    const a = alca("s2");
+    ponteiro(a, "pointerdown", 300);
+    ponteiro(a, "pointermove", 495);
+    rodar(100);
+    expect(rolagem.scrollLeft).toBe(0);
+  });
+
+  it("alça grudada à esquerda: pegar na zona de 32 px e andar para a direita não rola para a esquerda", async () => {
+    const { alca, ponteiro, rolagem, rodar } = await comVista(1000, 100);
+    const a = alca("s1");
+    ponteiro(a, "pointerdown", 5);
+    ponteiro(a, "pointermove", 15);
+    rodar(50);
+    expect(rolagem.scrollLeft).toBe(100);
+  });
+
+  it("andar para a esquerda perto da borda esquerda rola até 0, nunca negativo", async () => {
+    const { alca, ponteiro, rolagem, rodar } = await comVista(1000, 100);
+    const a = alca("s1");
+    ponteiro(a, "pointerdown", 20);
+    ponteiro(a, "pointermove", 2);
+    rodar(3);
+    expect(rolagem.scrollLeft).toBeLessThan(100);
+    rodar(200);
+    expect(rolagem.scrollLeft).toBe(0);
+  });
+
+  it("soltar para o quadro de rolagem (cancelAnimationFrame)", async () => {
+    const { alca, ponteiro, rodar } = await comVista(1000);
+    const a = alca("s2");
+    ponteiro(a, "pointerdown", 300);
+    ponteiro(a, "pointermove", 490);
+    ponteiro(a, "pointerup", 490);
+    expect(rodar.cancelar).toHaveBeenCalled();
+  });
+});
+
+describe("falha do pedido", () => {
+  it.each(["rejeita", "409"] as const)("%s: a faixa se solta, outro arraste envia e Ctrl+Z volta a desfazer", async (modo) => {
+    const m = await monta({ modo, project: PROJ_UNDO(), undoRevision: 2 });
+    const a = m.alca("s1");
+    m.ponteiro(a, "pointerdown", 100);
+    m.ponteiro(a, "pointermove", 900);
+    m.ponteiro(a, "pointerup", 900);
+    expect(m.edits()).toHaveLength(1);
+    await vazio();
+    expect(m.faixa.classList.contains("reordenando")).toBe(false);
+    expect(m.faixa.querySelectorAll(".arrastando")).toHaveLength(0);
+
+    const b = m.alca("s3");
+    m.ponteiro(b, "pointerdown", 900);
+    m.ponteiro(b, "pointermove", 10);
+    m.ponteiro(b, "pointerup", 10);
+    expect(m.edits()).toHaveLength(2);
+    await vazio();
+
+    m.document.dispatchEvent({ type: "keydown", key: "z", ctrlKey: true, target: m.document.body } as never);
+    expect(m.pedidos.filter((p) => p.path === "project/undo")).toHaveLength(1);
+  });
+
+  it.each([
+    ["ok", "Cena 1 movida para a posição 3 de 3"],
+    ["409", "A cena não mudou de lugar"],
+    ["rejeita", "A cena não mudou de lugar"],
+  ] as const)("anúncio do teclado com %s", async (modo, texto) => {
+    const m = await monta({ modo });
+    const a = m.alca("s1");
+    a.focus();
+    m.tecla(a, " ");
+    m.tecla(a, "End");
+    m.tecla(a, " ");
+    await vazio();
+    expect(m.faixa.querySelector(".faixa-anuncio")!.textContent).toBe(texto);
+  });
+});
+
+describe("pintura durante o gesto", () => {
+  const legendas = (text: string) => ({ revision: 3, estado: "pronto", cues: [{ startMs: 1000, endMs: 2500, text }] });
+
+  it("legendasFaixa no meio do gesto não muda a trilha; depois do fim, muda", async () => {
+    const m = await monta({ modo: "ok", legendas: legendas("primeira") });
+    const lane = () => m.faixa.querySelector(".lane-legenda")!;
+    // O fake DOM só tem o setter de innerHTML: o conteúdo lido é a árvore.
+    const conteudo = () => lane().querySelectorAll(".seq-cue, .lane-vazia").map((n) => n.className + ":" + n.textContent).join("|");
+    const antes = conteudo();
+    expect(antes).toContain("primeira");
+    const a = m.alca("s1");
+    m.ponteiro(a, "pointerdown", 100);
+    m.ponteiro(a, "pointermove", 900);
+    m.state.set("legendasFaixa", legendas("segunda"));
+    expect(conteudo()).toBe(antes);
+    m.ponteiro(a, "pointerup", 900);
+    await vazio();
+    expect(conteudo()).toContain("segunda");
+    expect(conteudo()).not.toBe(antes);
+  });
+
+  it("projeto de ordem nova no meio do gesto não tira o realce dos blocos segurados", async () => {
+    const m = await monta({ playhead: 1 });
+    const ativa = () => m.faixa.querySelectorAll(".seq-audio").filter((n) => n.classList.contains("ativa")).map((n) => n.dataset.scene);
+    expect(ativa()).toEqual(["s1"]);
+    const a = m.alca("s1");
+    m.ponteiro(a, "pointerdown", 100);
+    m.ponteiro(a, "pointermove", 900);
+    m.state.set("project", projeto({ revision: 4 }, [cena("s2", 2), cena("s3", 4), cena("s1", 4)]));
+    m.state.set("playhead", 1.5);
+    expect(ativa()).toEqual(["s1"]);
+  });
+});
+
+describe("histórico em campo editável durante o gesto", () => {
+  function monitor(m: Awaited<ReturnType<typeof monta>>) {
+    const eventos: Array<{ defaultPrevented: boolean }> = [];
+    m.document.addEventListener("keydown", (ev) => { eventos.push(ev); });
+    return eventos;
+  }
+
+  it("Ctrl+Z num INPUT não é interceptado e não chama project/undo", async () => {
+    const m = await monta({ project: PROJ_UNDO(), undoRevision: 2 });
+    const eventos = monitor(m);
+    const a = m.alca("s1");
+    m.ponteiro(a, "pointerdown", 100);
+    m.ponteiro(a, "pointermove", 900);
+    const campo = m.document.createElement("input");
+    m.document.dispatchEvent({ type: "keydown", key: "z", ctrlKey: true, target: campo } as never);
+    expect(eventos.at(-1)!.defaultPrevented).toBe(false);
+    expect(m.pedidos.filter((p) => p.path === "project/undo")).toHaveLength(0);
+  });
+
+  it("Ctrl+Z fora de campo fica com preventDefault e não chama project/undo", async () => {
+    const m = await monta({ project: PROJ_UNDO(), undoRevision: 2 });
+    const eventos = monitor(m);
+    const a = m.alca("s1");
+    m.ponteiro(a, "pointerdown", 100);
+    m.ponteiro(a, "pointermove", 900);
+    m.document.dispatchEvent({ type: "keydown", key: "z", ctrlKey: true, target: m.document.body } as never);
+    expect(eventos.at(-1)!.defaultPrevented).toBe(true);
+    expect(m.pedidos.filter((p) => p.path === "project/undo")).toHaveLength(0);
+  });
+});
+
+describe("alça desabilitada no meio do gesto", () => {
+  it("o redesenho cancela o gesto de teclado, anuncia e não envia", async () => {
+    const m = await monta();
+    const a = m.alca("s1");
+    a.focus();
+    m.tecla(a, " ");
+    m.tecla(a, "ArrowRight");
+    expect(m.faixa.classList.contains("reordenando")).toBe(true);
+    a.disabled = true;
+    m.state.set("project", projeto({ revision: 4 }));
+    expect(m.faixa.classList.contains("reordenando")).toBe(false);
+    expect(m.faixa.querySelector(".faixa-anuncio")!.textContent).toBe("Movimento cancelado");
+    expect(m.edits()).toHaveLength(0);
+  });
+});
+
+describe("cena de duração zero", () => {
+  it("a alça dela ganha a classe vazia e fica sem width; as outras mantêm o width", async () => {
+    const m = await monta({ project: projeto({}, [cena("s1", 4), cena("s2", 0), cena("s3", 4)]) });
+    const cenaAlca = (id: string) => m.alca(id).closest(".alca-cena")!;
+    expect(cenaAlca("s2").classList.contains("vazia")).toBe(true);
+    expect(cenaAlca("s2").getAttribute("style")).not.toContain("width");
+    for (const id of ["s1", "s3"]) {
+      expect(cenaAlca(id).classList.contains("vazia")).toBe(false);
+      expect(cenaAlca(id).getAttribute("style")).toContain("width");
+    }
   });
 });

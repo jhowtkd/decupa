@@ -7,7 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { startApp } from "../server.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { compileScenes, validateProposal } from "./scenes.ts";
+import { compileScenes, setSceneSupport, validateProposal } from "./scenes.ts";
 import { loadProject, saveProject } from "./store.ts";
 import type { Project } from "./types.ts";
 
@@ -16,7 +16,7 @@ const pastas: string[] = [];
 afterEach(async () => {
   for (const close of fechar.splice(0)) await close();
   // Só as pastas que este arquivo criou, e só depois de fechar os apps.
-  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true });
+  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 type Corpo = { project: Project; undoRevision: number | null; redoRevision: number | null };
@@ -232,4 +232,68 @@ it("o move-scene continua funcionando: uma posição, um passo", async () => {
   const depois = await obter(base);
   expect({ status: res.status, ordem: ordem(depois.project), revision: depois.project.revision, rotulo: depois.project.undo!.steps.at(-1)!.label })
     .toEqual({ status: 200, ordem: ["s2", "s1", "s3", "s4", "s5"], revision: antes.project.revision + 1, rotulo: "Mover cena" });
+});
+
+/** Cena com corte, trecho protegido, apoio e uma correção; prévia e aprovação preenchidas. */
+async function montarCompleto(dir: string): Promise<void> {
+  await montar(dir);
+  const p = await loadProject(dir);
+  const apoio = fixtureAssembly().sources[1]!;
+  p.assembly.sources.push({ ...apoio, durationSeconds: 30 });
+  p.analyses.push({
+    sourceId: "b", key: "kb", status: "ready", speech: [], words: [], wordsStatus: "ready",
+    visual: [{ id: "b:v1", sourceId: "b", start: 0, end: 2, text: "plano", confidence: "observed", tags: [] }],
+    visualCoverage: { requested: [], returned: [], missing: [] },
+  });
+  const take = p.scenes[0]!.takes[0]!;
+  take.removed = [{ start: 0.5, end: 0.8 }];
+  take.protected = [{ start: 1, end: 1.2 }];
+  p.scenes = setSceneSupport(p, "s1", [{ visualId: "b:v1", offsetFrames: 5, durationFrames: 10 }]);
+  p.corrections = [{ id: "c1", sourceId: "a", start: 3, end: 3.5, text: "corrigido", status: "aligned", words: [] }];
+  p.assembly = compileScenes(p, p.scenes);
+  p.previewRevision = p.revision;
+  p.finalApprovedRevision = p.revision;
+  await saveProject(dir, p.revision, () => p);
+}
+
+/** Ordem em que as cenas aparecem na trilha de vídeo compilada. */
+const ordemDosClipes = (p: Project): string[] => {
+  const video = p.assembly.tracks.find((track) => track.kind === "Video");
+  return [...new Set((video?.clips ?? []).map((clip) => clip.sceneId))];
+};
+
+it("reordenar, desfazer e refazer só mudam a ordem: cenas, correções e clipes seguem a identidade", async () => {
+  const { dir, base } = await subir();
+  await montarCompleto(dir);
+  const antes = await obter(base);
+  expect(antes.project.previewRevision).not.toBeNull();
+  expect(antes.project.finalApprovedRevision).not.toBeNull();
+  expect(antes.project.scenes[0]!.takes[0]!.removed).toHaveLength(1);
+  expect(antes.project.scenes[0]!.support).toHaveLength(1);
+  expect(ordemDosClipes(antes.project)).toEqual(IDS);
+  const porId = (p: Project) => Object.fromEntries(p.scenes.map((scene) => [scene.id, scene]));
+
+  const res = await reordenar(base, antes.project.revision, ["s2", "s3", "s4", "s5", "s1"]);
+  expect(res.status).toBe(200);
+  const movido = await obter(base);
+  expect(ordem(movido.project)).toEqual(["s2", "s3", "s4", "s5", "s1"]);
+  expect(porId(movido.project)).toEqual(porId(antes.project));
+  expect(movido.project.corrections).toEqual(antes.project.corrections);
+  expect(movido.project.previewRevision).toBeNull();
+  expect(movido.project.finalApprovedRevision).toBeNull();
+  expect(ordemDosClipes(movido.project)).toEqual(["s2", "s3", "s4", "s5", "s1"]);
+
+  expect((await desfazer(base)).status).toBe(200);
+  const desfeito = await obter(base);
+  expect(ordem(desfeito.project)).toEqual(IDS);
+  expect(porId(desfeito.project)).toEqual(porId(antes.project));
+  expect(desfeito.project.corrections).toEqual(antes.project.corrections);
+  expect(ordemDosClipes(desfeito.project)).toEqual(IDS);
+
+  expect((await refazer(base)).status).toBe(200);
+  const refeito = await obter(base);
+  expect(ordem(refeito.project)).toEqual(["s2", "s3", "s4", "s5", "s1"]);
+  expect(porId(refeito.project)).toEqual(porId(antes.project));
+  expect(refeito.project.corrections).toEqual(antes.project.corrections);
+  expect(ordemDosClipes(refeito.project)).toEqual(["s2", "s3", "s4", "s5", "s1"]);
 });
