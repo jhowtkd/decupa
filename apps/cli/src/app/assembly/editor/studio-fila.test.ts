@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { uploadFingerprint } from "./media-upload.js";
 import {
-  MANIFESTO, MAX_ITENS, acoesDoItem, aparar, criarFila, gravarManifesto, lerManifesto, mensagemDeErro,
+  IMPRESSAO_CONCLUIDA, IMPRESSAO_REPETIDA, MANIFESTO, MAX_ITENS, RESERVA_PERDIDA, acoesDoItem, aparar, criarFila, gravarManifesto, lerManifesto, mensagemDeErro,
   motivoInvalido, textoDoItem,
 } from "./studio-fila.js";
 
@@ -319,7 +319,7 @@ describe("parcial, pausa, erros e associação", () => {
     expect(estados(fila)).toEqual(["pronto"]);
   });
 
-  it("remover no modo equipe cancela o parcial no servidor; no item em voo do modo local não age", () => {
+  it("remover cancela o parcial no servidor, nos dois modos, inclusive no item em voo", () => {
     const equipe = montar();
     equipe.fila.sincronizar();
     equipe.fila.adicionarArquivos(arquivos(1));
@@ -331,10 +331,11 @@ describe("parcial, pausa, erros e associação", () => {
     local.fila.sincronizar();
     local.fila.adicionarArquivos(arquivos(1));
     const item = local.fila.instantanea().itens[0]!;
-    expect(item.acoes).toEqual([]);
+    // O POST local agora pode ser abortado: o item em voo oferece "remover".
+    expect(item.acoes).toEqual(["remover"]);
     local.fila.remover(item.chave);
-    expect(local.fila.instantanea().itens).toHaveLength(1);
-    expect(local.config.cancelar).not.toHaveBeenCalled();
+    expect(local.fila.instantanea().itens).toHaveLength(0);
+    expect(local.config.cancelar).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -485,8 +486,186 @@ describe("manifesto decupa.materiais.v1", () => {
     expect(mensagemDeErro({ status: 404 }, "equipe")).toMatch(/expirou/);
     expect(mensagemDeErro({ status: 404 }, "local")).toBe("Não foi possível enviar este arquivo.");
     expect(mensagemDeErro({ status: 409 }, "local")).toMatch(/projeto mudou/);
-    expect(mensagemDeErro({}, "local")).toMatch(/recomeça do início/);
+    // Só o TypeError do fetch é queda de conexão; erro sem status usa a message.
+    expect(mensagemDeErro(new TypeError("Failed to fetch"), "local")).toMatch(/recomeça do início/);
+    expect(mensagemDeErro(new TypeError("Failed to fetch"), "equipe")).toMatch(/de onde parou/);
+    expect(mensagemDeErro(new Error("o servidor encerrou"), "local")).toBe("o servidor encerrou");
+    expect(mensagemDeErro({}, "local")).toBe("Não foi possível enviar este arquivo.");
+    expect(mensagemDeErro(Object.assign(new Error("x"), { status: 409, dono: { nome: "Ana" } }), "equipe")).toBe(RESERVA_PERDIDA);
     expect(textoDoItem({ estado: "pronto", reuso: "projeto" }, { pausado: false, modo: "equipe" })).toBe("Já estava no projeto");
-    expect(acoesDoItem({ estado: "enviando" }, { modo: "equipe" })).toEqual(["remover"]);
+    expect(acoesDoItem({ estado: "enviando" })).toEqual(["remover"]);
+  });
+});
+
+/** O JSDoc do JS tipa `pausar` sem parâmetros; o real aceita `{ motivo }`. */
+const pausarComMotivo = (fila: Fila, motivo: string) => (fila.pausar as unknown as (opcoes: { motivo: string }) => void)({ motivo });
+const pausaDoCliente = () => Object.assign(new Error("envio pausado"), { name: "UploadPausedError" });
+
+describe("Reserva perdida, pausa atrasada e impressão repetida", () => {
+  it("project/media com dono para a fila com o item pausado e o retomar só associa", async () => {
+    const adicionar = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("reservado"), { status: 409, dono: { nome: "Ana" } }))
+      .mockResolvedValueOnce({ sha256: sha(1), reaproveitada: false });
+    const { fila, t } = montar({ adicionar });
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(2));
+    t.envios[0]!.resolve({ mediaId: sha(1), deduplicado: false });
+    await flush();
+    const visao = vista(fila);
+    expect(visao.itens.map((item) => item.estado)).toEqual(["pausado", "aguardando"]);
+    expect(visao.itens[0]!.mensagem).toBe(RESERVA_PERDIDA);
+    expect(visao.pausado).toBe(true);
+    expect(visao.resumo).toContain(RESERVA_PERDIDA);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+    fila.retomar();
+    await flush();
+    expect(adicionar).toHaveBeenCalledTimes(2);
+    expect(adicionar).toHaveBeenLastCalledWith(sha(1));
+    // Só associou: o primeiro não foi enviado de novo; o segundo é o que sobe agora.
+    expect(t.enviar).toHaveBeenCalledTimes(2);
+    expect(t.envios[1]!.item.nome).toBe("clipe-02.mp4");
+    expect(estados(fila)).toEqual(["pronto", "enviando"]);
+  });
+
+  it("queda de conexão na associação também para a fila (TypeError)", async () => {
+    const adicionar = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { fila, t } = montar({ adicionar });
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(2));
+    t.envios[0]!.resolve({ mediaId: sha(1), deduplicado: false });
+    await flush();
+    expect(estados(fila)).toEqual(["pausado", "aguardando"]);
+    expect(vista(fila).pausado).toBe(true);
+  });
+
+  it("pausar com motivo chama o pausar do transporte e a fila mostra o motivo", async () => {
+    const { fila, t, config } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(2));
+    pausarComMotivo(fila, RESERVA_PERDIDA);
+    expect(config.pausar).toHaveBeenCalledTimes(1);
+    t.envios[0]!.reject(pausaDoCliente());
+    await flush();
+    const visao = vista(fila) as ReturnType<typeof vista> & { motivoDaPausa: string };
+    expect(visao.motivoDaPausa).toBe(RESERVA_PERDIDA);
+    expect(visao.resumo).toContain(RESERVA_PERDIDA);
+    expect(estados(fila)).toEqual(["pausado", "aguardando"]);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+    // Retomar limpa o motivo.
+    fila.retomar();
+    expect((vista(fila) as { motivoDaPausa: string | null }).motivoDaPausa).toBeNull();
+  });
+
+  it("pausar sem nada pendente é no-op e a escolha seguinte começa direto", () => {
+    const { fila, t, config } = montar();
+    fila.sincronizar();
+    pausarComMotivo(fila, RESERVA_PERDIDA);
+    expect(config.pausar).not.toHaveBeenCalled();
+    expect(vista(fila).pausado).toBe(false);
+    fila.adicionarArquivos(arquivos(1));
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+    expect(estados(fila)).toEqual(["enviando"]);
+  });
+
+  it("UploadPausedError atrasado: pausar e retomar antes da rejeição devolve o item a aguardando e ele é reenviado primeiro", async () => {
+    const { fila, t } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(3));
+    fila.pausar();
+    fila.retomar();
+    // A rejeição só chega agora, assíncrona, como no POST de criação do cliente real.
+    expect(estados(fila)).toEqual(["enviando", "aguardando", "aguardando"]);
+    t.envios[0]!.reject(pausaDoCliente());
+    await flush();
+    expect(t.enviar).toHaveBeenCalledTimes(2);
+    expect(t.envios[1]!.item.nome).toBe("clipe-01.mp4");
+    expect(estados(fila)).toEqual(["enviando", "aguardando", "aguardando"]);
+    expect(vista(fila).pausado).toBe(false);
+    t.envios[1]!.resolve({ mediaId: sha(1), deduplicado: false });
+    await flush();
+    // Os outros não passaram na frente e nada ficou preso.
+    expect(t.envios[2]!.item.nome).toBe("clipe-02.mp4");
+    t.envios[2]!.resolve({ mediaId: sha(2), deduplicado: false });
+    await flush();
+    t.envios[3]!.resolve({ mediaId: sha(3), deduplicado: false });
+    await flush();
+    expect(estados(fila)).toEqual(["pronto", "pronto", "pronto"]);
+  });
+
+  it("com a fila ainda pausada, o UploadPausedError deixa o item pausado", async () => {
+    const { fila, t } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(1));
+    fila.pausar();
+    t.envios[0]!.reject(pausaDoCliente());
+    await flush();
+    expect(estados(fila)).toEqual(["pausado"]);
+  });
+
+  it("mesma impressão na mesma escolha: duas linhas, a segunda em erro, um envio só", () => {
+    const { fila, t, storage } = montar();
+    fila.sincronizar();
+    const a = arquivo("C0001.MP4", 10, "video/mp4", 5);
+    const b = arquivo("C0001.MP4", 10, "video/mp4", 5);
+    const novos = fila.adicionarArquivos([a, b]);
+    const itens = fila.instantanea().itens;
+    expect(novos).toBe(1);
+    expect(itens.map((item) => item.estado)).toEqual(["enviando", "erro"]);
+    expect(itens[1]!.mensagem).toBe(IMPRESSAO_REPETIDA);
+    expect(itens[1]!.acoes).toEqual(["remover"]);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+    // A linha repetida não entra no manifesto.
+    expect(lerManifesto(storage).get("alpha")).toHaveLength(1);
+  });
+
+  it("remover a linha repetida não chama cancelar e não mexe no original", () => {
+    const { fila, t, config } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos([arquivo("C0001.MP4", 10, "video/mp4", 5), arquivo("C0001.MP4", 10, "video/mp4", 5)]);
+    fila.remover(fila.instantanea().itens[1]!.chave);
+    expect(config.cancelar).not.toHaveBeenCalled();
+    expect(estados(fila)).toEqual(["enviando"]);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+  });
+
+  it("mesma impressão de um item ainda aguardando de uma escolha anterior também é recusada", () => {
+    const { fila, t } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos([arquivo("a.mp4", 10), arquivo("b.mp4", 11)]);
+    expect(estados(fila)).toEqual(["enviando", "aguardando"]);
+    const novos = fila.adicionarArquivos([arquivo("b.mp4", 11), arquivo("a.mp4", 10)]);
+    expect(novos).toBe(0);
+    const itens = fila.instantanea().itens;
+    expect(itens.map((item) => item.estado)).toEqual(["enviando", "aguardando", "erro", "erro"]);
+    expect(itens[2]!.mensagem).toBe(IMPRESSAO_REPETIDA);
+    expect(itens[3]!.mensagem).toBe(IMPRESSAO_REPETIDA);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+  });
+
+  it("concluído reconhecido na nova escolha diz que só a impressão casou", async () => {
+    const { fila, t } = montar({ shas: new Set([sha(1)]) });
+    fila.sincronizar();
+    fila.adicionarArquivos([arquivo("a.mp4", 10)]);
+    t.envios[0]!.resolve({ mediaId: sha(1), deduplicado: false });
+    await flush();
+    fila.adicionarArquivos([arquivo("a.mp4", 10)]);
+    const item = fila.instantanea().itens[0]!;
+    expect(item.reconhecido).toBe(true);
+    expect(item.mensagem).toBe(IMPRESSAO_CONCLUIDA);
+    expect(t.enviar).toHaveBeenCalledTimes(1);
+  });
+
+  it("erro sem status que não é de rede marca o item e a fila segue", async () => {
+    const { fila, t } = montar();
+    fila.sincronizar();
+    fila.adicionarArquivos(arquivos(2));
+    t.envios[0]!.reject(new Error("o servidor encerrou o envio sem mediaId"));
+    await flush();
+    const visao = vista(fila);
+    expect(visao.itens[0]!.estado).toBe("erro");
+    expect(visao.itens[0]!.mensagem).toBe("o servidor encerrou o envio sem mediaId");
+    expect(visao.pausado).toBe(false);
+    expect(visao.itens[1]!.estado).toBe("enviando");
+    expect(t.enviar).toHaveBeenCalledTimes(2);
   });
 });

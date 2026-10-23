@@ -1,9 +1,9 @@
 // Materiais do studio no DOM falso: a fila desenhada no rail, o modo local
 // (POST project/import) e os transportes do modo equipe com cliente falso.
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createState } from "./state.js";
 import { uploadFingerprint } from "./media-upload.js";
-import { MANIFESTO } from "./studio-fila.js";
+import { MANIFESTO, RESERVA_PERDIDA } from "./studio-fila.js";
 import { mountMateriais } from "./studio-materiais.js";
 import { domWindow, installDom, type El } from "./fake-dom.test-helper.ts";
 
@@ -69,9 +69,10 @@ type Montagem = {
   project?: unknown;
   store?: ReturnType<typeof storage>;
   criarEnvio?: ReturnType<typeof envioFalso>["criarEnvio"];
+  onConflitoDeReserva?: (body: unknown) => void;
 };
 
-function montar({ fetchImpl, teamMode = false, readOnly, project = projeto(), store = storage(), criarEnvio }: Montagem = {}) {
+function montar({ fetchImpl, teamMode = false, readOnly, project = projeto(), store = storage(), criarEnvio, onConflitoDeReserva }: Montagem = {}) {
   const document = installDom(BODY);
   Object.assign(domWindow(), { removeEventListener: vi.fn(), addEventListener: vi.fn() });
   const state = createState({});
@@ -82,6 +83,7 @@ function montar({ fetchImpl, teamMode = false, readOnly, project = projeto(), st
   const mat = mountMateriais({
     state, api, setStage, teamMode, mediaEnabled: teamMode, onAtividade, storage: store as never, projeto: "alpha",
     ...(readOnly ? { readOnly } : {}),
+    ...(onConflitoDeReserva ? { onConflitoDeReserva: onConflitoDeReserva as never } : {}),
     ...(fetchImpl ? { fetchImpl: fetchImpl as never } : {}),
     ...(criarEnvio ? { criarEnvio: criarEnvio as never } : {}),
   });
@@ -140,8 +142,9 @@ it("modo local: POST project/import com baseRevision, nome e x-file-size", async
   expect(init.method).toBe("POST");
   expect(init.headers["x-file-size"]).toBe("12");
   expect(init.body).toBe(arq);
-  // Em voo no local: sem ações, e o bootstrap segura as edições.
-  expect(lis(document)[0]!.querySelectorAll("button")).toHaveLength(0);
+  // Em voo no local: só "remover" (o POST pode ser abortado), e o bootstrap segura as edições.
+  expect(init.signal).toBeInstanceOf(AbortSignal);
+  expect(lis(document)[0]!.querySelectorAll("button").map((b) => b.dataset.acao)).toEqual(["remover"]);
   expect(onAtividade).toHaveBeenLastCalledWith({ importando: true, rotulo: "Enviando 1/1 · meu clipe.mp4…" });
   await flush();
   expect(state.get("project").revision).toBe(4);
@@ -179,12 +182,150 @@ it("modo local: dois 409 seguidos viram erro (uma tentativa só)", async () => {
   expect(item.mensagem).toBe("O projeto mudou durante o envio. Tente de novo.");
 });
 
-it("modo local: remover não age no item em voo", () => {
-  const fetchImpl = vi.fn(() => new Promise(() => {}));
-  const { document, mat } = montar({ fetchImpl });
+/** fetch que fica pendente até o abort do `signal`, como o POST de um arquivo grande. */
+function fetchPendente() {
+  const sinais: AbortSignal[] = [];
+  const fetchImpl = vi.fn((_url: string, init: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+    sinais.push(init.signal);
+    init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  }));
+  return { fetchImpl, sinais };
+}
+
+it("modo local: pausar durante o POST aborta o signal, o item fica pausado e retomar faz outro POST", async () => {
+  const { fetchImpl, sinais } = fetchPendente();
+  const { document, mat } = montar({ fetchImpl: fetchImpl as never });
   mat.adicionar([arquivo("a.mp4")]);
-  mat.fila.remover(mat.fila.instantanea().itens[0]!.chave);
+  document.getElementById("filaPausar")!.click();
+  expect(sinais[0]!.aborted).toBe(true);
+  await flush();
+  expect(lis(document)[0]!.dataset.estado).toBe("pausado");
+  expect(document.getElementById("filaPausar")!.textContent).toBe("Retomar envio");
+  document.getElementById("filaPausar")!.click();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(sinais[1]!.aborted).toBe(false);
+  expect(lis(document)[0]!.dataset.estado).toBe("enviando");
+});
+
+it("modo local: remover durante o POST aborta, tira o item da fila e o próximo começa", async () => {
+  const { fetchImpl, sinais } = fetchPendente();
+  const { document, mat } = montar({ fetchImpl: fetchImpl as never });
+  mat.adicionar([arquivo("a.mp4"), arquivo("b.mp4", 11)]);
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  lis(document)[0]!.querySelector('button[data-acao="remover"]')!.click();
+  expect(sinais[0]!.aborted).toBe(true);
+  await flush();
   expect(lis(document)).toHaveLength(1);
+  expect(lis(document)[0]!.querySelector(".fila-nome")!.textContent).toBe("b.mp4");
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(mat.fila.instantanea().itens[0]!.estado).toBe("enviando");
+});
+
+describe("Reserva perdida", () => {
+  it("local: 409 com dono faz um POST só, avisa a Reserva, para a fila com o motivo e o retomar volta a enviar", async () => {
+    const dono = { nome: "Ana" };
+    const corpo = { dono, error: "Projeto reservado para edição" };
+    const fetchImpl = vi.fn(async () => respostaOk(corpo, 409));
+    const onConflitoDeReserva = vi.fn();
+    const { document, mat, api } = montar({ fetchImpl, onConflitoDeReserva });
+    mat.adicionar([arquivo("a.mp4"), arquivo("b.mp4", 11)]);
+    await flush();
+    // Sem repetir o arquivo inteiro e sem reconciliar como um 409 de revisão.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(api.call).not.toHaveBeenCalled();
+    expect(onConflitoDeReserva).toHaveBeenCalledTimes(1);
+    expect(onConflitoDeReserva).toHaveBeenCalledWith(corpo);
+    const visao = mat.fila.instantanea() as ReturnType<typeof mat.fila.instantanea> & { resumo: string };
+    expect(visao.itens.map((item) => item.estado)).toEqual(["pausado", "aguardando"]);
+    expect(visao.itens[0]!.mensagem).toBe(RESERVA_PERDIDA);
+    expect(visao.resumo).toContain(RESERVA_PERDIDA);
+    expect(document.getElementById("filaResumo")!.textContent).toContain(RESERVA_PERDIDA);
+    expect(lis(document)[0]!.querySelector(".fila-msg")!.textContent).toBe(RESERVA_PERDIDA);
+    // Retomar: o primeiro volta a enviar, e o segundo continua esperando.
+    document.getElementById("filaPausar")!.click();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(onConflitoDeReserva).toHaveBeenCalledTimes(1);
+  });
+
+  it("equipe: project/media com 409 e dono deixa o item pausado com o mediaId, e retomar só associa", async () => {
+    const envio = envioFalso();
+    const { document, mat, api } = montar({ teamMode: true, criarEnvio: envio.criarEnvio });
+    api.call
+      .mockResolvedValueOnce({ res: { ok: false, status: 409 }, body: { dono: { nome: "Ana" }, error: "reservado" } })
+      .mockResolvedValueOnce({ res: { ok: true, status: 200 }, body: { source: { sha256: sha(8) } } });
+    mat.adicionar([arquivo("a.mp4"), arquivo("b.mp4", 11)]);
+    envio.clientes[0]!.resolver!({ mediaId: sha(8), deduplicado: false });
+    await flush();
+    const visao = mat.fila.instantanea();
+    expect(visao.itens.map((item) => item.estado)).toEqual(["pausado", "aguardando"]);
+    expect(visao.itens[0]!.texto).toBe("Pausado · falta adicionar ao projeto");
+    expect(visao.pausado).toBe(true);
+    // O segundo não subiu: a fila parou.
+    expect(envio.clientes).toHaveLength(1);
+    document.getElementById("filaPausar")!.click();
+    await flush();
+    expect(api.call).toHaveBeenCalledTimes(2);
+    expect(JSON.parse((api.call.mock.calls[1]![1] as { body: string }).body).mediaId).toBe(sha(8));
+    // O item concluído não foi reenviado: o cliente 0 é o único que fez start do primeiro arquivo.
+    expect(envio.clientes[0]!.start).toHaveBeenCalledTimes(1);
+    expect(mat.fila.instantanea().itens[0]!.estado).toBe("pronto");
+    expect(envio.clientes).toHaveLength(2);
+  });
+
+  it("pausarPorReserva com upload em voo chama o pause() do cliente e a fila mostra o motivo", async () => {
+    const envio = envioFalso();
+    const { document, mat } = montar({ teamMode: true, criarEnvio: envio.criarEnvio });
+    mat.adicionar([arquivo("a.mp4")]);
+    mat.pausarPorReserva();
+    expect(envio.clientes[0]!.pause).toHaveBeenCalledTimes(1);
+    await flush();
+    const visao = mat.fila.instantanea() as ReturnType<typeof mat.fila.instantanea> & { motivoDaPausa: string };
+    expect(visao.pausado).toBe(true);
+    expect(visao.motivoDaPausa).toBe(RESERVA_PERDIDA);
+    expect(document.getElementById("filaResumo")!.textContent).toContain(RESERVA_PERDIDA);
+  });
+
+  it("pausarPorReserva sem nada pendente não faz nada, e a escolha seguinte começa direto", () => {
+    const envio = envioFalso();
+    const { mat } = montar({ teamMode: true, criarEnvio: envio.criarEnvio });
+    mat.pausarPorReserva();
+    expect(mat.fila.instantanea().pausado).toBe(false);
+    mat.adicionar([arquivo("a.mp4")]);
+    expect(envio.clientes).toHaveLength(1);
+    expect(envio.clientes[0]!.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("equipe: remover durante o POST de criação apaga a sessão e a impressão do decupa.uploads.v1 (cliente real)", async () => {
+  const store = storage();
+  const chamadas: Array<{ url: string; metodo: string }> = [];
+  let criacao: (valor: unknown) => void = () => {};
+  const { document, mat } = montar({ teamMode: true, store });
+  // installDom (dentro de montar) troca o fetch global: o falso entra depois.
+  vi.stubGlobal("fetch", vi.fn((url: string, init?: { method?: string }) => {
+    chamadas.push({ url, metodo: init?.method ?? "GET" });
+    if (url === "/api/uploads" && init?.method === "POST") {
+      return new Promise((resolve) => {
+        criacao = () => resolve({ ok: true, status: 201, json: async () => ({ id: "u1", offset: 0, tamanhoParte: 5 }) });
+      });
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+  }));
+  const arq = arquivo("a.mp4", 12);
+  mat.adicionar([arq]);
+  await flush();
+  expect(chamadas).toEqual([{ url: "/api/uploads", metodo: "POST" }]);
+  lis(document)[0]!.querySelector('button[data-acao="remover"]')!.click();
+  await flush();
+  expect(lis(document)).toHaveLength(0);
+  // Só agora o servidor responde, com a sessão já criada.
+  criacao(undefined);
+  await flush();
+  await flush();
+  expect(chamadas).toContainEqual({ url: "/api/uploads/u1", metodo: "DELETE" });
+  const salvos = JSON.parse(store.dados.get("decupa.uploads.v1") ?? "{}") as Record<string, unknown>;
+  expect(salvos[uploadFingerprint(arq)]).toBeUndefined();
+  expect(Object.keys(salvos)).toEqual([]);
 });
 
 it("equipe: o botão Pausar chama o pausar do cliente de envio e o clique em Remover cancela", async () => {

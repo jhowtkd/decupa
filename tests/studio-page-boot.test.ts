@@ -1,6 +1,6 @@
 // A divisão legacy/studio no bootstrap (page.js), conferida no texto: page.js inteiro
 // não roda no DOM falso (top-level await), e o studio não pode vazar para a legacy.
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { beforeAll, expect, it } from "vitest";
 
 const ASSEMBLY = new URL("../apps/cli/src/app/assembly/", import.meta.url);
@@ -76,4 +76,49 @@ it("page.html segue sem nada da bancada do studio", () => {
     expect(legacyHtml, marca).not.toContain(marca);
   }
   for (const id of ["monitor", "monitorToggle", "closeMonitor", "stages"]) expect(legacyHtml).toContain(`id="${id}"`);
+});
+
+/** O objeto STUDIO_MODULOS do page.js: nome → caminho. */
+function studioModulos(): Record<string, string> {
+  const corpo = /const STUDIO_MODULOS = \{([\s\S]*?)\};/.exec(js)?.[1];
+  expect(corpo, "STUDIO_MODULOS no page.js").toBeDefined();
+  return Object.fromEntries([...corpo!.matchAll(/(\w+):\s*"([^"]+)"/g)].map((m) => [m[1]!, m[2]!]));
+}
+
+it("STUDIO_MODULOS liga cada nome a um editor/studio-*.js que existe", async () => {
+  const modulos = studioModulos();
+  expect(Object.keys(modulos).sort()).toEqual(["bancada", "materiais", "renomear"]);
+  for (const [nome, caminho] of Object.entries(modulos)) {
+    expect(caminho, nome).toMatch(/^editor\/studio-[\w-]+\.js$/);
+    await expect(access(new URL(caminho, ASSEMBLY)), caminho).resolves.toBeUndefined();
+  }
+});
+
+it("cada uso studio.<nome>.<função>( do page.js tem o nome em STUDIO_MODULOS e a função exportada pelo arquivo", async () => {
+  const modulos = studioModulos();
+  const usos = [...js.matchAll(/\bstudio\.(\w+)\.(\w+)\(/g)].map((m) => ({ nome: m[1]!, funcao: m[2]! }));
+  expect(usos.length).toBeGreaterThanOrEqual(3);
+  for (const { nome, funcao } of usos) {
+    expect(Object.keys(modulos), `studio.${nome}`).toContain(nome);
+    const fonte = await readFile(new URL(modulos[nome]!, ASSEMBLY), "utf8");
+    expect(fonte, `${modulos[nome]} exporta ${funcao}`).toMatch(new RegExp(`export (?:async )?function ${funcao}\\(`));
+  }
+  // Os três módulos têm pelo menos um uso: um nome sem uso seria import morto.
+  expect(new Set(usos.map((uso) => uso.nome))).toEqual(new Set(Object.keys(modulos)));
+});
+
+it("nenhum outro import de studio-* no page.js além do mapa STUDIO_MODULOS", () => {
+  const mencoes = linhas().filter((linha) => linha.includes("studio-") && !linha.trim().startsWith("//") && !linha.trim().startsWith("*"));
+  const modulos = Object.values(studioModulos());
+  // Só as linhas do próprio mapa citam um arquivo studio-*.
+  expect(mencoes.map((linha) => linha.trim().replace(/^\w+:\s*"|",$/g, "")).sort()).toEqual([...modulos].sort());
+  expect(js).not.toMatch(/import\s*\(\s*projectPath\(\s*["'][^"']*studio-/);
+  expect(js).not.toMatch(/^import .*studio-/m);
+});
+
+it("o Modo Leitura pausa a fila de Materiais e o conflito do POST local chega à Reserva", () => {
+  const onReadOnly = /onReadOnly: \(owner\) => \{([\s\S]*?)\n  \},/.exec(js)?.[1];
+  expect(onReadOnly, "onReadOnly").toBeDefined();
+  expect(onReadOnly).toContain("if (owner) materiais?.pausarPorReserva();");
+  expect(js).toMatch(/studio\.materiais\.mountMateriais\(\{[\s\S]*?onConflitoDeReserva: \(body\) => reservationUI\.handleConflict\(body\),/);
 });

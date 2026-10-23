@@ -22,7 +22,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** page.js serve ./media-upload.js pelo servidor; aqui o import aponta para o arquivo do editor. */
 async function carregarPagina() {
   const dir = mkdtempSync(join(tmpdir(), "hub-studio-carga-"));
-  const aqui = (arquivo: string) => pathToFileURL(new URL(arquivo, import.meta.url).pathname).href;
+  const aqui = (arquivo: string) => new URL(arquivo, import.meta.url).href;
   const fonte = readFileSync(new URL("./page.js", import.meta.url), "utf8")
     .replace('"./media-upload.js"', JSON.stringify(aqui("../assembly/editor/media-upload.js")))
     .replace('"./batch.js"', JSON.stringify(aqui("./batch.js")))
@@ -36,8 +36,8 @@ async function carregarPagina() {
   }
 }
 
-function montar() {
-  const document = installDom('<meta name="decupa-media-enabled" content="true">' + BODY);
+function montar(acervo = true) {
+  const document = installDom(`<meta name="decupa-media-enabled" content="${acervo}">` + BODY);
   Object.assign(domWindow(), {
     location: { origin: "http://127.0.0.1:1", assign: vi.fn(), hash: "", pathname: "/", search: "" },
     setInterval: vi.fn(() => 1), clearInterval: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -79,4 +79,35 @@ it("modelo: a gaveta não chama transporte nem criação até haver arquivo", ()
   expect(criarImportacaoDrive).not.toHaveBeenCalled();
   expect(enviarCriacao).not.toHaveBeenCalled();
   expect(gaveta.instantanea().itens ?? []).toHaveLength(0);
+});
+
+/** O elemento ou algum ancestral é um <details>? (Fechado, esconderia o texto.) */
+function dentroDeDetails(el: { tag: string; parentElement: unknown }): boolean {
+  for (let no = el as { tag: string; parentElement: typeof no | null } | null; no; no = no.parentElement) {
+    if (no.tag === "details") return true;
+  }
+  return false;
+}
+
+it("estático: #libraryStatus não está dentro de um <details> no hub/studio.html", () => {
+  const indice = HTML.indexOf('id="libraryStatus"');
+  expect(indice).toBeGreaterThan(0);
+  const antes = HTML.slice(0, indice);
+  const abertos = (antes.match(/<details\b/g) ?? []).length;
+  const fechados = (antes.match(/<\/details>/g) ?? []).length;
+  expect(abertos - fechados).toBe(0);
+});
+
+it("sem acervo configurado a frase que explica fica em #libraryStatus, fora de <details>", async () => {
+  const { document, chamadas } = montar(false);
+  await carregarPagina();
+  await flush();
+  const status = document.getElementById("libraryStatus")!;
+  expect(status.textContent).toBe("O acervo de Mídias não está configurado neste servidor.");
+  expect(dentroDeDetails(status)).toBe(false);
+  expect(document.getElementById("mediaFiles")!.disabled).toBe(true);
+  // E abrir a gaveta não lê o acervo que não existe.
+  document.getElementById("newProject")!.click();
+  await flush();
+  expect(chamadas.filter((chamada) => chamada.url === "/api/media")).toEqual([]);
 });

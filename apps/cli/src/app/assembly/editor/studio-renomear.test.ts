@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createState } from "./state.js";
 import { mountRail } from "./rail.js";
 import { mountMateriais } from "./studio-materiais.js";
-import { efeitosDeRenomear, mountRenomear, nomeDaMontagem, resultadoDeRenomear, validarNome } from "./studio-renomear.js";
+import { efeitosDeRenomear, mensagemDeRecusa, mountRenomear, nomeDaMontagem, resultadoDeRenomear, validarNome } from "./studio-renomear.js";
 import { domWindow, installDom } from "./fake-dom.test-helper.ts";
 
 afterEach(() => {
@@ -47,7 +47,7 @@ describe("efeitosDeRenomear e validarNome (puros)", () => {
     expect(texto).toContain("da v3 para a v4");
     expect(texto).toContain("A prévia v3 deixa de valer");
     expect(texto).toContain("A aprovação da v3 é desfeita");
-    expect(texto).toContain("Desfazer fica indisponível");
+    expect(texto).toContain("deixam de poder ser desfeitas");
   });
 
   it("sem aprovação vigente avisa que a entrega segue travada; sem undo o Desfazer só não volta o nome", () => {
@@ -55,7 +55,7 @@ describe("efeitosDeRenomear e validarNome (puros)", () => {
     expect(texto).toContain("Nenhuma aprovação vale para a v4");
     expect(texto).toContain("A prévia é gerada para a v4");
     expect(texto).toContain("O Desfazer não volta o nome.");
-    expect(texto).not.toContain("indisponível");
+    expect(texto).not.toContain("deixam de poder");
   });
 
   it("validarNome recusa vazio, mais de 200 caracteres e o mesmo nome", () => {
@@ -76,7 +76,7 @@ describe("efeitosDeRenomear e validarNome (puros)", () => {
     expect(linhas[0]).toBe("Agora é a v4 (era v3).");
     expect(linhas[1]).toMatch(/^Prévia desatualizada/);
     expect(linhas[2]).toMatch(/^Aprovação: pendente/);
-    expect(linhas[3]).toMatch(/^Desfazer: indisponível/);
+    expect(linhas[3]).toMatch(/^Desfazer: .*não podem mais ser desfeitas/);
   });
 });
 
@@ -174,7 +174,7 @@ describe("diálogo de renomear no studio.html", () => {
     expect(document.getElementById("renameDone")!.textContent).toContain("Montagem nova");
     expect(resultado).toContain("Prévia desatualizada");
     expect(resultado).toContain("Aprovação: pendente");
-    expect(resultado).toContain("Desfazer: indisponível");
+    expect(resultado).toContain("não podem mais ser desfeitas");
     expect(document.getElementById("renameConfirm")!.hidden).toBe(true);
     expect(document.getElementById("renameCancel")!.textContent).toBe("Fechar");
   });
@@ -197,6 +197,43 @@ describe("diálogo de renomear no studio.html", () => {
     expect(efeitos).toContain("v7 para a v8");
     expect(document.getElementById("renameResult")!.hidden).toBe(true);
     expect(document.getElementById("renameConfirm")!.disabled).toBe(false);
+  });
+});
+
+describe("recusas do POST", () => {
+  const antes = { revision: 3 };
+
+  it("mensagemDeRecusa separa o 409 de Reserva, o de revisão que andou e o sintético de envio em curso", () => {
+    // Reserva perdida: o texto do servidor.
+    expect(mensagemDeRecusa(409, { dono: { nome: "Ana" }, error: "Projeto reservado por Ana" }, antes as never, { revision: 3 } as never))
+      .toBe("Projeto reservado por Ana");
+    // Revisão andou (o call() reconciliou): pede para conferir os avisos.
+    expect(mensagemDeRecusa(409, { error: "revisão" }, antes as never, { revision: 5 } as never))
+      .toMatch(/^A montagem mudou enquanto você renomeava/);
+    // Mesma revisão: o 409 sintético do call() ("Aguarde o envio…") fala por si.
+    expect(mensagemDeRecusa(409, { error: "Aguarde o envio terminar" }, antes as never, { revision: 3 } as never))
+      .toBe("Aguarde o envio terminar");
+    expect(mensagemDeRecusa(500, { error: "falhou" }, antes as never, { revision: 3 } as never)).toBe("falhou");
+    expect(mensagemDeRecusa(500, {}, antes as never, { revision: 3 } as never)).toBe("Não foi possível renomear.");
+    // dono sem texto cai no padrão da Reserva.
+    expect(mensagemDeRecusa(409, { dono: { nome: "Ana" } }, antes as never, { revision: 3 } as never)).toBe("Projeto reservado para edição");
+  });
+
+  it("pelo DOM: 409 com dono mostra o texto do servidor; 409 com a mesma revisão mostra o sintético", async () => {
+    for (const [corpo, esperado] of [
+      [{ dono: { nome: "Ana" }, error: "Projeto reservado por Ana" }, "Projeto reservado por Ana"],
+      [{ error: "Aguarde o envio terminar" }, "Aguarde o envio terminar"],
+    ] as const) {
+      const { document, state, api } = montar();
+      api.call.mockResolvedValue({ res: { ok: false, status: 409 }, body: corpo as never });
+      mountRenomear({ state, api });
+      document.getElementById("renameProject")!.click();
+      document.getElementById("renameInput")!.value = "Outro";
+      document.getElementById("renameForm")!.dispatchEvent({ type: "submit" });
+      await flush();
+      expect(document.getElementById("renameError")!.textContent).toBe(esperado);
+      expect(document.getElementById("renameResult")!.hidden).toBe(true);
+    }
   });
 });
 
