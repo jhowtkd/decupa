@@ -21,3 +21,7 @@ work/
 /reference.mp4
 /:memory:.ses
 .playwright-cli/
+
+# Testes de navegador (pnpm e2e): traces, capturas e relatório de cada execução.
+/test-results/
+/playwright-report/
