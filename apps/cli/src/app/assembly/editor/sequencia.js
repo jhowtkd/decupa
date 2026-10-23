@@ -443,10 +443,12 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const scenes = new Map(p.scenes.map((scene) => [scene.id, scene]));
     const posicao = (block) => ' data-scene="' + esc(block.sceneId) + '" data-start="' + block.start + '" data-end="' + block.end + '"'
       + ' style="width:' + pct(block.end - block.start) + ";position:absolute;left:" + pct(block.start) + ';"';
-    const bloco = (block, inner) => '<div class="seq-bloco' + (block.kind === "support" ? " seq-apoio" : "") + '"'
-      + posicao(block) + ' data-kind="' + esc(block.kind) + '" data-group="' + esc(block.groupId || "") + '"'
-      + ' title="' + esc(block.label + " · " + formatTimecode(block.start) + "–" + formatTimecode(block.end)) + '">'
-      + inner + "</div>";
+    const bloco = (block, inner) => {
+      const titulo = esc(block.label + " · " + formatTimecode(block.start) + "–" + formatTimecode(block.end));
+      return '<div class="seq-bloco' + (block.kind === "support" ? " seq-apoio" : "") + '"'
+        + posicao(block) + ' data-kind="' + esc(block.kind) + '" data-group="' + esc(block.groupId || "") + '"'
+        + ' title="' + titulo + '">' + inner + "</div>";
+    };
     const cenas = blocks.filter((block) => block.kind === "scene");
     const apoios = blocks.filter((block) => block.kind === "support");
     const video = cenas.map((block) => {
@@ -456,8 +458,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
         ? '<img class="timeline-thumb" alt="" loading="lazy" title="Miniatura de ' + esc(source.name) + '" src="'
           + projectPath("project/thumbnail/" + encodeURIComponent(source.id)) + '">'
         : '<span class="sem-dado">sem miniatura</span>';
-      return bloco(block, thumb + '<span class="clip-label">' + esc(block.label) + "</span>"
-        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + " s</span>");
+      // Miniatura, nome e duração juntos: com zoom, grudam na borda visível do bloco.
+      return bloco(block, '<span class="bloco-rosto">' + thumb + '<span class="clip-label">' + esc(block.label) + "</span>"
+        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + " s</span></span>");
     }).join("");
     const apoio = apoios.length
       ? apoios.map((block) => bloco(block, '<span class="clip-label">' + esc(block.label) + "</span>")).join("")

@@ -241,17 +241,17 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .lane-vazia { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--faint); white-space: nowrap; }
 .sem-dado { font-size: 9px; line-height: 1.2; color: var(--faint); white-space: nowrap; }
 /* Bloco de cena: miniatura real da fonte (ou "sem miniatura") ao lado do nome e da duração. */
-.seq-lane .seq-bloco { top: 0; height: 100%; overflow: hidden; border-radius: 6px; }
+/* overflow: clip (não hidden): o bloco não vira rolagem, e o rosto gruda na faixa que rola. */
+.seq-lane .seq-bloco { top: 0; height: 100%; display: flex; overflow: clip; border-radius: 6px; }
 .seq-lane .seq-bloco::before { height: 100%; border-radius: 6px; }
-.lane-video .seq-bloco { display: grid; grid-template: "mini nome" 1fr "mini dur" 1fr / auto minmax(0, 1fr); align-items: center; column-gap: 7px; padding-right: 6px; }
-.lane-video .seq-bloco > * { position: relative; }
+.bloco-rosto { position: sticky; left: 0; z-index: 1; display: grid; grid-template: "mini nome" 1fr "mini dur" 1fr / auto minmax(0, 1fr); align-items: center; column-gap: 7px; min-width: 0; max-width: 100%; height: 100%; padding-right: 6px; }
 .lane-video .timeline-thumb { display: block; grid-area: mini; height: var(--trilha-video); aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px 0 0 6px; }
 .lane-video .sem-dado { grid-area: mini; align-self: stretch; display: flex; align-items: center; justify-content: center; width: calc(var(--trilha-video) * 16 / 9); border-right: 1px dashed var(--line); }
 .lane-video .clip-label { grid-area: nome; position: static; align-self: end; }
 .lane-video .seq-bloco .dur { grid-area: dur; position: static; align-self: start; }
 /* Apoio (B-roll) com o nome, na própria trilha. */
-.lane-apoio .seq-bloco.seq-apoio { top: 0; height: 100%; display: flex; align-items: center; border-radius: 6px; background: rgb(127 147 168 / .35); box-shadow: inset 0 0 0 1px rgb(127 147 168 / .5); }
-.lane-apoio .seq-apoio .clip-label { display: block; position: static; padding: 0 6px; font-size: 10px; font-weight: 500; }
+.lane-apoio .seq-bloco.seq-apoio { top: 0; height: 100%; align-items: center; border-radius: 6px; background: rgb(127 147 168 / .35); box-shadow: inset 0 0 0 1px rgb(127 147 168 / .5); }
+.lane-apoio .seq-apoio .clip-label { display: block; position: sticky; left: 0; padding: 0 6px; font-size: 10px; font-weight: 500; }
 .lane-apoio .seq-apoio.ativa { background: rgb(127 147 168 / .55); }
 /* Áudio: a onda dos trechos retidos de cada cena, sob o bloco dela. */
 .seq-audio { position: absolute; top: 0; height: 100%; overflow: hidden; border-right: 3px solid var(--card); border-radius: 6px; background: #1A1D21; }
@@ -339,7 +339,10 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
   .texto-busca { padding-left: 14px; }
   /* A barra cabe numa linha sem a contagem de palavras. */
   .texto-barra .barra-resumo { display: none; }
-  /* Faixa no celular: rótulos estreitos e miniatura menor. */
+  /* Faixa no celular: título e total numa linha, formato e zoom na outra;
+     rótulos estreitos e miniatura menor. */
   :root { --faixa-rotulos: 42px; --trilha-video: 40px; }
+  .faixa-head .total { margin-left: auto; }
+  .faixa-ferramentas { order: 1; flex: 1 1 100%; justify-content: space-between; margin-left: 0; }
   .faixa-rotulos { font-size: 9px; letter-spacing: 0; }
 }
