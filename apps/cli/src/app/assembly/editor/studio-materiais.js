@@ -50,10 +50,12 @@ export function mountMateriais({
 
   async function importar(arquivo, tentativa = 0) {
     const revision = state.get("project").revision;
-    const res = await fetchImpl(
-      projectPath("project/import") + "?baseRevision=" + revision + "&name=" + encodeURIComponent(arquivo.name),
-      { method: "POST", headers: projectHeaders({ "x-file-size": String(arquivo.size) }), body: arquivo },
-    );
+    // A URL vai inteira no template: o rastreador de recursos dos testes HTTP
+    // lê `import` seguido de aspas como um import de módulo.
+    const url = projectPath(`project/import?baseRevision=${revision}&name=${encodeURIComponent(arquivo.name)}`);
+    const res = await fetchImpl(url, {
+      method: "POST", headers: projectHeaders({ "x-file-size": String(arquivo.size) }), body: arquivo,
+    });
     const body = await res.json().catch(() => ({}));
     // Revisão andou entre um arquivo e outro: reconcilia e tenta uma vez.
     if (res.status === 409 && tentativa === 0) {
