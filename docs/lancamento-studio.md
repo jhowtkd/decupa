@@ -14,7 +14,8 @@ O Decupa Studio é a interface nova da bancada, com as quatro etapas Materiais, 
 - **Onde se define.** No Docker, pelo `.env` (o `docker-compose.yml` já repassa); fora dele, no ambiente de quem roda `decupa serve`.
 - **Como trocar.** Mudar a variável e **reiniciar o servidor**: não há troca a quente.
 - **O que não muda.** Os dados não mudam de lugar nem de formato. O mesmo Projeto abre nas duas variantes, e o que for editado numa continua abrindo na outra. O teste de navegador `e2e/legacy.e2e.ts` comprova isso: corte, reordenação e Refazer feitos no studio aparecem na legacy, a legacy edita e desfaz por cima, e o studio volta a abrir o resultado.
-- **Preferências locais.** As do studio (etapa, painéis e zoom, no navegador) não guardam nada editorial e não afetam a legacy.
+- **Preferências locais.** As do studio (etapa, painéis e zoom, no navegador, em `decupa.studio.bancada.v1`) não guardam nada editorial e não afetam a legacy.
+- **Fila de Materiais.** O manifesto da fila do studio (`decupa.materiais.v1`, no navegador) só é lido pelo studio: se a variante mudar com envios na fila, as entradas pendentes ou parciais reaparecem quando o studio voltar. **Troque de variante com a fila vazia.**
 
 ## Etapas
 
@@ -81,6 +82,10 @@ Voltar a versão é seguro para os dados. O `project.json` gravado pela versão 
 - **Correções sobrepostas.** Defeito anterior ao redesign, em ticket próprio (`fora-da-pilha-correcoes-sobrepostas`).
 - **Temporários de teste.** A suíte de testes deixa temporários no `/tmp`; em ticket próprio (`fora-da-pilha-temporarios-de-teste`).
 
+## Render nos testes de navegador (CI)
+
+O job `e2e` usa o motor de render real, instalado do bundle do repositório. Se o render real quebrar no CI (o FFmpeg lá é o do apt), o plano B troca só o compositor por um MP4 liso na duração da timeline, sem commit: em **Settings → Secrets and variables → Actions → Variables**, crie a variável de repositório `DECUPA_E2E_MOTOR` com o valor `sintetico`. Apague a variável (ou deixe vazia) para voltar ao motor real. Ligar o plano B é decisão humana e fica registrado no PR que o usou.
+
 ## Passos humanos
 
 Nenhum destes é feito pelos testes nem pelo CI:
@@ -88,7 +93,7 @@ Nenhum destes é feito pelos testes nem pelo CI:
 1. Escolher e copiar os Projetos do aceite e subir a instância separada.
 2. Percorrer o roteiro de aceite e registrar o resultado, inclusive a conferência no DaVinci Resolve real.
 3. Medir a preparação com os modelos reais e o desempenho no computador de uso.
-4. Conferir o primeiro run do job `e2e` no CI (Ubuntu) e registrar falhas e testes flaky na evidência da linha de base.
+4. Conferir o primeiro run do job `e2e` no CI (Ubuntu) e registrar falhas e testes flaky na evidência da linha de base; se o render real falhar lá, decidir se liga o plano B (`DECUPA_E2E_MOTOR`).
 5. Definir `DECUPA_EDITOR_UI` em cada ambiente (`.env`, Docker, serviço) e reiniciar.
 6. Decidir a passagem de cada etapa (aceite → uso controlado → promoção) e avisar quem usa.
 7. Contar as duas versões estáveis depois da promoção e decidir a remoção da legacy.

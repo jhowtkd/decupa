@@ -48,7 +48,12 @@ Cada interação tem 5 repetições de aquecimento e 50 medidas, com clique real
 | 4×4000 | 4 Mídias, 16 000 palavras, 40 cenas (~1,8 h) | 16,7 / **20,7** / 22,5 | 28,1 / **36,6** / 39,6 | 21,4 / **55,1** / 74,6 |
 | 20×2000 | 20 Mídias, 40 000 palavras, 200 cenas (~4,4 h) | 41,3 / **55,8** / 65,8 | 93,5 / **118,1** / 127,8 | 71,1 / **163,7** / 260,9 |
 
-**O teto de p95 ≤ 100 ms vale até ~40 cenas e ~4 h de material.** Nos três primeiros projetos, as três interações ficam abaixo de 60 ms. No 20×2000 a seleção fica em 56 ms, mas painel e etapa ficam em ~118 e ~164 ms (achado abaixo). A oscilação da carga do host move esses dois números: em repetições de 20 amostras, o painel deu entre 96 e 126 ms e a etapa entre 105 e 124 ms.
+**O teto de p95 ≤ 100 ms vale até ~40 cenas e ~4 h de material.** Nos três primeiros projetos, as três interações ficam abaixo de 60 ms. No 20×2000 a seleção fica em 56–63 ms, mas painel e etapa ficam acima do teto (achado abaixo), e a carga do host move esses dois números de uma execução para outra. Por isso entram como faixa, juntando as execuções do PR 10 (50 amostras, as repetições de 20 e a execução da revisão independente):
+
+| 20×2000, p95 | Faixa observada |
+| --- | --- |
+| painel | **96–151 ms** |
+| etapa | **105–164 ms** |
 
 ### Antes e depois das correções (p95, ms)
 
@@ -114,7 +119,7 @@ A prévia sai em **1920×1080 a 25 fps**, o formato da montagem, e não 4K: a fo
 - A jornada (`e2e/jornada.e2e.ts`) usa a auto-prévia renderizada por esse motor, com o `assemblySha256` real. O job `e2e` do CI instala o motor do mesmo jeito. Não há prévia sintética nos testes.
 - **A exportação roda sem o motor.** `exportApprovedOperation` nunca renderiza: copia o `reference.mp4` da prévia aprovada depois de conferir sha256, `assemblySha256` e duração. As legendas saem do `subtitleRecord`. A jornada confere os downloads byte a byte: o vídeo tem o sha256 da prévia aprovada, e o `.vtt`/`.srt` (soltos e dentro do pacote `.tar`) são iguais ao `subtitleRecord` da revisão.
 - **Achado, não corrigido aqui.** Com o motor presente, `apps/cli/src/app/assembly/render.test.ts` › "render segmentado de 12s preserva bordas, voz contínua e portrait VFR em 30000/1001" falha neste host (`duração 12.160 s, a timeline tem 12.012 s`). O teste só roda quando o motor existe, e o CI não instala o motor antes da suíte JS. Os outros dois renders reais (V1/V2/V1 e muitos cortes) passam.
-- **Risco em aberto.** O CI usa o FFmpeg 6.1 do apt; aqui o render real rodou com o 7.0.2 estático. O render real nunca tinha rodado no CI. O plano B está pronto e desligado: `DECUPA_E2E_MOTOR=sintetico` aponta `VE_PLUGIN_ROOT` para `e2e/apoio/motor-sintetico`. É um `ve_tools` mínimo que o `render-assembly.py` real carrega; ele grava um MP4 liso do FFmpeg na duração e no quadro da timeline, e o resto do caminho (registro da prévia com o `assemblySha256` real, aprovação, exportação e downloads) continua o de verdade. A jornada passa com ele (20,7 s). Só deve ser ligado se o render real quebrar no CI, com registro no PR.
+- **Risco em aberto.** O CI usa o FFmpeg 6.1 do apt; aqui o render real rodou com o 7.0.2 estático. O render real nunca tinha rodado no CI. O plano B está pronto e desligado: `DECUPA_E2E_MOTOR=sintetico` aponta `VE_PLUGIN_ROOT` para `e2e/apoio/motor-sintetico`. É um `ve_tools` mínimo que o `render-assembly.py` real carrega; ele grava um MP4 liso do FFmpeg na duração e no quadro da timeline, e o resto do caminho (registro da prévia com o `assemblySha256` real, aprovação, exportação e downloads) continua o de verdade. A jornada passa com ele (20,7 s). No CI ele liga sem commit pela variável de repositório `DECUPA_E2E_MOTOR=sintetico` (passo a passo em `docs/lancamento-studio.md`). Só deve ser ligado se o render real quebrar no CI, com registro no PR.
 
 ## Não medido aqui (passo humano)
 
