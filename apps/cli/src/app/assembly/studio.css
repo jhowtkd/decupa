@@ -9,7 +9,7 @@
    As condições de etapa vão em :where() para não somar especificidade: a
    ordem do arquivo decide, e o projeto vazio (no fim) sempre vence.
    Seções: tokens, casca, topo, regiões, texto, etapas, vazio, materiais,
-   renomear, faixa, legenda, formato, gavetas, responsivo. */
+   renomear, faixa, legenda, formato, revisão, entrega, gavetas, responsivo. */
 
 /* == tokens == */
 :root {
@@ -293,6 +293,35 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .formato-erro { margin: 8px 0 0; font-size: 12px; color: var(--red); }
 .formato-dialog .dialog-actions { justify-content: flex-end; margin: 18px 0 0; }
 
+/* == revisão == */
+/* Os cinco dados da revisão (studio-revisao.js), cada um no seu bloco, abaixo
+   do cartão de aprovação. Só existem na etapa Revisão. */
+:where(body:not([data-stage="revisao"])) #revisaoPainel { display: none; }
+.revisao-dados { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; }
+.revisao-bloco { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-sub); background: var(--card-2); }
+.revisao-bloco dt { font: 600 11px/1.4 var(--sans-ui); color: var(--muted); }
+.revisao-bloco dd { margin: 0; }
+.revisao-valor { font-size: 15px; line-height: 1.4; color: var(--ink); }
+.revisao-detalhe { font-size: 11px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.revisao-bloco[data-tom="ok"] .revisao-valor { color: var(--green); }
+.revisao-bloco[data-tom="aviso"] { box-shadow: inset 0 0 0 1px rgb(240 202 110 / .3); }
+.revisao-bloco[data-tom="aviso"] .revisao-valor { color: var(--accent); }
+
+/* == entrega == */
+/* Vídeo, legendas e continuidade no editor (contexto.js com ui studio), cada
+   um com a revisão e a disponibilidade, no lugar da lista plana de arquivos. */
+.entrega-itens { display: flex; flex-direction: column; gap: 10px; }
+.entrega-item { display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 12px 16px; }
+.entrega-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.entrega-item-head h2 { flex: 1 1 auto; margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.entrega-estado { font-size: 12px; font-weight: 600; color: var(--muted); }
+.entrega-item[data-estado="disponivel"] .entrega-estado { color: var(--green); }
+.entrega-item[data-estado="preparar"] .entrega-estado { color: var(--accent); }
+.entrega-detalhe, .entrega-nota { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.entrega-nota { padding-left: 10px; border-left: 2px solid var(--hairline); }
+.entrega-arquivos { display: flex; flex-direction: column; gap: 6px; }
+.entrega-arquivos .file-name { width: min(260px, 45%); overflow-wrap: anywhere; }
+
 /* == gavetas == */
 /* Sem largura para fixar, o painel aberto sobrepõe a bancada abaixo do topo. */
 :where(body[data-rail="aberto"]) #rail,
@@ -332,6 +361,10 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
   :where(body[data-stage="edicao"]) #inspector, :where(body[data-stage="revisao"]) #inspector { order: 4; }
   :where(body[data-stage="edicao"]) #rail { order: 5; }
 }
+@media (max-width: 480px) {
+  /* Celular: um dado da revisão por linha. */
+  .revisao-dados { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 700px) {
   #stages button { flex: 1 1 0; min-width: 0; padding: 0 8px; }
   /* O cabeçalho do texto não cabe o rótulo: fica o ícone, e o nome segue
@@ -350,4 +383,6 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
   .faixa-formato { gap: 4px; }
   .faixa-formato button { padding: 0 6px; }
   .faixa-rotulos { font-size: 9px; letter-spacing: 0; }
+  /* O nome do arquivo divide a linha com o Baixar, como na lista plana (page.css). */
+  .entrega-arquivos .file-name { width: auto; }
 }

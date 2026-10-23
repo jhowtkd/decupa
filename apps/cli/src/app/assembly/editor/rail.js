@@ -213,6 +213,63 @@ export function deliveryFormats(project, verificacao, manifest = null, capabilit
   return files;
 }
 
+/** Rótulo de cada disponibilidade de item da entrega. */
+export const ITEM_STATUS = {
+  bloqueado: "Bloqueado", preparar: "A preparar", disponivel: "Disponível", indisponivel: "Indisponível",
+};
+
+/** Mesmo sentido do aviso de legenda do monitor (PR 5): legenda nunca vai gravada no MP4. */
+export const LEGENDA_SEPARADA = "Arquivos separados (.vtt/.srt): a legenda não é gravada no MP4.";
+
+/**
+ * Itens da entrega do studio (puro): vídeo, legendas e continuidade no editor,
+ * cada um com a revisão a que corresponde (a atual) e a disponibilidade —
+ * bloqueado sem a aprovação da revisão atual, a preparar enquanto a exportação
+ * dela não existe, disponível com os arquivos, indisponível quando a exportação
+ * não gerou aquele item. Os arquivos são os de deliveryFormats (URL com a
+ * revisão) e o download leva a revisão no nome; o .drp só entra se o registro
+ * do Resolve for da mesma revisão, e o link pede essa revisão ao servidor.
+ * @param {{status?: string, revision?: number, drpPath?: string} | null} [resolveDelivery]
+ */
+export function deliveryItems(project, verificacao, capabilities = null, resolveDelivery = null) {
+  if (!project) return [];
+  const rev = project.revision;
+  const approved = project.finalApprovedRevision != null && project.finalApprovedRevision === rev;
+  const formats = deliveryFormats(project, verificacao, null, capabilities);
+  const named = (file) => ({ ...file, download: file.file.startsWith("decupa-r") ? file.file : "decupa-r" + rev + "-" + file.file });
+  const pick = (...ids) => ids.flatMap((id) => formats.filter((file) => file.id === id)).map(named);
+  const continuity = formats.filter((file) => ["package", "otio", "instrucoes", "verificacao"].includes(file.id)).map(named);
+  if (resolveDelivery?.drpPath && resolveDelivery.revision === rev && formats.length) {
+    continuity.push(named({ id: "drp", file: "projeto.drp", label: "Projeto nativo do DaVinci", href: projectPath("project/resolve-drp/" + rev) }));
+  }
+  const items = [
+    { id: "video", title: "Vídeo", files: pick("mp4"), ready: "MP4 de referência da v" + rev + ", sem legenda gravada na imagem." },
+    { id: "legendas", title: "Legendas", files: pick("vtt", "srt"), ready: "Legendas sincronizadas com a v" + rev + ".", note: LEGENDA_SEPARADA },
+    { id: "continuidade", title: "Continuidade no editor", files: continuity,
+      ready: verificacao?.status === "confirmada"
+        ? "Conferência da v" + rev + " confirmada no Resolve."
+        : "Timeline para o Resolve. Importe a v" + rev + " e confirme a conferência." },
+  ];
+  return items.map(({ ready, note, ...item }) => {
+    let state;
+    let detail;
+    if (!approved) {
+      state = "bloqueado";
+      detail = "Aprove a prévia da v" + rev + " para liberar.";
+    } else if (!formats.length) {
+      state = "preparar";
+      detail = "Gerado ao preparar a entrega da v" + rev + ".";
+    } else if (!item.files.length) {
+      state = "indisponivel";
+      detail = "A exportação da v" + rev + " não gerou " + (item.id === "legendas" ? "legendas" : "este item") + ".";
+    } else {
+      state = "disponivel";
+      detail = ready;
+    }
+    return { ...item, revision: rev, state, status: ITEM_STATUS[state], detail, ...(note ? { note } : {}) };
+  });
+}
+
 /** Cartão da conferência (puro): bloqueio → preparar → conferir → confirmada. */
 export function verifyView(project, verificacao) {
   const approved = project?.finalApprovedRevision != null && project.finalApprovedRevision === project.revision;

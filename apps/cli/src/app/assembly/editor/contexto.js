@@ -5,7 +5,7 @@ import { mountFillerContext, mountFillerReview } from "./cacoetes.js";
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
+import { deliveryChecklist, deliveryFormats, deliveryItems, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
 import { approveButtonView, reviewView } from "./progress.js";
 import { mountCobertura } from "./cobertura.js";
@@ -247,6 +247,23 @@ let lastPreviewRev = null;
 /** Chip mono (.chip da Task 3): metadados curtos da prévia em linha. */
 const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
 
+/** Linha de arquivo com Baixar; `file` é também o nome com que ele chega ao disco. */
+function fileRow(file, label, href) {
+  const li = document.createElement("li");
+  li.className = "file";
+  li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
+  li.querySelector(".file-name").textContent = file;
+  li.querySelector(".file-desc").textContent = label;
+  const link = document.createElement("a");
+  link.className = "button";
+  link.href = href;
+  link.download = file;
+  link.textContent = "Baixar";
+  link.setAttribute("aria-label", "Baixar " + file);
+  li.append(link);
+  return li;
+}
+
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
 function setDisabled(el, value) {
   if (!el) return;
@@ -372,7 +389,11 @@ export function pendingItems(project) {
   return items;
 }
 
-export function mountContexto({ state, api, player }) {
+/**
+ * @param {{ state: any, api: any, player: any, ui?: "legacy" | "studio" }} deps
+ * `ui` só muda a entrega: no studio, os arquivos vão em três itens com revisão e disponibilidade.
+ */
+export function mountContexto({ state, api, player, ui = "legacy" }) {
   const root = document.getElementById("contexto");
   root.replaceChildren();
 
@@ -528,6 +549,15 @@ export function mountContexto({ state, api, player }) {
     + '<ul id="versionHistory" class="plain history"></ul>';
   delivery.hidden = true;
   document.getElementById("center").appendChild(delivery);
+  // Studio: vídeo, legendas e continuidade no editor, cada um com a revisão a
+  // que corresponde e a disponibilidade, no lugar da lista só do que existe.
+  const itens = ui === "studio" ? document.createElement("ul") : null;
+  if (itens) {
+    itens.id = "entregaItens";
+    itens.className = "plain entrega-itens";
+    itens.setAttribute("aria-label", "Arquivos da entrega");
+    delivery.insertBefore(itens, document.getElementById("deliveryFiles"));
+  }
 
   // Controle de ritmo (#66): escolha do perfil é etapa anterior à
   // prévia/aprovação — a proposta compara pausas e oferece amostra
@@ -727,9 +757,12 @@ export function mountContexto({ state, api, player }) {
   }
 
   function renderDelivery(project) {
+    const approved = project.finalApprovedRevision === project.revision;
     // Checklist derivado do estado real: atualiza a cada render de projeto.
+    // No studio, "Revisão pronta" é a versão atual aprovada, não qualquer uma.
     const checklist = document.getElementById("deliveryChecklist");
-    checklist.replaceChildren(...deliveryChecklist(project).map((item) => {
+    const items = deliveryChecklist(project).map((item) => itens && item.id === "review" ? { ...item, done: approved } : item);
+    checklist.replaceChildren(...items.map((item) => {
       const li = document.createElement("li");
       li.className = "pill" + (item.done ? " done" : "");
       li.innerHTML = item.done ? ICON.check : ICON.circle;
@@ -744,7 +777,6 @@ export function mountContexto({ state, api, player }) {
     }
     // Cadeado da entrega (Task 9): só libera depois de aprovar a prévia atual —
     // o servidor também recusa export sem aprovação (exportApproved).
-    const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
     lock.textContent = approved
       ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser aprovada."
@@ -792,24 +824,13 @@ export function mountContexto({ state, api, player }) {
     exportStatus.textContent = parts.filter(Boolean).join(" · ");
     exportStatus.className = "export-" + view.tone;
     const downloads = document.getElementById("downloads");
-    const addFile = (file, label, href) => {
-      const li = document.createElement("li");
-      li.className = "file";
-      li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
-      li.querySelector(".file-name").textContent = file;
-      li.querySelector(".file-desc").textContent = label;
-      const link = document.createElement("a");
-      link.className = "button";
-      link.href = href;
-      link.download = file;
-      link.textContent = "Baixar";
-      link.setAttribute("aria-label", "Baixar " + file);
-      li.append(link);
-      downloads.append(li);
-    };
+    const addFile = (file, label, href) => downloads.append(fileRow(file, label, href));
     downloads.replaceChildren();
-    for (const f of formats) addFile(f.file, f.label, f.href);
-    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", projectPath("project/resolve-drp"));
+    if (itens) paintItens(project, verificacao);
+    else {
+      for (const f of formats) addFile(f.file, f.label, f.href);
+      if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", projectPath("project/resolve-drp"));
+    }
     document.getElementById("deliveryFiles").hidden = downloads.childElementCount === 0;
     document.getElementById("filesPath").textContent = formats.length ? "exports/" + project.finalApprovedRevision + "/" : "";
     const history = document.getElementById("versionHistory");
@@ -819,6 +840,35 @@ export function mountContexto({ state, api, player }) {
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
       chip("formato " + formatLabel(project.assembly)),
     );
+  }
+
+  /** Os três itens do studio: título, revisão, disponibilidade e os arquivos que existem. */
+  function paintItens(project, verificacao) {
+    itens.replaceChildren(...deliveryItems(project, verificacao, deliveryCapabilities, resolveDelivery).map((item) => {
+      const li = document.createElement("li");
+      li.className = "sub entrega-item";
+      li.dataset.item = item.id;
+      li.dataset.estado = item.state;
+      li.innerHTML = '<div class="entrega-item-head"><h2></h2><span class="pill mono entrega-rev"></span>'
+        + '<span class="entrega-estado"></span></div><p class="entrega-detalhe"></p>';
+      li.querySelector("h2").textContent = item.title;
+      li.querySelector(".entrega-rev").textContent = "v" + item.revision;
+      li.querySelector(".entrega-estado").textContent = item.status;
+      li.querySelector(".entrega-detalhe").textContent = item.detail;
+      if (item.note) {
+        const note = document.createElement("p");
+        note.className = "entrega-nota";
+        note.textContent = item.note;
+        li.append(note);
+      }
+      if (item.files.length) {
+        const files = document.createElement("ul");
+        files.className = "plain entrega-arquivos";
+        files.append(...item.files.map((f) => fileRow(f.download, f.label, f.href)));
+        li.append(files);
+      }
+      return li;
+    }));
   }
 
   function render(project) {

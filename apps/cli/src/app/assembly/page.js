@@ -20,6 +20,7 @@ const STUDIO_MODULOS = {
   legendas: "editor/studio-legendas.js",
   materiais: "editor/studio-materiais.js",
   renomear: "editor/studio-renomear.js",
+  revisao: "editor/studio-revisao.js",
 };
 async function importarStudio() {
   const nomes = Object.keys(STUDIO_MODULOS);
@@ -603,7 +604,7 @@ async function uploadTeamFiles(files) {
 /* ---- Fiação ---- */
 
 mountStage({ state, api, player });
-mountContexto({ state, api, player });
+mountContexto({ state, api, player, ui: editorUi });
 mountRail({ state, api, player, ui: editorUi });
 mountTemplates({state,api});
 mountTexto({ state, api, player, ui: editorUi });
@@ -614,6 +615,8 @@ if (editorUi === "studio") studio.busca.mountBusca({ state });
 // recebe a legenda da revisão atual; "Formato…" abre o diálogo do studio.
 if (editorUi === "studio") studio.legendas.mountLegendas({ state, player });
 if (editorUi === "studio") studio.formato.mountFormato({ state, api });
+// Painel da Revisão do studio: só lê o estado que o rastreio do player publica.
+if (editorUi === "studio") studio.revisao.mountRevisao({ state, player });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");
