@@ -28,14 +28,14 @@ it("editorUi vem só da meta decupa-editor-ui com content studio; o resto é leg
   expect(js.match(/const editorUi\b/g)).toHaveLength(1);
 });
 
-it("studio-bancada.js só é importado quando editorUi é studio", () => {
+it("os módulos do studio (bancada inclusive) só são importados quando editorUi é studio", () => {
   const usos = linhas().filter((linha) => linha.includes("studio-bancada"));
   expect(usos).toHaveLength(1);
-  expect(usos[0]).toMatch(/editorUi === "studio" \? import\(projectPath\("editor\/studio-bancada\.js"\)\) : null,/);
-  expect(js).not.toMatch(/^import .*studio-bancada/m);
+  expect(usos[0]!.trim()).toBe('bancada: "editor/studio-bancada.js",');
+  expect(js).not.toMatch(/^import .*studio-/m);
   // Dentro do Promise.all do boot: nenhuma ida e volta em série depois dos módulos.
   const boot = /await Promise\.all\(\[([\s\S]*?)\]\);/.exec(js)?.[1];
-  expect(boot).toContain(usos[0]!.trim());
+  expect(boot).toContain('editorUi === "studio" ? importarStudio() : null,');
 });
 
 it("a legacy chama mountLegacyMonitor() e abre em Materiais; o studio usa a bancada", () => {
@@ -49,7 +49,7 @@ it("a legacy chama mountLegacyMonitor() e abre em Materiais; o studio usa a banc
   // A definição existe uma vez e a única chamada é a da legacy.
   expect(js.match(/function mountLegacyMonitor\(/g)).toHaveLength(1);
   expect(js.match(/mountLegacyMonitor\(\)/g)).toHaveLength(2);
-  expect(js).toContain('const bancada = editorUi === "studio" ? studioBancada.mountBancada(');
+  expect(js).toContain('const bancada = editorUi === "studio" ? studio.bancada.mountBancada(');
   expect(js).toContain("const showStage = bancada ? bancada.show : applyStageDom;");
 });
 
@@ -67,10 +67,8 @@ it("só mountRail, mountTexto e mountSequencia recebem ui", () => {
 it("studio-busca.js só carrega no studio e a busca é montada sem api", () => {
   const usos = linhas().filter((linha) => linha.includes("studio-busca"));
   expect(usos).toHaveLength(1);
-  expect(usos[0]).toMatch(/editorUi === "studio" \? import\(projectPath\("editor\/studio-busca\.js"\)\) : null,/);
-  const boot = /await Promise\.all\(\[([\s\S]*?)\]\);/.exec(js)?.[1];
-  expect(boot).toContain(usos[0]!.trim());
-  expect(js).toContain("if (studioBusca) studioBusca.mountBusca({ state });");
+  expect(usos[0]!.trim()).toBe('busca: "editor/studio-busca.js",');
+  expect(js).toContain('if (editorUi === "studio") studio.busca.mountBusca({ state });');
 });
 
 it("page.html segue sem nada da bancada do studio", () => {

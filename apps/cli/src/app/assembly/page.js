@@ -9,6 +9,22 @@ import { projectHeaders, projectPath } from "./project-path.js";
 const editorUi = document.querySelector('meta[name="decupa-editor-ui"]')?.getAttribute("content") === "studio"
   ? "studio" : "legacy";
 
+/**
+ * Módulos só do studio, por nome: a legacy não baixa nenhum, e o nome de cada
+ * um nunca depende da posição no Promise.all (um módulo a mais não desalinha os outros).
+ */
+const STUDIO_MODULOS = {
+  bancada: "editor/studio-bancada.js",
+  busca: "editor/studio-busca.js",
+  materiais: "editor/studio-materiais.js",
+  renomear: "editor/studio-renomear.js",
+};
+async function importarStudio() {
+  const nomes = Object.keys(STUDIO_MODULOS);
+  const modulos = await Promise.all(nomes.map((nome) => import(projectPath(STUDIO_MODULOS[nome]))));
+  return Object.fromEntries(nomes.map((nome, i) => [nome, modulos[i]]));
+}
+
 const [
   { mountTemplates },
   { createState },
@@ -21,10 +37,7 @@ const [
   { ICON },
   { ResumableMediaUpload, UploadPausedError },
   { activityView, mountActivity },
-  studioBancada,
-  studioBusca,
-  studioMateriais,
-  studioRenomear,
+  studio,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -37,11 +50,8 @@ const [
   import(projectPath("editor/icons.js")),
   import(projectPath("editor/media-upload.js")),
   import(projectPath("editor/progress.js")),
-  // Só o studio baixa a bancada; a legacy não pede o módulo.
-  editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
-  editorUi === "studio" ? import(projectPath("editor/studio-busca.js")) : null,
-  editorUi === "studio" ? import(projectPath("editor/studio-materiais.js")) : null,
-  editorUi === "studio" ? import(projectPath("editor/studio-renomear.js")) : null,
+  // Só o studio baixa os módulos dele, no mesmo Promise.all (sem ida e volta em série).
+  editorUi === "studio" ? importarStudio() : null,
 ]);
 
 const state = createState({
@@ -590,7 +600,7 @@ mountTemplates({state,api});
 mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
 // Busca no texto do studio: lê o projeto do estado e não recebe api.
-if (studioBusca) studioBusca.mountBusca({ state });
+if (editorUi === "studio") studio.busca.mountBusca({ state });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");
@@ -707,7 +717,7 @@ function setStage(stage) {
 }
 // Legacy: a etapa é alvo de foco e rolagem. Studio: a etapa é uma vista da
 // bancada (CSS sobre as mesmas regiões; o player nunca sai do lugar).
-const bancada = editorUi === "studio" ? studioBancada.mountBancada({ state, setStage, paintStages }) : null;
+const bancada = editorUi === "studio" ? studio.bancada.mountBancada({ state, setStage, paintStages }) : null;
 const showStage = bancada ? bancada.show : applyStageDom;
 state.subscribe("stage", showStage);
 state.subscribe("transcriptNotice", applyTranscriptNotice);
@@ -719,7 +729,7 @@ document.getElementById("stages").addEventListener("click", (event) => {
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
 // Studio: fila de Materiais com todos os arquivos escolhidos já à vista, e
 // renomear a montagem com o aviso de invalidação antes de confirmar.
-const materiais = editorUi === "studio" ? studioMateriais.mountMateriais({
+const materiais = editorUi === "studio" ? studio.materiais.mountMateriais({
   state, api, setStage, teamMode, mediaEnabled,
   readOnly: () => ui.readOnly,
   onAtividade: ({ importando, rotulo }) => {
@@ -728,7 +738,7 @@ const materiais = editorUi === "studio" ? studioMateriais.mountMateriais({
     renderStatus();
   },
 }) : null;
-if (editorUi === "studio") studioRenomear.mountRenomear({ state, api });
+if (editorUi === "studio") studio.renomear.mountRenomear({ state, api });
 /** Seletor e arraste: no studio vão para a fila; a legacy segue com o envio de antes. */
 function sendFiles(files) {
   if (materiais) return materiais.adicionar(files);
