@@ -6,7 +6,7 @@
 // É o único diálogo de formato do studio: "Formato…" na faixa e, na Entrega,
 // quem chamar abrirFormato() (o #formatDialog antigo fica para a legacy).
 import { PROPORCOES, formatChip, fpsLabel } from "./format.js";
-import { LEGENDA_FORA_DO_MP4 } from "./studio-legendas.js";
+import { LEGENDA_FORA_DO_MP4 } from "./rail.js";
 
 /** Medida par, como o servidor exige. */
 const par = (n) => Math.max(2, 2 * Math.round(n / 2));

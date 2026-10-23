@@ -218,8 +218,12 @@ export const ITEM_STATUS = {
   bloqueado: "Bloqueado", preparar: "A preparar", disponivel: "Disponível", indisponivel: "Indisponível",
 };
 
-/** Mesmo sentido do aviso de legenda do monitor (PR 5): legenda nunca vai gravada no MP4. */
-export const LEGENDA_SEPARADA = "Arquivos separados (.vtt/.srt): a legenda não é gravada no MP4.";
+/**
+ * A frase única de "a legenda não vai no MP4": o monitor, o diálogo de formato
+ * e a Entrega do studio usam esta (aqui porque rail.js roda nas duas variantes
+ * e não importa studio-*).
+ */
+export const LEGENDA_FORA_DO_MP4 = "A legenda do monitor serve só para conferir: não é gravada no MP4. Ela sai em arquivo separado (.vtt/.srt) na entrega.";
 
 /**
  * Itens da entrega do studio (puro): vídeo, legendas e continuidade no editor,
@@ -244,7 +248,7 @@ export function deliveryItems(project, verificacao, capabilities = null, resolve
   }
   const items = [
     { id: "video", title: "Vídeo", files: pick("mp4"), ready: "MP4 de referência da v" + rev + ", sem legenda gravada na imagem." },
-    { id: "legendas", title: "Legendas", files: pick("vtt", "srt"), ready: "Legendas sincronizadas com a v" + rev + ".", note: LEGENDA_SEPARADA },
+    { id: "legendas", title: "Legendas", files: pick("vtt", "srt"), ready: "Legendas sincronizadas com a v" + rev + ".", note: LEGENDA_FORA_DO_MP4 },
     { id: "continuidade", title: "Continuidade no editor", files: continuity,
       ready: verificacao?.status === "confirmada"
         ? "Conferência da v" + rev + " confirmada no Resolve."

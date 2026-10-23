@@ -6,6 +6,7 @@ import { mountFillerContext, mountFillerReview } from "./cacoetes.js";
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
 import { deliveryChecklist, deliveryFormats, deliveryItems, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
+import { formatChip } from "./format.js";
 import { ICON } from "./icons.js";
 import { approveButtonView, reviewView } from "./progress.js";
 import { mountCobertura } from "./cobertura.js";
@@ -673,33 +674,6 @@ export function mountContexto({ state, api, player, ui = "legacy" }) {
     });
   };
 
-  // Escolha de formato: visível (linha + chip) e editável por diálogo —
-  // muda a revisão e invalida prévia/aprovação via /project/settings.
-  const formatDialog = document.createElement("dialog");
-  formatDialog.id = "formatDialog";
-  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
-    + '<label>Usar formato de <select id="formatSource"></select></label>'
-    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
-    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
-    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
-    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
-    + '<button type="button" id="closeFormat">Fechar</button></div>';
-  document.body.appendChild(formatDialog);
-  document.getElementById("editFormat").onclick = () => {
-    const p = state.get("project");
-    if (!p) return;
-    const sel = document.getElementById("formatSource");
-    sel.replaceChildren(new Option("Personalizado", ""));
-    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
-      sel.appendChild(new Option(s.name, s.id));
-    }
-    sel.value = "";
-    document.getElementById("formatWidth").value = p.assembly.width;
-    document.getElementById("formatHeight").value = p.assembly.height;
-    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
-    formatDialog.showModal();
-  };
-  document.getElementById("closeFormat").onclick = () => formatDialog.close();
   // Confirmação manual da conferência (#63): exige entrega da revisão
   // atual; grava revisão+artefato+origem manual no verificacao.json.
   document.getElementById("confirmImport").onclick = () => {
@@ -711,31 +685,11 @@ export function mountContexto({ state, api, player, ui = "legacy" }) {
       label: "Confirmando conferência…",
     });
   };
-  document.getElementById("saveFormat").onclick = async () => {
-    const p = state.get("project");
-    if (!p) return;
-    const sourceId = document.getElementById("formatSource").value;
-    let body;
-    if (sourceId) {
-      body = { baseRevision: p.revision, sourceId };
-    } else {
-      const rawFps = document.getElementById("formatFps").value.trim();
-      const split = rawFps.split("/");
-      const fps = split.length === 2
-        ? { num: Number(split[0]), den: Number(split[1]) }
-        : { num: Number(rawFps) * 1000, den: 1000 };
-      body = {
-        baseRevision: p.revision,
-        width: Number(document.getElementById("formatWidth").value),
-        height: Number(document.getElementById("formatHeight").value),
-        fps,
-      };
-    }
-    const { res } = await api.call("project/settings", {
-      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
-    });
-    if (res.ok) formatDialog.close();
-  };
+  // Formato: no studio, "Alterar formato" abre o único diálogo de formato dele
+  // (studio-formato.js abre com qualquer [data-acao="formato"]); o diálogo
+  // antigo é só da legacy.
+  if (ui === "studio") document.getElementById("editFormat").setAttribute("data-acao", "formato");
+  else mountLegacyFormat({ state, api });
   const exportUi = { status: "idle", error: null, revision: null };
   let deliveryCapabilities = { resolve: false, primary: "package" };
   let resolveDelivery=null;
@@ -784,7 +738,8 @@ export function mountContexto({ state, api, player, ui = "legacy" }) {
     const badge = document.getElementById("deliveryBadge");
     badge.className = "pill" + (approved ? " pill-ok" : "");
     badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
-    document.getElementById("formatLine").textContent = formatLabel(project.assembly);
+    // Studio: a proporção com a resolução de saída, como no chip da faixa.
+    document.getElementById("formatLine").textContent = ui === "studio" ? formatChip(project.assembly) : formatLabel(project.assembly);
     document.getElementById("formatOrigin").textContent = formatOrigin(project.assembly);
     // Estado da conferência: exportar nunca confirma; revisão nova
     // não herda a confirmação (verificacao.json é por revisão).
@@ -965,6 +920,63 @@ export function mountContexto({ state, api, player, ui = "legacy" }) {
   // Confirmar a conferência devolve o mesmo projeto: só a verificação muda.
   state.subscribe("verificacao", () => { if (state.get("project")) renderDelivery(state.get("project")); });
   render(state.get("project"));
+}
+
+/**
+ * Diálogo de formato da legacy: visível (linha + chip) e editável — muda a
+ * revisão e invalida prévia/aprovação via /project/settings.
+ */
+function mountLegacyFormat({ state, api }) {
+  const formatDialog = document.createElement("dialog");
+  formatDialog.id = "formatDialog";
+  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
+    + '<label>Usar formato de <select id="formatSource"></select></label>'
+    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
+    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
+    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
+    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
+    + '<button type="button" id="closeFormat">Fechar</button></div>';
+  document.body.appendChild(formatDialog);
+  document.getElementById("editFormat").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sel = document.getElementById("formatSource");
+    sel.replaceChildren(new Option("Personalizado", ""));
+    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
+      sel.appendChild(new Option(s.name, s.id));
+    }
+    sel.value = "";
+    document.getElementById("formatWidth").value = p.assembly.width;
+    document.getElementById("formatHeight").value = p.assembly.height;
+    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
+    formatDialog.showModal();
+  };
+  document.getElementById("closeFormat").onclick = () => formatDialog.close();
+  document.getElementById("saveFormat").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sourceId = document.getElementById("formatSource").value;
+    let body;
+    if (sourceId) {
+      body = { baseRevision: p.revision, sourceId };
+    } else {
+      const rawFps = document.getElementById("formatFps").value.trim();
+      const split = rawFps.split("/");
+      const fps = split.length === 2
+        ? { num: Number(split[0]), den: Number(split[1]) }
+        : { num: Number(rawFps) * 1000, den: 1000 };
+      body = {
+        baseRevision: p.revision,
+        width: Number(document.getElementById("formatWidth").value),
+        height: Number(document.getElementById("formatHeight").value),
+        fps,
+      };
+    }
+    const { res } = await api.call("project/settings", {
+      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
+    });
+    if (res.ok) formatDialog.close();
+  };
 }
 
 export function decisionSummary(report) {

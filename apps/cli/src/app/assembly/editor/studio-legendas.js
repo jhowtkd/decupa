@@ -6,9 +6,9 @@
 // "legendasFaixa" do estado. Tudo vem de GET project/subtitles, o mesmo
 // gerador da exportação; nada aqui processa nem cobra.
 import { projectHeaders, projectPath } from "../project-path.js";
-
-/** Texto (b) do plano: o monitor confere a legenda, o MP4 sai sem ela. */
-export const LEGENDA_FORA_DO_MP4 = "A legenda do monitor serve só para conferir: não é gravada no MP4. Ela sai em arquivo separado (.vtt/.srt) na entrega.";
+// Texto (b) do plano: o monitor confere a legenda, o MP4 sai sem ela. A frase
+// mora em rail.js, a mesma do diálogo de formato e da Entrega.
+import { LEGENDA_FORA_DO_MP4 } from "./rail.js";
 
 /**
  * O que muda a legenda sem mudar a revisão (pura): a correção que termina de
