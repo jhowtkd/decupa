@@ -3,6 +3,7 @@
 // [data-rail], [data-inspector]) que o studio.css lê; nenhum nó sai do lugar,
 // então o <video id="previewPlayer"> segue tocando de onde estava. Nada aqui
 // chama a API: navegar e abrir painel nunca processam nem cobram.
+import { ZOOMS } from "./format.js";
 import { STAGES, stepperState } from "./topbar.js";
 
 const STAGE_IDS = new Set(STAGES.map((stage) => stage.id));
@@ -23,8 +24,6 @@ export const PAINEIS = {
 export const PREFERENCIA = "decupa.studio.bancada.v1";
 const MAX_PROJETOS = 30;
 const ESCOLHAS = new Set(["fixo", "recolhido"]);
-/** Os mesmos níveis de ZOOMS (sequencia.js); fora deles a faixa abre em 1×. */
-const ZOOMS = new Set([1, 2, 4, 8]);
 
 /** Preferência local (pura sobre o storage): ausente, ilegível ou corrompida vira o padrão. */
 export function readPreferencia(storage) {
@@ -46,7 +45,8 @@ export function readPreferencia(storage) {
     const escolha = data?.paineis?.[nome];
     if (ESCOLHAS.has(escolha)) paineis[nome] = escolha;
   }
-  const zoom = ZOOMS.has(data?.zoom) ? data.zoom : undefined;
+  // Zoom fora de ZOOMS não é lido: a faixa abre em 1×.
+  const zoom = ZOOMS.includes(data?.zoom) ? data.zoom : undefined;
   return { etapas, paineis, zoom };
 }
 
@@ -64,7 +64,7 @@ export function writePreferencia(storage, mudanca) {
     etapas.set(mudanca.projeto, mudanca.etapa);
   }
   if (mudanca.painel !== undefined) paineis[mudanca.painel] = mudanca.escolha;
-  const proximoZoom = mudanca.zoom !== undefined && ZOOMS.has(mudanca.zoom) ? mudanca.zoom : zoom;
+  const proximoZoom = mudanca.zoom !== undefined && ZOOMS.includes(mudanca.zoom) ? mudanca.zoom : zoom;
   const recentes = [...etapas].slice(-MAX_PROJETOS);
   try {
     storage?.setItem(PREFERENCIA, JSON.stringify({

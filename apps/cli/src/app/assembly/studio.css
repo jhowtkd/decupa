@@ -239,6 +239,9 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .lane-legenda { height: var(--trilha-legenda); }
 /* Trilha sem dado diz o que falta, no lugar dos blocos. */
 .lane-vazia { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--faint); white-space: nowrap; }
+/* A legenda costuma chegar numa ida e volta: o aviso de carregando só aparece se demorar. */
+.lane-vazia.carregando { animation: aparece-depois 0s linear .6s both; }
+@keyframes aparece-depois { from { visibility: hidden; } to { visibility: visible; } }
 .sem-dado { font-size: 9px; line-height: 1.2; color: var(--faint); white-space: nowrap; }
 /* Bloco de cena: miniatura real da fonte (ou "sem miniatura") ao lado do nome e da duração. */
 /* overflow: clip (não hidden): o bloco não vira rolagem, e o rosto gruda na faixa que rola. */

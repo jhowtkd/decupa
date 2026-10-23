@@ -23,6 +23,9 @@ export function seconds1(seconds) {
   return Math.floor(tenths / 10) + "," + (tenths % 10) + " s";
 }
 
+/** Zoom da faixa do studio: largura das trilhas sobre a área visível. */
+export const ZOOMS = [1, 2, 4, 8];
+
 /** Proporções que o studio oferece, na ordem do diálogo de formato. */
 export const PROPORCOES = [
   { id: "16:9", w: 16, h: 9, uso: "horizontal" },

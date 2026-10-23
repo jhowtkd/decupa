@@ -12,22 +12,31 @@ export const LEGENDA_FORA_DO_MP4 = "A legenda do monitor serve só para conferir
 
 /**
  * O que muda a legenda sem mudar a revisão (pura): a correção que termina de
- * alinhar em segundo plano troca o texto na mesma revisão.
+ * alinhar em segundo plano e a análise refeita de uma fonte (gravadas sem
+ * subir a revisão) trocam as palavras na mesma revisão.
  */
 export function assinaturaLegenda(project) {
-  return project.revision + ":" + (project.corrections || []).map((item) => item.id + "=" + item.status).join(",");
+  return project.revision + ":" + (project.corrections || []).map((item) => item.id + "=" + item.status).join(",")
+    + "|" + (project.analyses || []).map((item) => item.sourceId + ":" + item.key + ":" + item.wordsStatus).join(",");
 }
+
+/** Motivo da entrega para revisão sem fala (o mesmo texto de subtitleRecord). */
+const SEM_FALA = "sem falas retidas na montagem";
 
 /**
  * Resposta de GET project/subtitles/<rev>/json → resultado (pura).
  * `pronto` traz vttSha e cues; `sem-fala` é a revisão sem fala retida (como
- * a entrega registra); `sem-revisao` é a revisão sem como gerar a legenda.
+ * a entrega registra); `indisponivel` é o gerador que falhou, com o motivo;
+ * `sem-revisao` é a revisão sem como gerar a legenda.
  */
 export function resultadoDaResposta(status, body) {
   if (status === 200 && body?.legendas?.status === "pronto") {
     return { estado: "pronto", origem: body.origem, vttSha: body.legendas.vttSha, cues: Array.isArray(body.cues) ? body.cues : [] };
   }
-  if (status === 200) return { estado: "sem-fala", motivo: body?.legendas?.motivo || "sem falas retidas na montagem", cues: [] };
+  if (status === 200) {
+    const motivo = body?.legendas?.motivo || SEM_FALA;
+    return { estado: motivo === SEM_FALA ? "sem-fala" : "indisponivel", motivo, cues: [] };
+  }
   if (status === 404) return { estado: "sem-revisao", motivo: body?.error || "legenda indisponível", cues: [] };
   return { estado: "erro", motivo: body?.error || "erro " + status, cues: [] };
 }

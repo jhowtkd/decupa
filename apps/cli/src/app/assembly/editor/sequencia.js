@@ -9,7 +9,7 @@
 // No studio a faixa separa vídeo, apoio, áudio e legenda em trilhas sob a
 // mesma régua, com zoom local; cada trilha mostra o dado real ou diz que
 // ele falta ("sem miniatura", "sem onda", "sem áudio").
-import { clock, clockPrecise, formatChip } from "./format.js";
+import { ZOOMS, clock, clockPrecise, formatChip } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
 import { projectHeaders, projectPath } from "../project-path.js";
@@ -164,8 +164,7 @@ export function planSceneWave(inBlock, bySource, blockStart, sceneDur, width, he
 /** Intervalo entre seeks de scrub durante o arraste. */
 export const SCRUB_THROTTLE_MS = 60;
 
-/** Zoom da faixa do studio (largura das trilhas sobre a área visível). */
-export const ZOOMS = [1, 2, 4, 8];
+export { ZOOMS };
 
 /** Zoom válido (puro): fora da lista volta a 1. */
 export function zoomValido(zoom) {
@@ -188,6 +187,8 @@ export function cuesDaFaixa(legendas, project) {
 export function legendaVazia(legendas, project) {
   if (!legendas || legendas.revision !== project?.revision || legendas.estado === "carregando") return "carregando legenda…";
   if (legendas.estado === "sem-fala") return "sem fala retida";
+  if (legendas.estado === "indisponivel") return "legenda indisponível";
+  if (legendas.estado === "erro") return "legenda não carregou";
   return "sem legenda";
 }
 
@@ -298,7 +299,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     // O botão vive fora da faixa: atualiza mesmo quando o desenho não muda.
     placeUndo(p);
     const next = JSON.stringify(p && (studio
-      ? [p.revision, p.scenes, p.assembly.sources, state.get("legendasFaixa"), zoom()]
+      ? [p.revision, p.scenes, p.assembly.sources, zoom()]
       : [p.revision, p.scenes, p.assembly.sources, p.captions]));
     if (next === signature) return;
     signature = next;
@@ -473,12 +474,6 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
         + (comAudio ? '<canvas class="seq-wave" hidden></canvas><span class="sem-dado" hidden>sem onda</span>' : '<span class="sem-dado">sem áudio</span>')
         + "</div>";
     }).join("");
-    const legendas = state.get("legendasFaixa");
-    const cues = cuesDaFaixa(legendas, p);
-    const legenda = cues.length
-      ? cues.map((cue) => '<span class="seq-cue" title="' + esc(cue.text) + '" style="left:' + pct(cue.start)
-        + ";width:" + pct(Math.max(0, cue.end - cue.start)) + ';">' + esc(cue.text) + "</span>").join("")
-      : '<span class="lane-vazia">' + legendaVazia(legendas, p) + "</span>";
     const strip = document.createElement("div");
     strip.className = "seq-strip";
     strip.style.cssText = "position:relative;width:100%;cursor:pointer;";
@@ -488,7 +483,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     strip.setAttribute("aria-valuemax", String(duration));
     strip.setAttribute("tabindex", "0");
     const lane = (nome, inner) => '<div class="seq-lane lane-' + nome + '">' + inner + "</div>";
-    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legenda)
+    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration))
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
     const rotulos = document.createElement("div");
     rotulos.className = "faixa-rotulos";
@@ -520,6 +515,31 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     void hydrateWaves(p);
   }
 
+  /**
+   * Conteúdo da trilha de legenda (studio): os cues da revisão atual ou o
+   * porquê de não haver. "carregando legenda…" só aparece se demorar (CSS).
+   */
+  function legendaHtml(p, duration) {
+    const pct = (t) => (duration > 0 ? (t / duration) * 100 : 0).toFixed(3) + "%";
+    const legendas = state.get("legendasFaixa");
+    const cues = cuesDaFaixa(legendas, p);
+    if (cues.length) {
+      return cues.map((cue) => '<span class="seq-cue" title="' + esc(cue.text) + '" style="left:' + pct(cue.start)
+        + ";width:" + pct(Math.max(0, cue.end - cue.start)) + ';">' + esc(cue.text) + "</span>").join("");
+    }
+    const texto = legendaVazia(legendas, p);
+    const motivo = legendas?.revision === p.revision && legendas.motivo ? ' title="' + esc(legendas.motivo) + '"' : "";
+    return '<span class="lane-vazia' + (texto === "carregando legenda…" ? " carregando" : "") + '"' + motivo + ">" + texto + "</span>";
+  }
+
+  /** A legenda chegou: troca só a trilha dela, sem refazer a faixa (nem o gesto em curso). */
+  function pintarLegenda() {
+    const p = state.get("project");
+    const lane = root()?.querySelector(".seq-strip .lane-legenda");
+    if (!p || !lane) return;
+    lane.innerHTML = legendaHtml(p, montageDuration(p));
+  }
+
   function mudarZoom(passo) {
     const atual = ZOOMS.indexOf(zoom());
     const next = ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, atual + passo))];
@@ -530,23 +550,43 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   // por sha no servidor; 204/erro vira null e o bloco segue sem waveform).
   // O GET vai direto, fora do api.call: a waveform é enfeite e sua resposta
   // não pode apagar o erro de uma ação nem sincronizar o projeto.
+  // No studio só a onda que existe fica guardada: a preparação ainda pode
+  // gerá-la e a rede pode voltar. `faltas` diz por que a fonte está sem.
   const peaksCache = new Map();
+  const faltas = new Map();
   async function peaksFor(sourceId) {
     if (peaksCache.has(sourceId)) return peaksCache.get(sourceId);
     let peaks = null;
+    let falha = false;
     try {
       const res = await fetch(projectPath("project/waveform/" + encodeURIComponent(sourceId)), {
         headers: projectHeaders(),
       });
+      falha = !res.ok;
       const body = res.ok && res.status !== 204 ? await res.json() : null;
       if (body && Array.isArray(body.peaks) && body.peaks.length > 0) {
         peaks = body;
       }
     } catch {
       peaks = null;
+      falha = true;
     }
-    peaksCache.set(sourceId, peaks);
+    if (!studio || peaks) {
+      peaksCache.set(sourceId, peaks);
+      faltas.delete(sourceId);
+    } else {
+      faltas.set(sourceId, falha ? "erro" : "ausente");
+    }
     return peaks;
+  }
+
+  /**
+   * Por que a cena está sem onda (puro sobre `faltas`): erro de rede não é
+   * "sem onda"; durante a preparação a onda ainda pode vir.
+   */
+  function motivoSemOnda(sourceIds, p) {
+    if (sourceIds.some((id) => faltas.get(id) === "erro")) return "onda não carregou";
+    return p.preparation?.status === "running" ? "preparando onda…" : "sem onda";
   }
 
   // Pinta um projeto obsoleto por cima do novo quando o fetch demora:
@@ -577,7 +617,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       if (!canvas.isConnected) continue;
       const bySource = new Map(sourceIds.map((id, i) => [id, fetched[i]]));
       const temOnda = [...bySource.values()].some(Boolean);
-      marcar?.(node, temOnda);
+      marcar?.(node, temOnda, sourceIds);
       if (!temOnda) continue;
       const inBlock = segments.filter(
         (seg) => seg.montageEnd > start && seg.montageStart < end,
@@ -593,9 +633,14 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const el = root();
     const strip = el && el.querySelector(".seq-strip");
     if (!strip) return;
-    // Studio: sem peaks de nenhuma fonte da cena, o bloco diz "sem onda".
+    // Studio: sem peaks de nenhuma fonte da cena, o bloco diz por quê.
     const marcar = studio
-      ? (node, temOnda) => { const falta = node.querySelector(".sem-dado"); if (falta) falta.hidden = temOnda; }
+      ? (node, temOnda, sourceIds) => {
+        const falta = node.querySelector(".sem-dado");
+        if (!falta) return;
+        falta.hidden = temOnda;
+        if (!temOnda) falta.textContent = motivoSemOnda(sourceIds, p);
+      }
       : undefined;
     await drawBlocks(p, strip, (sourceIds) => Promise.all(sourceIds.map((id) => peaksFor(id))), () => token === waveGen, marcar);
   }
@@ -626,8 +671,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     }
   }
 
-  /** Linha do playhead + bloco aceso, sem re-render. */
-  function paint(playhead) {
+  /**
+   * Linha do playhead + bloco aceso, sem re-render. `acompanhar` vem só do
+   * playhead em movimento: o redesenho e o zoom não puxam a vista.
+   */
+  function paint(playhead, acompanhar = false) {
     const el = root();
     const strip = el && el.querySelector(".seq-strip");
     if (!strip) return;
@@ -656,7 +704,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     // O áudio que toca é o da cena, mesmo sob um apoio.
     const scene = valid ? activeScene(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-audio")) node.classList.toggle("ativa", node.dataset.scene === scene);
-    if (valid && !scrubbing) seguir(strip, Math.min(1, Math.max(0, playhead / duration)));
+    if (acompanhar && valid && !scrubbing && player.el?.()?.paused === false) {
+      seguir(strip, Math.min(1, Math.max(0, playhead / duration)));
+    }
   }
 
   /** Studio com zoom: o playhead que sai da vista traz a rolagem junto. */
@@ -808,11 +858,19 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
 
   bind();
   if (studio) {
-    state.subscribe("legendasFaixa", () => render(state.get("project")));
+    state.subscribe("legendasFaixa", () => pintarLegenda());
     state.subscribe("zoomSequencia", () => render(state.get("project")));
+    // Fim da preparação: a onda que faltava pode ter sido gerada.
+    let preparo = state.get("project")?.preparation?.status ?? null;
+    state.subscribe("project", (p) => {
+      const agora = p?.preparation?.status ?? null;
+      if (agora === preparo) return;
+      preparo = agora;
+      if (faltas.size) void hydrateWaves(p);
+    });
   }
   state.subscribe("undoRevision", () => render(state.get("project")));
   state.subscribe("project", (p) => render(p));
-  state.subscribe("playhead", (t) => paint(t));
+  state.subscribe("playhead", (t) => paint(t, true));
   render(state.get("project"));
 }
