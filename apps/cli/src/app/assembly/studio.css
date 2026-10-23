@@ -343,6 +343,8 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
      rótulos estreitos e miniatura menor. */
   :root { --faixa-rotulos: 42px; --trilha-video: 40px; }
   .faixa-head .total { margin-left: auto; }
-  .faixa-ferramentas { order: 1; flex: 1 1 100%; justify-content: space-between; margin-left: 0; }
+  .faixa-ferramentas { order: 1; flex: 1 1 100%; justify-content: space-between; column-gap: 6px; margin-left: 0; }
+  .faixa-formato { gap: 4px; }
+  .faixa-formato button { padding: 0 6px; }
   .faixa-rotulos { font-size: 9px; letter-spacing: 0; }
 }
