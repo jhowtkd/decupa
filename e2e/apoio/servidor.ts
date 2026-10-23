@@ -28,8 +28,12 @@ export class Servidor {
   private porta = 0;
   private filho: ChildProcess | null = null;
   private saida: string[] = [];
+  private opcoes: OpcoesServidor;
 
-  constructor(private opcoes: OpcoesServidor) {}
+  // Sem parameter property: os apoios também rodam sob --experimental-strip-types.
+  constructor(opcoes: OpcoesServidor) {
+    this.opcoes = opcoes;
+  }
 
   /** Últimas linhas do servidor, anexadas ao relatório quando o teste falha. */
   log(): string {
