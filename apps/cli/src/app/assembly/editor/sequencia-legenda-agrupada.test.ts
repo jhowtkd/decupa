@@ -114,22 +114,36 @@ it("na faixa: com a largura conhecida, as falas estreitas viram um bloco 'N fala
   const legendas = (cues: { startMs: number; endMs: number; text: string }[]) => ({ revision: 3, estado: "pronto", cues });
   const estreitas = Array.from({ length: 20 }, (_, i) => ({ startMs: i * 250, endMs: (i + 1) * 250, text: `curta ${i}` }));
   const todas = [...estreitas, { startMs: 6000, endMs: 9000, text: "fala larga" }];
-  // Sem largura (fake DOM, ou faixa escondida): cada fala no seu bloco, como antes.
+  // Largura nunca medida (fake DOM): cada fala no seu bloco, como antes.
   state.set("legendasFaixa", legendas(todas));
   expect(faixa.querySelectorAll(".lane-legenda .seq-cue")).toHaveLength(21);
   expect(faixa.querySelectorAll(".lane-legenda .seq-cue-grupo")).toHaveLength(0);
-  // 100 px para 10 s: cada curta tem 2,5 px; a larga, 30 px.
-  const lane = faixa.querySelector(".lane-legenda")!;
-  lane.clientWidth = 100;
+  // Vista de 100 px no 1× para 10 s: cada curta tem 2,5 px; a larga, 30 px.
+  faixa.querySelector(".faixa-rolagem")!.clientWidth = 100;
   state.set("legendasFaixa", legendas(todas));
   const blocos = faixa.querySelectorAll(".lane-legenda .seq-cue");
   expect(blocos).toHaveLength(2);
   const bloco = faixa.querySelector(".lane-legenda .seq-cue-grupo")!;
+  // O intervalo vai no title; um span genérico não tem nome acessível próprio.
   expect(bloco.getAttribute("title")).toBe("20 falas, 0:00–0:05");
-  expect(bloco.getAttribute("aria-label")).toBe("20 falas, 0:00–0:05");
+  expect(bloco.getAttribute("aria-label")).toBeNull();
   expect(bloco.textContent).toBe("20 falas");
   expect(bloco.getAttribute("style")).toContain("left:0.000%;width:50.000%");
   const larga = blocos.find((el) => !el.className.includes("seq-cue-grupo"))!;
   expect(larga.getAttribute("title")).toBe("fala larga");
   expect(larga.textContent).toBe("fala larga");
+});
+
+it("na faixa: escondida depois de medida, a legenda que chega usa a última largura e segue agrupada", () => {
+  const { faixa, state } = monta();
+  const legendas = (n: number) => ({ revision: 3, estado: "pronto",
+    cues: Array.from({ length: n }, (_, i) => ({ startMs: i * 250, endMs: (i + 1) * 250, text: `curta ${i}` })) });
+  faixa.querySelector(".faixa-rolagem")!.clientWidth = 100;
+  state.set("legendasFaixa", legendas(20));
+  expect(faixa.querySelectorAll(".lane-legenda .seq-cue")).toHaveLength(1);
+  // Materiais ou Entrega: a faixa some (display:none) e a vista mede 0.
+  faixa.querySelector(".faixa-rolagem")!.clientWidth = 0;
+  state.set("legendasFaixa", legendas(30));
+  expect(faixa.querySelectorAll(".lane-legenda .seq-cue")).toHaveLength(1);
+  expect(faixa.querySelector(".lane-legenda .seq-cue-grupo")!.textContent).toBe("30 falas");
 });

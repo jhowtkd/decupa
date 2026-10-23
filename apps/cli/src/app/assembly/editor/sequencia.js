@@ -484,6 +484,15 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
 
   const studio = ui === "studio";
   const zoom = () => zoomValido(state.get("zoomSequencia"));
+  // Largura da vista da faixa (no 1×), a última não nula: com a faixa
+  // escondida (Materiais, Entrega) a medida dá 0, e a legenda que chega então
+  // ainda sai agrupada, sem montar milhares de spans para a volta à Edição.
+  let vistaLembrada = 0;
+  /** Largura da trilha inteira no zoom atual, a partir da medida da vista agora. */
+  const larguraTrilha = (vista) => {
+    if (vista > 0) vistaLembrada = vista;
+    return vistaLembrada * zoom();
+  };
 
   // Arraste de cena (studio): um gesto por vez, do pegar até a resposta do
   // pedido. Enquanto existe, a faixa não se redesenha, a vista não segue o
@@ -693,7 +702,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     strip.setAttribute("tabindex", "0");
     const lane = (nome, inner) => '<div class="seq-lane lane-' + nome + '">' + inner + "</div>";
     // Largura da trilha no zoom atual; a da vista anterior serve até o observador de largura repintar.
-    const largura = (el.querySelector(".faixa-rolagem")?.clientWidth || el.clientWidth || 0) * z;
+    const largura = larguraTrilha(el.querySelector(".faixa-rolagem")?.clientWidth || el.clientWidth || 0);
     strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration, largura))
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
     const rotulos = document.createElement("div");
@@ -789,7 +798,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
         const posicao = ' style="left:' + pct(item.start) + ";width:" + pct(Math.max(0, item.end - item.start)) + ';"';
         if (!item.falas) return '<span class="seq-cue" title="' + esc(item.text) + '"' + posicao + ">" + esc(item.text) + "</span>";
         const rotulo = item.falas + " falas, " + clock(item.start) + "–" + clock(item.end);
-        return '<span class="seq-cue seq-cue-grupo" title="' + rotulo + '" aria-label="' + rotulo + '"' + posicao + ">"
+        return '<span class="seq-cue seq-cue-grupo" title="' + rotulo + '"' + posicao + ">"
           + item.falas + " falas</span>";
       }).join("");
     }
@@ -804,7 +813,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const lane = root()?.querySelector(".seq-strip .lane-legenda");
     // Com o gesto, a faixa segura a ordem de quando pegou; o fim do gesto repinta.
     if (!p || !lane || gesto) return;
-    lane.innerHTML = legendaHtml(p, montageDuration(p), lane.clientWidth);
+    lane.innerHTML = legendaHtml(p, montageDuration(p), larguraTrilha(root()?.querySelector(".faixa-rolagem")?.clientWidth || 0));
   }
 
   function mudarZoom(passo) {
