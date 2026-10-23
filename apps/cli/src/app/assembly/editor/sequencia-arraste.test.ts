@@ -151,6 +151,19 @@ describe("alças", () => {
     expect(outra.faixa.querySelectorAll(".bloco-alca").map((b) => b.getAttribute("tabindex"))).toEqual(["-1", "-1", "0"]);
   });
 
+  it("a parada de Tab acompanha a cena selecionada sem redesenho; seleção sem alça mantém a atual", async () => {
+    const { faixa, state } = await monta();
+    const strip = faixa.querySelector(".seq-strip")!;
+    const tabs = () => faixa.querySelectorAll(".bloco-alca").map((b) => b.tabIndex);
+    state.set("selectedScene", "s2");
+    expect(tabs()).toEqual([-1, 0, -1]);
+    state.set("selectedScene", null);
+    expect(tabs()).toEqual([-1, 0, -1]);
+    state.set("selectedScene", "s9");
+    expect(tabs()).toEqual([-1, 0, -1]);
+    expect(faixa.querySelector(".seq-strip")).toBe(strip);
+  });
+
   it("uma cena só: sem alças; legacy: sem .faixa-alcas mesmo com várias cenas", async () => {
     const uma = await monta({ project: projeto({}, [cena("s1", 4)]) });
     expect(uma.faixa.querySelector(".faixa-alcas")).toBeNull();

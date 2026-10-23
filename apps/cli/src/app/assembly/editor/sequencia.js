@@ -691,19 +691,24 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     alcas.className = "faixa-alcas";
     alcas.setAttribute("role", "group");
     alcas.setAttribute("aria-label", "Ordem das cenas");
-    alcas.innerHTML = cenas.map((block, i) => '<div class="alca-cena" data-scene="' + esc(block.sceneId) + '" style="left:'
-      + pct(block.start) + ";width:" + pct(block.end - block.start) + ';">'
-      + '<button type="button" class="bloco-alca" data-alca="' + esc(block.sceneId) + '" tabindex="' + (block.sceneId === noTab ? "0" : "-1") + '"'
-      + ' title="Arraste para mudar a ordem" aria-label="' + esc("Mover cena " + (i + 1) + ": " + block.label) + '"'
-      + ' aria-describedby="faixaAlcaAjuda">' + ICON.grip + "</button></div>").join("")
+    alcas.innerHTML = cenas.map((block, i) => {
+      const nome = "Mover cena " + (i + 1) + ": " + block.label;
+      return '<div class="alca-cena" data-scene="' + esc(block.sceneId) + '" style="left:'
+        + pct(block.start) + ";width:" + pct(block.end - block.start) + ';">'
+        + '<button type="button" class="bloco-alca" data-alca="' + esc(block.sceneId) + '" tabindex="' + (block.sceneId === noTab ? "0" : "-1") + '"'
+        + ' title="Arraste para mudar a ordem" aria-label="' + esc(nome) + '"'
+        + ' aria-describedby="faixaAlcaAjuda">' + ICON.grip + "</button></div>";
+    }).join("")
       + '<div class="faixa-destino" hidden></div>'
       + '<span id="faixaAlcaAjuda" hidden>Arraste para mudar a ordem. Pelo teclado: Espaço pega a cena, as setas escolhem o lugar, Espaço solta e Esc cancela.</span>';
     return alcas;
   }
 
-  /** Uma parada de Tab nas alças: a da cena `sceneId`. */
+  /** Uma parada de Tab nas alças: a da cena `sceneId`; cena sem alça mantém a de agora. */
   function alcaNoTab(sceneId) {
-    for (const btn of root()?.querySelectorAll(".bloco-alca") || []) btn.tabIndex = btn.dataset.alca === sceneId ? 0 : -1;
+    const alcas = [...(root()?.querySelectorAll(".bloco-alca") || [])];
+    if (!alcas.some((btn) => btn.dataset.alca === sceneId)) return;
+    for (const btn of alcas) btn.tabIndex = btn.dataset.alca === sceneId ? 0 : -1;
   }
 
   function focarAlca(sceneId) {
@@ -1307,6 +1312,10 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   bind();
   if (studio) {
     state.subscribe("legendasFaixa", () => pintarLegenda());
+    // A parada de Tab das alças acompanha a cena selecionada (texto, faixa ou playhead).
+    state.subscribe("selectedScene", (sceneId) => {
+      if (!gesto) alcaNoTab(sceneId);
+    });
     state.subscribe("zoomSequencia", () => render(state.get("project")));
     // Fim da preparação: a onda que faltava pode ter sido gerada.
     let preparo = state.get("project")?.preparation?.status ?? null;
