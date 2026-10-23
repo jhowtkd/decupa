@@ -7,8 +7,8 @@ import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
 import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
 import { ICON } from "./icons.js";
-import { approveButtonView, reviewView, watchProgress } from "./progress.js";
-import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
+import { approveButtonView, reviewView } from "./progress.js";
+import { mountCobertura } from "./cobertura.js";
 import { singleFlight } from "./sequencia.js";
 import { projectHeaders, projectPath } from "../project-path.js";
 
@@ -75,82 +75,17 @@ export function mountStage({ state, api, player }) {
     if (source) player.playOriginal(source.id);
   };
 
-  // Rastreio "assistido de verdade" (#103): só conta a reprodução real da
-  // prévia atual, provada pelo played do player. A cobertura (playback.js)
-  // junta os trechos tocados; seek para a frente não entra, voltar zera, e
-  // trocar de src (Original ou revisão nova) recomeça do zero. Aqui só se
-  // leem os eventos do player.
-  let coverage = newCoverage();
+  // O rastreio da reprodução (cobertura.js) é dono dos listeners do player e
+  // publica "watched" e "watchCoverage"; aqui só se lê o que ele publicou.
+  const cobertura = mountCobertura({ state, video: previewPlayer });
   const RING = 2 * Math.PI * 19;
-  function isPreviewSrc(project) {
-    return !!project && project.previewRevision != null
-      && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
-  }
-  function markWatched() {
-    const project = state.get("project");
-    if (!isPreviewSrc(project)) return;
-    state.set("watched", { revision: project.previewRevision, ended: true });
-  }
-  function resetWatched() {
-    state.set("watched", { revision: null, ended: false });
-  }
-  function playedRanges() {
-    const ranges = [];
-    for (let i = 0; i < previewPlayer.played.length; i++) {
-      ranges.push([previewPlayer.played.start(i), previewPlayer.played.end(i)]);
-    }
-    return ranges;
-  }
-  /**
-   * O assistido acompanha a cobertura contra a duração de agora: marca quando
-   * cobre e revoga quando deixa de cobrir (metadados que mudam a duração).
-   */
-  function settleWatched(project) {
-    const watched = state.get("watched");
-    const marked = watched?.ended === true && watched.revision === project.previewRevision;
-    const complete = coverageComplete(coverage, previewPlayer.duration);
-    if (complete && !marked) markWatched();
-    else if (!complete && watched?.ended) resetWatched();
-    paintReview(project);
-  }
-  /** Uma leitura do player; `seek` marca posição vinda de salto (seeking/seeked). */
-  function readPlayback(seek) {
-    const project = state.get("project");
-    if (!Number.isFinite(previewPlayer.currentTime) || !isPreviewSrc(project)) return;
-    const reading = playbackReading(coverage, previewPlayer.currentTime, {
-      played: playedRanges(), rate: previewPlayer.playbackRate, seek,
-      source: previewPlayer.getAttribute("data-rev"),
-    });
-    coverage = reading.coverage;
-    if (reading.reset) resetWatched();
-    settleWatched(project);
-  }
-  previewPlayer.addEventListener("timeupdate", () => readPlayback(previewPlayer.seeking));
-  previewPlayer.addEventListener("seeking", () => readPlayback(true));
-  previewPlayer.addEventListener("seeked", () => readPlayback(true));
-  previewPlayer.addEventListener("ended", () => readPlayback(false));
-  // Fecha o trecho na velocidade antiga antes de a nova valer (sem retroagir).
-  previewPlayer.addEventListener("ratechange", () => readPlayback(false));
-  const onDuration = () => {
-    const project = state.get("project");
-    if (isPreviewSrc(project)) settleWatched(project);
-  };
-  previewPlayer.addEventListener("durationchange", onDuration);
-  previewPlayer.addEventListener("loadedmetadata", onDuration);
-  previewPlayer.addEventListener("loadstart", () => {
-    coverage = newCoverage(0, { source: previewPlayer.getAttribute("data-rev") });
-    state.set("watched", { revision: null, ended: false });
-  });
 
   /** Cartão de revisão: anel do visto, texto do gate e aprovar travado (Task 9). */
   function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const progress = watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched);
-    const previous = state.get("watchCoverage");
-    if (previous?.revision !== project.previewRevision || previous?.ratio !== progress.ratio || previous?.label !== progress.label) {
-      state.set("watchCoverage", { revision: project.previewRevision, ...progress });
-    }
+    const coverage = state.get("watchCoverage");
+    const progress = coverage?.revision === project.previewRevision ? coverage : { ratio: 0, label: "" };
     const view = reviewView(project, status, progress);
     document.getElementById("reviewTitle").textContent = view.title;
     document.getElementById("freshChip").textContent = project.previewRevision == null
@@ -234,10 +169,7 @@ export function mountStage({ state, api, player }) {
         previewPlayer.setAttribute("data-rev", String(project.previewRevision));
         previewPlayer.removeAttribute("data-prev");
         previewPlayer.currentTime = time;
-        // Troca de src invalida o "assistido" (o loadstart cobre o resto).
-        state.set("watched", { revision: null, ended: false });
-        // A posição mantida na troca não foi tocada nesta prévia: a contagem recomeça.
-        coverage = newCoverage(Number.isFinite(time) ? time : 0, { source: String(project.previewRevision) });
+        cobertura.restart(time, String(project.previewRevision));
       }
       lastPreviewRev = project.previewRevision;
       if (!current) {
@@ -305,6 +237,7 @@ export function mountStage({ state, api, player }) {
   state.subscribe("operation", () => renderPreview(state.get("project")));
   state.subscribe("view", () => renderPreview(state.get("project")));
   state.subscribe("watched", () => paintReview(state.get("project")));
+  state.subscribe("watchCoverage", () => paintReview(state.get("project")));
   renderPreview(state.get("project"));
 }
 
