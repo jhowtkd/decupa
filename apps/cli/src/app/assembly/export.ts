@@ -4,7 +4,7 @@ import { createSpaceManager, type SpaceClaim } from "../space.ts";
 import { mediaKey, projectRuntimeContext, resourceLedgerForProject, storageRootForProject, withResourceWork } from "../resource-ledger.ts";
 import { transitionLifecycle } from "../project-lifecycle.ts";
 import { buildHandoff } from "./handoff.ts";
-import { buildSubtitles } from "./subtitles.ts";
+import { subtitleRecord } from "./subtitles.ts";
 import { assertTimecodesReadable, davinciImportSettings, orientationOf, sourceChecklist } from "./otio.ts";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -358,28 +358,11 @@ async function exportApprovedOperation(project: Project, dir: string): Promise<s
       snapshot.sources.map((s) => [s.id, s.sha256]),
     );
     // Legendas são best-effort: qualquer falha (ou ausência de falas) vira
-    // registro de indisponibilidade — nunca derruba MP4 nem OTIO.
-    let legendas: { status: string; vttSha?: string; srtSha?: string; motivo?: string };
-    let vttText: string | null = null;
-    let srtText: string | null = null;
-    try {
-      const subs = buildSubtitles(project);
-      if (!subs) {
-        legendas = { status: "indisponivel", motivo: "sem falas retidas na montagem" };
-      } else {
-        vttText = subs.vtt;
-        srtText = subs.srt;
-        legendas = {
-          status: "pronto",
-          vttSha: createHash("sha256").update(vttText, "utf8").digest("hex"),
-          srtSha: createHash("sha256").update(srtText, "utf8").digest("hex"),
-        };
-      }
-    } catch (err) {
-      legendas = { status: "indisponivel", motivo: err instanceof Error ? err.message : String(err) };
-      vttText = null;
-      srtText = null;
-    }
+    // registro de indisponibilidade — nunca derruba MP4 nem OTIO. O mesmo
+    // registro serve a legenda da prévia (rota project/subtitles).
+    const { legendas, subtitles } = subtitleRecord(project);
+    const vttText = subtitles?.vtt ?? null;
+    const srtText = subtitles?.srt ?? null;
     let matchesExpected = false;
     let localValid = false;
     try {

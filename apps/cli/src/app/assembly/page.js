@@ -16,6 +16,8 @@ const editorUi = document.querySelector('meta[name="decupa-editor-ui"]')?.getAtt
 const STUDIO_MODULOS = {
   bancada: "editor/studio-bancada.js",
   busca: "editor/studio-busca.js",
+  formato: "editor/studio-formato.js",
+  legendas: "editor/studio-legendas.js",
   materiais: "editor/studio-materiais.js",
   renomear: "editor/studio-renomear.js",
 };
@@ -608,6 +610,10 @@ mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
 // Busca no texto do studio: lê o projeto do estado e não recebe api.
 if (editorUi === "studio") studio.busca.mountBusca({ state });
+// Studio: o <track> do player segue a revisão do vídeo carregado, e a faixa
+// recebe a legenda da revisão atual; "Formato…" abre o diálogo do studio.
+if (editorUi === "studio") studio.legendas.mountLegendas({ state, player });
+if (editorUi === "studio") studio.formato.mountFormato({ state, api });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");

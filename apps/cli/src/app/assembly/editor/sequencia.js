@@ -6,7 +6,10 @@
 // num <canvas>; apoio não entra (não tem áudio próprio) e sem peaks a
 // faixa segue só com os blocos. O desfazer mora no cabeçalho do texto
 // (botão de desfazer no cabeçalho do texto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
-import { clock, clockPrecise } from "./format.js";
+// No studio a faixa separa vídeo, apoio, áudio e legenda em trilhas sob a
+// mesma régua, com zoom local; cada trilha mostra o dado real ou diz que
+// ele falta ("sem miniatura", "sem onda", "sem áudio").
+import { ZOOMS, clock, clockPrecise, formatChip } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
 import { projectHeaders, projectPath } from "../project-path.js";
@@ -161,6 +164,34 @@ export function planSceneWave(inBlock, bySource, blockStart, sceneDur, width, he
 /** Intervalo entre seeks de scrub durante o arraste. */
 export const SCRUB_THROTTLE_MS = 60;
 
+export { ZOOMS };
+
+/** Zoom válido (puro): fora da lista volta a 1. */
+export function zoomValido(zoom) {
+  return ZOOMS.includes(zoom) ? zoom : 1;
+}
+
+/**
+ * Cues da trilha de legenda do studio (puro), a partir do resultado de
+ * GET project/subtitles (chave "legendasFaixa"): só os da revisão do
+ * projeto, em segundos.
+ */
+export function cuesDaFaixa(legendas, project) {
+  if (!legendas || !project || legendas.revision !== project.revision || legendas.estado !== "pronto") return [];
+  return captionCues({
+    captions: (legendas.cues || []).map((cue) => ({ start: cue.startMs / 1000, end: cue.endMs / 1000, text: cue.text })),
+  });
+}
+
+/** Estado da trilha de legenda sem cues (puro): o porquê, nunca vazio mudo. */
+export function legendaVazia(legendas, project) {
+  if (!legendas || legendas.revision !== project?.revision || legendas.estado === "carregando") return "carregando legenda…";
+  if (legendas.estado === "sem-fala") return "sem fala retida";
+  if (legendas.estado === "indisponivel") return "legenda indisponível";
+  if (legendas.estado === "erro") return "legenda não carregou";
+  return "sem legenda";
+}
+
 /** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
 let undoKeyBound = false;
 
@@ -260,11 +291,16 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     undo.classList.toggle("has-label", !!view.text);
   }
 
+  const studio = ui === "studio";
+  const zoom = () => zoomValido(state.get("zoomSequencia"));
+
   let signature = "";
   function render(p) {
     // O botão vive fora da faixa: atualiza mesmo quando o desenho não muda.
     placeUndo(p);
-    const next = JSON.stringify(p && [p.revision, p.scenes, p.assembly.sources, p.captions]);
+    const next = JSON.stringify(p && (studio
+      ? [p.revision, p.scenes, p.assembly.sources, zoom()]
+      : [p.revision, p.scenes, p.assembly.sources, p.captions]));
     if (next === signature) return;
     signature = next;
     const el = root();
@@ -290,11 +326,16 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     total.className = "mono total";
     total.textContent = clockPrecise(duration);
     head.append(label, count, total);
+    if (studio) head.insertBefore(cabecalhoStudio(p), total);
     if (!blocks.length) {
       const empty = document.createElement("div");
       empty.className = "timeline-empty";
       empty.innerHTML = '<div><strong>Sua sequência aparece aqui</strong><p>Prepare os materiais para criar o primeiro corte.</p></div>';
       el.replaceChildren(head, empty);
+      return;
+    }
+    if (studio) {
+      renderStudio(p, el, head, blocks, duration);
       return;
     }
     // Régua: marcas nice (rulerTicks) posicionadas por TEMPO, não por
@@ -364,27 +405,188 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     void hydrateWaves(p);
   }
 
+  /** Studio: o formato com a resolução de saída e o zoom, no cabeçalho da faixa. */
+  function cabecalhoStudio(p) {
+    const tools = document.createElement("span");
+    tools.className = "faixa-ferramentas";
+    const atual = ZOOMS.indexOf(zoom());
+    // "Formato…" abre o diálogo do studio (studio-formato.js escuta data-acao).
+    tools.innerHTML = '<span class="faixa-formato"><span class="mono" title="Formato e resolução de saída da montagem">'
+      + esc(formatChip(p.assembly)) + '</span><button type="button" class="small quiet" data-acao="formato">Formato…</button></span>'
+      + '<span class="faixa-zoom" role="group" aria-label="Zoom da sequência">'
+      + '<button type="button" class="icon small" data-zoom="-1" aria-label="Diminuir zoom da sequência">−</button>'
+      + '<span class="mono zoom-valor">' + zoom() + "×</span>"
+      + '<button type="button" class="icon small" data-zoom="1" aria-label="Aumentar zoom da sequência">+</button></span>';
+    tools.querySelector('[data-zoom="-1"]').disabled = atual <= 0;
+    tools.querySelector('[data-zoom="1"]').disabled = atual >= ZOOMS.length - 1;
+    return tools;
+  }
+
+  /**
+   * Studio: trilhas de vídeo (cenas com miniatura), apoio, áudio (onda por
+   * cena) e legenda (cues da revisão atual), sob uma régua só e com a
+   * largura multiplicada pelo zoom. Dado que falta vira estado escrito.
+   */
+  function renderStudio(p, el, head, blocks, duration) {
+    const z = zoom();
+    const pct = (t) => (duration > 0 ? (t / duration) * 100 : 0).toFixed(3) + "%";
+    const ruler = document.createElement("div");
+    ruler.className = "ruler";
+    const ticks = rulerTicks(duration, 6 * z);
+    ticks.forEach((t, i) => {
+      const s = document.createElement("span");
+      s.textContent = clock(t);
+      s.style.left = pct(t);
+      if (i === 0 || i === ticks.length - 1) s.style.transform = "none";
+      ruler.append(s);
+    });
+    const sources = new Map(p.assembly.sources.map((source) => [source.id, source]));
+    const scenes = new Map(p.scenes.map((scene) => [scene.id, scene]));
+    const posicao = (block) => ' data-scene="' + esc(block.sceneId) + '" data-start="' + block.start + '" data-end="' + block.end + '"'
+      + ' style="width:' + pct(block.end - block.start) + ";position:absolute;left:" + pct(block.start) + ';"';
+    const bloco = (block, inner) => {
+      const titulo = esc(block.label + " · " + formatTimecode(block.start) + "–" + formatTimecode(block.end));
+      return '<div class="seq-bloco' + (block.kind === "support" ? " seq-apoio" : "") + '"'
+        + posicao(block) + ' data-kind="' + esc(block.kind) + '" data-group="' + esc(block.groupId || "") + '"'
+        + ' title="' + titulo + '">' + inner + "</div>";
+    };
+    const cenas = blocks.filter((block) => block.kind === "scene");
+    const apoios = blocks.filter((block) => block.kind === "support");
+    const video = cenas.map((block) => {
+      const scene = scenes.get(block.sceneId);
+      const source = (scene?.takes || []).map((take) => sources.get(take.sourceId)).find((item) => item?.hasVideo);
+      const thumb = source
+        ? '<img class="timeline-thumb" alt="" loading="lazy" title="Miniatura de ' + esc(source.name) + '" src="'
+          + projectPath("project/thumbnail/" + encodeURIComponent(source.id)) + '">'
+        : '<span class="sem-dado">sem miniatura</span>';
+      // Miniatura, nome e duração juntos: com zoom, grudam na borda visível do bloco.
+      return bloco(block, '<span class="bloco-rosto">' + thumb + '<span class="clip-label">' + esc(block.label) + "</span>"
+        + '<span class="data dur">' + (block.end - block.start).toFixed(1).replace(".", ",") + " s</span></span>");
+    }).join("");
+    const apoio = apoios.length
+      ? apoios.map((block) => bloco(block, '<span class="clip-label">' + esc(block.label) + "</span>")).join("")
+      : '<span class="lane-vazia">sem apoio</span>';
+    // Onda por cena, sob o bloco dela: o canvas só aparece com peaks reais.
+    const audio = cenas.map((block) => {
+      const scene = scenes.get(block.sceneId);
+      const comAudio = (scene?.takes || []).some((take) => sources.get(take.sourceId)?.hasAudio);
+      return '<div class="seq-audio"' + posicao(block) + ">"
+        + (comAudio ? '<canvas class="seq-wave" hidden></canvas><span class="sem-dado" hidden>sem onda</span>' : '<span class="sem-dado">sem áudio</span>')
+        + "</div>";
+    }).join("");
+    const strip = document.createElement("div");
+    strip.className = "seq-strip";
+    strip.style.cssText = "position:relative;width:100%;cursor:pointer;";
+    strip.setAttribute("role", "slider");
+    strip.setAttribute("aria-label", "Sequência da montagem");
+    strip.setAttribute("aria-valuemin", "0");
+    strip.setAttribute("aria-valuemax", String(duration));
+    strip.setAttribute("tabindex", "0");
+    const lane = (nome, inner) => '<div class="seq-lane lane-' + nome + '">' + inner + "</div>";
+    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration))
+      + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
+    const rotulos = document.createElement("div");
+    rotulos.className = "faixa-rotulos";
+    rotulos.setAttribute("aria-hidden", "true");
+    rotulos.innerHTML = '<span class="rotulo-regua"></span><span>Vídeo</span><span>Apoio</span><span>Áudio</span><span>Legenda</span>';
+    const trilhas = document.createElement("div");
+    trilhas.className = "faixa-trilhas";
+    trilhas.style.width = z * 100 + "%";
+    trilhas.append(ruler, strip);
+    const rolagem = document.createElement("div");
+    rolagem.className = "faixa-rolagem";
+    rolagem.append(trilhas);
+    const corpo = document.createElement("div");
+    corpo.className = "faixa-corpo";
+    corpo.append(rotulos, rolagem);
+    // O redesenho (zoom, revisão nova) mantém o centro da vista e o foco do zoom.
+    const antes = el.querySelector(".faixa-rolagem");
+    const centro = antes && antes.scrollWidth > 0 ? (antes.scrollLeft + antes.clientWidth / 2) / antes.scrollWidth : null;
+    const foco = document.activeElement?.closest?.("[data-zoom]")?.dataset.zoom;
+    el.replaceChildren(head, corpo);
+    if (Number.isFinite(centro) && rolagem.scrollWidth > 0) {
+      rolagem.scrollLeft = Math.max(0, centro * rolagem.scrollWidth - rolagem.clientWidth / 2);
+    }
+    if (foco) {
+      const botoes = [...el.querySelectorAll("[data-zoom]")];
+      (botoes.find((item) => item.dataset.zoom === foco && !item.disabled) || botoes.find((item) => !item.disabled))?.focus();
+    }
+    paint(state.get("playhead"));
+    void hydrateWaves(p);
+  }
+
+  /**
+   * Conteúdo da trilha de legenda (studio): os cues da revisão atual ou o
+   * porquê de não haver. "carregando legenda…" só aparece se demorar (CSS).
+   */
+  function legendaHtml(p, duration) {
+    const pct = (t) => (duration > 0 ? (t / duration) * 100 : 0).toFixed(3) + "%";
+    const legendas = state.get("legendasFaixa");
+    const cues = cuesDaFaixa(legendas, p);
+    if (cues.length) {
+      return cues.map((cue) => '<span class="seq-cue" title="' + esc(cue.text) + '" style="left:' + pct(cue.start)
+        + ";width:" + pct(Math.max(0, cue.end - cue.start)) + ';">' + esc(cue.text) + "</span>").join("");
+    }
+    const texto = legendaVazia(legendas, p);
+    const motivo = legendas?.revision === p.revision && legendas.motivo ? ' title="' + esc(legendas.motivo) + '"' : "";
+    return '<span class="lane-vazia' + (texto === "carregando legenda…" ? " carregando" : "") + '"' + motivo + ">" + texto + "</span>";
+  }
+
+  /** A legenda chegou: troca só a trilha dela, sem refazer a faixa (nem o gesto em curso). */
+  function pintarLegenda() {
+    const p = state.get("project");
+    const lane = root()?.querySelector(".seq-strip .lane-legenda");
+    if (!p || !lane) return;
+    lane.innerHTML = legendaHtml(p, montageDuration(p));
+  }
+
+  function mudarZoom(passo) {
+    const atual = ZOOMS.indexOf(zoom());
+    const next = ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, atual + passo))];
+    if (next !== zoom()) state.set("zoomSequencia", next);
+  }
+
   // Peaks por fonte com cache no tempo de vida do mount (a invalidação é
   // por sha no servidor; 204/erro vira null e o bloco segue sem waveform).
   // O GET vai direto, fora do api.call: a waveform é enfeite e sua resposta
   // não pode apagar o erro de uma ação nem sincronizar o projeto.
+  // No studio só a onda que existe fica guardada: a preparação ainda pode
+  // gerá-la e a rede pode voltar. `faltas` diz por que a fonte está sem.
   const peaksCache = new Map();
+  const faltas = new Map();
   async function peaksFor(sourceId) {
     if (peaksCache.has(sourceId)) return peaksCache.get(sourceId);
     let peaks = null;
+    let falha = false;
     try {
       const res = await fetch(projectPath("project/waveform/" + encodeURIComponent(sourceId)), {
         headers: projectHeaders(),
       });
+      falha = !res.ok;
       const body = res.ok && res.status !== 204 ? await res.json() : null;
       if (body && Array.isArray(body.peaks) && body.peaks.length > 0) {
         peaks = body;
       }
     } catch {
       peaks = null;
+      falha = true;
     }
-    peaksCache.set(sourceId, peaks);
+    if (!studio || peaks) {
+      peaksCache.set(sourceId, peaks);
+      faltas.delete(sourceId);
+    } else {
+      faltas.set(sourceId, falha ? "erro" : "ausente");
+    }
     return peaks;
+  }
+
+  /**
+   * Por que a cena está sem onda (puro sobre `faltas`): erro de rede não é
+   * "sem onda"; durante a preparação a onda ainda pode vir.
+   */
+  function motivoSemOnda(sourceIds, p) {
+    if (sourceIds.some((id) => faltas.get(id) === "erro")) return "onda não carregou";
+    return p.preparation?.status === "running" ? "preparando onda…" : "sem onda";
   }
 
   // Pinta um projeto obsoleto por cima do novo quando o fetch demora:
@@ -392,14 +594,16 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   let waveGen = 0;
 
   /**
-   * Desenha os trechos retidos em cada bloco de cena do strip. `peaksDe(ids)`
-   * dá os peaks na ordem das fontes (do fetch ou só do cache); `vivo()` falso
-   * depois da espera para o desenho que perdeu a corrida.
+   * Desenha os trechos retidos em cada bloco de cena do strip (no studio, no
+   * bloco da cena na trilha de áudio). `peaksDe(ids)` dá os peaks na ordem
+   * das fontes (do fetch ou só do cache); `vivo()` falso depois da espera
+   * para o desenho que perdeu a corrida. `marcar(node, temOnda)`, quando
+   * vem, recebe a resposta definitiva de cada bloco.
    */
-  async function drawBlocks(p, strip, peaksDe, vivo) {
+  async function drawBlocks(p, strip, peaksDe, vivo, marcar) {
     const segments = retainedSegments(p);
     const scenes = new Map(p.scenes.map((scene) => [scene.id, scene]));
-    const nodes = [...strip.querySelectorAll('.seq-bloco[data-kind="scene"]')];
+    const nodes = [...strip.querySelectorAll('.seq-bloco[data-kind="scene"], .seq-audio')];
     for (const node of nodes) {
       const scene = scenes.get(node.dataset.scene);
       const start = Number(node.dataset.start);
@@ -412,7 +616,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       // O strip pode ter sido re-renderizado enquanto o fetch voava.
       if (!canvas.isConnected) continue;
       const bySource = new Map(sourceIds.map((id, i) => [id, fetched[i]]));
-      if (![...bySource.values()].some(Boolean)) continue;
+      const temOnda = [...bySource.values()].some(Boolean);
+      marcar?.(node, temOnda, sourceIds);
+      if (!temOnda) continue;
       const inBlock = segments.filter(
         (seg) => seg.montageEnd > start && seg.montageStart < end,
       );
@@ -427,7 +633,16 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const el = root();
     const strip = el && el.querySelector(".seq-strip");
     if (!strip) return;
-    await drawBlocks(p, strip, (sourceIds) => Promise.all(sourceIds.map((id) => peaksFor(id))), () => token === waveGen);
+    // Studio: sem peaks de nenhuma fonte da cena, o bloco diz por quê.
+    const marcar = studio
+      ? (node, temOnda, sourceIds) => {
+        const falta = node.querySelector(".sem-dado");
+        if (!falta) return;
+        falta.hidden = temOnda;
+        if (!temOnda) falta.textContent = motivoSemOnda(sourceIds, p);
+      }
+      : undefined;
+    await drawBlocks(p, strip, (sourceIds) => Promise.all(sourceIds.map((id) => peaksFor(id))), () => token === waveGen, marcar);
   }
 
   /**
@@ -456,8 +671,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     }
   }
 
-  /** Linha do playhead + bloco aceso, sem re-render. */
-  function paint(playhead) {
+  /**
+   * Linha do playhead + bloco aceso, sem re-render. `acompanhar` vem só do
+   * playhead em movimento: o redesenho e o zoom não puxam a vista.
+   */
+  function paint(playhead, acompanhar = false) {
     const el = root();
     const strip = el && el.querySelector(".seq-strip");
     if (!strip) return;
@@ -482,6 +700,24 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       const on = !!hit && node.dataset.scene === hit.sceneId && node.dataset.kind === hit.kind;
       node.classList.toggle("ativa", on);
     }
+    if (!studio) return;
+    // O áudio que toca é o da cena, mesmo sob um apoio.
+    const scene = valid ? activeScene(p, playhead) : null;
+    for (const node of strip.querySelectorAll(".seq-audio")) node.classList.toggle("ativa", node.dataset.scene === scene);
+    if (acompanhar && valid && !scrubbing && player.el?.()?.paused === false) {
+      seguir(strip, Math.min(1, Math.max(0, playhead / duration)));
+    }
+  }
+
+  /** Studio com zoom: o playhead que sai da vista traz a rolagem junto. */
+  function seguir(strip, ratio) {
+    const rolagem = strip.closest(".faixa-rolagem");
+    if (!rolagem || zoom() === 1) return;
+    const largura = rolagem.scrollWidth;
+    const vista = rolagem.clientWidth;
+    if (!(largura > vista)) return;
+    const x = ratio * largura;
+    if (x < rolagem.scrollLeft || x > rolagem.scrollLeft + vista - 16) rolagem.scrollLeft = Math.max(0, x - vista * 0.25);
   }
 
   function seekRatio(ratio) {
@@ -503,11 +739,13 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     return (ev.clientX - rect.left) / rect.width;
   }
 
+  // Durante o arraste a faixa não rola sozinha atrás do playhead.
+  let scrubbing = false;
+
   function bind() {
     const el = root();
     if (!el || el.dataset.seqBound) return;
     el.dataset.seqBound = "1";
-    let scrubbing = false;
     let scrubMoved = false;
     let lastScrub = 0;
     el.addEventListener("keydown", (ev) => {
@@ -519,7 +757,24 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       const seconds = ev.key === "Home" ? 0 : ev.key === "End" ? duration : current + (ev.key === "ArrowRight" ? 1 : -1);
       seekRatio(duration ? seconds / duration : 0);
     });
+    if (studio) {
+      // Miniatura que não carrega (fonte sem quadro, erro) vira estado escrito.
+      el.addEventListener("error", (ev) => {
+        const img = ev.target;
+        if (!img?.matches?.("img.timeline-thumb") || !img.parentElement) return;
+        const falta = document.createElement("span");
+        falta.className = "sem-dado";
+        falta.textContent = "sem miniatura";
+        img.parentElement.insertBefore(falta, img);
+        img.remove();
+      }, true);
+    }
     el.addEventListener("click", (ev) => {
+      const zoomButton = studio ? ev.target.closest("[data-zoom]") : null;
+      if (zoomButton) {
+        mudarZoom(Number(zoomButton.dataset.zoom));
+        return;
+      }
       // O clique que fecha um arraste chega depois do pointerup: ignora.
       if (scrubMoved) {
         scrubMoved = false;
@@ -602,8 +857,20 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   }
 
   bind();
+  if (studio) {
+    state.subscribe("legendasFaixa", () => pintarLegenda());
+    state.subscribe("zoomSequencia", () => render(state.get("project")));
+    // Fim da preparação: a onda que faltava pode ter sido gerada.
+    let preparo = state.get("project")?.preparation?.status ?? null;
+    state.subscribe("project", (p) => {
+      const agora = p?.preparation?.status ?? null;
+      if (agora === preparo) return;
+      preparo = agora;
+      if (faltas.size) void hydrateWaves(p);
+    });
+  }
   state.subscribe("undoRevision", () => render(state.get("project")));
   state.subscribe("project", (p) => render(p));
-  state.subscribe("playhead", (t) => paint(t));
+  state.subscribe("playhead", (t) => paint(t, true));
   render(state.get("project"));
 }

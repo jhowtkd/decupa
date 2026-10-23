@@ -302,7 +302,13 @@ function parseHtml(root: El, html: string) {
   const re = /<!--[\s\S]*?-->|<\/([A-Za-z][\w:-]*)\s*>|<([A-Za-z][\w:-]*)([^>]*?)(\/?)>|([^<]+)/g;
   const stack = [root];
   for (const match of html.matchAll(re)) {
-    if (match[0].startsWith("<!--") || match[5]) continue;
+    if (match[0].startsWith("<!--")) continue;
+    if (match[5]) {
+      // Texto solto dentro de um elemento sem filhos vira o textContent dele (entidades ficam cruas).
+      const dono = stack[stack.length - 1]!;
+      if (dono !== root && dono.children.length === 0 && match[5].trim()) dono.textContent += match[5];
+      continue;
+    }
     if (match[1]) {
       const tag = match[1].toLowerCase();
       for (let index = stack.length - 1; index > 0; index -= 1) {

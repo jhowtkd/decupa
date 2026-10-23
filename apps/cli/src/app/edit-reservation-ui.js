@@ -14,7 +14,7 @@ export function paintReadOnlyControls(root, currentOwner, reservationTake, origi
   root.body.classList.toggle("modo-leitura", Boolean(currentOwner));
   for (const element of root.querySelectorAll("button, input, textarea, select")) {
     if (element === reservationTake
-      || element.matches("[data-stage], [data-painel], [data-busca], #monitorToggle, #closeMonitor")
+      || element.matches("[data-stage], [data-painel], [data-busca], [data-zoom], #monitorToggle, #closeMonitor")
       || element.closest?.("[data-edit-reservation-dialog]")) continue;
     if (currentOwner) {
       if (!originalDisabled.has(element)) originalDisabled.set(element, element.disabled);

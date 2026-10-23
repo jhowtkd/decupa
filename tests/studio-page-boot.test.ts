@@ -87,7 +87,7 @@ function studioModulos(): Record<string, string> {
 
 it("STUDIO_MODULOS liga cada nome a um editor/studio-*.js que existe", async () => {
   const modulos = studioModulos();
-  expect(Object.keys(modulos).sort()).toEqual(["bancada", "busca", "materiais", "renomear"]);
+  expect(Object.keys(modulos).sort()).toEqual(["bancada", "busca", "formato", "legendas", "materiais", "renomear"]);
   for (const [nome, caminho] of Object.entries(modulos)) {
     expect(caminho, nome).toMatch(/^editor\/studio-[\w-]+\.js$/);
     await expect(access(new URL(caminho, ASSEMBLY)), caminho).resolves.toBeUndefined();
@@ -121,4 +121,15 @@ it("o Modo Leitura pausa a fila de Materiais e o conflito do POST local chega à
   expect(onReadOnly, "onReadOnly").toBeDefined();
   expect(onReadOnly).toContain("if (owner) materiais?.pausarPorReserva();");
   expect(js).toMatch(/studio\.materiais\.mountMateriais\(\{[\s\S]*?onConflitoDeReserva: \(body\) => reservationUI\.handleConflict\(body\),/);
+});
+
+it("legendas e formato só montam no studio: cada chamada vive numa linha guardada por editorUi === \"studio\"", () => {
+  for (const chamada of ["studio.legendas.mountLegendas(", "studio.formato.mountFormato("]) {
+    const usos = linhas().filter((linha) => linha.includes(chamada));
+    expect(usos, chamada).toHaveLength(1);
+    expect(usos[0]!.trim().startsWith('if (editorUi === "studio") '), chamada).toBe(true);
+  }
+  // A legacy não ganha o #legendaMonitor nem o diálogo de formato do studio.
+  expect(legacyHtml).not.toContain("legendaMonitor");
+  expect(legacyHtml).not.toContain("formatoDialog");
 });
