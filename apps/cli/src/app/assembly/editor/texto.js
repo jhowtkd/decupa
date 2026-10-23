@@ -187,6 +187,20 @@ export function selectionKey(sceneId, takeId, wordId) {
 }
 
 /**
+ * Takes e zonas omitidas que a seleção cita, como `cena\0take` (zona: take
+ * ""). Quem percorre o projeto pula o resto: o custo segue a seleção, não o
+ * tamanho do projeto.
+ */
+function citedOf(selection) {
+  const cited = new Set();
+  for (const key of selection || []) {
+    const [sceneId, takeId] = key.split("\0");
+    cited.add(sceneId + "\0" + takeId);
+  }
+  return cited;
+}
+
+/**
  * Novo conjunto de seleção sem as ocorrências que saíram do catálogo (puro;
  * ex.: correção alinhada). Inclui as zonas omitidas, que são selecionáveis
  * para o menu ouvir/incluir. Só confere os takes e zonas que a seleção cita:
@@ -195,11 +209,7 @@ export function selectionKey(sceneId, takeId, wordId) {
 export function pruneSelection(p, selection) {
   const next = new Set();
   if (!selection || selection.size === 0) return next;
-  const cited = new Set();
-  for (const key of selection) {
-    const [sceneId, takeId] = key.split("\0");
-    cited.add(sceneId + "\0" + takeId);
-  }
+  const cited = citedOf(selection);
   const known = new Set();
   for (const scene of p.scenes) {
     for (const take of scene.takes) {
@@ -254,11 +264,7 @@ function eachCited(project, cited, visit) {
 export function reconcileSelection(previous, next, selection) {
   const out = new Set();
   if (!selection || selection.size === 0) return out;
-  const cited = new Set();
-  for (const key of selection) {
-    const [sceneId, takeId] = key.split("\0");
-    cited.add(sceneId + "\0" + takeId);
-  }
+  const cited = citedOf(selection);
   const before = new Map();
   if (previous) {
     eachCited(previous, cited, (key, word, sourceId) => before.set(key, { sourceId, start: word.start, end: word.end }));
@@ -334,8 +340,10 @@ export function correctionNotice(project, sourceId, start, end) {
  */
 export function selectedTake(project, selection) {
   const groups = new Map();
+  const cited = citedOf(selection);
   for (const scene of project.scenes) {
     for (const take of scene.takes) {
+      if (!cited.has(scene.id + "\0" + take.id)) continue;
       const prefix = scene.id + "\0" + take.id + "\0";
       const catalog = new Map(takeWords(project, scene, take).map((word) => [word.id, word]));
       const words = [];
@@ -348,6 +356,7 @@ export function selectedTake(project, selection) {
         groups.set(scene.id + "\0" + take.id, { scene, take, sourceId: take.sourceId, words });
       }
     }
+    if (!cited.has(scene.id + "\0")) continue;
     const bySource = new Map();
     for (const source of project.assembly.sources) {
       for (const word of omittedWords(project, scene, source.id)) {
@@ -1046,17 +1055,20 @@ export function listenTarget(project, selection) {
   };
 }
 
-/** Bandeiras da seleção no formato que menuActionsFor entende. */
-function selectedFlags(project, selection) {
+/** Bandeiras da seleção no formato que menuActionsFor entende (pura). */
+export function selectedFlags(project, selection) {
   const flags = [];
+  const cited = citedOf(selection);
   for (const scene of project.scenes) {
     for (const take of scene.takes) {
+      if (!cited.has(scene.id + "\0" + take.id)) continue;
       for (const word of takeWords(project, scene, take)) {
         if (selection.has(selectionKey(scene.id, take.id, word.id))) {
           flags.push({ removed: !!word.removed, protected: !!word.protected, takeId: take.id });
         }
       }
     }
+    if (!cited.has(scene.id + "\0")) continue;
     for (const source of project.assembly.sources) {
       for (const word of omittedWords(project, scene, source.id)) {
         if (selection.has(selectionKey(scene.id, "", word.id))) {

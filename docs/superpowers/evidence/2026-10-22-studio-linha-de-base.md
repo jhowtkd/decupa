@@ -207,3 +207,11 @@ Run [39917561209](https://github.com/jhowtkd/decupa/actions/runs/39917561209), t
 Numa rodada parcial sob carga; o arquivo passou nas duas repetições seguintes:
 
 - `apps/cli/src/app/assembly/editor/montage-hot.test.ts`: teto de 16 ms de relógio.
+
+### Intermitências vistas no CI do PR 9 (#197, Windows)
+
+Run [39924096370](https://github.com/jhowtkd/decupa/actions/runs/39924096370), duas tentativas do mesmo SHA (`743b106`). Cada uma falhou numa tentativa só e passou na outra, e são de arquivos que a pilha não toca:
+
+- `apps/cli/src/app/r2-upload.test.ts` › reconcilia objeto concluído antes da queda sem depender de consulta do navegador. O `expect.poll` do `pool` vazio (linha 295) estourou, na tentativa 1; reincidência do #192.
+- `apps/cli/src/app/assembly/preparation-new-source-additional.test.ts` › barreira de fonte incluída depois da captura › cancela durante a espera de assentamento sem pagar a proposta. O `waitFor` da linha 227 viu `visual` ≠ `proposal`, na tentativa 2.
+- `apps/cli/src/app/media-admission.test.ts` › não deixa um download antigo sem espaço bloquear um menor admitido. O `waitFor` da linha 293 viu `[]` sem `small`, na tentativa 2.

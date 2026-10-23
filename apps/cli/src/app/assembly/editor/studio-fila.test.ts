@@ -337,6 +337,47 @@ describe("parcial, pausa, erros e associação", () => {
     expect(local.fila.instantanea().itens).toHaveLength(0);
     expect(local.config.cancelar).toHaveBeenCalledTimes(1);
   });
+
+  it("outros arquivos seguem enquanto a mesma impressão espera o cancelamento terminar", async () => {
+    let terminar = () => {};
+    const { fila, t } = montar({ cancelar: () => new Promise<void>((resolve) => { terminar = resolve; }) });
+    const arq = arquivo("a.mp4");
+    fila.sincronizar();
+    fila.adicionarArquivos([arq, arquivo("b.mp4")]);
+    fila.remover(uploadFingerprint(arq));
+    fila.adicionarArquivos([arq]);
+    expect(t.envios.map((envio) => envio.item.nome)).toEqual(["a.mp4", "b.mp4"]);
+    t.envios[1]!.resolve({ mediaId: sha(2) });
+    await flush();
+    expect(estados(fila)).toEqual(["pronto", "aguardando"]);
+    expect(t.envios).toHaveLength(2);
+    terminar();
+    await flush();
+    expect(t.envios.map((envio) => envio.item.nome)).toEqual(["a.mp4", "b.mp4", "a.mp4"]);
+  });
+
+  it.each(["pausar", "remover"] as const)("%s antes do cancelamento terminar impede o reenvio automático", async (acao) => {
+    let terminar = () => {};
+    const cancelar = vi.fn(() => new Promise<void>((resolve) => { terminar = resolve; }));
+    const { fila, t } = montar({ cancelar });
+    const arq = arquivo("a.mp4");
+    fila.sincronizar();
+    fila.adicionarArquivos([arq]);
+    fila.remover(uploadFingerprint(arq));
+    fila.adicionarArquivos([arq]);
+    if (acao === "pausar") fila.pausar();
+    else fila.remover(uploadFingerprint(arq));
+    terminar();
+    await flush();
+    expect(t.envios).toHaveLength(1);
+    expect(cancelar).toHaveBeenCalledTimes(1);
+    if (acao === "pausar") {
+      fila.retomar();
+      expect(t.envios).toHaveLength(2);
+    } else {
+      expect(fila.instantanea().itens).toHaveLength(0);
+    }
+  });
 });
 
 describe("manifesto decupa.materiais.v1", () => {

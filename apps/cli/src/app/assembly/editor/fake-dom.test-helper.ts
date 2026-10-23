@@ -358,7 +358,10 @@ function matches(el: El, part: string) {
   return !tag || el.tag === tag;
 }
 
-/** Alternativas de uma lista de seletores (`a, b`), sem cortar vírgulas dentro de aspas, colchetes ou parênteses. */
+/**
+ * Alternativas de uma lista de seletores (`a, b`), sem cortar vírgulas dentro de aspas, colchetes ou parênteses.
+ * Seletor vazio ou só vírgulas lança `SyntaxError`, como no navegador.
+ */
 function selectorList(selector: string): string[] {
   const list: string[] = [];
   let current = "";
@@ -381,7 +384,9 @@ function selectorList(selector: string): string[] {
     current += ch;
   }
   list.push(current.trim());
-  return list.filter(Boolean);
+  const items = list.filter(Boolean);
+  if (!items.length) throw new SyntaxError(`seletor inválido: "${selector}"`);
+  return items;
 }
 
 function matchesList(el: El, selector: string) {
@@ -420,13 +425,16 @@ function selectorParts(selector: string): string[] {
 
 function queryAll(root: El, selector: string): El[] {
   const list = selectorList(selector);
-  if (list.length > 1) {
-    // Lista de seletores: união na ordem do documento, como no navegador.
-    const hits = new Set(list.flatMap((item) => queryAll(root, item)));
-    return descendants(root).filter((el) => hits.has(el));
-  }
+  if (list.length === 1) return queryOne(root, list[0]!);
+  // Lista de seletores: união na ordem do documento, como no navegador.
+  const hits = new Set(list.flatMap((item) => queryOne(root, item)));
+  return descendants(root).filter((el) => hits.has(el));
+}
+
+/** Um item já normalizado da lista (sem vírgula de topo), parte a parte pelos descendentes. */
+function queryOne(root: El, item: string): El[] {
   let scope = [root];
-  for (const part of selectorParts(selector)) {
+  for (const part of selectorParts(item)) {
     scope = scope.flatMap((base) => descendants(base).filter((el) => matches(el, part)));
   }
   return scope;
