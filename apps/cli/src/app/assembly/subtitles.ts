@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Clip, Project } from "./types.ts";
 import { effectiveWords, retainedRanges, subtractRanges } from "./words.ts";
 
@@ -148,4 +149,32 @@ export function buildSubtitles(project: Project): SubtitleResult | null {
   flush();
   if (cues.length === 0) return null;
   return { cues, vtt: formatVtt(cues), srt: formatSrt(cues) };
+}
+
+/** Registro `legendas` do manifest da entrega: a ordem das chaves faz parte da comparação. */
+export type SubtitleRecord =
+  | { status: "pronto"; vttSha: string; srtSha: string }
+  | { status: "indisponivel"; motivo: string };
+
+/**
+ * Legendas de uma revisão como a entrega as grava (best-effort): qualquer
+ * falha, ou montagem sem fala retida, vira indisponibilidade e nunca lança.
+ * A exportação e a rota de legendas da prévia passam por aqui, então as
+ * duas dão o mesmo arquivo para a mesma revisão.
+ */
+export function subtitleRecord(project: Project): { legendas: SubtitleRecord; subtitles: SubtitleResult | null } {
+  try {
+    const subtitles = buildSubtitles(project);
+    if (!subtitles) return { legendas: { status: "indisponivel", motivo: "sem falas retidas na montagem" }, subtitles: null };
+    return {
+      legendas: {
+        status: "pronto",
+        vttSha: createHash("sha256").update(subtitles.vtt, "utf8").digest("hex"),
+        srtSha: createHash("sha256").update(subtitles.srt, "utf8").digest("hex"),
+      },
+      subtitles,
+    };
+  } catch (err) {
+    return { legendas: { status: "indisponivel", motivo: err instanceof Error ? err.message : String(err) }, subtitles: null };
+  }
 }

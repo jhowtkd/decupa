@@ -94,6 +94,27 @@ export function applyHistorySnapshot(p: Project, snap: EditorialSnapshot): Proje
   };
 }
 
+/**
+ * O projeto como estava na revisão da foto, só para leitura (legenda de uma
+ * prévia antiga): mesmo conteúdo editorial do desfazer, mas na revisão da
+ * foto e com o perfil de ritmo exato dela. Análises, fontes e formato são os
+ * atuais; quem usa confere a montagem recomposta contra a da prévia.
+ */
+export function projectAtSnapshot(p: Project, snap: EditorialSnapshot): Project {
+  const scenes = snap.scenes;
+  const past: Project = {
+    ...p,
+    revision: snap.revision,
+    input: snap.input,
+    scenes,
+    corrections: snap.corrections,
+    fillerExceptions: snap.fillerExceptions ?? [],
+    proposal: snap.proposal,
+  };
+  const assembly = compileScenes(past, scenes);
+  return { ...past, assembly: { ...assembly, revision: snap.revision, rhythmProfile: snap.rhythmProfile } };
+}
+
 export function recordPreview(
   p: Project,
   artifact: NonNullable<Project["previewArtifact"]>,

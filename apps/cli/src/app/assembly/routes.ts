@@ -41,6 +41,8 @@ import {
 } from "./rhythm.ts";
 import { renderAssembly } from "./render.ts";
 import { buildTemplateReport } from "./template-report.ts";
+import { subtitleRecord } from "./subtitles.ts";
+import { subtitleSource } from "./subtitles-revision.ts";
 import { peaksPath } from "./waveform.ts";
 import {
   applyEdit, applyFillerEdit, applyHistorySnapshot, applyProposalWithFillers, proposalProject, approveFinal, recordPreview,
@@ -1055,6 +1057,32 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HttpError(404, "saída não registrada");
           throw error;
         }
+        return true;
+      }
+
+      // Legenda da revisão para a prévia: o mesmo registro que a exportação
+      // grava (vtt/srt idênticos); json traz o registro e os cues para a faixa.
+      if (parts[1] === "subtitles" && req.method === "GET") {
+        const revision = parts[2] ?? "";
+        const kind = parts[3] ?? "";
+        if (!/^\d+$/.test(revision) || parts.length !== 4 || !["vtt", "srt", "json"].includes(kind)) {
+          throw new HttpError(404, "legenda desconhecida");
+        }
+        const source = await subtitleSource(dir, await loadProject(dir), Number(revision));
+        if (!source.ok) throw new HttpError(404, source.motivo);
+        const { legendas, subtitles } = subtitleRecord(source.project);
+        if (kind === "json") {
+          sendJson(res, { revision: Number(revision), origem: source.origem, legendas, cues: subtitles?.cues ?? [] });
+          return true;
+        }
+        if (!subtitles) throw new HttpError(404, legendas.status === "indisponivel" ? legendas.motivo : "legenda indisponível");
+        const text = kind === "vtt" ? subtitles.vtt : subtitles.srt;
+        res.writeHead(200, {
+          "content-type": kind === "vtt" ? "text/vtt; charset=utf-8" : "application/x-subrip; charset=utf-8",
+          "content-length": Buffer.byteLength(text),
+          "cache-control": "no-store",
+        });
+        res.end(text);
         return true;
       }
 
