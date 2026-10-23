@@ -154,3 +154,20 @@ Run [39881959764](https://github.com/jhowtkd/decupa/actions/runs/39881959764). C
     - › preserva o objeto quando a validação falha e permite cancelar explicitamente. 500 ≠ 202.
     - › reconcilia objeto concluído antes da queda sem depender de consulta do navegador. Lista vazia.
   - `apps/cli/src/app/assembly/preparation-new-source-additional.test.ts` › revalida uma fonte incluída durante a espera F2 depois que a correção assenta. O stage veio `undefined` ≠ `proposal`.
+
+### Intermitências vistas no CI do PR 5 (#193)
+
+Run [39888656551](https://github.com/jhowtkd/decupa/actions/runs/39888656551). Cada uma passou na outra tentativa do mesmo SHA, e são de arquivos que a pilha não toca:
+
+- **macOS** (primeira vez neste runner): `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém correção pending após encerramento/cancelamento e GET seguinte relança (worker de fala encerrou).
+- **Windows**, reincidências das já registradas acima:
+  - `apps/cli/src/app/assembly/preparation.test.ts` › runPreparation › edição correct durante o áudio faz rebase: ready sem perder a correção assentada;
+  - `apps/cli/src/app/r2-upload.test.ts` › cancelar durante o download responde sem esperar e impede publicação, e › limpa a pasta temporária após queda entre publicação e remoção do estado;
+  - `apps/cli/src/app/drive-upload.test.ts` › expira download parado e conserva falha para retry explícito.
+
+### Intermitências vistas localmente no PR 8 (carga)
+
+Na suíte inteira, sob a carga dos PRs que rodam em paralelo no mesmo host; os dois arquivos passam isolados:
+
+- `apps/cli/src/app/assembly/filler-performance.test.ts`: teto de tempo de relógio.
+- `apps/cli/src/app/assembly/preparation-pending-additional.test.ts` › interrompe se a análise vira error durante a espera e a correção assenta.
