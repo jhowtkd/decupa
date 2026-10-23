@@ -59,11 +59,12 @@ it("withStudioShell não altera o que vem antes da injeção nem de </head> em d
   expect(out.length).toBe(HTML.length + META.length + '<link rel="stylesheet" href="/studio.css">'.length);
 });
 
-it("withStudioShell só mexe no primeiro </head>", () => {
-  const dois = HTML.replace("<script>", "<script>const s='</head>';");
-  const out = withStudioShell(dois, "/studio.css");
-  expect(out.split(META)).toHaveLength(2);
-  expect(out.indexOf(META)).toBeLessThan(out.indexOf("const s"));
+it("withStudioShell recusa HTML com mais de um </head>, antes ou depois do real", () => {
+  const noScript = HTML.replace("<script>", "<script>const s='</head>';");
+  const noComentario = HTML.replace("<title>", "<!-- fim </head> -->ponto<title>");
+  for (const html of [noScript, noComentario]) {
+    expect(() => withStudioShell(html, "/studio.css")).toThrow(/mais de um <\/head>/);
+  }
 });
 
 it("withStudioShell lança erro claro sem </head>", () => {
@@ -78,6 +79,8 @@ const REAIS: Array<[string, string, string]> = [
 
 it.each(REAIS)("withStudioShell sobre %s: o <body> e o <script> inline saem idênticos e a repetição não muda nada", async (_nome, caminho, css) => {
   const legacy = await readFile(new URL(caminho, import.meta.url), "utf8");
+  // Um </head> só: a injeção não pode cair num comentário ou num script.
+  expect(legacy.split("</head>")).toHaveLength(2);
   const studio = withStudioShell(legacy, css);
   const corpo = (h: string) => h.slice(h.indexOf("<body"));
   const scripts = (h: string) => [...h.matchAll(/<script\b[\s\S]*?<\/script>/g)].map((m) => m[0]);
