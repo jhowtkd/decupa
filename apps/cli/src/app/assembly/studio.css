@@ -9,13 +9,21 @@
    As condições de etapa vão em :where() para não somar especificidade: a
    ordem do arquivo decide, e o projeto vazio (no fim) sempre vence.
    Seções: tokens, casca, topo, regiões, texto, etapas, vazio, materiais,
-   renomear, gavetas, responsivo. */
+   renomear, faixa, legenda, formato, gavetas, responsivo. */
 
 /* == tokens == */
 :root {
   --studio-rail: 232px;
   --studio-inspector: 320px;
   --studio-drawer: min(360px, calc(100vw - 2 * var(--gap)));
+  /* Faixa: coluna dos rótulos e altura de cada trilha (rótulo e trilha alinham por elas). */
+  --faixa-rotulos: 56px;
+  --trilha-regua: 12px;
+  --trilha-video: 48px;
+  --trilha-apoio: 22px;
+  --trilha-audio: 30px;
+  --trilha-legenda: 22px;
+  --trilha-gap: 4px;
 }
 
 /* == casca == */
@@ -202,6 +210,86 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .rename-warning ul, .rename-result ul { margin: 0; padding-left: 1.1rem; }
 .rename-dialog .dialog-actions { justify-content: flex-end; margin: 18px 0 0; }
 
+/* == faixa == */
+/* Cabeçalho: formato com a resolução de saída e o zoom, à direita do título. */
+.faixa-head { flex-wrap: wrap; align-items: center; row-gap: 4px; }
+.faixa-head .total { margin-left: 0; }
+.faixa-ferramentas { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-left: auto; }
+.faixa-formato { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.faixa-formato button { height: 26px; padding: 0 10px; font-size: 11px; }
+.faixa-zoom { display: inline-flex; align-items: center; gap: 2px; }
+.faixa-zoom button { width: 26px; height: 26px; padding: 0; font-size: 14px; }
+.faixa-zoom .zoom-valor { min-width: 2.4em; text-align: center; font-size: 11px; color: var(--muted); }
+/* Rótulos fixos à esquerda; régua e trilhas rolam juntas quando o zoom passa de 1×. */
+.faixa-corpo { display: grid; grid-template-columns: var(--faixa-rotulos) minmax(0, 1fr); column-gap: 8px; }
+.faixa-rotulos { display: flex; flex-direction: column; gap: var(--trilha-gap); font-size: 10px; color: var(--faint); letter-spacing: .04em; text-transform: uppercase; }
+.faixa-rotulos span { display: flex; align-items: center; height: var(--trilha-video); }
+.faixa-rotulos .rotulo-regua { height: var(--trilha-regua); }
+.faixa-rotulos span:nth-child(3) { height: var(--trilha-apoio); }
+.faixa-rotulos span:nth-child(4) { height: var(--trilha-audio); }
+.faixa-rotulos span:nth-child(5) { height: var(--trilha-legenda); }
+.faixa-rolagem { min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+.faixa-trilhas { display: flex; flex-direction: column; gap: var(--trilha-gap); min-width: 100%; }
+#faixa .faixa-trilhas .ruler { flex: none; height: var(--trilha-regua); }
+#faixa .seq-strip { height: auto; display: flex; flex-direction: column; gap: var(--trilha-gap); border-radius: 0; }
+.seq-lane { position: relative; flex: none; border-radius: 6px; background: var(--card-2); }
+.lane-video { height: var(--trilha-video); }
+.lane-apoio { height: var(--trilha-apoio); }
+.lane-audio { height: var(--trilha-audio); }
+.lane-legenda { height: var(--trilha-legenda); }
+/* Trilha sem dado diz o que falta, no lugar dos blocos. */
+.lane-vazia { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.sem-dado { font-size: 9px; line-height: 1.2; color: var(--faint); white-space: nowrap; }
+/* Bloco de cena: miniatura real da fonte (ou "sem miniatura") ao lado do nome e da duração. */
+.seq-lane .seq-bloco { top: 0; height: 100%; overflow: hidden; border-radius: 6px; }
+.seq-lane .seq-bloco::before { height: 100%; border-radius: 6px; }
+.lane-video .seq-bloco { display: grid; grid-template: "mini nome" 1fr "mini dur" 1fr / auto minmax(0, 1fr); align-items: center; column-gap: 7px; padding-right: 6px; }
+.lane-video .seq-bloco > * { position: relative; }
+.lane-video .timeline-thumb { display: block; grid-area: mini; height: var(--trilha-video); aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px 0 0 6px; }
+.lane-video .sem-dado { grid-area: mini; align-self: stretch; display: flex; align-items: center; justify-content: center; width: calc(var(--trilha-video) * 16 / 9); border-right: 1px dashed var(--line); }
+.lane-video .clip-label { grid-area: nome; position: static; align-self: end; }
+.lane-video .seq-bloco .dur { grid-area: dur; position: static; align-self: start; }
+/* Apoio (B-roll) com o nome, na própria trilha. */
+.lane-apoio .seq-bloco.seq-apoio { top: 0; height: 100%; display: flex; align-items: center; border-radius: 6px; background: rgb(127 147 168 / .35); box-shadow: inset 0 0 0 1px rgb(127 147 168 / .5); }
+.lane-apoio .seq-apoio .clip-label { display: block; position: static; padding: 0 6px; font-size: 10px; font-weight: 500; }
+.lane-apoio .seq-apoio.ativa { background: rgb(127 147 168 / .55); }
+/* Áudio: a onda dos trechos retidos de cada cena, sob o bloco dela. */
+.seq-audio { position: absolute; top: 0; height: 100%; overflow: hidden; border-right: 3px solid var(--card); border-radius: 6px; background: #1A1D21; }
+.seq-audio.ativa { box-shadow: inset 0 0 0 1px rgb(240 202 110 / .5); }
+.lane-audio .seq-wave { top: 0; height: 100%; color: #5E7A6B; }
+.seq-audio .sem-dado { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); }
+.lane-legenda .seq-cue { top: 3px; height: calc(100% - 6px); line-height: 16px; }
+
+/* == legenda == */
+/* De que revisão é a legenda do vídeo no monitor, ou por que ele está sem. */
+.legenda-monitor { flex: none; margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.legenda-monitor[data-tom="sem"] { color: var(--ink); }
+:where(body[data-stage="materiais"]) #legendaMonitor { display: none; }
+
+/* == formato == */
+.formato-dialog { width: min(540px, 92vw); }
+.formato-dialog h2 { margin: 0 0 4px; font-size: 17px; color: var(--ink); }
+.formato-agora { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+.formato-opcoes { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.formato-opcoes legend { margin: 0 0 6px; padding: 0; }
+.formato-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 6px; }
+.formato-opcao { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 6px; padding: 10px; border-radius: var(--radius-sub); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--hairline); cursor: pointer; }
+.formato-opcao > :not(input) { grid-column: 2; }
+.formato-opcao:has(input:checked) { box-shadow: inset 0 0 0 2px var(--accent); }
+.formato-nome { font-weight: 600; color: var(--ink); }
+.formato-opcao .mono { font-size: 12px; color: var(--ink); }
+.formato-uso { font-size: 11px; color: var(--muted); }
+.formato-linha { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.formato-linha select { max-width: 100%; }
+.formato-campos { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 24px; }
+.formato-campos label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.formato-campos input { width: 8rem; }
+.formato-aviso { margin: 0; padding-left: 24px; font-size: 12px; color: var(--muted); }
+.formato-nota { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius-sub); background: var(--card-2); font-size: 12px; line-height: 1.5; color: var(--ink); }
+.formato-nota + .formato-nota { margin-top: 6px; }
+.formato-erro { margin: 8px 0 0; font-size: 12px; color: var(--red); }
+.formato-dialog .dialog-actions { justify-content: flex-end; margin: 18px 0 0; }
+
 /* == gavetas == */
 /* Sem largura para fixar, o painel aberto sobrepõe a bancada abaixo do topo. */
 :where(body[data-rail="aberto"]) #rail,
@@ -251,4 +339,7 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
   .texto-busca { padding-left: 14px; }
   /* A barra cabe numa linha sem a contagem de palavras. */
   .texto-barra .barra-resumo { display: none; }
+  /* Faixa no celular: rótulos estreitos e miniatura menor. */
+  :root { --faixa-rotulos: 42px; --trilha-video: 40px; }
+  .faixa-rotulos { font-size: 9px; letter-spacing: 0; }
 }

@@ -87,7 +87,7 @@ function studioModulos(): Record<string, string> {
 
 it("STUDIO_MODULOS liga cada nome a um editor/studio-*.js que existe", async () => {
   const modulos = studioModulos();
-  expect(Object.keys(modulos).sort()).toEqual(["bancada", "busca", "materiais", "renomear"]);
+  expect(Object.keys(modulos).sort()).toEqual(["bancada", "busca", "formato", "legendas", "materiais", "renomear"]);
   for (const [nome, caminho] of Object.entries(modulos)) {
     expect(caminho, nome).toMatch(/^editor\/studio-[\w-]+\.js$/);
     await expect(access(new URL(caminho, ASSEMBLY)), caminho).resolves.toBeUndefined();

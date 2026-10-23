@@ -33,7 +33,7 @@ function projeto() {
     captions: [],
     corrections: [],
     analyses: [{ sourceId: "a", words: [], visual: [] }],
-    assembly: { fps: { num: 25, den: 1 }, sources: [{ id: "a", name: "fala.mp4", included: true, hasVideo: false }], tracks: [] },
+    assembly: { fps: { num: 25, den: 1 }, sources: [{ id: "a", name: "fala.mp4", included: true, hasVideo: false, hasAudio: true }], tracks: [] },
   };
 }
 

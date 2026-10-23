@@ -19,10 +19,12 @@ export const PAINEIS = {
   inspector: { fixa: { edicao: "(min-width: 1400px)", revisao: "(min-width: 1024px)" }, padrao: "fixo" },
 };
 
-/** Chave da preferência local: etapa por projeto e escolha de cada painel. */
+/** Chave da preferência local: etapa por projeto, escolha de cada painel e zoom da sequência. */
 export const PREFERENCIA = "decupa.studio.bancada.v1";
 const MAX_PROJETOS = 30;
 const ESCOLHAS = new Set(["fixo", "recolhido"]);
+/** Os mesmos níveis de ZOOMS (sequencia.js); fora deles a faixa abre em 1×. */
+const ZOOMS = new Set([1, 2, 4, 8]);
 
 /** Preferência local (pura sobre o storage): ausente, ilegível ou corrompida vira o padrão. */
 export function readPreferencia(storage) {
@@ -44,25 +46,30 @@ export function readPreferencia(storage) {
     const escolha = data?.paineis?.[nome];
     if (ESCOLHAS.has(escolha)) paineis[nome] = escolha;
   }
-  return { etapas, paineis };
+  const zoom = ZOOMS.has(data?.zoom) ? data.zoom : undefined;
+  return { etapas, paineis, zoom };
 }
 
 /**
- * Grava uma mudança só: a etapa de um projeto (`{ projeto, etapa }`) ou a
- * escolha de um painel (`{ painel, escolha }`). Relê o storage antes, então
- * outra aba que gravou outro projeto ou outro painel não é apagada. Falha do
- * storage (cota, modo privado) não chega à bancada.
+ * Grava uma mudança só: a etapa de um projeto (`{ projeto, etapa }`), a
+ * escolha de um painel (`{ painel, escolha }`) ou o zoom da sequência
+ * (`{ zoom }`). Relê o storage antes, então outra aba que gravou outro
+ * projeto ou outro painel não é apagada. Falha do storage (cota, modo
+ * privado) não chega à bancada.
  */
 export function writePreferencia(storage, mudanca) {
-  const { etapas, paineis } = readPreferencia(storage);
+  const { etapas, paineis, zoom } = readPreferencia(storage);
   if (mudanca.projeto !== undefined) {
     etapas.delete(mudanca.projeto);
     etapas.set(mudanca.projeto, mudanca.etapa);
   }
   if (mudanca.painel !== undefined) paineis[mudanca.painel] = mudanca.escolha;
+  const proximoZoom = mudanca.zoom !== undefined && ZOOMS.has(mudanca.zoom) ? mudanca.zoom : zoom;
   const recentes = [...etapas].slice(-MAX_PROJETOS);
   try {
-    storage?.setItem(PREFERENCIA, JSON.stringify({ etapas: Object.fromEntries(recentes), paineis }));
+    storage?.setItem(PREFERENCIA, JSON.stringify({
+      etapas: Object.fromEntries(recentes), paineis, ...(proximoZoom !== undefined ? { zoom: proximoZoom } : {}),
+    }));
   } catch {
     // Sem storage a bancada segue; só não lembra na próxima visita.
   }
@@ -252,6 +259,9 @@ export function mountBancada({
     aberto = null;
     render();
   });
+  // Zoom da sequência: preferência local da pessoa, não do projeto.
+  if (preferencia.zoom !== undefined) state.set("zoomSequencia", preferencia.zoom);
+  state.subscribe("zoomSequencia", (zoom) => writePreferencia(storage, { zoom }));
   state.subscribe("project", (project) => {
     // Ganhar ou perder todo o material muda quem ocupa o cartão central.
     placeEntrega();
