@@ -131,3 +131,26 @@ Run [39843790718](https://github.com/jhowtkd/decupa/actions/runs/39843790718). T
   - `pipeline-spawn-abort.additional.test.ts`, na 1ª tentativa;
   - `drive-upload.test.ts` › expira download parado e conserva falha para retry explícito, na 2ª tentativa.
 - No sentido inverso, `media-admission.test.ts` › usa a mesma cota de validação para PATCH local e publicação, que está na lista do Windows, passou numa das tentativas.
+
+### Intermitências vistas no CI do PR 3 (#191, Windows)
+
+Run [39881512509](https://github.com/jhowtkd/decupa/actions/runs/39881512509). Cada uma passou numa das duas tentativas do mesmo SHA, e são de arquivos que a pilha não toca:
+
+- `apps/cli/src/app/assembly/f3-pending-regression.test.ts` › R2: assentamento em background e retomada gastam no máximo uma proposta textual. O `waitFor` da linha 76 viu `media` em vez de `proposal`.
+- `apps/cli/src/app/cleanup-project-root-http.test.ts` › descarrega Limpeza ociosa e recarrega o Projeto com relógio injetado. O id do job não estava na página (linha 150).
+- `apps/cli/src/app/media-admission.test.ts` › retoma 100 imports R2/Drive com cotas de download e validação e expõe a fila. O `waitFor` da linha 248 viu `entered` = 0.
+
+### Intermitências vistas no CI do PR 4 (#192)
+
+Run [39881959764](https://github.com/jhowtkd/decupa/actions/runs/39881959764). Cada uma passou na outra tentativa do mesmo SHA, e são de arquivos que a pilha não toca:
+
+- **macOS:**
+  - `apps/cli/src/app/project-new-http.test.ts` › ao abrir a Limpeza criada na Raiz, coloca o preparo na fila global. A espera da linha 410 estourou.
+  - `packages/coordinator/src/single-flight.test.ts` › heartbeat de lease antiga não reassume slot tomado por outra tarefa. `ENOTEMPTY` no `rmdir`.
+- **Windows:**
+  - `apps/cli/src/app/cleanup-project-root-http.test.ts` › descarrega Limpeza ociosa e recarrega o Projeto com relógio injetado (a mesma do #191).
+  - `apps/cli/src/app/r2-upload.test.ts`:
+    - › cancelar durante o download responde sem esperar e impede publicação. Timeout de 60 s.
+    - › preserva o objeto quando a validação falha e permite cancelar explicitamente. 500 ≠ 202.
+    - › reconcilia objeto concluído antes da queda sem depender de consulta do navegador. Lista vazia.
+  - `apps/cli/src/app/assembly/preparation-new-source-additional.test.ts` › revalida uma fonte incluída durante a espera F2 depois que a correção assenta. O stage veio `undefined` ≠ `proposal`.
