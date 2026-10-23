@@ -171,3 +171,39 @@ Na suíte inteira, sob a carga dos PRs que rodam em paralelo no mesmo host; os d
 
 - `apps/cli/src/app/assembly/filler-performance.test.ts`: teto de tempo de relógio.
 - `apps/cli/src/app/assembly/preparation-pending-additional.test.ts` › interrompe se a análise vira error durante a espera e a correção assenta.
+
+### Intermitências vistas no CI do PR 6 (#194)
+
+Run [39890646391](https://github.com/jhowtkd/decupa/actions/runs/39890646391). Cada uma passou no rerun do mesmo SHA, e são de arquivos que a pilha não toca:
+
+- **Ubuntu** (primeira vez neste runner): `apps/cli/src/app/server.test.ts` › triagem serializada › dois pedidos iguais em voo chamam a triagem uma vez e devolvem o mesmo keep-list. `expected 2 to be 1`, na linha 668.
+- **Windows** (primeira vez neste runner): `packages/coordinator/src/hub-holders.additional.test.ts` › expõe slot ativo com metadados….
+
+### Intermitências vistas no CI do PR 7 (#195, Windows)
+
+Run [39891872071](https://github.com/jhowtkd/decupa/actions/runs/39891872071), três tentativas do mesmo SHA. Cada uma passou em pelo menos uma, e são de arquivos que a pilha não toca:
+
+- `apps/cli/src/app/r2-upload.test.ts`:
+  - › não ressuscita um envio cujo cancelamento ainda aguarda o R2. 500 ≠ 202, nas tentativas 1 e 3.
+  - › persiste o cancelamento antes de tentar excluir e repete após reiniciar. 500 ≠ 202, na tentativa 1.
+  - › recusa partes fora do arquivo e conclusão com tamanho incorreto. Na tentativa 3.
+- `apps/cli/src/app/server-metrics.test.ts` › cleanup ingest metrics › persists failed preflight trace and terminal ingest result with autoStart defaults. `ENOENT` no `readdir` da pasta de métricas (corrida do próprio teste), na tentativa 1.
+- `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém erro quando o arquivo da fonte de mídia desapareceu. Na tentativa 2.
+- `packages/coordinator/src/coordinator.test.ts` › createFileCoordinator › mantém a ordem de chegada depois de uma espera longa. Na tentativa 3.
+
+### Intermitências vistas no CI do PR 8 (#196)
+
+Run [39917561209](https://github.com/jhowtkd/decupa/actions/runs/39917561209), três tentativas. Cada uma passou em pelo menos uma, e são de arquivos que a pilha não toca:
+
+- **macOS** (primeira vez neste runner): `apps/cli/src/app/assembly/f3-pending-regression.test.ts` › R2: assentamento em background e retomada gastam no máximo uma proposta textual.
+- **Windows:**
+  - `apps/cli/src/app/assembly/preparation-pending-additional.test.ts` › barreira de alinhamento pendente antes da proposta › usa correção que assenta durante a barreira e faz uma chamada com texto corrigido. O `waitFor` da linha 95 estourou.
+  - `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém correção pending após encerramento/cancelamento e GET seguinte relança (alinhamento cancelado).
+  - `packages/coordinator/src/hub-holders.additional.test.ts` › expõe slot ativo com metadados enquanto o mesmo Projeto também tem waiter, após heartbeat. "timeout waiting for waiter".
+  - `apps/cli/src/app/r2-upload.test.ts` › não publica um download truncado nem apaga a cópia íntegra no R2.
+
+### Intermitências vistas localmente no PR 9 (carga)
+
+Numa rodada parcial sob carga; o arquivo passou nas duas repetições seguintes:
+
+- `apps/cli/src/app/assembly/editor/montage-hot.test.ts`: teto de 16 ms de relógio.
