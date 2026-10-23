@@ -41,14 +41,17 @@ it("legacy: / é o page.html byte a byte e /studio.css não existe", async () =>
   });
 });
 
-it("legacy: valor desconhecido da variável também serve o page.html de hoje", async () => {
+it("legacy: valor desconhecido da variável também serve o page.html de hoje, com um aviso só", async () => {
+  const aviso: string[] = [];
   const antes = console.error;
-  console.error = () => {};
+  console.error = (...partes: unknown[]) => { aviso.push(partes.map(String).join(" ")); };
   try {
     await comMarcador({ DECUPA_EDITOR_UI: "novo" }, async (base) => {
       expect(await (await fetch(`${base}/`)).text()).toBe(await ler("page.html"));
       expect((await fetch(`${base}/studio.css`)).status).not.toBe(200);
+      expect(await (await fetch(`${base}/login`)).text()).toBe(await ler("../app/login/page.html"));
     });
+    expect(aviso.filter((m) => m.includes("DECUPA_EDITOR_UI"))).toHaveLength(1);
   } finally { console.error = antes; }
 });
 

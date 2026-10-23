@@ -100,20 +100,28 @@ it("legacy (avulso com senha): /login segue o de hoje", async () => {
   } finally { await app.close(); await limpa(dir, cfg); }
 });
 
-it("legacy: valor desconhecido de DECUPA_EDITOR_UI também serve a tela de hoje", async () => {
+it("legacy: valor desconhecido de DECUPA_EDITOR_UI também serve a tela de hoje, com um aviso só", async () => {
   const root = await seedComLimpeza();
   const cfg = await mkdtemp(join(tmpdir(), "pr07-cfg-"));
   const aviso: string[] = [];
   const antes = console.error;
-  console.error = (m: unknown) => { aviso.push(String(m)); };
-  const app = await startApp({ projectsRoot: root, port: 0, autoStart: false, executor, providerConfigDir: cfg, env: { DECUPA_EDITOR_UI: "Studio" } });
-  console.error = antes;
+  console.error = (...partes: unknown[]) => { aviso.push(partes.map(String).join(" ")); };
+  let app: Awaited<ReturnType<typeof startApp>> | undefined;
   try {
+    app = await startApp({ projectsRoot: root, port: 0, autoStart: false, executor, providerConfigDir: cfg, env: { DECUPA_EDITOR_UI: "Studio" } });
     const base = `http://127.0.0.1:${app.port}`;
     expect(await (await fetch(`${base}/cleanup`)).text()).toBe(await ler("hub/cleanup.html"));
     expect((await fetch(`${base}/hub/cleanup-studio.css`)).status).not.toBe(200);
-    expect(aviso.length).toBeGreaterThan(0);
-  } finally { await app.close(); await limpa(root, cfg); }
+    // As outras telas também servem a legacy sem ler a variável de novo.
+    expect(await (await fetch(`${base}/settings`)).text()).toBe(await ler("settings.html"));
+    expect(await (await fetch(`${base}/login`)).text()).toBe(await ler("login/page.html"));
+    expect(await (await fetch(`${base}/projects/limpeza/`)).text()).not.toContain("decupa-editor-ui");
+    expect(aviso.filter((m) => m.includes("DECUPA_EDITOR_UI"))).toHaveLength(1);
+  } finally {
+    console.error = antes;
+    await app?.close();
+    await limpa(root, cfg);
+  }
 });
 
 // ---------- studio: shell próprio ou derivado ----------
@@ -203,9 +211,12 @@ it.each([["Raiz", true], ["avulso", false]] as const)("studio (%s com senha): /l
     expect(doHtml.has("error")).toBe(true);
     expect(html).toMatch(/<input[^>]*name="nome"/);
     expect(html).toMatch(/<input[^>]*name="senha"/);
-    // Sem sessão o resto continua protegido.
-    expect((await fetch(`${base}/settings`, { redirect: "manual" })).status).not.toBe(200);
-    expect((await fetch(`${base}/settings/studio.css`, { redirect: "manual" })).status).not.toBe(200);
+    // Sem sessão o resto continua protegido, inclusive as CSS do studio e os tokens.
+    const protegidas = ["/settings", "/settings/studio.css", "/settings/tokens.css",
+      ...(raiz ? ["/hub/cleanup-studio.css", "/projects/limpeza/studio.css"] : ["/studio.css"])];
+    for (const caminho of protegidas) {
+      expect((await fetch(`${base}${caminho}`, { redirect: "manual" })).status, caminho).not.toBe(200);
+    }
   } finally { await app.close(); await limpa(...(raiz ? [(sobe as Awaited<ReturnType<typeof sobeRaiz>>).root] : [(sobe as Awaited<ReturnType<typeof sobeAvulso>>).dir]), sobe.cfg); }
 });
 
