@@ -55,13 +55,23 @@ const troca = async (video: El, rev: string | null) => {
 
 it("puras: assinaturaLegenda, resultadoDaResposta e linhaDoMonitor", () => {
   expect(assinaturaLegenda({ revision: 3, corrections: [{ id: "c1", status: "pending" }, { id: "c2", status: "aligned" }] }))
-    .toBe("3:c1=pending,c2=aligned");
-  expect(assinaturaLegenda({ revision: 3 })).toBe("3:");
+    .toBe("3:c1=pending,c2=aligned|");
+  expect(assinaturaLegenda({ revision: 3 })).toBe("3:|");
+  // A análise refeita (key) ou as palavras prontas (wordsStatus) mudam a legenda sem subir a revisão.
+  const com = (key: string, wordsStatus: string) => assinaturaLegenda({ revision: 3, corrections: [], analyses: [{ sourceId: "a", key, wordsStatus }] });
+  expect(com("k1", "ready")).toBe("3:|a:k1:ready");
+  expect(com("k1", "ready")).not.toBe(com("k2", "ready"));
+  expect(com("k1", "ready")).not.toBe(com("k1", "pending"));
 
   expect(resultadoDaResposta(200, { origem: "historico", legendas: { status: "pronto", vttSha: "v" }, cues }))
     .toEqual({ estado: "pronto", origem: "historico", vttSha: "v", cues });
   expect(resultadoDaResposta(200, { legendas: { status: "indisponivel", motivo: "sem falas retidas na montagem" }, cues: [] }))
     .toEqual({ estado: "sem-fala", motivo: "sem falas retidas na montagem", cues: [] });
+  // Sem motivo vira o da entrega sem fala; outro motivo é o gerador que falhou.
+  expect(resultadoDaResposta(200, { legendas: { status: "indisponivel" }, cues: [] }))
+    .toEqual({ estado: "sem-fala", motivo: "sem falas retidas na montagem", cues: [] });
+  expect(resultadoDaResposta(200, { legendas: { status: "indisponivel", motivo: "cue inválido" }, cues: [] }))
+    .toEqual({ estado: "indisponivel", motivo: "cue inválido", cues: [] });
   expect(resultadoDaResposta(404, { error: "a v1 não é a prévia" })).toEqual({ estado: "sem-revisao", motivo: "a v1 não é a prévia", cues: [] });
   expect(resultadoDaResposta(500, null)).toEqual({ estado: "erro", motivo: "erro 500", cues: [] });
 
@@ -72,6 +82,8 @@ it("puras: assinaturaLegenda, resultadoDaResposta e linhaDoMonitor", () => {
   expect(linhaDoMonitor({ videoRev: 2, atual: 2, resultado: { estado: "pronto" } }).texto).not.toContain("prévia exibida");
   expect(linhaDoMonitor({ videoRev: 1, atual: 2, resultado: { estado: "sem-revisao", motivo: "não é a prévia" } }).texto)
     .toBe("Sem legenda no monitor para a v1 (prévia exibida): não é a prévia.");
+  expect(linhaDoMonitor({ videoRev: 2, atual: 2, resultado: { estado: "indisponivel", motivo: "cue inválido" } }).texto)
+    .toBe("Sem legenda no monitor para a v2: cue inválido.");
   expect(LEGENDA_FORA_DO_MP4).toMatch(/não é gravada no MP4/);
 });
 
@@ -213,4 +225,37 @@ it("revisão sem fala retida: sem track, linha com o motivo, faixa em sem-fala",
   expect(tracks()).toHaveLength(0);
   expect(monitor().textContent).toBe("Sem legenda no monitor para a v2: sem falas retidas na montagem.");
   expect(state.get("legendasFaixa")).toMatchObject({ revision: 2, estado: "sem-fala" });
+});
+
+it("análise refeita na mesma revisão (key ou wordsStatus) refaz o pedido e troca o track", async () => {
+  let sha = "sha-1";
+  const { tracks, state, project, fetchFn, pedidos } = monta(() => pronto(sha));
+  await esperar();
+  const antes = tracks()[0]!;
+  expect(antes.dataset.sha).toBe("sha-1");
+  sha = "sha-2";
+  state.set("project", project({ analyses: [{ sourceId: "a", key: "k1", wordsStatus: "pending" }] }));
+  await esperar();
+  expect(fetchFn).toHaveBeenCalledTimes(2);
+  expect(tracks()[0]).not.toBe(antes);
+  expect(tracks()[0]!.dataset.sha).toBe("sha-2");
+  sha = "sha-3";
+  state.set("project", project({ analyses: [{ sourceId: "a", key: "k1", wordsStatus: "ready" }] }));
+  await esperar();
+  expect(fetchFn).toHaveBeenCalledTimes(3);
+  expect(tracks()[0]!.dataset.sha).toBe("sha-3");
+  // Mesma análise de novo: nenhum pedido a mais.
+  state.set("project", project({ analyses: [{ sourceId: "a", key: "k1", wordsStatus: "ready" }] }));
+  await esperar();
+  expect(pedidos).toEqual([2, 2, 2]);
+});
+
+it("legenda indisponível (gerador falhou) não deixa track e diz o motivo; a faixa recebe o estado", async () => {
+  const { tracks, monitor, state } = monta(() => ({
+    status: 200, body: { origem: "atual", legendas: { status: "indisponivel", motivo: "cue inválido" }, cues: [] },
+  }));
+  await esperar();
+  expect(tracks()).toHaveLength(0);
+  expect(monitor().textContent).toBe("Sem legenda no monitor para a v2: cue inválido.");
+  expect(state.get("legendasFaixa")).toMatchObject({ revision: 2, estado: "indisponivel", motivo: "cue inválido" });
 });

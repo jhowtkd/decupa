@@ -2,7 +2,7 @@
 // entrega o que a exportação grava, a prévia antiga leva a legenda dela ou
 // 404 com motivo, e corte, correção e reordenação mudam a legenda.
 import { createHash } from "node:crypto";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -13,7 +13,7 @@ import { fixtureAssembly } from "./fixture.ts";
 import { applyEdit } from "./revisions.ts";
 import { compileScenes, validateProposal } from "./scenes.ts";
 import { loadProject, saveProject } from "./store.ts";
-import { subtitleRecord } from "./subtitles.ts";
+import { formatSrt, formatVtt, parseVtt, subtitleRecord } from "./subtitles.ts";
 import { settleCorrection } from "./words.ts";
 import type { Project, Word } from "./types.ts";
 
@@ -310,4 +310,102 @@ it("POST project/settings com o pedido de proporção do studio mantém o fps da
   const depois = (await res.json() as { project: Project }).project;
   expect(depois.assembly).toMatchObject({ width: 1080, height: 1920, fps: { num: 30000, den: 1001 } });
   expect((await loadProject(dir)).assembly.fps).toEqual({ num: 30000, den: 1001 });
+});
+
+const sha = (texto: string) => createHash("sha256").update(texto, "utf8").digest("hex");
+
+/** Escreve a entrega da revisão como a exportação a deixa: manifest com os sha dos arquivos. */
+async function entregar(dir: string, revision: number, cues: Cue[]) {
+  const vtt = formatVtt(cues);
+  const srt = formatSrt(cues);
+  const dest = join(dir, "exports", String(revision));
+  await mkdir(dest, { recursive: true });
+  await writeFile(join(dest, "legendas.vtt"), vtt, "utf8");
+  await writeFile(join(dest, "legendas.srt"), srt, "utf8");
+  await writeFile(join(dest, "manifest.json"), JSON.stringify({ revision, legendas: { status: "pronto", vttSha: sha(vtt), srtSha: sha(srt) } }), "utf8");
+  return { vtt, srt, dest };
+}
+
+const entregues: Cue[] = [
+  { startMs: 200, endMs: 1300, text: "texto entregue" },
+  { startMs: 3_700_000, endMs: 3_701_500, text: "linha um\nlinha dois" },
+];
+
+it("parseVtt(formatVtt(cues)) volta aos mesmos cues, com hora cheia e texto de duas linhas", () => {
+  expect(parseVtt(formatVtt(entregues))).toEqual(entregues);
+  expect(parseVtt(formatVtt([]))).toEqual([]);
+  expect(parseVtt("WEBVTT\n\n")).toEqual([]);
+  const projeto = { cues: [{ startMs: 0, endMs: 999, text: "a" }, { startMs: 1000, endMs: 61_001, text: "b c" }] };
+  expect(parseVtt(formatVtt(projeto.cues))).toEqual(projeto.cues);
+});
+
+it("revisão anterior com entrega que confere: a rota devolve exatamente os arquivos entregues (origem entrega)", async () => {
+  const { dir, base } = await boot();
+  await montar(dir);
+  const takeId = (await loadProject(dir)).scenes[0]!.takes[0]!.id;
+  const rev1 = await editar(base, 0, { type: "remove", sceneId: "s1", takeId, wordIds: ["w1"] });
+  expect(rev1).toBe(1);
+  const { vtt, srt } = await entregar(dir, 0, entregues);
+
+  const vttRota = await texto(base, 0, "vtt");
+  const srtRota = await texto(base, 0, "srt");
+  expect(vttRota.status).toBe(200);
+  expect(Buffer.from(vttRota.text)).toEqual(Buffer.from(vtt));
+  expect(Buffer.from(srtRota.text)).toEqual(Buffer.from(srt));
+  expect(vttRota.headers.get("cache-control")).toBe("no-store");
+
+  const resposta = await json(base, 0);
+  expect(resposta.status).toBe(200);
+  expect(resposta.body.origem).toBe("entrega");
+  expect(resposta.body.cues).toEqual(parseVtt(vtt));
+  expect(resposta.body.cues).toEqual(entregues);
+  expect(resposta.body.legendas).toEqual({ status: "pronto", vttSha: sha(vtt), srtSha: sha(srt) });
+  // A revisão atual segue saindo do projeto.
+  expect((await json(base, 1)).body.origem).toBe("atual");
+});
+
+it("entrega adulterada (sha não confere) não vale: sem prévia dá 404, com prévia cai na foto do histórico", async () => {
+  // Sem prévia guardada.
+  {
+    const { dir, base } = await boot();
+    await montar(dir);
+    const takeId = (await loadProject(dir)).scenes[0]!.takes[0]!.id;
+    await editar(base, 0, { type: "remove", sceneId: "s1", takeId, wordIds: ["w1"] });
+    const { dest, vtt } = await entregar(dir, 0, entregues);
+    await writeFile(join(dest, "legendas.vtt"), vtt.replace("texto entregue", "texto trocado"), "utf8");
+    const adulterada = await json(base, 0);
+    expect(adulterada.status).toBe(404);
+    expect(adulterada.body.error).toMatch(/não é a prévia guardada/);
+    expect((await texto(base, 0, "vtt")).status).toBe(404);
+    await fechar();
+  }
+  // Com a prévia da revisão: a legenda vem da foto, nunca do arquivo adulterado.
+  {
+    const { dir, base } = await boot();
+    await montar(dir);
+    const n = await gravarPrevia(dir);
+    const esperada = (await json(base, n)).body.cues;
+    const takeId = (await loadProject(dir)).scenes[0]!.takes[0]!.id;
+    await editar(base, n, { type: "remove", sceneId: "s1", takeId, wordIds: ["w1"] });
+    const { dest } = await entregar(dir, n, entregues);
+    expect((await json(base, n)).body.origem).toBe("entrega");
+    await writeFile(join(dest, "legendas.srt"), "1\n00:00:00,000 --> 00:00:01,000\nadulterado\n", "utf8");
+    const caiu = await json(base, n);
+    expect(caiu.status).toBe(200);
+    expect(caiu.body.origem).toBe("historico");
+    expect(caiu.body.cues).toEqual(esperada);
+    expect(textos(caiu.body.cues)).not.toContain("texto entregue");
+  }
+});
+
+it("entrega de outra revisão no manifest ou sem legendas prontas é ignorada", async () => {
+  const { dir, base } = await boot();
+  await montar(dir);
+  const takeId = (await loadProject(dir)).scenes[0]!.takes[0]!.id;
+  await editar(base, 0, { type: "remove", sceneId: "s1", takeId, wordIds: ["w1"] });
+  const { dest, vtt, srt } = await entregar(dir, 0, entregues);
+  await writeFile(join(dest, "manifest.json"), JSON.stringify({ revision: 5, legendas: { status: "pronto", vttSha: sha(vtt), srtSha: sha(srt) } }), "utf8");
+  expect((await json(base, 0)).status).toBe(404);
+  await writeFile(join(dest, "manifest.json"), JSON.stringify({ revision: 0, legendas: { status: "indisponivel", motivo: "x" } }), "utf8");
+  expect((await json(base, 0)).status).toBe(404);
 });

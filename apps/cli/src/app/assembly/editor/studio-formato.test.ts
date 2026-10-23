@@ -117,6 +117,16 @@ it("os avisos: (a) não reenquadra, com o fps; (b) a legenda não vai para o MP4
   expect(a).toContain("faixas escuras");
   expect(a).toContain("O fps (29,97) continua o mesmo.");
   expect(avisoDeReenquadrar(assembly(1920, 1080, { num: 25, den: 1 }))).toContain("O fps (25) continua o mesmo.");
+  // Preset ou nada escolhido: continua o mesmo; fonte: só as faixas; personalizado: o fps é o do campo.
+  expect(avisoDeReenquadrar(assembly(), "9:16")).toContain("O fps (29,97) continua o mesmo.");
+  const fonte = avisoDeReenquadrar(assembly(), "fonte");
+  expect(fonte).toContain("faixas escuras");
+  expect(fonte).not.toContain("continua o mesmo");
+  expect(fonte).not.toContain("O fps");
+  const livre = avisoDeReenquadrar(assembly(), "personalizado");
+  expect(livre).toContain("faixas escuras");
+  expect(livre).toContain("O fps passa a ser o do campo.");
+  expect(livre).not.toContain("continua o mesmo");
   expect(LEGENDA_FORA_DO_MP4).toBe("A legenda do monitor serve só para conferir: não é gravada no MP4. Ela sai em arquivo separado (.vtt/.srt) na entrega.");
 });
 
@@ -203,4 +213,116 @@ it("resposta de erro mantém o diálogo aberto; formato igual ao atual nem chama
   await atual.aplicar();
   expect(atual.api.call).not.toHaveBeenCalled();
   expect(atual.dialog.querySelector("#formatoErro")!.textContent).toBe("Este já é o formato da montagem.");
+});
+
+// ---- Aviso por escolha e diálogo aberto ----
+
+const muda = (alvo: { dispatchEvent: (e: { type: string }) => void }) => alvo.dispatchEvent({ type: "change" });
+
+it("o aviso do diálogo acompanha a escolha: preset 'continua o mesmo', fonte com o fps dela, personalizado 'o do campo'", () => {
+  const { document, dialog, escolhe } = monta();
+  document.getElementById("abrir")!.click();
+  const nota = () => dialog.querySelector("#formatoReenquadra")!.textContent;
+  expect(nota()).toContain("O fps (29,97) continua o mesmo.");
+
+  escolhe("9:16");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "9:16")!);
+  expect(nota()).toContain("O fps (29,97) continua o mesmo.");
+
+  escolhe("fonte");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "fonte")!);
+  expect(nota()).toContain("faixas escuras");
+  expect(nota()).not.toContain("continua o mesmo");
+  const aviso = dialog.querySelector("#formatoFonteAviso")!;
+  expect(aviso.hidden).toBe(false);
+  expect(aviso.textContent).toBe("Adota o tamanho e o fps de fala.mp4 (25 fps), não só a proporção.");
+
+  escolhe("personalizado");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "personalizado")!);
+  expect(nota()).toContain("O fps passa a ser o do campo.");
+  expect(nota()).not.toContain("continua o mesmo");
+
+  escolhe("1:1");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "1:1")!);
+  expect(nota()).toContain("O fps (29,97) continua o mesmo.");
+});
+
+it("com o diálogo aberto, projeto novo com outro quadro atualiza as resoluções e mantém a escolha", () => {
+  const { document, state, dialog, escolhe } = monta();
+  document.getElementById("abrir")!.click();
+  escolhe("9:16");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "9:16")!);
+  const resolucoes = () => dialog.querySelectorAll("#formatoProporcoes .formato-opcao").map((el) => el.querySelector(".mono")!.textContent);
+  expect(resolucoes()).toEqual(["1920×1080", "1080×1920", "1080×1080", "1080×1350"]);
+
+  state.set("project", { ...projeto(assembly(1280, 720)), revision: 8 });
+  expect(resolucoes()).toEqual(["1280×720", "720×1280", "720×720", "720×900"]);
+  expect(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.checked)?.value).toBe("9:16");
+  expect(dialog.querySelector("#formatoAgora")!.textContent).toBe("16:9 · 1280×720 · 29,97 fps");
+  expect(dialog.open).toBe(true);
+});
+
+it("o repreenchimento guarda a fonte escolhida e o que foi digitado no personalizado", () => {
+  const { document, state, dialog, escolhe } = monta();
+  const duas = (largura: number) => ({
+    ...projeto({ ...assembly(largura, 1080), sources: [
+      { id: "a", name: "fala.mp4", hasVideo: true, hasAudio: true, fps: { num: 25, den: 1 } },
+      { id: "c", name: "mudo.mp4", hasVideo: true, hasAudio: false, fps: { num: 24, den: 1 } },
+    ] } as never),
+    revision: 9,
+  });
+  state.set("project", duas(1920));
+  document.getElementById("abrir")!.click();
+  const select = dialog.querySelector("#formatoFonte")!;
+  expect(dialog.querySelectorAll("#formatoFonte option")).toHaveLength(2);
+  select.value = "c";
+  escolhe("fonte");
+  muda(select);
+  expect(dialog.querySelector("#formatoFonteAviso")!.textContent).toBe("Adota o tamanho e o fps de mudo.mp4 (24 fps), não só a proporção.");
+  state.set("project", duas(1280));
+  expect(dialog.querySelector("#formatoFonte")!.value).toBe("c");
+  expect(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.checked)?.value).toBe("fonte");
+
+  escolhe("personalizado");
+  dialog.querySelector("#formatoLargura")!.value = "1000";
+  dialog.querySelector("#formatoAltura")!.value = "500";
+  dialog.querySelector("#formatoFps")!.value = "24";
+  muda(dialog.querySelector("#formatoLargura")!);
+  state.set("project", duas(1920));
+  expect(dialog.querySelector("#formatoLargura")!.value).toBe("1000");
+  expect(dialog.querySelector("#formatoAltura")!.value).toBe("500");
+  expect(dialog.querySelector("#formatoFps")!.value).toBe("24");
+  expect(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.checked)?.value).toBe("personalizado");
+});
+
+it("o erro do POST recusado sobrevive ao repreenchimento e some ao mudar a escolha ou reabrir", async () => {
+  const { document, state, dialog, escolhe, aplicar } = monta({ ok: false, body: { error: "revisão desatualizada" } });
+  document.getElementById("abrir")!.click();
+  escolhe("1:1");
+  await aplicar();
+  const erro = dialog.querySelector("#formatoErro")!;
+  expect(erro.textContent).toBe("revisão desatualizada");
+  expect(erro.hidden).toBe(false);
+
+  state.set("project", { ...projeto(assembly(1280, 720)), revision: 8 });
+  expect(erro.textContent).toBe("revisão desatualizada");
+  expect(erro.hidden).toBe(false);
+
+  escolhe("4:5");
+  muda(dialog.querySelectorAll('input[name="formatoEscolha"]').find((i) => i.value === "4:5")!);
+  expect(erro.textContent).toBe("");
+  expect(erro.hidden).toBe(true);
+
+  await aplicar();
+  expect(erro.hidden).toBe(false);
+  dialog.close();
+  document.getElementById("abrir")!.click();
+  expect(erro.textContent).toBe("");
+});
+
+it("projeto novo com o diálogo fechado não repreenche nada", () => {
+  const { state, dialog } = monta();
+  state.set("project", { ...projeto(assembly(1280, 720)), revision: 8 });
+  expect(dialog.querySelectorAll("#formatoProporcoes .formato-opcao")).toHaveLength(0);
+  expect(dialog.open).toBe(false);
 });

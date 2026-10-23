@@ -10,7 +10,8 @@ import { referenceForAssembly } from "../../../../../tests/fixtures/timeline-ref
 import { hashFile } from "@decupa/media";
 import { exportApproved } from "./export.ts";
 import { fixtureAssembly } from "./fixture.ts";
-import { createProject } from "./store.ts";
+import { createProject, loadProject } from "./store.ts";
+import { subtitleRecord } from "./subtitles.ts";
 import type { Project } from "./types.ts";
 
 let failNextCopy = false;
@@ -414,6 +415,10 @@ it("com falas, grava legendas.vtt/srt e declara os hashes no manifest", async ()
   const srt = await readFile(join(dest, "legendas.srt"), "utf8");
   expect(vtt).toMatch(/^WEBVTT\n\n00:00:00\.200 --> 00:00:01\.200\nola mundo\n/);
   expect(srt).toContain("1\n00:00:00,200 --> 00:00:01,200\nola mundo\n");
+  // Os arquivos exportados são o que a rota de legendas serve: subtitleRecord do projeto gravado.
+  const { subtitles } = subtitleRecord(await loadProject(dir));
+  expect(Buffer.from(vtt)).toEqual(Buffer.from(subtitles!.vtt));
+  expect(Buffer.from(srt)).toEqual(Buffer.from(subtitles!.srt));
   const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as {
     legendas: { status: string; vttSha: string; srtSha: string };
   };

@@ -1,10 +1,11 @@
 // A faixa do studio em trilhas: blocos proporcionais, zoom, estados escritos
 // quando falta dado (miniatura, onda, áudio, apoio, fala) e a legacy intacta.
 import { readFileSync } from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createState } from "./state.js";
+import { ZOOMS as ZOOMS_FORMAT } from "./format.js";
 import { ZOOMS, cuesDaFaixa, legendaVazia, mountSequencia, zoomValido } from "./sequencia.js";
-import { installDom, type El } from "./fake-dom.test-helper.ts";
+import { El, installDom } from "./fake-dom.test-helper.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -49,7 +50,7 @@ function projeto(extra: Record<string, unknown> = {}) {
 
 const peaksReais = { sampleRate: 8000, count: 64 * 320, peaks: Array.from({ length: 64 }, () => ({ min: -100, max: 100 })) };
 
-type Opcoes = { ui?: "studio" | "legacy"; project?: unknown; peaks?: Record<string, "real" | "204" | "erro">; zoom?: number; legendas?: unknown };
+type Opcoes = { player?: { seek: unknown; el: () => unknown }; ui?: "studio" | "legacy"; project?: unknown; peaks?: Record<string, "real" | "204" | "erro">; zoom?: number; legendas?: unknown };
 
 function monta(opcoes: Opcoes = {}) {
   const document = installDom('<section id="faixa"></section><span id="undoSlot"></span>');
@@ -69,7 +70,7 @@ function monta(opcoes: Opcoes = {}) {
   if (opcoes.legendas !== undefined) state.set("legendasFaixa", opcoes.legendas);
   state.set("project", opcoes.project ?? projeto());
   const api = { call: vi.fn(async () => ({ res: { ok: true }, body: {} })) };
-  const player = { seek: vi.fn(), el: () => null };
+  const player = opcoes.player ?? { seek: vi.fn(), el: () => null };
   if (opcoes.ui === undefined) mountSequencia({ state, api, player } as never);
   else mountSequencia({ state, api, player, ui: opcoes.ui } as never);
   const faixa = document.getElementById("faixa")!;
@@ -84,6 +85,11 @@ function pct(el: El) {
 }
 
 const proximo = (a: number, b: number) => expect(a).toBeCloseTo(b, 2);
+
+it("ZOOMS de sequencia.js é o mesmo array de format.js", () => {
+  expect(ZOOMS).toBe(ZOOMS_FORMAT);
+  expect(ZOOMS_FORMAT).toEqual([1, 2, 4, 8]);
+});
 
 it("ZOOMS, zoomValido, cuesDaFaixa e legendaVazia (puras)", () => {
   expect(ZOOMS).toEqual([1, 2, 4, 8]);
@@ -102,6 +108,8 @@ it("ZOOMS, zoomValido, cuesDaFaixa e legendaVazia (puras)", () => {
   expect(legendaVazia({ revision: 3, estado: "carregando" }, p)).toBe("carregando legenda…");
   expect(legendaVazia({ revision: 3, estado: "sem-fala" }, p)).toBe("sem fala retida");
   expect(legendaVazia({ revision: 3, estado: "sem-revisao" }, p)).toBe("sem legenda");
+  expect(legendaVazia({ revision: 3, estado: "indisponivel", motivo: "boom" }, p)).toBe("legenda indisponível");
+  expect(legendaVazia({ revision: 3, estado: "erro" }, p)).toBe("legenda não carregou");
 });
 
 it("studio: quatro trilhas sob a mesma faixa, com blocos proporcionais de cena, apoio, áudio e legenda", async () => {
@@ -223,11 +231,11 @@ it("sem miniatura, sem apoio, sem áudio e sem onda são estados escritos", asyn
   expect(document).toBeDefined();
 });
 
-it("erro de rede nos peaks também deixa 'sem onda' visível", async () => {
+it("erro de rede nos peaks diz 'onda não carregou', não 'sem onda'", async () => {
   const { faixa } = monta({ ui: "studio", peaks: { a: "erro" } });
   await esperar();
   const falta = faixa.querySelector('.seq-audio[data-scene="s1"] .sem-dado')!;
-  expect(falta.textContent).toBe("sem onda");
+  expect(falta.textContent).toBe("onda não carregou");
   expect(falta.hidden).toBe(false);
 });
 
@@ -299,4 +307,170 @@ it("page.html (legacy) não ganha #legendaMonitor; o studio.html tem", () => {
   const studio = readFileSync(new URL("../studio.html", import.meta.url), "utf8");
   expect(legacy).not.toContain("legendaMonitor");
   expect(studio.match(/id="legendaMonitor"/g)).toHaveLength(1);
+});
+
+it("legendasFaixa que chega troca só .lane-legenda: strip, blocos e imagem são os mesmos nós", async () => {
+  const { faixa, state } = monta({ ui: "studio" });
+  await esperar();
+  const strip = faixa.querySelector(".seq-strip")!;
+  const blocos = faixa.querySelectorAll(".seq-bloco");
+  const img = faixa.querySelector("img.timeline-thumb")!;
+  const trilhas = faixa.querySelector(".faixa-trilhas")!;
+  const lane = faixa.querySelector(".lane-legenda")!;
+  expect(blocos.length).toBeGreaterThan(0);
+  state.set("legendasFaixa", { revision: 3, estado: "pronto", cues: [{ startMs: 0, endMs: 2000, text: "olá" }] });
+  expect(faixa.querySelector(".lane-legenda .seq-cue")!.textContent).toBe("olá");
+  expect(faixa.querySelector(".seq-strip")).toBe(strip);
+  expect(faixa.querySelector(".faixa-trilhas")).toBe(trilhas);
+  expect(faixa.querySelector(".lane-legenda")).toBe(lane);
+  expect(faixa.querySelectorAll(".seq-bloco")).toEqual(blocos);
+  faixa.querySelectorAll(".seq-bloco").forEach((el, i) => expect(el).toBe(blocos[i]));
+  expect(faixa.querySelector("img.timeline-thumb")).toBe(img);
+  // Chegadas seguintes também.
+  state.set("legendasFaixa", { revision: 3, estado: "sem-fala", cues: [] });
+  expect(faixa.querySelector(".seq-strip")).toBe(strip);
+  expect(faixa.querySelector(".lane-legenda .lane-vazia")!.textContent).toBe("sem fala retida");
+});
+
+it("trilha de legenda: 'carregando legenda…' leva a classe carregando; indisponível leva o motivo no title; erro tem texto próprio", async () => {
+  const lane = async (legendas: unknown) => {
+    const { faixa } = monta({ ui: "studio", legendas });
+    await esperar();
+    return faixa.querySelector(".lane-legenda .lane-vazia")!;
+  };
+  const carregando = await lane(undefined);
+  expect(carregando.textContent).toBe("carregando legenda…");
+  expect(carregando.classList.contains("carregando")).toBe(true);
+  const indisponivel = await lane({ revision: 3, estado: "indisponivel", motivo: "cue inválido", cues: [] });
+  expect(indisponivel.textContent).toBe("legenda indisponível");
+  expect(indisponivel.getAttribute("title")).toBe("cue inválido");
+  expect(indisponivel.classList.contains("carregando")).toBe(false);
+  const erro = await lane({ revision: 3, estado: "erro", motivo: "erro 500", cues: [] });
+  expect(erro.textContent).toBe("legenda não carregou");
+  const semFala = await lane({ revision: 3, estado: "sem-fala", cues: [] });
+  expect(semFala.textContent).toBe("sem fala retida");
+  expect(semFala.classList.contains("carregando")).toBe(false);
+});
+
+it("peaks 204 durante a preparação mostram 'preparando onda…'; ao terminar, a onda real vem num novo fetch e o rótulo some", async () => {
+  const peaks: Record<string, "real" | "204" | "erro"> = { a: "204" };
+  const { faixa, state, pedidos } = monta({ ui: "studio", peaks, project: projeto({ preparation: { status: "running" } }) });
+  await esperar();
+  const falta = () => faixa.querySelector('.seq-audio[data-scene="s1"] .sem-dado')!;
+  expect(falta().textContent).toBe("preparando onda…");
+  expect(falta().hidden).toBe(false);
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(1);
+
+  // Sem a preparação mudar, outro projeto da mesma revisão não busca de novo.
+  state.set("project", projeto({ preparation: { status: "running" } }));
+  await esperar();
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(1);
+
+  peaks.a = "real";
+  state.set("project", projeto({ preparation: { status: "done" } }));
+  await esperar();
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(2);
+  expect(falta().hidden).toBe(true);
+  expect(faixa.querySelector('.seq-audio[data-scene="s1"] canvas.seq-wave')!.hidden).toBe(false);
+});
+
+it("preparação que termina e a onda continua 204: o rótulo passa a 'sem onda'", async () => {
+  const { faixa, state } = monta({ ui: "studio", peaks: { a: "204" }, project: projeto({ preparation: { status: "running" } }) });
+  await esperar();
+  state.set("project", projeto({ preparation: { status: "done" } }));
+  await esperar();
+  expect(faixa.querySelector('.seq-audio[data-scene="s1"] .sem-dado')!.textContent).toBe("sem onda");
+});
+
+it("erro de rede nos peaks não fica guardado: o próximo desenho tenta de novo", async () => {
+  const peaks: Record<string, "real" | "204" | "erro"> = { a: "erro" };
+  const { faixa, state, pedidos } = monta({ ui: "studio", peaks });
+  await esperar();
+  expect(faixa.querySelector('.seq-audio[data-scene="s1"] .sem-dado')!.textContent).toBe("onda não carregou");
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(1);
+  peaks.a = "real";
+  state.set("zoomSequencia", 2);
+  await esperar();
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(2);
+  expect(faixa.querySelector('.seq-audio[data-scene="s1"] .sem-dado')!.hidden).toBe(true);
+});
+
+it("legacy segue guardando a falta de onda: um fetch só por fonte, mesmo com preparação e zoom mudando", async () => {
+  const { faixa, state, pedidos } = monta({ ui: "legacy", peaks: { a: "204" } });
+  await esperar();
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(1);
+  state.set("project", projeto({ preparation: { status: "running" } }));
+  state.set("project", projeto({ preparation: { status: "done" } }));
+  state.set("zoomSequencia", 4);
+  await esperar();
+  expect(pedidos.filter((url) => url.includes("waveform/a"))).toHaveLength(1);
+  expect(faixa.querySelector(".sem-dado")).toBeNull();
+});
+
+describe("rolagem da faixa com zoom", () => {
+  // O DOM falso não mede layout: a rolagem tem 4000 de conteúdo e a vista é dada à mão.
+  beforeEach(() => {
+    Object.defineProperty(El.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: El) { return this.className === "faixa-rolagem" ? 4000 : 0; },
+    });
+  });
+  afterEach(() => { delete (El.prototype as unknown as Record<string, unknown>).scrollWidth; });
+
+  const rolagem = (faixa: El) => faixa.querySelector(".faixa-rolagem") as unknown as { scrollLeft: number; clientWidth: number };
+
+  it("redesenhar ou mudar o zoom com o playhead fora da vista não rola para ele", async () => {
+    const t = monta({ ui: "studio", zoom: 4, peaks: { a: "real" } });
+    await esperar();
+    t.state.set("playhead", 9);
+    const antes = rolagem(t.faixa);
+    antes.scrollLeft = 500;
+    // Zoom +: a faixa se redesenha, mantém o centro da vista (500) e não vai a 9 s (≈3350).
+    t.faixa.querySelector('[data-zoom="1"]')!.dispatchEvent({ type: "click" });
+    expect(t.state.get("zoomSequencia")).toBe(8);
+    expect(rolagem(t.faixa).scrollLeft).toBe(500);
+    t.faixa.querySelector('[data-zoom="-1"]')!.dispatchEvent({ type: "click" });
+    expect(rolagem(t.faixa).scrollLeft).toBe(500);
+    // Revisão nova (redesenho por projeto) também não puxa a vista.
+    t.state.set("project", projeto({ revision: 4 }));
+    await esperar();
+    expect(rolagem(t.faixa).scrollLeft).toBe(500);
+  });
+
+  it("o playhead que anda com o player tocando segue; pausado ou sem player, não", async () => {
+    const el = { paused: false };
+    const t = monta({ ui: "studio", zoom: 4, player: { seek: vi.fn(), el: () => el } });
+    await esperar();
+    const vista = rolagem(t.faixa);
+    vista.clientWidth = 1000;
+    vista.scrollLeft = 0;
+    // Dentro da vista (0,5 s ≈ x 200): fica.
+    t.state.set("playhead", 0.5);
+    expect(vista.scrollLeft).toBe(0);
+    // Fora da vista (9 s ≈ x 3600), tocando: a rolagem vai atrás (x − 25% da vista).
+    t.state.set("playhead", 9);
+    expect(vista.scrollLeft).toBe(3350);
+
+    vista.scrollLeft = 0;
+    el.paused = true;
+    t.state.set("playhead", 8.5);
+    expect(vista.scrollLeft).toBe(0);
+
+    const sem = monta({ ui: "studio", zoom: 4 });
+    await esperar();
+    const outra = rolagem(sem.faixa);
+    outra.clientWidth = 1000;
+    outra.scrollLeft = 0;
+    sem.state.set("playhead", 9);
+    expect(outra.scrollLeft).toBe(0);
+  });
+
+  it("em 1× o playhead tocando não rola nada", async () => {
+    const t = monta({ ui: "studio", player: { seek: vi.fn(), el: () => ({ paused: false }) } });
+    await esperar();
+    const vista = rolagem(t.faixa);
+    vista.clientWidth = 1000;
+    t.state.set("playhead", 9);
+    expect(vista.scrollLeft ?? 0).toBe(0);
+  });
 });

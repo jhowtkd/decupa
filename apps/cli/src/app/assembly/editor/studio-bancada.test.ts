@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountContexto, mountStage } from "./contexto.js";
+import { ZOOMS } from "./format.js";
 import { mountSequencia } from "./sequencia.js";
 import { createState } from "./state.js";
 import {
@@ -916,4 +917,15 @@ it("mountBancada: o zoom gravado entra em zoomSequencia e cada mudança é grava
 it("mountBancada: sem zoom gravado ou com zoom lixo, zoomSequencia fica sem valor (1×)", () => {
   expect(monta({ project: projeto() }).state.get("zoomSequencia")).toBeUndefined();
   expect(monta({ storage: prefs({ etapas: {}, paineis: {}, zoom: 7 }), project: projeto() }).state.get("zoomSequencia")).toBeUndefined();
+});
+
+it("a preferência aceita exatamente os ZOOMS de format.js", () => {
+  for (const zoom of ZOOMS) {
+    const storage = fakeStorage();
+    writePreferencia(storage, { zoom });
+    expect(readPreferencia(storage).zoom, String(zoom)).toBe(zoom);
+  }
+  for (const fora of [0, 3, 5, 16, ZOOMS.at(-1)! * 2]) {
+    expect(readPreferencia(prefs({ etapas: {}, paineis: {}, zoom: fora })).zoom, String(fora)).toBeUndefined();
+  }
 });
