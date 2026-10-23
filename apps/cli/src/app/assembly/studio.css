@@ -264,6 +264,9 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .lane-audio .seq-wave { top: 0; height: 100%; color: #5E7A6B; }
 .seq-audio .sem-dado { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); }
 .lane-legenda .seq-cue { top: 3px; height: calc(100% - 6px); line-height: 16px; }
+/* Falas estreitas demais para ler, agrupadas num bloco: listrado e com a
+   contagem em itálico, para não parecer uma fala só. */
+.lane-legenda .seq-cue-grupo { padding: 0 4px; border-radius: 4px; background: repeating-linear-gradient(135deg, rgb(240 202 110 / .16) 0 3px, rgb(240 202 110 / .04) 3px 6px); color: var(--muted); font-style: italic; }
 /* Ordem das cenas: uma alça por cena numa camada sobre a trilha de vídeo, fora
    do slider (o resto do bloco segue buscando). Gruda na borda visível com zoom,
    como o rosto; no toque, mais larga e sem rolar a página. Só na Edição, onde

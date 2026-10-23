@@ -185,6 +185,51 @@ export function cuesDaFaixa(legendas, project) {
   });
 }
 
+/** Largura mínima (px) para uma fala ter bloco e rótulo próprios na trilha de legenda. */
+export const LEGENDA_CUE_MIN_PX = 24;
+
+/**
+ * Itens da trilha de legenda (puro). Cada fala com pelo menos `limiar` px na
+ * largura atual da trilha (zoom incluído) fica sozinha; falas seguidas mais
+ * estreitas, da mesma cena e sem um vão de `limiar` px entre elas, viram um
+ * bloco só, com a contagem (`falas`). O bloco nunca atravessa o começo de uma
+ * cena (`cortes`, em segundos da montagem): fica sob a cena dele. Uma fala
+ * estreita isolada segue sozinha. Largura desconhecida (0: a faixa está
+ * escondida) não agrupa nada; o redesenho por largura repinta quando ela
+ * aparece.
+ * @param {{start: number, end: number, text: string}[]} cues em ordem
+ * @param {number} duration segundos da montagem
+ * @param {number} larguraPx largura da trilha inteira, em px
+ * @param {number[]} [cortes] começos das cenas, em ordem
+ * @returns {({start: number, end: number, text: string} | {start: number, end: number, falas: number})[]}
+ */
+export function agruparCues(cues, duration, larguraPx, cortes = [], limiar = LEGENDA_CUE_MIN_PX) {
+  if (!(larguraPx > 0) || !(duration > 0)) return cues;
+  const px = (segundos) => (segundos / duration) * larguraPx;
+  const itens = [];
+  let grupo = null;
+  let cena = -1;
+  const fechar = () => {
+    if (grupo) itens.push(grupo.falas === 1 ? grupo.primeira : { start: grupo.start, end: grupo.end, falas: grupo.falas });
+    grupo = null;
+  };
+  for (const cue of cues) {
+    while (cena + 1 < cortes.length && cortes[cena + 1] <= cue.start) cena += 1;
+    if (px(cue.end - cue.start) >= limiar) {
+      fechar();
+      itens.push(cue);
+    } else if (grupo && grupo.cena === cena && px(cue.start - grupo.end) < limiar) {
+      grupo.end = Math.max(grupo.end, cue.end);
+      grupo.falas += 1;
+    } else {
+      fechar();
+      grupo = { start: cue.start, end: cue.end, falas: 1, primeira: cue, cena };
+    }
+  }
+  fechar();
+  return itens;
+}
+
 /** Estado da trilha de legenda sem cues (puro): o porquê, nunca vazio mudo. */
 export function legendaVazia(legendas, project) {
   if (!legendas || legendas.revision !== project?.revision || legendas.estado === "carregando") return "carregando legenda…";
@@ -647,7 +692,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     strip.setAttribute("aria-valuemax", String(duration));
     strip.setAttribute("tabindex", "0");
     const lane = (nome, inner) => '<div class="seq-lane lane-' + nome + '">' + inner + "</div>";
-    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration))
+    // Largura da trilha no zoom atual; a da vista anterior serve até o observador de largura repintar.
+    const largura = (el.querySelector(".faixa-rolagem")?.clientWidth || el.clientWidth || 0) * z;
+    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration, largura))
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
     const rotulos = document.createElement("div");
     rotulos.className = "faixa-rotulos";
@@ -730,13 +777,21 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
    * Conteúdo da trilha de legenda (studio): os cues da revisão atual ou o
    * porquê de não haver. "carregando legenda…" só aparece se demorar (CSS).
    */
-  function legendaHtml(p, duration) {
+  function legendaHtml(p, duration, larguraPx) {
     const pct = (t) => (duration > 0 ? (t / duration) * 100 : 0).toFixed(3) + "%";
     const legendas = state.get("legendasFaixa");
     const cues = cuesDaFaixa(legendas, p);
     if (cues.length) {
-      return cues.map((cue) => '<span class="seq-cue" title="' + esc(cue.text) + '" style="left:' + pct(cue.start)
-        + ";width:" + pct(Math.max(0, cue.end - cue.start)) + ';">' + esc(cue.text) + "</span>").join("");
+      // Fala estreita demais para ler vira parte de um bloco "N falas": milhares
+      // de spans de menos de 1 px pesavam em cada quadro da página.
+      const cortes = timelineBlocks(p).filter((block) => block.kind === "scene").map((block) => block.start);
+      return agruparCues(cues, duration, larguraPx, cortes).map((item) => {
+        const posicao = ' style="left:' + pct(item.start) + ";width:" + pct(Math.max(0, item.end - item.start)) + ';"';
+        if (!item.falas) return '<span class="seq-cue" title="' + esc(item.text) + '"' + posicao + ">" + esc(item.text) + "</span>";
+        const rotulo = item.falas + " falas, " + clock(item.start) + "–" + clock(item.end);
+        return '<span class="seq-cue seq-cue-grupo" title="' + rotulo + '" aria-label="' + rotulo + '"' + posicao + ">"
+          + item.falas + " falas</span>";
+      }).join("");
     }
     const texto = legendaVazia(legendas, p);
     const motivo = legendas?.revision === p.revision && legendas.motivo ? ' title="' + esc(legendas.motivo) + '"' : "";
@@ -749,7 +804,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const lane = root()?.querySelector(".seq-strip .lane-legenda");
     // Com o gesto, a faixa segura a ordem de quando pegou; o fim do gesto repinta.
     if (!p || !lane || gesto) return;
-    lane.innerHTML = legendaHtml(p, montageDuration(p));
+    lane.innerHTML = legendaHtml(p, montageDuration(p), lane.clientWidth);
   }
 
   function mudarZoom(passo) {
@@ -1330,7 +1385,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       const next = Math.round(entries[0]?.contentRect.width || 0);
       if (next === width) return;
       width = next;
-      if (next > 0) redrawCachedWaves();
+      if (next > 0) {
+        redrawCachedWaves();
+        // A faixa apareceu ou mudou de largura: o agrupamento da legenda acompanha.
+        pintarLegenda();
+      }
     }).observe(root());
   }
 
