@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json --pretty",
     "lint": "oxlint . --deny-warnings",
     "smoke": "node scripts/smoke-strip-types.mjs",
-    "e2e": "playwright test",
+    "e2e": "playwright test --project=e2e",
     "decupa": "node --experimental-strip-types apps/cli/src/index.ts"
   },
   "packageManager": "pnpm@10.32.1",

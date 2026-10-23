@@ -2,11 +2,16 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Testes de navegador do Decupa Studio (e2e/*.e2e.ts). Cada teste sobe o
 // próprio servidor (CLI real) sobre uma Raiz semeada; o vitest não os pega.
+// Os ensaios locais (e2e/*.ensaio.ts, projeto "ensaio") ficam fora do CI:
+// `pnpm exec playwright test --project=ensaio`.
 const ci = Boolean(process.env.CI);
 
 export default defineConfig({
   testDir: "e2e",
-  testMatch: /.*\.e2e\.ts$/,
+  projects: [
+    { name: "e2e", testMatch: /.*\.e2e\.ts$/ },
+    { name: "ensaio", testMatch: /.*\.ensaio\.ts$/, timeout: 900_000 },
+  ],
   outputDir: "test-results/e2e",
   timeout: 180_000,
   expect: { timeout: 15_000 },

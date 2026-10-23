@@ -5,6 +5,7 @@
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> extensa
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> fila <n>
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> limpeza
+//   node --experimental-strip-types e2e/apoio/semear.ts <base> 4k
 //
 // <base> é a pasta temporária do teste: a Raiz fica em <base>/raiz e a mídia
 // sintética (FFmpeg lavfi) em <base>/midia. A transcrição é semeada porque a
@@ -70,13 +71,17 @@ function analise(sourceId: string, falas: Fala[]): Analysis {
 
 /** Projeto com as cenas propostas e a montagem compilada, como depois da preparação. */
 async function gravar(raiz: string, id: string, nome: string, sources: Source[], analyses: Analysis[],
-  cenas: { id: string; speechIds: string[]; objective: string }[]): Promise<{ id: string; dir: string; nome: string }> {
+  cenas: { id: string; speechIds: string[]; objective: string }[],
+  formato?: { width: number; height: number }): Promise<{ id: string; dir: string; nome: string }> {
   const dir = join(raiz, id);
   await mkdir(dir);
   const p: Project = blankProject(randomUUID(), nome);
   const video = sources.find((s) => s.hasVideo);
-  p.assembly = { ...p.assembly, name: nome, width: video?.width ?? 1280, height: video?.height ?? 720,
-    canvasSourceId: video?.id ?? sources[0]!.id, canvasManual: false, sources };
+  // Sem formato escolhido, o quadro segue a Mídia de vídeo; com formato, ele é manual.
+  p.assembly = formato
+    ? { ...p.assembly, name: nome, ...formato, canvasManual: true, sources }
+    : { ...p.assembly, name: nome, width: video?.width ?? 1280, height: video?.height ?? 720,
+      canvasSourceId: video?.id ?? sources[0]!.id, canvasManual: false, sources };
   p.analyses = analyses;
   if (cenas.length) {
     p.scenes = validateProposal({ id: "semente", baseRevision: p.revision, changedSceneIds: cenas.map((c) => c.id), scenes: cenas }, p).scenes;
@@ -178,9 +183,11 @@ async function fila(base: string, n: number): Promise<Semeado> {
   const pasta = join(base, "fila");
   await mkdir(raiz, { recursive: true });
   await mkdir(pasta, { recursive: true });
+  // Ensaio de ingestão: DECUPA_E2E_FILA="<largura>x<altura>x<segundos>" (padrão 320x180x1).
+  const [largura, altura, segundos] = (/^(\d+)x(\d+)x(\d+)$/.exec(process.env.DECUPA_E2E_FILA ?? "")?.slice(1) ?? ["320", "180", "1"]);
   const semente = join(pasta, ".semente.mp4");
-  await ff(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=1",
-    "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000:duration=1",
+  await ff(["-f", "lavfi", "-i", `testsrc2=size=${largura}x${altura}:rate=25:duration=${segundos}`,
+    "-f", "lavfi", "-i", `sine=frequency=330:sample_rate=48000:duration=${segundos}`,
     "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", semente]);
   const arquivos: string[] = [];
   for (let i = 1; i <= n; i++) {
@@ -232,15 +239,45 @@ async function limpeza(base: string): Promise<Semeado> {
   return { raiz, projetos: [projeto], arquivos: [original, proxy, analise1], preservados: [rollback] };
 }
 
+/**
+ * Mídia 4K representativa (3840×2160, 25 fps, 20 s, com áudio): um Projeto
+ * com duas cenas no formato 16:9 · 1920×1080 (a fonte 4K não decide a saída)
+ * e um Projeto vazio para medir a ingestão do mesmo arquivo pelo navegador.
+ */
+async function quatroK(base: string): Promise<Semeado> {
+  const raiz = join(base, "raiz");
+  const midia = join(base, "midia");
+  await mkdir(raiz, { recursive: true });
+  await mkdir(midia, { recursive: true });
+  const path = join(midia, "camera-4k.mp4");
+  await ff(["-f", "lavfi", "-i", "testsrc2=size=3840x2160:rate=25:duration=20",
+    "-f", "lavfi", "-i", "aevalsrc=exprs='0.5*sin(2*PI*180*t)*abs(sin(2*PI*0.7*t))':s=48000:d=20",
+    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path]);
+  const a = await fonte("a", path, "camera-4k.mp4", "speech");
+  const analyses = [analise("a", [
+    { sourceId: "a", inicio: 0.5, fim: 8.5, texto: FALAS[0]! },
+    { sourceId: "a", inicio: 10, fim: 19, texto: FALAS[1]! },
+  ])];
+  const projeto = await gravar(raiz, "quatro-k-e2e", "Câmera 4K", [a], analyses, [
+    { id: "s1", speechIds: ["a:s1"], objective: "Abertura" },
+    { id: "s2", speechIds: ["a:s2"], objective: "Cidade" },
+  ], { width: 1920, height: 1080 });
+  const vazio = join(raiz, "quatro-k-ingestao-e2e");
+  await mkdir(vazio);
+  await createProject(vazio, blankProject(randomUUID(), "Ingestão 4K"));
+  return { raiz, projetos: [projeto, { id: "quatro-k-ingestao-e2e", dir: vazio, nome: "Ingestão 4K" }], arquivos: [path] };
+}
+
 const [base, cenario, n] = process.argv.slice(2);
 if (!base || !cenario) {
-  console.error("uso: semear.ts <base> <jornada|extensa|fila|limpeza> [n]");
+  console.error("uso: semear.ts <base> <jornada|extensa|fila|limpeza|4k> [n]");
   process.exit(2);
 }
 const semeado = cenario === "jornada" ? await jornada(base)
   : cenario === "extensa" ? await extensa(base)
   : cenario === "limpeza" ? await limpeza(base)
   : cenario === "fila" ? await fila(base, Number(n ?? 20))
+  : cenario === "4k" ? await quatroK(base)
   : null;
 if (!semeado) {
   console.error(`cenário desconhecido: ${cenario}`);

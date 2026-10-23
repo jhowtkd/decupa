@@ -17,7 +17,7 @@ export const RAIZ_TEMPORARIA = process.env.DECUPA_E2E_TMP || tmpdir();
 type Fixtures = {
   /** Pasta exclusiva do teste. */
   base: string;
-  semear: (cenario: "jornada" | "extensa" | "fila" | "limpeza", n?: number) => Promise<Semeado>;
+  semear: (cenario: "jornada" | "extensa" | "fila" | "limpeza" | "4k", n?: number) => Promise<Semeado>;
   servidor: (opcoes: Omit<OpcoesServidor, "base">) => Promise<Servidor>;
 };
 
