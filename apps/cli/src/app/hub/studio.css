@@ -31,5 +31,6 @@ details.origem > summary { cursor: pointer; color: var(--muted); font-size: 12px
 details.origem > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 details.origem[open] > summary { margin-bottom: 8px; }
 @media (max-width: 680px) {
-  .toolbar #newProject { width: 100%; }
+  /* Empilhada (page.css), a barra volta a esticar busca, filtro e botão. */
+  .toolbar { align-items: stretch; }
 }

@@ -94,7 +94,9 @@ body:has(> #visual-provider-notice:not([hidden])) {
 }
 :where(body[data-stage="materiais"]) :is(#center, #inspector, #faixa) { display: none; }
 :where(body[data-stage="materiais"]) #rail { padding: 16px 14px 14px; }
-/* O monitor encolhe em Materiais: o original ainda toca, e briefing e preparação cabem na coluna. */
+/* O monitor encolhe em Materiais: o original ainda toca, e briefing e preparação
+   cabem na coluna, que rola (o #stage não encolhe por cima do briefing). */
+:where(body[data-stage="materiais"]) #stage { flex: none; }
 :where(body[data-stage="materiais"]) #stage > .preview-screen { flex: none; max-height: 34dvh; }
 :where(body:not([data-stage="materiais"])) #materiaisBriefing { display: none; }
 
@@ -169,9 +171,12 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .fila-acoes button { height: 28px; padding: 0 10px; }
 /* Cinquenta arquivos não empurram a lista de materiais para fora: a fila rola sozinha. */
 .fila-lista { display: flex; flex-direction: column; gap: 2px; max-height: min(44dvh, 420px); overflow-y: auto; }
-.fila-item { display: flex; flex-direction: column; gap: 4px; padding: 7px 8px; border-radius: 8px; }
+/* Uma linha por arquivo: nome e estado, com as ações à direita; barra e aviso embaixo. */
+.fila-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 5px 8px; border-radius: 8px; }
+.fila-item-acoes { grid-column: 2; grid-row: 1; }
+.fila-item progress, .fila-msg { grid-column: 1 / -1; }
 .fila-item:hover, .fila-item:focus-within { background: var(--tint); }
-.fila-item-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.fila-item-top { grid-column: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
 .fila-nome { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .fila-estado { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .fila-item[data-estado="enviando"] .fila-estado, .fila-item[data-estado="adicionando"] .fila-estado { color: var(--accent); }
@@ -180,7 +185,7 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .fila-item progress { display: block; width: 100%; height: 4px; accent-color: var(--accent); }
 .fila-msg { margin: 0; font-size: 11px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 .fila-item[data-estado="erro"] .fila-msg { color: var(--red); }
-.fila-item-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+.fila-item-acoes { display: flex; gap: 2px; }
 .fila-item-acoes:empty { display: none; }
 .fila-item-acoes button { height: 26px; padding: 0 10px; font-size: 11px; }
 #rail.over { outline: 2px dashed var(--accent); outline-offset: -6px; }
