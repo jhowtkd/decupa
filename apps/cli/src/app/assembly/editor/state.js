@@ -33,7 +33,7 @@ export function createState(initial = {}) {
     },
     set(key, value) {
       // Polls idênticos não recriam mídia, timeline nem campos em edição.
-      if (["project", "operation", "undoRevision", "brollCandidates"].includes(key)) {
+      if (["project", "operation", "undoRevision", "redoRevision", "brollCandidates"].includes(key)) {
         const snapshot = JSON.stringify(value);
         if (snapshots.get(key) === snapshot) return;
         snapshots.set(key, snapshot);

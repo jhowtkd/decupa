@@ -78,6 +78,8 @@ body:has(> #visual-provider-notice:not([hidden])) {
 .texto-barra .texto-correct { flex: 1 1 18rem; min-width: 0; }
 .texto-barra .texto-correct input { flex: 1; min-width: 8rem; }
 .texto-barra:has(.barra-status:not(:empty)), .texto-barra:has(.texto-correct:not([hidden])) { border-radius: var(--radius-sub); }
+/* Desfazer e Refazer lado a lado no cabeçalho do texto (sequencia.js). */
+#undoSlot { display: inline-flex; align-items: center; gap: 2px; }
 /* Busca: botão no cabeçalho e a caixa logo abaixo dele (studio-busca.js). */
 .texto-busca { flex: none; display: flex; align-items: center; gap: 4px; padding: 0 14px 10px 28px; }
 /* Na Entrega o cabeçalho do texto some, e a caixa aberta some com ele. */

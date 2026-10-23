@@ -221,6 +221,13 @@ export function singleFlight(run, onChange = () => {}) {
   return call;
 }
 
+/** Topo de `steps` ou `redo` em `project.undo`, só enquanto `head` é a revisão atual. */
+function historyTop(project, key) {
+  const undo = project?.undo;
+  const list = undo && undo.head === project.revision ? undo[key] : null;
+  return Array.isArray(list) ? list[list.length - 1] ?? null : null;
+}
+
 /**
  * Botão de desfazer (puro): anuncia o passo do topo da pilha do servidor
  * (`project.undo`). Só libera quando o GET confirmou a mesma foto
@@ -228,13 +235,43 @@ export function singleFlight(run, onChange = () => {}) {
  * @returns {{ disabled: boolean, busy: boolean, title: string, text: string }}
  */
 export function undoView(project, undoRevision, busy) {
-  const undo = project?.undo;
-  const top = undo && undo.head === project.revision ? undo.steps[undo.steps.length - 1] : null;
+  const top = historyTop(project, "steps");
   if (busy) return { disabled: true, busy: true, title: "Desfazendo…", text: top ? top.label : "" };
   if (!top || undoRevision == null || top.revision !== undoRevision) {
     return { disabled: true, busy: false, title: "Nenhuma alteração com histórico para desfazer", text: "" };
   }
   return { disabled: false, busy: false, title: "Desfazer: " + top.label, text: top.label };
+}
+
+/**
+ * Botão de refazer (puro, só no studio): espelho do `undoView` sobre o ramo
+ * do refazer (`project.undo.redo`) e a foto confirmada pelo GET (`redoRevision`).
+ * Edição nova ou revisão que andou por fora encerram o ramo no servidor.
+ * @returns {{ disabled: boolean, busy: boolean, title: string, text: string }}
+ */
+export function redoView(project, redoRevision, busy) {
+  const top = historyTop(project, "redo");
+  if (busy) return { disabled: true, busy: true, title: "Refazendo…", text: top ? top.label : "" };
+  if (!top || redoRevision == null || top.revision !== redoRevision) {
+    return { disabled: true, busy: false, title: "Nada desfeito para refazer", text: "" };
+  }
+  return { disabled: false, busy: false, title: "Refazer: " + top.label, text: top.label };
+}
+
+/**
+ * Atalho de histórico (puro): Cmd/Ctrl+Z desfaz nas duas variantes; no studio,
+ * Cmd/Ctrl+Shift+Z e Ctrl+Y refazem. Alt nunca é atalho daqui.
+ * @returns {"undo" | "redo" | null}
+ */
+export function historyKey(ev, ui) {
+  if (ev.altKey) return null;
+  const key = String(ev.key || "").toLowerCase();
+  if (key === "z" && (ev.metaKey || ev.ctrlKey)) {
+    if (!ev.shiftKey) return "undo";
+    return ui === "studio" ? "redo" : null;
+  }
+  if (key === "y" && ev.ctrlKey && !ev.metaKey && !ev.shiftKey) return ui === "studio" ? "redo" : null;
+  return null;
 }
 
 function esc(text) {
@@ -256,13 +293,32 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
    */
   const undoEdit = singleFlight(() => {
     const p = state.get("project");
-    if (!p || undoView(p, state.get("undoRevision"), false).disabled) return undefined;
+    if (!p || redoEdit.busy() || undoView(p, state.get("undoRevision"), false).disabled) return undefined;
     return api.call("project/undo", {
       method: "POST",
       body: JSON.stringify({ baseRevision: p.revision, revision: state.get("undoRevision") }),
       label: "Desfazendo…",
     });
-  }, () => placeUndo(state.get("project")));
+  }, () => placeHistory(state.get("project")));
+
+  /**
+   * Refaz o último desfazer (studio). Divide o voo com o desfazer: um pedido
+   * de histórico por vez, e cada um parte da revisão que o anterior deixou.
+   */
+  const redoEdit = singleFlight(() => {
+    const p = state.get("project");
+    if (ui !== "studio" || !p || undoEdit.busy() || redoView(p, state.get("redoRevision"), false).disabled) return undefined;
+    return api.call("project/redo", {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: p.revision, revision: state.get("redoRevision") }),
+      label: "Refazendo…",
+    });
+  }, () => placeHistory(state.get("project")));
+
+  function placeHistory(p) {
+    placeUndo(p);
+    placeRedo(p);
+  }
 
   /** Desfazer mora no cabeçalho do texto: é o gesto de quem edita pelo texto. */
   function placeUndo(p) {
@@ -278,7 +334,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       (document.getElementById("undoSlot") || root()).appendChild(undo);
     }
     const view = undoView(p, state.get("undoRevision"), undoEdit.busy());
-    undo.disabled = view.disabled;
+    undo.disabled = view.disabled || redoEdit.busy();
     undo.setAttribute("aria-busy", String(view.busy));
     // O botão diz o que vai voltar: "Desfazer: Tirar trecho".
     undo.title = view.title;
@@ -291,13 +347,36 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     undo.classList.toggle("has-label", !!view.text);
   }
 
+  /**
+   * Refazer (só no studio) fica logo depois do Desfazer, só com o ícone: o
+   * rótulo do passo vai no title e no nome acessível.
+   */
+  function placeRedo(p) {
+    if (ui !== "studio") return;
+    let redo = document.getElementById("redo");
+    if (!redo) {
+      redo = document.createElement("button");
+      redo.type = "button";
+      redo.id = "redo";
+      redo.className = "icon";
+      redo.innerHTML = ICON.redo;
+      redo.onclick = () => void redoEdit();
+      (document.getElementById("undoSlot") || root()).appendChild(redo);
+    }
+    const view = redoView(p, state.get("redoRevision"), redoEdit.busy());
+    redo.disabled = view.disabled || undoEdit.busy();
+    redo.setAttribute("aria-busy", String(view.busy));
+    redo.title = view.title;
+    redo.setAttribute("aria-label", view.text ? "Refazer: " + view.text : "Refazer edição");
+  }
+
   const studio = ui === "studio";
   const zoom = () => zoomValido(state.get("zoomSequencia"));
 
   let signature = "";
   function render(p) {
-    // O botão vive fora da faixa: atualiza mesmo quando o desenho não muda.
-    placeUndo(p);
+    // Os botões vivem fora da faixa: atualizam mesmo quando o desenho não muda.
+    placeHistory(p);
     const next = JSON.stringify(p && (studio
       ? [p.revision, p.scenes, p.assembly.sources, zoom()]
       : [p.revision, p.scenes, p.assembly.sources, p.captions]));
@@ -815,14 +894,13 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     el.addEventListener("pointercancel", stop);
   }
 
-  // Atalho document-level Cmd/Ctrl+Z: ignora foco em campo editável para
-  // não roubar o desfazer nativo do texto.
+  // Atalhos document-level de desfazer e refazer (`historyKey`): ignoram foco
+  // em campo editável para não roubar o desfazer/refazer nativo do texto.
   if (!undoKeyBound) {
     undoKeyBound = true;
     document.addEventListener("keydown", (ev) => {
-      if (ev.key !== "z" && ev.key !== "Z") return;
-      if (!ev.metaKey && !ev.ctrlKey) return;
-      if (ev.shiftKey || ev.altKey) return;
+      const kind = historyKey(ev, ui);
+      if (!kind) return;
       const target = ev.target;
       if (target instanceof HTMLElement) {
         if (target.isContentEditable) return;
@@ -830,7 +908,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       }
       ev.preventDefault();
-      void undoEdit();
+      void (kind === "redo" ? redoEdit() : undoEdit());
     });
   }
 
@@ -870,6 +948,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     });
   }
   state.subscribe("undoRevision", () => render(state.get("project")));
+  if (ui === "studio") state.subscribe("redoRevision", () => render(state.get("project")));
   state.subscribe("project", (p) => render(p));
   state.subscribe("playhead", (t) => paint(t, true));
   render(state.get("project"));

@@ -20,10 +20,25 @@ export function editLabel(action: EditAction): string {
   return EDIT_LABEL[action.type];
 }
 
+/** A pilha só vale na revisão em que foi gravada; fora dela não há passo. */
+function liveStack(project: Project): UndoStack | null {
+  const undo = project.undo;
+  return undo && undo.head === project.revision ? undo : null;
+}
+
 /** Passos da pilha que ainda valem para o projeto; pilha quebrada não tem passo. */
 function liveSteps(project: Project): UndoStep[] {
-  const undo = project.undo;
-  return undo && undo.head === project.revision ? undo.steps : [];
+  return liveStack(project)?.steps ?? [];
+}
+
+/** Ramo do refazer que ainda vale: some com a pilha, pela mesma regra. */
+function liveRedo(project: Project): UndoStep[] {
+  return liveStack(project)?.redo ?? [];
+}
+
+/** Pilha nova; o ramo do refazer só é gravado quando tem passo. */
+function stack(head: number, steps: UndoStep[], redo: UndoStep[]): UndoStack {
+  return redo.length ? { head, steps, redo } : { head, steps };
 }
 
 /** Passo que o próximo desfazer restaura, ou null. */
@@ -31,46 +46,74 @@ export function undoTop(project: Project): UndoStep | null {
   return liveSteps(project).at(-1) ?? null;
 }
 
+/** Passo que o próximo refazer restaura, ou null. */
+export function redoTop(project: Project): UndoStep | null {
+  return liveRedo(project).at(-1) ?? null;
+}
+
 /**
  * Registra a transição `before` → `after` como um passo: a foto de `before`
  * já foi gravada em `history/rev-<before.revision>.json`. Uma mudança de
- * revisão sem foto no meio quebrou a pilha, então ela recomeça.
+ * revisão sem foto no meio quebrou a pilha, então ela recomeça. Edição nova
+ * encerra o ramo do refazer.
  */
 export function recordUndo(before: Project, after: Project, label: string): Project {
   const steps = [...liveSteps(before), { revision: before.revision, label }].slice(-UNDO_LIMIT);
-  return { ...after, undo: { head: after.revision, steps } };
+  return { ...after, undo: stack(after.revision, steps, []) };
 }
 
 /**
- * Tira o passo desfeito da pilha. O estado de antes do desfazer não vira
- * passo: o desfazer seguinte volta mais um, nunca refaz.
+ * Tira o passo desfeito da pilha e o põe no ramo do refazer, apontando para
+ * a foto de `before` (o estado desfeito), que o chamador já gravou. O
+ * desfazer seguinte volta mais um; o refazer volta o que saiu.
  */
 export function popUndo(before: Project, after: Project): Project {
-  return { ...after, undo: { head: after.revision, steps: liveSteps(before).slice(0, -1) } };
+  const steps = liveSteps(before);
+  const top = steps.at(-1);
+  const redo = top ? [...liveRedo(before), { revision: before.revision, label: top.label }] : liveRedo(before);
+  return { ...after, undo: stack(after.revision, steps.slice(0, -1), redo.slice(-UNDO_LIMIT)) };
 }
 
 /**
- * Pilha gravada; formato inválido vira "sem desfazer" em vez de projeto
- * ilegível. Cada passo é uma foto de revisão anterior ao `head`, e as
- * revisões crescem de passo em passo (é assim que `recordUndo` as grava).
+ * Espelho do `popUndo`: tira o passo refeito do ramo e o devolve à pilha do
+ * desfazer, apontando para a foto de `before`, que o chamador já gravou.
  */
-export function readUndoStack(value: unknown): UndoStack | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const { head, steps } = value as { head?: unknown; steps?: unknown };
-  if (!Number.isSafeInteger(head) || (head as number) < 0 || !Array.isArray(steps)) return undefined;
+export function popRedo(before: Project, after: Project): Project {
+  const redo = liveRedo(before);
+  const top = redo.at(-1);
+  const steps = top ? [...liveSteps(before), { revision: before.revision, label: top.label }] : liveSteps(before);
+  return { ...after, undo: stack(after.revision, steps.slice(-UNDO_LIMIT), redo.slice(0, -1)) };
+}
+
+/**
+ * Passos gravados: cada um é uma foto de revisão anterior ao `head`, e as
+ * revisões crescem de passo em passo (é assim que as funções acima gravam).
+ */
+function readSteps(value: unknown, head: number): UndoStep[] | undefined {
+  if (!Array.isArray(value)) return undefined;
   let previous = -1;
-  const valid = steps.every((step: unknown) => {
+  const valid = value.every((step: unknown) => {
     if (typeof step !== "object" || step === null) return false;
     const { revision, label } = step as { revision?: unknown; label?: unknown };
     if (!Number.isSafeInteger(revision) || typeof label !== "string") return false;
     const n = revision as number;
-    if (n <= previous || n >= (head as number)) return false;
+    if (n <= previous || n >= head) return false;
     previous = n;
     return true;
   });
   if (!valid) return undefined;
-  return {
-    head: head as number,
-    steps: (steps as UndoStep[]).slice(-UNDO_LIMIT).map(({ revision, label }) => ({ revision, label })),
-  };
+  return (value as UndoStep[]).slice(-UNDO_LIMIT).map(({ revision, label }) => ({ revision, label }));
+}
+
+/**
+ * Pilha gravada; formato inválido vira "sem desfazer" em vez de projeto
+ * ilegível. Ramo do refazer inválido vira só "sem refazer".
+ */
+export function readUndoStack(value: unknown): UndoStack | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { head, steps, redo } = value as { head?: unknown; steps?: unknown; redo?: unknown };
+  if (!Number.isSafeInteger(head) || (head as number) < 0) return undefined;
+  const undoSteps = readSteps(steps, head as number);
+  if (!undoSteps) return undefined;
+  return stack(head as number, undoSteps, readSteps(redo, head as number) ?? []);
 }

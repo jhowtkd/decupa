@@ -21,6 +21,7 @@ export const ICON = {
   ok: stroke(14, '<circle cx="8" cy="8" r="6.5"/><path d="M5.2 8.3l1.9 1.8 3.7-3.8"/>'),
   play: '<svg class="i" width="10" height="10" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>',
   plus: stroke(12, '<path d="M8 3v10M3 8h10"/>'),
+  redo: stroke(16, '<path d="M10 3.5l3 3-3 3M12.5 6.5h-6a3.5 3.5 0 0 0 0 7H8"/>'),
   search: stroke(14, '<circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4L14 14"/>'),
   send: stroke(14, '<path d="M8 13V3M4 7l4-4 4 4"/>'),
   spinner: stroke(16, '<circle cx="8" cy="8" r="6.5" stroke-opacity=".25"/><path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5"/>', " spin"),
