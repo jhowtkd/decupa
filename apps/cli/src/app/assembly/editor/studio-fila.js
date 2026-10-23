@@ -79,14 +79,27 @@ export function gravarManifesto(storage, projeto, itens) {
   }
 }
 
-/** Erro de envio → texto. Sem status, a requisição nem chegou: a conexão caiu. */
+/** A Reserva de Edição passou para outra aba ou pessoa no meio da fila. */
+export const RESERVA_PERDIDA = "A edição passou para outra aba ou pessoa. O envio parou; assuma a edição e retome.";
+/** Mesma impressão (nome, tamanho e data) de um arquivo que já está na fila. */
+export const IMPRESSAO_REPETIDA = "Outro arquivo com o mesmo nome, tamanho e data já está na fila. Renomeie um deles para enviar.";
+/** Nova seleção de um concluído: a impressão casa, o conteúdo não é conferido. */
+export const IMPRESSAO_CONCLUIDA = "Mesmo nome, tamanho e data de um arquivo já enviado. Se for outro arquivo, renomeie-o para enviar.";
+
+/** O fetch rejeita com TypeError quando a requisição nem chega: a conexão caiu. */
+export function quedaDeConexao(erro) {
+  return erro?.name === "TypeError";
+}
+
+/** Erro de envio → texto. */
 export function mensagemDeErro(erro, modo) {
   const status = erro?.status;
-  if (status === undefined) {
+  if (quedaDeConexao(erro)) {
     return modo === "equipe"
       ? "Conexão interrompida. Retome o envio para continuar de onde parou."
       : "Conexão interrompida. Retome o envio; este arquivo recomeça do início.";
   }
+  if (erro?.dono) return RESERVA_PERDIDA;
   if (status === 413) return "Este arquivo passa do tamanho máximo permitido.";
   if (status === 507) return "Não há espaço suficiente para guardar este arquivo. Libere espaço e tente de novo.";
   if (status === 404 && modo === "equipe") return "O envio expirou no servidor. Tente de novo para enviar do começo.";
@@ -115,7 +128,9 @@ export function textoDoItem(item, { pausado, modo }) {
       if (item.fase === "verifying") return "Verificando";
       return "Enviando · " + pct(item.percent) + "%";
     case "adicionando": return "Adicionando ao projeto…";
-    case "pausado": return item.percent != null ? "Pausado · " + pct(item.percent) + "%" : "Pausado";
+    case "pausado":
+      if (item.mediaId) return "Pausado · falta adicionar ao projeto";
+      return item.percent != null ? "Pausado · " + pct(item.percent) + "%" : "Pausado";
     case "erro": return item.mediaId ? "Enviado · falta adicionar ao projeto" : "Falhou";
     case "sem-arquivo":
       if (item.mediaId) return "Enviado · falta adicionar ao projeto";
@@ -128,10 +143,9 @@ export function textoDoItem(item, { pausado, modo }) {
 }
 
 /** Ações que cada item oferece agora (o que a tela desenha como botão). */
-export function acoesDoItem(item, { modo }) {
+export function acoesDoItem(item) {
   if (item.estado === "pronto" || item.estado === "adicionando") return [];
-  // O POST do modo local não tem como ser interrompido: o arquivo em voo termina.
-  if (item.estado === "enviando") return modo === "equipe" ? ["remover"] : [];
+  if (item.estado === "enviando") return ["remover"];
   const acoes = [];
   if (item.mediaId && (item.estado === "erro" || item.estado === "sem-arquivo")) acoes.push("adicionar");
   else if (item.estado === "erro" && item.arquivo && !item.invalido) acoes.push("tentar");
@@ -146,7 +160,7 @@ export function textoDoResumo(visao) {
   const partes = [prontos + " de " + total + " no projeto"];
   const ativo = visao.itens.find((item) => item.estado === "enviando" || item.estado === "adicionando");
   if (ativo) partes.push("enviando " + ativo.nome);
-  else if (visao.pausado && visao.contagem.pendentes) partes.push("envio pausado");
+  else if (visao.pausado && visao.contagem.pendentes) partes.push(visao.motivoDaPausa || "envio pausado");
   if (semArquivo) partes.push(semArquivo + (semArquivo === 1 ? " espera o arquivo" : " esperam o arquivo"));
   if (erros) partes.push(erros + " com falha");
   return partes.join(" · ");
@@ -156,9 +170,12 @@ export function textoDoResumo(visao) {
  * Estado da fila. Os transportes chegam prontos:
  * - `enviar(item, { onProgress })`: no modo equipe devolve `{ mediaId, deduplicado }`
  *   (o cliente retomável de hoje); no local, `{ sha256, reaproveitada }` já com a
- *   fonte no projeto. Pausa no modo equipe chega como erro `UploadPausedError`.
+ *   fonte no projeto. Pausa chega como erro `UploadPausedError`; Reserva perdida,
+ *   como erro com `dono`; queda de conexão, como `TypeError` do fetch.
  * - `adicionar(mediaId)`: só no modo equipe, `POST project/media` → `{ sha256, reaproveitada }`.
- * - `pausar(item)` / `cancelar(item)`: param o envio do item e apagam o parcial no servidor.
+ * - `pausar(item)`: para o envio em voo do item. O parcial fica no servidor e o
+ *   Retomar segue pelo offset (no modo local, o arquivo recomeça).
+ * - `cancelar(item)`: para o envio do item e apaga o parcial no servidor.
  * - `parcial(entrada)`: percentual já enviado de um pendente (decupa.uploads.v1) ou null.
  * - `fontes()`: sha256 das fontes do projeto agora (Set), ou null antes do primeiro projeto.
  * @param {object} config
@@ -182,7 +199,10 @@ export function criarFila({
   let itens = [];
   let ativo = null;
   let pausado = false;
+  /** Por que a fila parou sozinha (conexão, Reserva); null quando foi a pessoa. */
+  let motivoDaPausa = null;
   let restaurada = false;
+  let repetidos = 0;
   let gravado = "";
 
   const noProjeto = (sha256) => Boolean(sha256) && fontes()?.has(sha256) === true;
@@ -206,7 +226,7 @@ export function criarFila({
 
   function instantanea() {
     const visao = {
-      modo, pausado, ativo: Boolean(ativo),
+      modo, pausado, motivoDaPausa: pausado ? motivoDaPausa : null, ativo: Boolean(ativo),
       contagem: contagem(),
       podeLimpar: itens.some((item) => item.estado === "pronto"),
       precisaArquivo: itens.some((item) => item.estado === "sem-arquivo" && !item.mediaId),
@@ -214,7 +234,7 @@ export function criarFila({
         chave: item.chave, nome: item.nome, estado: item.estado, fase: item.fase,
         percent: item.percent, mensagem: item.mensagem, reconhecido: item.reconhecido,
         texto: textoDoItem(item, { pausado, modo }),
-        acoes: acoesDoItem(item, { modo }),
+        acoes: acoesDoItem(item),
       })),
     };
     const pendentes = itens.some((item) => item.estado === "aguardando" || item.estado === "pausado");
@@ -302,9 +322,15 @@ export function criarFila({
     } catch (erro) {
       if (item.removido) return;
       if (ativo === item) ativo = null;
-      item.estado = "erro";
-      item.mensagem = "O arquivo já está no acervo, mas não entrou no projeto: "
-        + (erro?.message || String(erro)) + ". Adicione de novo; nada é reenviado.";
+      if (erro?.dono || quedaDeConexao(erro)) {
+        // Sem Reserva ou sem conexão os próximos falhariam igual: a fila para e
+        // o Retomar só associa este (o arquivo já está no acervo).
+        pararSozinha(item, mensagemDeErro(erro, modo));
+      } else {
+        item.estado = "erro";
+        item.mensagem = "O arquivo já está no acervo, mas não entrou no projeto: "
+          + (erro?.message || String(erro)) + ". Adicione de novo; nada é reenviado.";
+      }
       notificar();
       proximo();
       return;
@@ -324,18 +350,25 @@ export function criarFila({
     proximo();
   }
 
+  /** Conexão caiu ou a Reserva se perdeu: os próximos falhariam igual. A fila para e espera o Retomar. */
+  function pararSozinha(item, mensagem) {
+    item.estado = "pausado";
+    item.mensagem = mensagem;
+    pausado = true;
+    motivoDaPausa = mensagem;
+  }
+
   function falhar(item, erro) {
     if (item.removido) return;
     if (ativo === item) ativo = null;
     item.fase = null;
+    if (modo !== "equipe") item.percent = null;
     if (erro?.name === "UploadPausedError") {
-      item.estado = "pausado";
-    } else if (erro?.status === undefined) {
-      // Conexão caiu: os próximos cairiam também. A fila para e espera o Retomar.
-      item.estado = "pausado";
-      item.mensagem = mensagemDeErro(erro, modo);
-      pausado = true;
-      if (modo !== "equipe") item.percent = null;
+      // A rejeição chega quando a requisição em voo volta: se a fila já foi
+      // retomada nesse meio-tempo, o item volta à vez dele em vez de ficar preso.
+      item.estado = pausado ? "pausado" : "aguardando";
+    } else if (erro?.dono || quedaDeConexao(erro)) {
+      pararSozinha(item, mensagemDeErro(erro, modo));
     } else {
       item.estado = "erro";
       item.mensagem = mensagemDeErro(erro, modo);
@@ -351,13 +384,28 @@ export function criarFila({
    */
   function adicionarArquivos(arquivos) {
     let novos = 0;
+    const nestaEscolha = new Set();
+    /** A impressão é a identidade do parcial no decupa.uploads.v1: dois arquivos com a mesma não podem subir juntos. */
+    function repetido(arquivo, chave) {
+      repetidos += 1;
+      itens.push({
+        ...novoItem(arquivo, chave + "\u0000repetido-" + repetidos),
+        estado: "erro", mensagem: IMPRESSAO_REPETIDA, invalido: true,
+      });
+    }
     for (const arquivo of arquivos) {
       const chave = chaveDoArquivo(arquivo);
+      if (nestaEscolha.has(chave)) {
+        repetido(arquivo, chave);
+        continue;
+      }
+      nestaEscolha.add(chave);
       const existente = itens.find((item) => item.chave === chave);
       if (existente) {
         if (existente.estado === "pronto") {
           if (noProjeto(existente.sha256)) {
             existente.reconhecido = true;
+            existente.mensagem = IMPRESSAO_CONCLUIDA;
             continue;
           }
           // A fonte saiu do projeto: volta a ser um arquivo como outro qualquer.
@@ -373,7 +421,11 @@ export function criarFila({
             Object.assign(existente, { estado: "aguardando", mensagem: null });
           }
           novos += 1;
+          continue;
         }
+        // Aguardando, enviando ou adicionando: outro arquivo com a mesma impressão
+        // retomaria o parcial deste. Fica à vista, sem envio.
+        repetido(arquivo, chave);
         continue;
       }
       const item = novoItem(arquivo, chave);
@@ -428,18 +480,27 @@ export function criarFila({
     if (itens.length !== antes) notificar();
   }
 
-  function pausar() {
+  /**
+   * Para a fila. `motivo` diz por que, quando não foi a pessoa (ex.: a Reserva
+   * passou para outra aba). Sem nada correndo nem esperando, não há o que parar:
+   * a próxima escolha de arquivos começa direto.
+   */
+  function pausar({ motivo = null } = {}) {
     if (pausado) return;
+    const pendente = itens.some((item) => item.estado === "aguardando" || item.estado === "pausado");
+    if (!ativo && !pendente) return;
     pausado = true;
-    // No modo local o arquivo em voo termina; a fila para depois dele.
-    if (ativo && ativo.estado === "enviando" && modo === "equipe") pausarEnvio(ativo);
+    motivoDaPausa = motivo;
+    // O envio em voo para; no modo equipe o parcial fica e o Retomar segue pelo offset.
+    if (ativo && ativo.estado === "enviando") pausarEnvio(ativo);
     notificar();
   }
 
   function retomar() {
     pausado = false;
+    motivoDaPausa = null;
     for (const item of itens) {
-      if (item.estado === "pausado" && item.arquivo) Object.assign(item, { estado: "aguardando", mensagem: null });
+      if (item.estado === "pausado" && (item.arquivo || item.mediaId)) Object.assign(item, { estado: "aguardando", mensagem: null });
     }
     notificar();
     proximo();
@@ -447,11 +508,11 @@ export function criarFila({
 
   function remover(chave) {
     const item = itens.find((outro) => outro.chave === chave);
-    if (!item || item.estado === "adicionando" || (item.estado === "enviando" && modo !== "equipe")) return;
+    if (!item || item.estado === "adicionando") return;
     item.removido = true;
     if (ativo === item) ativo = null;
-    // Cancela no servidor o envio parcial; o que já está no acervo ou no projeto fica.
-    if (modo === "equipe" && !item.mediaId && item.estado !== "pronto") {
+    // Para o envio e apaga o parcial no servidor; o que já está no acervo ou no projeto fica.
+    if (!item.mediaId && item.estado !== "pronto" && !item.invalido) {
       void Promise.resolve(cancelar(item)).catch(() => {});
     }
     itens = itens.filter((outro) => outro !== item);

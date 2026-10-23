@@ -3,8 +3,8 @@
 // protocolo (ResumableMediaUpload + POST project/media no modo equipe, POST
 // project/import no local), o desenho da lista e o arraste sobre o rail.
 // Nada aqui roda sozinho: só o arquivo escolhido pela pessoa sobe.
-import { ResumableMediaUpload, uploadFingerprint } from "./media-upload.js";
-import { criarFila } from "./studio-fila.js";
+import { ResumableMediaUpload, UploadPausedError, uploadFingerprint } from "./media-upload.js";
+import { RESERVA_PERDIDA, criarFila } from "./studio-fila.js";
 import { projectHeaders, projectPath } from "../project-path.js";
 
 const ROTULO_ACAO = { tentar: "Tentar de novo", adicionar: "Adicionar ao projeto", remover: "Remover" };
@@ -27,40 +27,63 @@ function arquivoSalvo(item) {
   return { name: item.nome, size: item.tamanho, lastModified: item.ultimaModificacao };
 }
 
-/** Erro de HTTP com o status preservado, como o media-upload.js faz. */
-function httpError(status, message) {
-  return Object.assign(new Error(message), { status });
+/** Erro de HTTP com o status preservado, como o media-upload.js faz; `dono` marca a Reserva perdida. */
+function httpError(status, message, dono = null) {
+  return Object.assign(new Error(message), { status }, dono ? { dono } : {});
 }
 
 /**
  * Monta a fila no rail de Materiais. `setStage` leva à etapa onde a fila
  * aparece; `onAtividade` diz ao bootstrap o que mostrar no status e se o
  * envio local está em voo (ui.importing segura edições, como na legacy).
- * Devolve `adicionar(arquivos)`, a porta de entrada do seletor e do arraste.
+ * `onConflitoDeReserva` repassa o 409 com dono do POST local (que não passa
+ * pelo api.call) à UI da Reserva, que entra em Modo Leitura na hora.
+ * Devolve `adicionar(arquivos)`, a porta de entrada do seletor e do arraste,
+ * e `pausarPorReserva()`, que o bootstrap chama ao entrar em Modo Leitura.
  */
 export function mountMateriais({
   state, api, setStage = () => {}, teamMode = false, mediaEnabled = false,
-  readOnly = () => false, onAtividade = () => {},
+  readOnly = () => false, onAtividade = () => {}, onConflitoDeReserva = () => {},
   storage = localStore(), projeto = projetoAtual(),
   criarEnvio = (opcoes) => new ResumableMediaUpload(opcoes),
   fetchImpl = (url, init) => fetch(url, init),
 }) {
   const modo = teamMode && mediaEnabled ? "equipe" : "local";
+  /** Envio em voo por item: o cliente retomável e a promessa do start (equipe) ou o abort do POST (local). */
   const envios = new Map();
 
-  async function importar(arquivo, tentativa = 0) {
+  async function importar(item, tentativa = 0) {
+    const arquivo = item.arquivo;
     const revision = state.get("project").revision;
     // A URL vai inteira no template: o rastreador de recursos dos testes HTTP
     // lê `import` seguido de aspas como um import de módulo.
     const url = projectPath(`project/import?baseRevision=${revision}&name=${encodeURIComponent(arquivo.name)}`);
-    const res = await fetchImpl(url, {
-      method: "POST", headers: projectHeaders({ "x-file-size": String(arquivo.size) }), body: arquivo,
-    });
-    const body = await res.json().catch(() => ({}));
+    // Pausar e Remover interrompem o corpo; o servidor apaga o .part do que não chegou inteiro.
+    const controle = new AbortController();
+    envios.set(item.chave, { abortar: () => controle.abort() });
+    let res;
+    let body;
+    try {
+      res = await fetchImpl(url, {
+        method: "POST", headers: projectHeaders({ "x-file-size": String(arquivo.size) }), body: arquivo,
+        signal: controle.signal,
+      });
+      body = await res.json().catch(() => ({}));
+    } catch (erro) {
+      if (controle.signal.aborted) throw new UploadPausedError();
+      throw erro;
+    } finally {
+      envios.delete(item.chave);
+    }
+    // Reserva perdida: repetir mandaria o arquivo inteiro de novo para outro 409.
+    if (res.status === 409 && body.dono) {
+      onConflitoDeReserva(body);
+      throw httpError(409, body.error || RESERVA_PERDIDA, body.dono);
+    }
     // Revisão andou entre um arquivo e outro: reconcilia e tenta uma vez.
     if (res.status === 409 && tentativa === 0) {
       await api.call("project").catch(() => {});
-      return importar(arquivo, 1);
+      return importar(item, 1);
     }
     if (!res.ok) throw httpError(res.status, body.error || "erro " + res.status);
     if (body.project) {
@@ -80,10 +103,11 @@ export function mountMateriais({
       return project ? new Set(project.assembly.sources.map((source) => source.sha256)) : null;
     },
     enviar: (item, { onProgress }) => {
-      if (modo !== "equipe") return importar(item.arquivo);
+      if (modo !== "equipe") return importar(item);
       const upload = criarEnvio({ onProgress, storage });
-      envios.set(item.chave, upload);
-      return upload.start(item.arquivo).finally(() => envios.delete(item.chave));
+      const inicio = upload.start(item.arquivo);
+      envios.set(item.chave, { upload, inicio });
+      return inicio.finally(() => envios.delete(item.chave));
     },
     adicionar: async (mediaId) => {
       const { res, body } = await api.call("project/media", {
@@ -91,16 +115,35 @@ export function mountMateriais({
         body: JSON.stringify({ baseRevision: state.get("project").revision, mediaId }),
         label: "Adicionando Mídia…",
       });
-      if (!res.ok) throw httpError(res.status, body?.error || "erro " + res.status);
+      // O api.call já levou o 409 com dono à UI da Reserva; o dono marca o erro para a fila parar.
+      if (!res.ok) throw httpError(res.status, body?.error || "erro " + res.status, body?.dono);
       return { sha256: body.source?.sha256 ?? mediaId, reaproveitada: body.reused === true };
     },
-    pausar: (item) => envios.get(item.chave)?.pause(),
-    cancelar: (item) => {
-      // Depois de recarregar não há cliente vivo: o id salvo diz o que apagar no servidor.
+    pausar: (item) => {
+      const vivo = envios.get(item.chave);
+      if (vivo?.upload) vivo.upload.pause();
+      else vivo?.abortar();
+    },
+    cancelar: async (item) => {
       const alvo = item.arquivo ?? arquivoSalvo(item);
-      const upload = envios.get(item.chave) ?? criarEnvio({ storage });
-      if (!upload.uploadId) upload.uploadId = upload.readSaved(alvo)?.id ?? null;
-      return upload.cancel(alvo);
+      const vivo = envios.get(item.chave);
+      if (vivo?.abortar) {
+        vivo.abortar();
+        return;
+      }
+      if (vivo?.upload) {
+        await vivo.upload.cancel(alvo);
+        // O POST de criação pode ainda estar em voo (sem id para apagar): quando o
+        // start assentar, o id existe e a sessão e o decupa.uploads.v1 são limpos também.
+        await vivo.inicio.catch(() => {});
+        if (vivo.upload.uploadId) await vivo.upload.cancel(alvo);
+        return;
+      }
+      if (modo !== "equipe") return;
+      // Depois de recarregar não há cliente vivo: o id salvo diz o que apagar no servidor.
+      const upload = criarEnvio({ storage });
+      upload.uploadId = upload.readSaved(alvo)?.id ?? null;
+      await upload.cancel(alvo);
     },
     parcial: (entrada) => {
       if (modo !== "equipe" || !entrada.tamanho) return null;
@@ -288,5 +331,10 @@ export function mountMateriais({
     setStage("materiais");
   }
 
-  return { adicionar, fila };
+  /** Modo Leitura: a fila para (no modo equipe, a parte em voo também) e diz por quê. */
+  function pausarPorReserva() {
+    fila.pausar({ motivo: RESERVA_PERDIDA });
+  }
+
+  return { adicionar, pausarPorReserva, fila };
 }

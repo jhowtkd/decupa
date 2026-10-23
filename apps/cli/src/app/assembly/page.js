@@ -104,8 +104,15 @@ const client = createApi({
   },
 });
 
+/** Fila de Materiais do studio, montada mais abaixo; o Modo Leitura a para. */
+let materiais = null;
 const reservationUI = mountEditReservationUI({
-  onReadOnly: (owner) => { ui.readOnly = Boolean(owner); ui.owner = owner; },
+  onReadOnly: (owner) => {
+    ui.readOnly = Boolean(owner);
+    ui.owner = owner;
+    // Sem a Reserva a fila não segue: o modo equipe continuaria subindo ao acervo.
+    if (owner) materiais?.pausarPorReserva();
+  },
   onTakeover: () => call("project"),
 });
 
@@ -729,9 +736,11 @@ document.getElementById("stages").addEventListener("click", (event) => {
 window.addEventListener("decupa:set-stage", (event) => setStage(event.detail));
 // Studio: fila de Materiais com todos os arquivos escolhidos já à vista, e
 // renomear a montagem com o aviso de invalidação antes de confirmar.
-const materiais = editorUi === "studio" ? studio.materiais.mountMateriais({
+materiais = editorUi === "studio" ? studio.materiais.mountMateriais({
   state, api, setStage, teamMode, mediaEnabled,
   readOnly: () => ui.readOnly,
+  // O POST local não passa pelo call(): o 409 com dono chega à Reserva por aqui.
+  onConflitoDeReserva: (body) => reservationUI.handleConflict(body),
   onAtividade: ({ importando, rotulo }) => {
     ui.importing = importando;
     ui.label = rotulo;
