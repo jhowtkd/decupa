@@ -2,7 +2,7 @@
 // os dois avisos (não reenquadra; a legenda não vai para o MP4) e o POST.
 import { afterEach, expect, it, vi } from "vitest";
 import { formatChip, formatRatio, fpsLabel, PROPORCOES } from "./format.js";
-import { LEGENDA_FORA_DO_MP4 } from "./studio-legendas.js";
+import { LEGENDA_FORA_DO_MP4 } from "./rail.js";
 import {
   abrirFormato,
   avisoDeReenquadrar,

@@ -5,10 +5,11 @@ import { mountFillerContext, mountFillerReview } from "./cacoetes.js";
 // comportamento. As ações por palavra moram no menu flutuante do texto.
 import { watchedState } from "./watched.js";
 import { montageDuration, supportGroups, replaceSupportGroup, candidateEntries } from "./montage.js";
-import { deliveryChecklist, deliveryFormats, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
+import { deliveryChecklist, deliveryFormats, deliveryItems, exportView, formatLabel, formatOrigin, resolveView, verifyView } from "./rail.js";
+import { formatChip } from "./format.js";
 import { ICON } from "./icons.js";
-import { approveButtonView, reviewView, watchProgress } from "./progress.js";
-import { coverageComplete, coveredSeconds, newCoverage, playbackReading } from "./playback.js";
+import { approveButtonView, reviewView } from "./progress.js";
+import { mountCobertura } from "./cobertura.js";
 import { singleFlight } from "./sequencia.js";
 import { projectHeaders, projectPath } from "../project-path.js";
 
@@ -75,82 +76,17 @@ export function mountStage({ state, api, player }) {
     if (source) player.playOriginal(source.id);
   };
 
-  // Rastreio "assistido de verdade" (#103): só conta a reprodução real da
-  // prévia atual, provada pelo played do player. A cobertura (playback.js)
-  // junta os trechos tocados; seek para a frente não entra, voltar zera, e
-  // trocar de src (Original ou revisão nova) recomeça do zero. Aqui só se
-  // leem os eventos do player.
-  let coverage = newCoverage();
+  // O rastreio da reprodução (cobertura.js) é dono dos listeners do player e
+  // publica "watched" e "watchCoverage"; aqui só se lê o que ele publicou.
+  const cobertura = mountCobertura({ state, video: previewPlayer });
   const RING = 2 * Math.PI * 19;
-  function isPreviewSrc(project) {
-    return !!project && project.previewRevision != null
-      && previewPlayer.getAttribute("data-rev") === String(project.previewRevision);
-  }
-  function markWatched() {
-    const project = state.get("project");
-    if (!isPreviewSrc(project)) return;
-    state.set("watched", { revision: project.previewRevision, ended: true });
-  }
-  function resetWatched() {
-    state.set("watched", { revision: null, ended: false });
-  }
-  function playedRanges() {
-    const ranges = [];
-    for (let i = 0; i < previewPlayer.played.length; i++) {
-      ranges.push([previewPlayer.played.start(i), previewPlayer.played.end(i)]);
-    }
-    return ranges;
-  }
-  /**
-   * O assistido acompanha a cobertura contra a duração de agora: marca quando
-   * cobre e revoga quando deixa de cobrir (metadados que mudam a duração).
-   */
-  function settleWatched(project) {
-    const watched = state.get("watched");
-    const marked = watched?.ended === true && watched.revision === project.previewRevision;
-    const complete = coverageComplete(coverage, previewPlayer.duration);
-    if (complete && !marked) markWatched();
-    else if (!complete && watched?.ended) resetWatched();
-    paintReview(project);
-  }
-  /** Uma leitura do player; `seek` marca posição vinda de salto (seeking/seeked). */
-  function readPlayback(seek) {
-    const project = state.get("project");
-    if (!Number.isFinite(previewPlayer.currentTime) || !isPreviewSrc(project)) return;
-    const reading = playbackReading(coverage, previewPlayer.currentTime, {
-      played: playedRanges(), rate: previewPlayer.playbackRate, seek,
-      source: previewPlayer.getAttribute("data-rev"),
-    });
-    coverage = reading.coverage;
-    if (reading.reset) resetWatched();
-    settleWatched(project);
-  }
-  previewPlayer.addEventListener("timeupdate", () => readPlayback(previewPlayer.seeking));
-  previewPlayer.addEventListener("seeking", () => readPlayback(true));
-  previewPlayer.addEventListener("seeked", () => readPlayback(true));
-  previewPlayer.addEventListener("ended", () => readPlayback(false));
-  // Fecha o trecho na velocidade antiga antes de a nova valer (sem retroagir).
-  previewPlayer.addEventListener("ratechange", () => readPlayback(false));
-  const onDuration = () => {
-    const project = state.get("project");
-    if (isPreviewSrc(project)) settleWatched(project);
-  };
-  previewPlayer.addEventListener("durationchange", onDuration);
-  previewPlayer.addEventListener("loadedmetadata", onDuration);
-  previewPlayer.addEventListener("loadstart", () => {
-    coverage = newCoverage(0, { source: previewPlayer.getAttribute("data-rev") });
-    state.set("watched", { revision: null, ended: false });
-  });
 
   /** Cartão de revisão: anel do visto, texto do gate e aprovar travado (Task 9). */
   function paintReview(project) {
     if (!project) return;
     const status = watchedState(project, state.get("watched"));
-    const progress = watchProgress(coveredSeconds(coverage, previewPlayer.duration), previewPlayer.duration, status.watched);
-    const previous = state.get("watchCoverage");
-    if (previous?.revision !== project.previewRevision || previous?.ratio !== progress.ratio || previous?.label !== progress.label) {
-      state.set("watchCoverage", { revision: project.previewRevision, ...progress });
-    }
+    const coverage = state.get("watchCoverage");
+    const progress = coverage?.revision === project.previewRevision ? coverage : { ratio: 0, label: "" };
     const view = reviewView(project, status, progress);
     document.getElementById("reviewTitle").textContent = view.title;
     document.getElementById("freshChip").textContent = project.previewRevision == null
@@ -234,10 +170,7 @@ export function mountStage({ state, api, player }) {
         previewPlayer.setAttribute("data-rev", String(project.previewRevision));
         previewPlayer.removeAttribute("data-prev");
         previewPlayer.currentTime = time;
-        // Troca de src invalida o "assistido" (o loadstart cobre o resto).
-        state.set("watched", { revision: null, ended: false });
-        // A posição mantida na troca não foi tocada nesta prévia: a contagem recomeça.
-        coverage = newCoverage(Number.isFinite(time) ? time : 0, { source: String(project.previewRevision) });
+        cobertura.restart(time, String(project.previewRevision));
       }
       lastPreviewRev = project.previewRevision;
       if (!current) {
@@ -305,6 +238,7 @@ export function mountStage({ state, api, player }) {
   state.subscribe("operation", () => renderPreview(state.get("project")));
   state.subscribe("view", () => renderPreview(state.get("project")));
   state.subscribe("watched", () => paintReview(state.get("project")));
+  state.subscribe("watchCoverage", () => paintReview(state.get("project")));
   renderPreview(state.get("project"));
 }
 
@@ -313,6 +247,23 @@ let lastPreviewRev = null;
 
 /** Chip mono (.chip da Task 3): metadados curtos da prévia em linha. */
 const chip = (t) => { const s = document.createElement("span"); s.className = "chip"; s.textContent = t; return s; };
+
+/** Linha de arquivo com Baixar; `file` é também o nome com que ele chega ao disco. */
+function fileRow(file, label, href) {
+  const li = document.createElement("li");
+  li.className = "file";
+  li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
+  li.querySelector(".file-name").textContent = file;
+  li.querySelector(".file-desc").textContent = label;
+  const link = document.createElement("a");
+  link.className = "button";
+  link.href = href;
+  link.download = file;
+  link.textContent = "Baixar";
+  link.setAttribute("aria-label", "Baixar " + file);
+  li.append(link);
+  return li;
+}
 
 /** Desabilita sem reabilitar um botão que ainda tem spinner próprio. */
 function setDisabled(el, value) {
@@ -439,7 +390,11 @@ export function pendingItems(project) {
   return items;
 }
 
-export function mountContexto({ state, api, player }) {
+/**
+ * @param {{ state: any, api: any, player: any, ui?: "legacy" | "studio" }} deps
+ * `ui` só muda a entrega: no studio, os arquivos vão em três itens com revisão e disponibilidade.
+ */
+export function mountContexto({ state, api, player, ui = "legacy" }) {
   const root = document.getElementById("contexto");
   root.replaceChildren();
 
@@ -595,6 +550,15 @@ export function mountContexto({ state, api, player }) {
     + '<ul id="versionHistory" class="plain history"></ul>';
   delivery.hidden = true;
   document.getElementById("center").appendChild(delivery);
+  // Studio: vídeo, legendas e continuidade no editor, cada um com a revisão a
+  // que corresponde e a disponibilidade, no lugar da lista só do que existe.
+  const itens = ui === "studio" ? document.createElement("ul") : null;
+  if (itens) {
+    itens.id = "entregaItens";
+    itens.className = "plain entrega-itens";
+    itens.setAttribute("aria-label", "Arquivos da entrega");
+    delivery.insertBefore(itens, document.getElementById("deliveryFiles"));
+  }
 
   // Controle de ritmo (#66): escolha do perfil é etapa anterior à
   // prévia/aprovação — a proposta compara pausas e oferece amostra
@@ -710,33 +674,6 @@ export function mountContexto({ state, api, player }) {
     });
   };
 
-  // Escolha de formato: visível (linha + chip) e editável por diálogo —
-  // muda a revisão e invalida prévia/aprovação via /project/settings.
-  const formatDialog = document.createElement("dialog");
-  formatDialog.id = "formatDialog";
-  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
-    + '<label>Usar formato de <select id="formatSource"></select></label>'
-    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
-    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
-    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
-    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
-    + '<button type="button" id="closeFormat">Fechar</button></div>';
-  document.body.appendChild(formatDialog);
-  document.getElementById("editFormat").onclick = () => {
-    const p = state.get("project");
-    if (!p) return;
-    const sel = document.getElementById("formatSource");
-    sel.replaceChildren(new Option("Personalizado", ""));
-    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
-      sel.appendChild(new Option(s.name, s.id));
-    }
-    sel.value = "";
-    document.getElementById("formatWidth").value = p.assembly.width;
-    document.getElementById("formatHeight").value = p.assembly.height;
-    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
-    formatDialog.showModal();
-  };
-  document.getElementById("closeFormat").onclick = () => formatDialog.close();
   // Confirmação manual da conferência (#63): exige entrega da revisão
   // atual; grava revisão+artefato+origem manual no verificacao.json.
   document.getElementById("confirmImport").onclick = () => {
@@ -748,31 +685,11 @@ export function mountContexto({ state, api, player }) {
       label: "Confirmando conferência…",
     });
   };
-  document.getElementById("saveFormat").onclick = async () => {
-    const p = state.get("project");
-    if (!p) return;
-    const sourceId = document.getElementById("formatSource").value;
-    let body;
-    if (sourceId) {
-      body = { baseRevision: p.revision, sourceId };
-    } else {
-      const rawFps = document.getElementById("formatFps").value.trim();
-      const split = rawFps.split("/");
-      const fps = split.length === 2
-        ? { num: Number(split[0]), den: Number(split[1]) }
-        : { num: Number(rawFps) * 1000, den: 1000 };
-      body = {
-        baseRevision: p.revision,
-        width: Number(document.getElementById("formatWidth").value),
-        height: Number(document.getElementById("formatHeight").value),
-        fps,
-      };
-    }
-    const { res } = await api.call("project/settings", {
-      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
-    });
-    if (res.ok) formatDialog.close();
-  };
+  // Formato: no studio, "Alterar formato" abre o único diálogo de formato dele
+  // (studio-formato.js abre com qualquer [data-acao="formato"]); o diálogo
+  // antigo é só da legacy.
+  if (ui === "studio") document.getElementById("editFormat").setAttribute("data-acao", "formato");
+  else mountLegacyFormat({ state, api });
   const exportUi = { status: "idle", error: null, revision: null };
   let deliveryCapabilities = { resolve: false, primary: "package" };
   let resolveDelivery=null;
@@ -794,9 +711,12 @@ export function mountContexto({ state, api, player }) {
   }
 
   function renderDelivery(project) {
+    const approved = project.finalApprovedRevision === project.revision;
     // Checklist derivado do estado real: atualiza a cada render de projeto.
+    // No studio, "Revisão pronta" é a versão atual aprovada, não qualquer uma.
     const checklist = document.getElementById("deliveryChecklist");
-    checklist.replaceChildren(...deliveryChecklist(project).map((item) => {
+    const items = deliveryChecklist(project).map((item) => itens && item.id === "review" ? { ...item, done: approved } : item);
+    checklist.replaceChildren(...items.map((item) => {
       const li = document.createElement("li");
       li.className = "pill" + (item.done ? " done" : "");
       li.innerHTML = item.done ? ICON.check : ICON.circle;
@@ -811,7 +731,6 @@ export function mountContexto({ state, api, player }) {
     }
     // Cadeado da entrega (Task 9): só libera depois de aprovar a prévia atual —
     // o servidor também recusa export sem aprovação (exportApproved).
-    const approved = project.finalApprovedRevision === project.revision;
     const lock = document.getElementById("deliveryLock");
     lock.textContent = approved
       ? "A entrega vale para a v" + project.revision + ". Se você editar de novo, ela volta a ficar bloqueada até a nova prévia ser aprovada."
@@ -819,7 +738,8 @@ export function mountContexto({ state, api, player }) {
     const badge = document.getElementById("deliveryBadge");
     badge.className = "pill" + (approved ? " pill-ok" : "");
     badge.innerHTML = (approved ? ICON.check : ICON.lock) + "v" + project.revision + (approved ? " aprovada" : " não aprovada");
-    document.getElementById("formatLine").textContent = formatLabel(project.assembly);
+    // Studio: a proporção com a resolução de saída, como no chip da faixa.
+    document.getElementById("formatLine").textContent = ui === "studio" ? formatChip(project.assembly) : formatLabel(project.assembly);
     document.getElementById("formatOrigin").textContent = formatOrigin(project.assembly);
     // Estado da conferência: exportar nunca confirma; revisão nova
     // não herda a confirmação (verificacao.json é por revisão).
@@ -859,24 +779,13 @@ export function mountContexto({ state, api, player }) {
     exportStatus.textContent = parts.filter(Boolean).join(" · ");
     exportStatus.className = "export-" + view.tone;
     const downloads = document.getElementById("downloads");
-    const addFile = (file, label, href) => {
-      const li = document.createElement("li");
-      li.className = "file";
-      li.innerHTML = ICON.file + '<span class="mono file-name"></span><span class="file-desc"></span>';
-      li.querySelector(".file-name").textContent = file;
-      li.querySelector(".file-desc").textContent = label;
-      const link = document.createElement("a");
-      link.className = "button";
-      link.href = href;
-      link.download = file;
-      link.textContent = "Baixar";
-      link.setAttribute("aria-label", "Baixar " + file);
-      li.append(link);
-      downloads.append(li);
-    };
+    const addFile = (file, label, href) => downloads.append(fileRow(file, label, href));
     downloads.replaceChildren();
-    for (const f of formats) addFile(f.file, f.label, f.href);
-    if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", projectPath("project/resolve-drp"));
+    if (itens) paintItens(project, verificacao);
+    else {
+      for (const f of formats) addFile(f.file, f.label, f.href);
+      if (resolveDelivery?.drpPath) addFile("projeto.drp", "Projeto nativo do DaVinci", projectPath("project/resolve-drp"));
+    }
     document.getElementById("deliveryFiles").hidden = downloads.childElementCount === 0;
     document.getElementById("filesPath").textContent = formats.length ? "exports/" + project.finalApprovedRevision + "/" : "";
     const history = document.getElementById("versionHistory");
@@ -886,6 +795,35 @@ export function mountContexto({ state, api, player }) {
       chip(project.finalApprovedRevision != null ? "aprovada " + project.finalApprovedRevision : "não aprovada"),
       chip("formato " + formatLabel(project.assembly)),
     );
+  }
+
+  /** Os três itens do studio: título, revisão, disponibilidade e os arquivos que existem. */
+  function paintItens(project, verificacao) {
+    itens.replaceChildren(...deliveryItems(project, verificacao, deliveryCapabilities, resolveDelivery).map((item) => {
+      const li = document.createElement("li");
+      li.className = "sub entrega-item";
+      li.dataset.item = item.id;
+      li.dataset.estado = item.state;
+      li.innerHTML = '<div class="entrega-item-head"><h2></h2><span class="pill mono entrega-rev"></span>'
+        + '<span class="entrega-estado"></span></div><p class="entrega-detalhe"></p>';
+      li.querySelector("h2").textContent = item.title;
+      li.querySelector(".entrega-rev").textContent = "v" + item.revision;
+      li.querySelector(".entrega-estado").textContent = item.status;
+      li.querySelector(".entrega-detalhe").textContent = item.detail;
+      if (item.note) {
+        const note = document.createElement("p");
+        note.className = "entrega-nota";
+        note.textContent = item.note;
+        li.append(note);
+      }
+      if (item.files.length) {
+        const files = document.createElement("ul");
+        files.className = "plain entrega-arquivos";
+        files.append(...item.files.map((f) => fileRow(f.download, f.label, f.href)));
+        li.append(files);
+      }
+      return li;
+    }));
   }
 
   function render(project) {
@@ -982,6 +920,63 @@ export function mountContexto({ state, api, player }) {
   // Confirmar a conferência devolve o mesmo projeto: só a verificação muda.
   state.subscribe("verificacao", () => { if (state.get("project")) renderDelivery(state.get("project")); });
   render(state.get("project"));
+}
+
+/**
+ * Diálogo de formato da legacy: visível (linha + chip) e editável — muda a
+ * revisão e invalida prévia/aprovação via /project/settings.
+ */
+function mountLegacyFormat({ state, api }) {
+  const formatDialog = document.createElement("dialog");
+  formatDialog.id = "formatDialog";
+  formatDialog.innerHTML = '<h1>Formato da entrega</h1>'
+    + '<label>Usar formato de <select id="formatSource"></select></label>'
+    + '<label>Largura <input id="formatWidth" type="number" min="2" step="2"></label>'
+    + '<label>Altura <input id="formatHeight" type="number" min="2" step="2"></label>'
+    + '<label>Fps <input id="formatFps" type="text" placeholder="25 ou 30000/1001"></label>'
+    + '<div class="row"><button type="button" class="primary" id="saveFormat">Aplicar formato</button>'
+    + '<button type="button" id="closeFormat">Fechar</button></div>';
+  document.body.appendChild(formatDialog);
+  document.getElementById("editFormat").onclick = () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sel = document.getElementById("formatSource");
+    sel.replaceChildren(new Option("Personalizado", ""));
+    for (const s of p.assembly.sources.filter((item) => item.hasVideo)) {
+      sel.appendChild(new Option(s.name, s.id));
+    }
+    sel.value = "";
+    document.getElementById("formatWidth").value = p.assembly.width;
+    document.getElementById("formatHeight").value = p.assembly.height;
+    document.getElementById("formatFps").value = `${p.assembly.fps.num}/${p.assembly.fps.den}`;
+    formatDialog.showModal();
+  };
+  document.getElementById("closeFormat").onclick = () => formatDialog.close();
+  document.getElementById("saveFormat").onclick = async () => {
+    const p = state.get("project");
+    if (!p) return;
+    const sourceId = document.getElementById("formatSource").value;
+    let body;
+    if (sourceId) {
+      body = { baseRevision: p.revision, sourceId };
+    } else {
+      const rawFps = document.getElementById("formatFps").value.trim();
+      const split = rawFps.split("/");
+      const fps = split.length === 2
+        ? { num: Number(split[0]), den: Number(split[1]) }
+        : { num: Number(rawFps) * 1000, den: 1000 };
+      body = {
+        baseRevision: p.revision,
+        width: Number(document.getElementById("formatWidth").value),
+        height: Number(document.getElementById("formatHeight").value),
+        fps,
+      };
+    }
+    const { res } = await api.call("project/settings", {
+      method: "POST", body: JSON.stringify(body), label: "Alterando formato…",
+    });
+    if (res.ok) formatDialog.close();
+  };
 }
 
 export function decisionSummary(report) {

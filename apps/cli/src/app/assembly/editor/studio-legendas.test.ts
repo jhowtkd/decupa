@@ -2,8 +2,8 @@
 // revisão do vídeo carregado (data-rev), com o motivo sob o monitor quando a
 // rota não tem legenda daquela versão.
 import { afterEach, expect, it, vi } from "vitest";
+import { LEGENDA_FORA_DO_MP4 } from "./rail.js";
 import {
-  LEGENDA_FORA_DO_MP4,
   assinaturaLegenda,
   linhaDoMonitor,
   mountLegendas,
