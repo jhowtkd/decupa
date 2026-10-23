@@ -14,6 +14,8 @@ export default defineConfig({
   ],
   outputDir: "test-results/e2e",
   timeout: 180_000,
+  // No CI o Playwright para antes do timeout do job (40 min) e grava os relatórios.
+  globalTimeout: ci ? 25 * 60_000 : 0,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
