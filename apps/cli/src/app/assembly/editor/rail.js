@@ -535,8 +535,8 @@ export function mountRail({ state, api, player, ui = "legacy", confirm: confirmA
     field.addEventListener("input", () => briefing.edit());
     field.addEventListener("change", () => {
       briefing.edit();
-      // Inline (projeto vazio; no studio, Materiais) salva ao confirmar o campo.
-      if (briefingForm.parentElement === inlineBriefing || (studioBriefing && briefingForm.parentElement === studioBriefing)) void briefing.flush();
+      // Fora do diálogo (projeto vazio; no studio, Materiais) salva ao confirmar o campo.
+      if (briefingForm.parentElement !== briefingDialog) void briefing.flush();
     });
   }
   // Fechar e Esc só recolhem o diálogo; descartar exige uma ação explícita.
