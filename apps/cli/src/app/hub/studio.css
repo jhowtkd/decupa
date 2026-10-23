@@ -26,6 +26,9 @@
 .fila-envio-head .status:empty { display: none; }
 .fila-envio #mediaEmpty { margin-top: 10px; }
 .fila-envio .media-queue { margin-top: 10px; }
+/* O estado do acervo fica fora do <details>: sem acervo, explica por que o envio está desligado. */
+.acervo-status { margin: 16px 0 0; }
+.acervo-status:empty { display: none; }
 details.origem { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--hairline); }
 details.origem > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 details.origem > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
