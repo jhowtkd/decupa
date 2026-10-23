@@ -532,6 +532,31 @@ function applyMoveScene(project: Project, sceneId: string, direction: "up" | "do
   return invalidatePreview({ ...project, scenes });
 }
 
+/**
+ * A ordem completa vale para o projeto (pura): cada cena dele aparece uma vez,
+ * sem faltar nem sobrar; senão lança. Devolve se a ordem difere da atual.
+ */
+export function sceneOrderChanged(project: Project, order: string[]): boolean {
+  const ids = project.scenes.map((scene) => scene.id);
+  const known = new Set(ids);
+  const seen = new Set<string>();
+  for (const id of order) {
+    if (!known.has(id)) throw new Error(`cena não encontrada: ${id}`);
+    if (seen.has(id)) throw new Error(`cena repetida na ordem: ${id}`);
+    seen.add(id);
+  }
+  const missing = ids.find((id) => !seen.has(id));
+  if (missing) throw new Error(`ordem sem a cena ${missing}`);
+  return order.some((id, i) => id !== ids[i]);
+}
+
+/** Uma revisão para a ordem inteira; a mesma ordem não é edição. */
+function applyReorderScenes(project: Project, order: string[]): Project {
+  if (!sceneOrderChanged(project, order)) throw new Error("a ordem das cenas não mudou");
+  const byId = new Map(project.scenes.map((scene) => [scene.id, scene]));
+  return invalidatePreview({ ...project, scenes: order.map((id) => byId.get(id)!) });
+}
+
 function applyDeleteScene(project: Project, sceneId: string): Project {
   findScene(project, sceneId);
   return invalidatePreview({
@@ -555,6 +580,7 @@ export function applyTextEdit(project: Project, action: EditAction): Project {
     case "correct": return applyCorrect(project, action);
     case "include": return applyInclude(project, action);
     case "move-scene": return applyMoveScene(project, action.sceneId, action.direction);
+    case "reorder-scenes": return applyReorderScenes(project, action.order);
     case "delete-scene": return applyDeleteScene(project, action.sceneId);
   }
 }
@@ -666,6 +692,8 @@ export function parseEditAction(raw: unknown): EditAction {
         throw new Error("direção inválida para mover cena");
       }
       return { type: "move-scene", sceneId: nonEmptyId(raw.sceneId, "sceneId"), direction: raw.direction };
+    case "reorder-scenes":
+      return { type: "reorder-scenes", order: stringList(raw.order, "order") };
     case "set-support": {
       if (!Array.isArray(raw.support)) throw Error("support precisa ser array");
       const support=raw.support.map(entry=>{

@@ -11,7 +11,7 @@ it("todo ícone é SVG decorativo: o texto ou o aria-label do controle carrega o
 
 it("cobre os ícones que as telas usam", () => {
   expect(Object.keys(ICON).sort()).toEqual([
-    "alert", "check", "circle", "close", "down", "file", "image", "importMedia", "lock", "more",
+    "alert", "check", "circle", "close", "down", "file", "grip", "image", "importMedia", "lock", "more",
     "ok", "play", "plus", "redo", "search", "send", "spinner", "undo", "unlock", "up",
   ]);
 });

@@ -17,7 +17,7 @@ import {
   takeWords,
   wordAtPlayhead,
 } from "./montage.js";
-import { singleFlight } from "./sequencia.js";
+import { enviarOrdem, ordemMovida, singleFlight } from "./sequencia.js";
 
 /** Contexto antes do trecho em "ouvir" — padrão JOIN_PAD da tela de limpeza. */
 export const LISTEN_PAD = 0.7;
@@ -117,7 +117,8 @@ export function selectionBarBox(anchor, size, bounds) {
 
 /**
  * Ordem e exclusão da cena (puro): mover desabilita nos extremos,
- * excluir segue sempre disponível (rota direta move-scene/delete-scene).
+ * excluir segue sempre disponível (rota direta move-scene/delete-scene; no
+ * studio, mover envia a ordem inteira, como o arraste da faixa).
  * @returns {HeaderAction[]}
  */
 export function sceneHeaderActions(index, total) {
@@ -1862,6 +1863,13 @@ export function mountTexto({ state, api, player, ui = "legacy", confirm: confirm
     }
     if (sceneAction === "delete") {
       await deleteScene({ state, api, confirm: confirmAction }, scene);
+      return;
+    }
+    // No studio, mover pelo menu é a mesma ordem inteira do arraste da faixa.
+    if (studio) {
+      const ids = p.scenes.map((item) => item.id);
+      const ordem = ordemMovida(ids, scene, ids.indexOf(scene) + (sceneAction === "up" ? -1 : 1));
+      if (ordem) await enviarOrdem(api, p, ordem);
       return;
     }
     await api.call("project/edit", {

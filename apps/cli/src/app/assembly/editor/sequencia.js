@@ -8,7 +8,9 @@
 // (botão de desfazer no cabeçalho do texto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
 // No studio a faixa separa vídeo, apoio, áudio e legenda em trilhas sob a
 // mesma régua, com zoom local; cada trilha mostra o dado real ou diz que
-// ele falta ("sem miniatura", "sem onda", "sem áudio").
+// ele falta ("sem miniatura", "sem onda", "sem áudio"). A alça de cada cena
+// leva a cena para outra posição (ponteiro ou teclado): a ordem inteira vai
+// num pedido só, que vira uma revisão e um passo de desfazer.
 import { ZOOMS, clock, clockPrecise, formatChip } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
@@ -192,6 +194,71 @@ export function legendaVazia(legendas, project) {
   return "sem legenda";
 }
 
+/** Distância (px) que separa o clique na alça da cena do começo do arraste. */
+export const ARRASTE_LIMIAR_PX = 4;
+
+/** Faixa (px) junto à borda da vista que rola a sequência durante o arraste. */
+export const ARRASTE_BORDA_PX = 32;
+
+/**
+ * Ordem das cenas com `sceneId` levada à posição `destino` (pura), ou null
+ * quando nada muda: cena desconhecida, destino fora da lista ou o mesmo lugar.
+ * @param {string[]} ids
+ * @param {string} sceneId
+ * @param {number} destino
+ */
+export function ordemMovida(ids, sceneId, destino) {
+  const de = ids.indexOf(sceneId);
+  if (de < 0 || !Number.isInteger(destino) || destino < 0 || destino >= ids.length || destino === de) return null;
+  const ordem = ids.filter((id) => id !== sceneId);
+  ordem.splice(destino, 0, sceneId);
+  return ordem;
+}
+
+/**
+ * Posição final da cena `de` com o ponteiro no instante `t` (pura): conta as
+ * outras cenas cujo meio fica antes dele. `blocos` são as cenas na ordem atual.
+ * @param {{ start: number, end: number }[]} blocos
+ */
+export function destinoDoArraste(blocos, de, t) {
+  let destino = 0;
+  blocos.forEach((bloco, i) => {
+    if (i !== de && (bloco.start + bloco.end) / 2 < t) destino += 1;
+  });
+  return destino;
+}
+
+/**
+ * Instante da fronteira onde a cena `de` entra ao ir para `destino` (pura):
+ * antes da cena que hoje ocupa o lugar, ou depois dela; null no próprio lugar.
+ * @param {{ start: number, end: number }[]} blocos
+ */
+export function fronteiraDoDestino(blocos, de, destino) {
+  if (destino === de || !blocos[destino]) return null;
+  return destino < de ? blocos[destino].start : blocos[destino].end;
+}
+
+/** Anúncio do arraste pelo teclado (puro): "Cena 2 · posição 4 de 5". */
+export function anuncioDoArraste(numero, destino, total) {
+  return "Cena " + numero + " · posição " + (destino + 1) + " de " + total;
+}
+
+/**
+ * Reordena as cenas (studio): um POST project/edit com a ordem inteira, a
+ * partir da revisão que estava na tela. Arraste, teclado da faixa e menu da
+ * cena passam por aqui; o servidor confere a ordem contra essa revisão.
+ * @param {{ call: Function }} api
+ * @param {{ revision: number }} project
+ * @param {string[]} ordem
+ */
+export function enviarOrdem(api, project, ordem) {
+  return api.call("project/edit", {
+    method: "POST",
+    body: JSON.stringify({ baseRevision: project.revision, action: { type: "reorder-scenes", order: ordem } }),
+    label: "Movendo cena…",
+  });
+}
+
 /** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
 let undoKeyBound = false;
 
@@ -373,10 +440,23 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   const studio = ui === "studio";
   const zoom = () => zoomValido(state.get("zoomSequencia"));
 
+  // Arraste de cena (studio): um gesto por vez, do pegar até a resposta do
+  // pedido. Enquanto existe, a faixa não se redesenha, a vista não segue o
+  // playhead e os atalhos de histórico calam.
+  let gesto = null;
+  // Anúncios do arraste pelo teclado; o mesmo nó volta a cada redesenho.
+  const anuncio = studio ? document.createElement("p") : null;
+  if (anuncio) {
+    anuncio.className = "faixa-anuncio";
+    anuncio.setAttribute("aria-live", "polite");
+  }
+
   let signature = "";
   function render(p) {
     // Os botões vivem fora da faixa: atualizam mesmo quando o desenho não muda.
     placeHistory(p);
+    // Arraste em curso: o fim do gesto redesenha com o projeto de então.
+    if (gesto) return;
     const next = JSON.stringify(p && (studio
       ? [p.revision, p.scenes, p.assembly.sources, zoom()]
       : [p.revision, p.scenes, p.assembly.sources, p.captions]));
@@ -572,17 +652,20 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     trilhas.className = "faixa-trilhas";
     trilhas.style.width = z * 100 + "%";
     trilhas.append(ruler, strip);
+    if (cenas.length > 1) trilhas.append(alcasDasCenas(cenas, pct));
     const rolagem = document.createElement("div");
     rolagem.className = "faixa-rolagem";
     rolagem.append(trilhas);
     const corpo = document.createElement("div");
     corpo.className = "faixa-corpo";
     corpo.append(rotulos, rolagem);
-    // O redesenho (zoom, revisão nova) mantém o centro da vista e o foco do zoom.
+    // O redesenho (zoom, revisão nova) mantém o centro da vista e o foco do
+    // zoom ou da alça (a cena movida pelo teclado continua com o foco).
     const antes = el.querySelector(".faixa-rolagem");
     const centro = antes && antes.scrollWidth > 0 ? (antes.scrollLeft + antes.clientWidth / 2) / antes.scrollWidth : null;
     const foco = document.activeElement?.closest?.("[data-zoom]")?.dataset.zoom;
-    el.replaceChildren(head, corpo);
+    const alcaFoco = document.activeElement?.closest?.(".bloco-alca")?.dataset.alca;
+    el.replaceChildren(head, corpo, anuncio);
     if (Number.isFinite(centro) && rolagem.scrollWidth > 0) {
       rolagem.scrollLeft = Math.max(0, centro * rolagem.scrollWidth - rolagem.clientWidth / 2);
     }
@@ -590,8 +673,44 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       const botoes = [...el.querySelectorAll("[data-zoom]")];
       (botoes.find((item) => item.dataset.zoom === foco && !item.disabled) || botoes.find((item) => !item.disabled))?.focus();
     }
+    if (alcaFoco) focarAlca(alcaFoco);
     paint(state.get("playhead"));
     void hydrateWaves(p);
+  }
+
+  /**
+   * Alças de ordem das cenas (studio): uma por cena, numa camada sobre a
+   * trilha de vídeo e fora do slider, então o resto do bloco segue buscando
+   * e o leitor de tela enxerga cada alça. Uma parada de Tab só: a alça da
+   * cena selecionada (ou da primeira); as setas andam entre elas.
+   */
+  function alcasDasCenas(cenas, pct) {
+    const selecionada = state.get("selectedScene");
+    const noTab = cenas.some((block) => block.sceneId === selecionada) ? selecionada : cenas[0].sceneId;
+    const alcas = document.createElement("div");
+    alcas.className = "faixa-alcas";
+    alcas.setAttribute("role", "group");
+    alcas.setAttribute("aria-label", "Ordem das cenas");
+    alcas.innerHTML = cenas.map((block, i) => '<div class="alca-cena" data-scene="' + esc(block.sceneId) + '" style="left:'
+      + pct(block.start) + ";width:" + pct(block.end - block.start) + ';">'
+      + '<button type="button" class="bloco-alca" data-alca="' + esc(block.sceneId) + '" tabindex="' + (block.sceneId === noTab ? "0" : "-1") + '"'
+      + ' title="Arraste para mudar a ordem" aria-label="' + esc("Mover cena " + (i + 1) + ": " + block.label) + '"'
+      + ' aria-describedby="faixaAlcaAjuda">' + ICON.grip + "</button></div>").join("")
+      + '<div class="faixa-destino" hidden></div>'
+      + '<span id="faixaAlcaAjuda" hidden>Arraste para mudar a ordem. Pelo teclado: Espaço pega a cena, as setas escolhem o lugar, Espaço solta e Esc cancela.</span>';
+    return alcas;
+  }
+
+  /** Uma parada de Tab nas alças: a da cena `sceneId`. */
+  function alcaNoTab(sceneId) {
+    for (const btn of root()?.querySelectorAll(".bloco-alca") || []) btn.tabIndex = btn.dataset.alca === sceneId ? 0 : -1;
+  }
+
+  function focarAlca(sceneId) {
+    const btn = [...(root()?.querySelectorAll(".bloco-alca") || [])].find((item) => item.dataset.alca === sceneId);
+    if (!btn) return;
+    alcaNoTab(sceneId);
+    btn.focus();
   }
 
   /**
@@ -783,7 +902,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     // O áudio que toca é o da cena, mesmo sob um apoio.
     const scene = valid ? activeScene(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-audio")) node.classList.toggle("ativa", node.dataset.scene === scene);
-    if (acompanhar && valid && !scrubbing && player.el?.()?.paused === false) {
+    if (acompanhar && valid && !scrubbing && !gesto && player.el?.()?.paused === false) {
       seguir(strip, Math.min(1, Math.max(0, playhead / duration)));
     }
   }
@@ -821,6 +940,210 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   // Durante o arraste a faixa não rola sozinha atrás do playhead.
   let scrubbing = false;
 
+  /**
+   * Pega a cena da alça (ponteiro ou teclado). Só com a faixa parada, sem
+   * desfazer/refazer em voo e fora do Modo Leitura (alça desabilitada).
+   * Guarda a revisão e a geometria da tela: é delas que o pedido parte.
+   */
+  function pegar(alca, modo, extra = {}) {
+    const p = state.get("project");
+    if (!studio || gesto || scrubbing || alca.disabled || !p || undoEdit.busy() || redoEdit.busy()) return null;
+    const ids = p.scenes.map((scene) => scene.id);
+    const blocos = timelineBlocks(p).filter((block) => block.kind === "scene");
+    const duracao = montageDuration(p);
+    const de = ids.indexOf(alca.dataset.alca);
+    if (de < 0 || blocos.length !== ids.length || !(duracao > 0)) return null;
+    gesto = { modo, projeto: p, ids, blocos, duracao, de, destino: de, sceneId: ids[de], alca, ativo: modo === "teclado", enviando: false, ...extra };
+    document.addEventListener("keydown", escapeDoGesto, true);
+    return gesto;
+  }
+
+  /** Esc cancela o gesto antes de qualquer outro atalho (gaveta, menu). */
+  function escapeDoGesto(ev) {
+    if (ev.key !== "Escape" || !gesto || gesto.enviando) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelarGesto("Movimento cancelado");
+  }
+
+  /** Bloco levantado, deslocado com o ponteiro, e a barra na fronteira de destino. */
+  function pintarGesto() {
+    const el = root();
+    if (!gesto || !el) return;
+    el.classList.add("reordenando");
+    const bloco = [...el.querySelectorAll(".lane-video .seq-bloco")].find((node) => node.dataset.scene === gesto.sceneId);
+    const desloca = gesto.modo === "ponteiro" && gesto.ativo ? "translateX(" + gesto.dx + "px)" : "";
+    for (const node of [bloco, gesto.alca.closest(".alca-cena")]) {
+      if (!node) continue;
+      node.classList.add("arrastando");
+      node.style.transform = desloca;
+    }
+    const barra = el.querySelector(".faixa-destino");
+    const t = fronteiraDoDestino(gesto.blocos, gesto.de, gesto.destino);
+    if (!barra) return;
+    barra.hidden = t == null;
+    if (t != null) barra.style.left = ((t / gesto.duracao) * 100).toFixed(3) + "%";
+  }
+
+  function limparGesto() {
+    const el = root();
+    if (!el) return;
+    el.classList.remove("reordenando");
+    for (const node of el.querySelectorAll(".arrastando")) {
+      node.classList.remove("arrastando");
+      node.style.transform = "";
+    }
+    const barra = el.querySelector(".faixa-destino");
+    if (barra) barra.hidden = true;
+  }
+
+  /** Fim do gesto (cancelado, solto no lugar ou com a resposta): solta a guarda e redesenha. */
+  function encerrarGesto() {
+    const fim = gesto;
+    if (!fim) return;
+    gesto = null;
+    document.removeEventListener("keydown", escapeDoGesto, true);
+    if (fim.quadro && typeof cancelAnimationFrame === "function") cancelAnimationFrame(fim.quadro);
+    if (fim.modo === "ponteiro" && fim.alca.hasPointerCapture?.(fim.pointerId)) fim.alca.releasePointerCapture(fim.pointerId);
+    limparGesto();
+    render(state.get("project"));
+  }
+
+  function cancelarGesto(aviso) {
+    if (!gesto || gesto.enviando) return;
+    const teclado = gesto.modo === "teclado";
+    encerrarGesto();
+    if (teclado && aviso) anunciar(aviso);
+  }
+
+  function anunciar(texto) {
+    if (anuncio) anuncio.textContent = texto;
+  }
+
+  /**
+   * Solta a cena: no mesmo lugar não envia nada; senão um pedido só, com a
+   * ordem inteira e a revisão da tela (um 409 cai na reconciliação do
+   * call()). A faixa segura o desenho até a resposta: sem prévia no estado.
+   */
+  async function soltar() {
+    if (!gesto || gesto.enviando) return;
+    const ordem = ordemMovida(gesto.ids, gesto.sceneId, gesto.destino);
+    // Desfazer/refazer em voo mudam a base da tela: o pedido cairia num 409.
+    if (!ordem || undoEdit.busy() || redoEdit.busy()) {
+      cancelarGesto(ordem ? "Movimento cancelado" : "Cena no mesmo lugar");
+      return;
+    }
+    gesto.enviando = true;
+    if (gesto.modo === "teclado") anunciar("Cena " + (gesto.de + 1) + " movida para a posição " + (gesto.destino + 1) + " de " + gesto.ids.length);
+    try {
+      await enviarOrdem(api, gesto.projeto, ordem);
+    } catch {
+      // call() já mostrou o erro na pílula de status; a faixa volta à verdade.
+    } finally {
+      encerrarGesto();
+    }
+  }
+
+  /** Destino e deslocamento a partir do último x do ponteiro (a rolagem na borda também chama). */
+  function acompanharPonteiro() {
+    const el = root();
+    const strip = el?.querySelector(".seq-strip");
+    if (!gesto || !strip) return;
+    const rolagem = el.querySelector(".faixa-rolagem");
+    const ratio = Math.min(1, Math.max(0, ratioOfEvent(strip, { clientX: gesto.clientX })));
+    gesto.destino = destinoDoArraste(gesto.blocos, gesto.de, ratio * gesto.duracao);
+    gesto.dx = gesto.clientX - gesto.x0 + (rolagem?.scrollLeft || 0) - gesto.rolagem0;
+    pintarGesto();
+  }
+
+  /** Com zoom, o ponteiro a ARRASTE_BORDA_PX da borda da vista rola a faixa, mais rápido quanto mais perto. */
+  function rolarNaBorda() {
+    if (!gesto || gesto.modo !== "ponteiro" || gesto.enviando) return;
+    const rolagem = root()?.querySelector(".faixa-rolagem");
+    if (rolagem && rolagem.scrollWidth > rolagem.clientWidth) {
+      const rect = rolagem.getBoundingClientRect();
+      const esquerda = gesto.clientX - rect.left;
+      const direita = rect.right - gesto.clientX;
+      const perto = Math.min(esquerda, direita);
+      if (perto < ARRASTE_BORDA_PX) {
+        const antes = rolagem.scrollLeft;
+        const forca = Math.min(1, (ARRASTE_BORDA_PX - perto) / ARRASTE_BORDA_PX);
+        rolagem.scrollLeft = antes + (esquerda < direita ? -1 : 1) * Math.ceil(forca * 14);
+        if (rolagem.scrollLeft !== antes) acompanharPonteiro();
+      }
+    }
+    gesto.quadro = requestAnimationFrame(rolarNaBorda);
+  }
+
+  function pegarComPonteiro(alca, ev) {
+    if (ev.button !== 0) return;
+    // Sem o padrão: nada de seleção de texto nem foco no meio do gesto.
+    ev.preventDefault();
+    const rolagem = root()?.querySelector(".faixa-rolagem");
+    if (!pegar(alca, "ponteiro", { pointerId: ev.pointerId, x0: ev.clientX, clientX: ev.clientX, dx: 0, rolagem0: rolagem?.scrollLeft || 0 })) return;
+    alca.setPointerCapture?.(ev.pointerId);
+  }
+
+  function moverPonteiro(ev) {
+    gesto.clientX = ev.clientX;
+    if (!gesto.ativo) {
+      if (Math.abs(ev.clientX - gesto.x0) < ARRASTE_LIMIAR_PX) return;
+      gesto.ativo = true;
+      if (typeof requestAnimationFrame === "function") gesto.quadro = requestAnimationFrame(rolarNaBorda);
+    }
+    acompanharPonteiro();
+  }
+
+  function soltarPonteiro(ev) {
+    if (gesto.ativo) {
+      gesto.clientX = ev.clientX;
+      acompanharPonteiro();
+      void soltar();
+      return;
+    }
+    // Clique na alça sem arrastar: seleciona a cena, e a alça fica com o foco.
+    const sceneId = gesto.sceneId;
+    encerrarGesto();
+    state.set("selectedScene", sceneId);
+    state.set("selectedSupport", null);
+    focarAlca(sceneId);
+  }
+
+  /**
+   * Teclado na alça. Sem cena pega, as setas andam entre as alças e Espaço/
+   * Enter pega; com ela, as setas, Home e End escolhem o destino e Espaço/
+   * Enter solta (um pedido, por mais posições que ande). Esc cancela.
+   */
+  function teclaNaAlca(alca, ev) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End", "Enter", " "].includes(ev.key) || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    ev.preventDefault();
+    const soltarOuPegar = ev.key === "Enter" || ev.key === " ";
+    if (gesto) {
+      if (gesto.modo !== "teclado" || gesto.enviando) return;
+      if (soltarOuPegar) {
+        void soltar();
+        return;
+      }
+      const ultimo = gesto.ids.length - 1;
+      gesto.destino = ev.key === "Home" ? 0 : ev.key === "End" ? ultimo
+        : Math.min(ultimo, Math.max(0, gesto.destino + (ev.key === "ArrowRight" ? 1 : -1)));
+      pintarGesto();
+      anunciar(anuncioDoArraste(gesto.de + 1, gesto.destino, gesto.ids.length));
+      return;
+    }
+    if (soltarOuPegar) {
+      if (!pegar(alca, "teclado")) return;
+      pintarGesto();
+      anunciar(anuncioDoArraste(gesto.de + 1, gesto.destino, gesto.ids.length) + ". Setas escolhem o lugar, Espaço solta, Esc cancela.");
+      return;
+    }
+    const alcas = [...root().querySelectorAll(".bloco-alca")];
+    const i = alcas.indexOf(alca);
+    const j = ev.key === "Home" ? 0 : ev.key === "End" ? alcas.length - 1
+      : Math.min(alcas.length - 1, Math.max(0, i + (ev.key === "ArrowRight" ? 1 : -1)));
+    focarAlca(alcas[j].dataset.alca);
+  }
+
   function bind() {
     const el = root();
     if (!el || el.dataset.seqBound) return;
@@ -828,6 +1151,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     let scrubMoved = false;
     let lastScrub = 0;
     el.addEventListener("keydown", (ev) => {
+      const alca = studio ? ev.target.closest(".bloco-alca") : null;
+      if (alca) {
+        teclaNaAlca(alca, ev);
+        return;
+      }
       if (!ev.target.closest(".seq-strip") || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
       ev.preventDefault();
       const p = state.get("project");
@@ -866,6 +1194,12 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       if(block) {state.set("selectedScene",block.dataset.scene);state.set("selectedSupport",block.dataset.group||null);}
     });
     el.addEventListener("pointerdown", (ev) => {
+      // A alça da cena é do arraste: não busca nem faz scrub.
+      const alca = studio ? ev.target.closest(".bloco-alca") : null;
+      if (alca) {
+        pegarComPonteiro(alca, ev);
+        return;
+      }
       const strip = ev.target.closest(".seq-strip");
       if (!strip) return;
       scrubbing = true;
@@ -878,6 +1212,10 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       if (block) { state.set("selectedScene", block.dataset.scene); state.set("selectedSupport", block.dataset.group || null); }
     });
     el.addEventListener("pointermove", (ev) => {
+      if (gesto?.modo === "ponteiro" && ev.pointerId === gesto.pointerId) {
+        if (!gesto.enviando) moverPonteiro(ev);
+        return;
+      }
       if (!scrubbing) return;
       const now = Date.now();
       if (now - lastScrub < SCRUB_THROTTLE_MS) return;
@@ -892,6 +1230,22 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     };
     el.addEventListener("pointerup", stop);
     el.addEventListener("pointercancel", stop);
+    if (!studio) return;
+    const doGesto = (ev) => gesto?.modo === "ponteiro" && ev.pointerId === gesto.pointerId;
+    el.addEventListener("pointerup", (ev) => {
+      if (doGesto(ev) && !gesto.enviando) soltarPonteiro(ev);
+    });
+    // Captura perdida ou ponteiro cancelado (toque virou rolagem do sistema): cancela.
+    el.addEventListener("pointercancel", (ev) => {
+      if (doGesto(ev)) cancelarGesto();
+    });
+    el.addEventListener("lostpointercapture", (ev) => {
+      if (doGesto(ev)) cancelarGesto();
+    });
+    // Tab ou clique fora tiram o foco da alça com a cena pega: cancela.
+    el.addEventListener("focusout", (ev) => {
+      if (gesto?.modo === "teclado" && ev.target === gesto.alca) cancelarGesto("Movimento cancelado");
+    });
   }
 
   /**
@@ -911,6 +1265,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     document.addEventListener("keydown", (ev) => {
       const kind = historyKey(ev, ui);
       if (!kind) return;
+      // Arraste de cena em curso: o histórico espera o gesto acabar.
+      if (gesto) {
+        ev.preventDefault();
+        return;
+      }
       if (ui === "studio" && !historyShown()) return;
       const target = ev.target;
       if (target instanceof HTMLElement) {
