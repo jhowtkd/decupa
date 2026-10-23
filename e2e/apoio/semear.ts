@@ -4,13 +4,14 @@
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> jornada
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> extensa
 //   node --experimental-strip-types e2e/apoio/semear.ts <base> fila <n>
+//   node --experimental-strip-types e2e/apoio/semear.ts <base> limpeza
 //
 // <base> é a pasta temporária do teste: a Raiz fica em <base>/raiz e a mídia
 // sintética (FFmpeg lavfi) em <base>/midia. A transcrição é semeada porque a
 // preparação real precisa dos modelos de fala, que não existem no CI.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { blankProject } from "../../apps/cli/src/app/assembly/routes.ts";
@@ -27,6 +28,8 @@ export type Semeado = {
   raiz: string;
   projetos: { id: string; dir: string; nome: string }[];
   arquivos?: string[];
+  /** Só em `limpeza`: o que o plano de Limpar arquivos não pode tocar. */
+  preservados?: string[];
   alvo?: { frase: string; cena: string; total: number };
 };
 
@@ -126,6 +129,9 @@ async function jornada(base: string): Promise<Semeado> {
 const VOCABULARIO = ["então", "a", "gente", "começou", "gravação", "não", "é", "isso", "montagem", "ação",
   "você", "também", "porque", "assim", "cidade", "equipe", "praça", "ruas", "ano", "trabalho"];
 export const EXTENSA = { midias: 20, palavrasPorMidia: 2000, falasPorMidia: 10, passo: 0.4 };
+// Ensaio de escala: DECUPA_E2E_EXTENSA="<mídias>x<palavras por mídia>x<falas por mídia>".
+const escala = /^(\d+)x(\d+)x(\d+)$/.exec(process.env.DECUPA_E2E_EXTENSA ?? "");
+if (escala) Object.assign(EXTENSA, { midias: Number(escala[1]), palavrasPorMidia: Number(escala[2]), falasPorMidia: Number(escala[3]) });
 
 /**
  * Transcrição extensa: 20 Mídias só de áudio × 2 000 palavras (40 000 no
@@ -188,13 +194,52 @@ async function fila(base: string, n: number): Promise<Semeado> {
   return { raiz, projetos: [{ id: "fila-e2e", dir, nome: "Fila E2E" }], arquivos };
 }
 
+/**
+ * Projeto cuja entrega venceu o prazo (elegível a Limpar arquivos): fonte em
+ * `imports/`, proxy e análise derivados, mais um rollback que não pode sair.
+ * `arquivos` lista o que o plano deve remover; `preservados`, o que fica.
+ */
+async function limpeza(base: string): Promise<Semeado> {
+  const raiz = join(base, "raiz");
+  const midia = join(base, "midia");
+  await mkdir(raiz, { recursive: true });
+  await mkdir(midia, { recursive: true });
+  const temp = join(midia, "entrevista.m4a");
+  await ff(["-f", "lavfi", "-i", "aevalsrc=exprs='0.4*sin(2*PI*220*t)':s=48000:d=6", "-c:a", "aac", temp]);
+  const dir = join(raiz, "entrega-antiga-e2e");
+  const original = join(dir, "imports", "entrevista.m4a");
+  // Os metadados vêm do arquivo de mídia; a fonte aponta para a cópia em imports/, feita depois da gravação.
+  const fonteOriginal = { ...(await fonte("a", temp, "entrevista.m4a", "speech")), path: original };
+  const analises = [analise("a", [{ sourceId: "a", inicio: 0.3, fim: 5.5, texto: "Esta entrega já passou do prazo de retenção." }])];
+  const projeto = await gravar(raiz, "entrega-antiga-e2e", "Entrega antiga", [fonteOriginal], analises,
+    [{ id: "s1", speechIds: ["a:s1"], objective: "Única cena" }]);
+  await mkdir(join(dir, "imports"), { recursive: true });
+  await copyFile(temp, original);
+  const sha = fonteOriginal.sha256;
+  const proxy = join(dir, "media", sha, "proxy.mp4");
+  const analise1 = join(dir, "analysis", sha, "v1", "palavras.json");
+  const rollback = join(dir, "rev-1", "mantem.txt");
+  for (const [path, conteudo] of [[proxy, "proxy sintético"], [analise1, "{}"], [rollback, "rollback"]] as const) {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, conteudo);
+  }
+  // Entrega confirmada há muito tempo na revisão aprovada: o ciclo de vida deriva "elegível".
+  const arquivo = join(dir, "project.json");
+  const dados = JSON.parse(await readFile(arquivo, "utf8")) as Record<string, unknown> & { revision: number };
+  dados.finalApprovedRevision = dados.revision;
+  dados.lifecycle = { state: "entregue", revision: dados.revision, enteredAt: { entregue: Date.UTC(2020, 0, 1) } };
+  await writeFile(arquivo, JSON.stringify(dados));
+  return { raiz, projetos: [projeto], arquivos: [original, proxy, analise1], preservados: [rollback] };
+}
+
 const [base, cenario, n] = process.argv.slice(2);
 if (!base || !cenario) {
-  console.error("uso: semear.ts <base> <jornada|extensa|fila> [n]");
+  console.error("uso: semear.ts <base> <jornada|extensa|fila|limpeza> [n]");
   process.exit(2);
 }
 const semeado = cenario === "jornada" ? await jornada(base)
   : cenario === "extensa" ? await extensa(base)
+  : cenario === "limpeza" ? await limpeza(base)
   : cenario === "fila" ? await fila(base, Number(n ?? 20))
   : null;
 if (!semeado) {

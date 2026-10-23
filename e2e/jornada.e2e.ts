@@ -8,16 +8,14 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./apoio/fixtures.ts";
-import { esperarPreviaAtual, esperarProjeto, espiarEscritas, irParaEtapa, lerProjeto, sha256Arquivo } from "./apoio/bancada.ts";
+import {
+  arrastarCena, cortadas, cortarSelecao, esperarPreviaAtual, esperarProjeto, espiarEscritas, irParaEtapa, lerProjeto,
+  ordemNaFaixa, selecionar, sha256Arquivo,
+} from "./apoio/bancada.ts";
 import { REPO } from "./apoio/servidor.ts";
 
 const run = promisify(execFile);
 const ID = "entrevista-e2e";
-
-/** Palavras cortadas de uma cena, do jeito que o texto as mostra. */
-async function cortadas(page: Page, cena: string): Promise<string[]> {
-  return page.locator(`#texto .word.riscado[data-scene="${cena}"]`).allTextContents();
-}
 
 test("jornada do studio: editar, histórico, reinício, arraste, revisão, aprovação e entrega", async ({ page, semear, servidor, base }) => {
   const semeado = await semear("jornada");
@@ -38,17 +36,14 @@ test("jornada do studio: editar, histórico, reinício, arraste, revisão, aprov
   // Seleção explícita: clique e Shift+clique selecionam sem escrever nada.
   const escritas = espiarEscritas(page);
   const palavra = (id: string) => page.locator(`#texto .word[data-word-id="${id}"]`);
-  await palavra("a:w0-0000").click();
-  await palavra("a:w0-0001").click({ modifiers: ["Shift"] });
-  const barra = page.getByRole("toolbar", { name: "Ações da seleção" });
-  await expect(barra).toBeVisible();
+  await selecionar(page, "a:w0-0000", "a:w0-0001");
   await expect(palavra("a:w0-0000")).toHaveAttribute("aria-pressed", "true");
   await expect(palavra("a:w0-0001")).toHaveAttribute("aria-pressed", "true");
   await page.waitForTimeout(500);
   expect(escritas).toEqual([]);
 
   // Cortar: um pedido só, com as ocorrências reais.
-  await barra.getByRole("button", { name: "Cortar" }).click();
+  await cortarSelecao(page);
   await esperarProjeto(srv.url, ID, (p) => p.revision === 1, "revisão 1 depois de Cortar");
   expect(escritas).toHaveLength(1);
   expect(escritas[0]).toMatchObject({ caminho: "project/edit" });
@@ -82,23 +77,12 @@ test("jornada do studio: editar, histórico, reinício, arraste, revisão, aprov
   // Reordenar por arraste: s1 vai para depois de s4. Um pedido, uma revisão;
   // a faixa só redesenha com a resposta.
   escritas.length = 0;
-  const alca = page.locator('.bloco-alca[data-alca="s1"]');
-  const s4 = page.locator('#faixa .lane-video .seq-bloco[data-scene="s4"]');
-  const s5 = page.locator('#faixa .lane-video .seq-bloco[data-scene="s5"]');
-  const a = (await alca.boundingBox())!;
-  const b4 = (await s4.boundingBox())!;
-  const b5 = (await s5.boundingBox())!;
-  const alvo = Math.min(b4.x + b4.width + 6, b5.x + b5.width / 2 - 4);
-  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(alvo, a.y + a.height / 2 + 2, { steps: 12 });
-  await page.mouse.up();
+  await arrastarCena(page, "s1", "s4", "s5");
   const reordenado = await esperarProjeto(srv.url, ID, (p) => p.revision === 6, "revisão 6 depois do arraste");
   expect(reordenado.scenes.map((s) => s.id)).toEqual(["s2", "s3", "s4", "s1", "s5"]);
   expect(escritas).toHaveLength(1);
   expect(escritas[0]).toMatchObject({ caminho: "project/edit", corpo: { action: { type: "reorder-scenes", order: ["s2", "s3", "s4", "s1", "s5"] } } });
-  await expect.poll(() => page.locator("#faixa .lane-video .seq-bloco").evaluateAll((els) => els.map((el) => el.dataset.scene)))
-    .toEqual(["s2", "s3", "s4", "s1", "s5"]);
+  await expect.poll(() => ordemNaFaixa(page)).toEqual(["s2", "s3", "s4", "s1", "s5"]);
 
   // Revisão: a auto-prévia da v6 sai do motor; os cinco dados aparecem.
   const previa = await esperarPreviaAtual(srv.url, ID);

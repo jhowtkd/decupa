@@ -11,7 +11,7 @@ export type ProjetoServidor = {
   previewArtifact: { revision: number; assemblySha256: string; relativePath: string; sha256: string } | null;
   scenes: { id: string; takes: { id: string; removed: { start: number; end: number }[] }[] }[];
   undo?: { head: number; steps: { revision: number; label: string }[]; redo?: { revision: number; label: string }[] };
-  assembly: { name: string };
+  assembly: { name: string; sources: { sha256: string }[] };
 };
 
 /** GET do Projeto direto no servidor, fora da página (sem disputar a Reserva). */
@@ -53,6 +53,48 @@ export function espiarEscritas(page: Page): Escrita[] {
 
 export async function sha256Arquivo(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+/**
+ * Palavras cortadas de uma cena, do jeito que o texto as mostra (as duas
+ * variantes riscam igual). O texto é virtualizado por cena: rola até ela antes.
+ */
+export async function cortadas(page: Page, cena: string): Promise<string[]> {
+  await page.locator(`#cena-${cena}`).scrollIntoViewIfNeeded();
+  return page.locator(`#texto .word.riscado[data-scene="${cena}"]`).allTextContents();
+}
+
+/** Ordem das cenas na faixa (no studio, a trilha de vídeo; na legacy, a faixa única). */
+export function ordemNaFaixa(page: Page): Promise<(string | undefined)[]> {
+  return page.locator('#faixa .seq-bloco[data-kind="scene"]').evaluateAll((els) => els.map((el) => el.dataset.scene));
+}
+
+/** Seleção explícita no studio: clique na primeira palavra e Shift+clique na última. */
+export async function selecionar(page: Page, primeira: string, ultima = primeira): Promise<void> {
+  await page.locator(`#texto .word[data-word-id="${primeira}"]`).click();
+  if (ultima !== primeira) await page.locator(`#texto .word[data-word-id="${ultima}"]`).click({ modifiers: ["Shift"] });
+  await expect(page.getByRole("toolbar", { name: "Ações da seleção" })).toBeVisible();
+}
+
+export async function cortarSelecao(page: Page): Promise<void> {
+  await page.getByRole("toolbar", { name: "Ações da seleção" }).getByRole("button", { name: "Cortar" }).click();
+}
+
+/**
+ * Arrasta a alça de `cena` (studio, etapa Edição) até a fronteira depois de
+ * `depoisDe`, antes do meio do bloco seguinte. Quem chama espera a revisão:
+ * a faixa só redesenha com a resposta do servidor.
+ */
+export async function arrastarCena(page: Page, cena: string, depoisDe: string, seguinte: string): Promise<void> {
+  const alca = (await page.locator(`.bloco-alca[data-alca="${cena}"]`).boundingBox())!;
+  const antes = (await page.locator(`#faixa .lane-video .seq-bloco[data-scene="${depoisDe}"]`).boundingBox())!;
+  const depois = (await page.locator(`#faixa .lane-video .seq-bloco[data-scene="${seguinte}"]`).boundingBox())!;
+  const alvo = Math.min(antes.x + antes.width + 6, depois.x + depois.width / 2 - 4);
+  const y = alca.y + alca.height / 2;
+  await page.mouse.move(alca.x + alca.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(alvo, y + 2, { steps: 12 });
+  await page.mouse.up();
 }
 
 /** Etapa ativa do studio (o body carrega `data-stage`). */
