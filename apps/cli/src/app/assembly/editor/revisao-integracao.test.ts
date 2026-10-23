@@ -182,6 +182,14 @@ it("cobertura completa marca watched; voltar zera; trocar o src (revisão nova) 
 
 // ---- 5. Confirmação explícita sem assistir tudo ----
 
+it("studio: o painel fica no palco depois do vídeo, do cartão e da linha da legenda, fora do #stage", () => {
+  const t = monta("studio");
+  const palco = t.document.getElementById("palco")!;
+  const ids = palco.children.map((el) => el.id);
+  expect(ids.slice(0, 3)).toEqual(["stage", "legendaMonitor", "revisaoPainel"]);
+  expect(t.document.getElementById("stage")!.contains(t.document.getElementById("revisaoPainel"))).toBe(false);
+});
+
 it("aprovar sem assistir tudo pede confirmação; cancelar não chama a API", () => {
   const t = monta("studio");
   t.state.set("project", projeto());

@@ -1,5 +1,6 @@
-// Painel da Revisão (studio): cinco blocos separados no palco, logo abaixo do
-// cartão de aprovação, que continua sendo o único lugar de aprovar. Só lê o
+// Painel da Revisão (studio): cinco blocos separados no palco, abaixo do
+// monitor, do cartão de aprovação (que continua sendo o único lugar de aprovar)
+// e da linha da legenda do monitor. Só lê o
 // estado (o rastreio da reprodução mora em cobertura.js e publica "watched" e
 // "watchCoverage") e a revisão que o player está mostrando; nunca toca no
 // player nem chama a API. O CSS só o mostra na etapa Revisão.
@@ -100,7 +101,8 @@ export function blocosDaRevisao({ project, watched = null, coverage = null, veri
 }
 
 /**
- * Monta o painel dentro do #stage, depois do cartão de revisão. `player.el()`
+ * Monta o painel no palco, depois do #stage (vídeo e cartão de revisão) e da
+ * linha da legenda do monitor, que assim fica junto do vídeo. `player.el()`
  * é o <video> único: daqui só se lê a revisão que ele mostra. Fora da etapa
  * Revisão o painel está escondido e não recalcula (a cobertura muda a cada
  * timeupdate); entrar na Revisão repinta com o estado de agora.
@@ -115,7 +117,10 @@ export function mountRevisao({ state, player }) {
   const dados = document.createElement("dl");
   dados.className = "revisao-dados";
   painel.append(dados);
-  stage.append(painel);
+  const depois = document.getElementById("legendaMonitor") ?? stage;
+  const palco = depois.parentElement;
+  const irmaos = [...palco.children];
+  palco.insertBefore(painel, irmaos[irmaos.indexOf(depois) + 1] ?? null);
 
   function paint() {
     if (state.get("stage") !== "revisao") return;

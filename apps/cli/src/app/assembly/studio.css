@@ -294,9 +294,18 @@ body.is-empty .materiais-briefing .briefing-form textarea { min-height: 260px; }
 .formato-dialog .dialog-actions { justify-content: flex-end; margin: 18px 0 0; }
 
 /* == revisão == */
-/* Os cinco dados da revisão (studio-revisao.js), cada um no seu bloco, abaixo
-   do cartão de aprovação. Só existem na etapa Revisão. */
+/* Os cinco dados da revisão (studio-revisao.js), cada um no seu bloco, no
+   palco abaixo do cartão de aprovação e da linha da legenda. Só existem na
+   etapa Revisão. */
 :where(body:not([data-stage="revisao"])) #revisaoPainel { display: none; }
+#revisaoPainel { flex: none; }
+/* Na Revisão o vídeo encolhe até 140 px e o #stage não passa disso: sem altura
+   para tudo, o palco rola em vez de o cartão cobrir a legenda e os blocos. Com
+   altura sobrando, o vídeo cresce até 16:9. Empilhado, vale o de sempre. */
+@media (min-width: 901px) {
+  :where(body[data-stage="revisao"]) #stage { min-height: auto; container-type: inline-size; }
+  :where(body[data-stage="revisao"]) #stage > .preview-screen { flex: 1 1 140px; aspect-ratio: auto; max-height: calc(100cqw * 9 / 16); }
+}
 .revisao-dados { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; }
 .revisao-bloco { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-sub); background: var(--card-2); }
 .revisao-bloco dt { font: 600 11px/1.4 var(--sans-ui); color: var(--muted); }

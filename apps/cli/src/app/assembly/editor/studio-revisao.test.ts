@@ -160,7 +160,11 @@ function painel(over: { project?: Over | null; view?: string; data?: Over; stage
 
 it("o painel do DOM mostra os cinco blocos e acompanha o estado", () => {
   const t = painel();
-  expect(t.document.getElementById("stage")!.contains(t.el())).toBe(true);
+  // No palco, logo depois do #stage (e da linha da legenda, quando existe), fora dele.
+  const stage = t.document.getElementById("stage")!;
+  expect(stage.contains(t.el())).toBe(false);
+  const irmaos = stage.parentElement!.children;
+  expect(irmaos.indexOf(t.el())).toBe(irmaos.indexOf(stage) + 1);
   expect(t.document.querySelectorAll("#revisaoPainel [data-bloco]").map((el) => el.dataset.bloco))
     .toEqual(["montagem", "previa", "cobertura", "aprovada", "entrega"]);
   expect(t.bloco("montagem").valor).toBe("v6");
