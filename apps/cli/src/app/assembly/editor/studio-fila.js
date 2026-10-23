@@ -484,6 +484,7 @@ export function criarFila({
    * Para a fila. `motivo` diz por que, quando não foi a pessoa (ex.: a Reserva
    * passou para outra aba). Sem nada correndo nem esperando, não há o que parar:
    * a próxima escolha de arquivos começa direto.
+   * @param {{ motivo?: string | null }} [opcoes]
    */
   function pausar({ motivo = null } = {}) {
     if (pausado) return;

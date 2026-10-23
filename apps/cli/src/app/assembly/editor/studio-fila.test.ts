@@ -497,8 +497,7 @@ describe("manifesto decupa.materiais.v1", () => {
   });
 });
 
-/** O JSDoc do JS tipa `pausar` sem parâmetros; o real aceita `{ motivo }`. */
-const pausarComMotivo = (fila: Fila, motivo: string) => (fila.pausar as unknown as (opcoes: { motivo: string }) => void)({ motivo });
+const pausarComMotivo = (fila: Fila, motivo: string) => fila.pausar({ motivo });
 const pausaDoCliente = () => Object.assign(new Error("envio pausado"), { name: "UploadPausedError" });
 
 describe("Reserva perdida, pausa atrasada e impressão repetida", () => {
