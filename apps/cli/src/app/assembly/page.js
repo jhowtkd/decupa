@@ -22,6 +22,7 @@ const [
   { ResumableMediaUpload, UploadPausedError },
   { activityView, mountActivity },
   studioBancada,
+  studioBusca,
 ] = await Promise.all([
   import(projectPath("editor/templates.js")),
   import(projectPath("editor/state.js")),
@@ -36,6 +37,7 @@ const [
   import(projectPath("editor/progress.js")),
   // Só o studio baixa a bancada; a legacy não pede o módulo.
   editorUi === "studio" ? import(projectPath("editor/studio-bancada.js")) : null,
+  editorUi === "studio" ? import(projectPath("editor/studio-busca.js")) : null,
 ]);
 
 const state = createState({
@@ -193,6 +195,13 @@ const api = {
   },
 };
 
+/** Fim de um trecho da montagem em reprodução (playMontage); trocar de vídeo ou pausar o solta. */
+let montageStop = null;
+function releaseMontageStop() {
+  montageStop?.();
+  montageStop = null;
+}
+
 const player = {
   el() {
     return document.getElementById("previewPlayer");
@@ -200,9 +209,36 @@ const player = {
   previewBusy() {
     return previewInflight || previewPending;
   },
+  /** Toca a montagem de `start` a `end` (segundos) e pausa no fim. */
+  playMontage(start, end) {
+    const el = this.el();
+    if (!el) return;
+    this.seek(start);
+    const onTime = () => {
+      if (el.currentTime < end) return;
+      releaseMontageStop();
+      el.pause();
+    };
+    // Trocar o src para a prévia também pausa: só a pausa ou a busca da
+    // pessoa, depois que o trecho começou a tocar, soltam o fim.
+    const onPlaying = () => {
+      el.addEventListener("pause", releaseMontageStop);
+      el.addEventListener("seeking", releaseMontageStop);
+    };
+    el.addEventListener("timeupdate", onTime);
+    el.addEventListener("playing", onPlaying, { once: true });
+    montageStop = () => {
+      el.removeEventListener("timeupdate", onTime);
+      el.removeEventListener("playing", onPlaying);
+      el.removeEventListener("pause", releaseMontageStop);
+      el.removeEventListener("seeking", releaseMontageStop);
+    };
+    el.play().catch(() => {});
+  },
   playOriginal(sourceId, start, end) {
     const el = this.el();
     if (!el) return;
+    releaseMontageStop();
     el.src = projectPath("project/media/" + encodeURIComponent(sourceId) + "?view=playback")
       + (start != null && end != null ? "#t=" + start.toFixed(2) + "," + end.toFixed(2) : "");
     el.removeAttribute("data-rev");
@@ -214,6 +250,7 @@ const player = {
     if (seconds == null) return;
     const el = this.el();
     if (!el) return;
+    releaseMontageStop();
     const p = project();
     el.removeAttribute("data-source");
     if (state.get("view") !== "montagem") state.set("view", "montagem");
@@ -546,8 +583,10 @@ mountStage({ state, api, player });
 mountContexto({ state, api, player });
 mountRail({ state, api, player });
 mountTemplates({state,api});
-mountTexto({ state, api, player });
+mountTexto({ state, api, player, ui: editorUi });
 mountSequencia({ state, api, player, ui: editorUi });
+// Busca no texto do studio: lê o projeto do estado e não recebe api.
+if (studioBusca) studioBusca.mountBusca({ state });
 
 const STAGE_TARGET = { materiais: "rail", edicao: "texto", revisao: "stage", entrega: "delivery" };
 const monitor = document.getElementById("monitor");

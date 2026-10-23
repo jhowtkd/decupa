@@ -120,3 +120,14 @@ Run [39839574637](https://github.com/jhowtkd/decupa/actions/runs/39839574637) e 
   - › libera o parcial local após falha de importação…
 - `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém correção pending após encerramento/cancelamento…. Só na 2ª tentativa: o `waitFor` viu `pending` ≠ `aligned`.
 - `apps/cli/src/app/drive-upload.test.ts` › expira download parado e conserva falha para retry explícito. Só na 2ª tentativa: o `expect.poll` no `.tmp` estourou o prazo.
+
+### Intermitências vistas no CI do PR 2 (#190, Windows)
+
+Run [39843790718](https://github.com/jhowtkd/decupa/actions/runs/39843790718). Todas passaram no rerun e são de arquivos que a pilha não toca:
+
+- `apps/cli/src/app/assembly/routes-pending-additional.test.ts` › mantém erro de conteúdo quando a cobertura do alinhamento é inválida. Só na 1ª tentativa: o `waitFor` da linha 147 viu `pending` ≠ `error`.
+- `apps/cli/src/app/project-media-http.test.ts` › preserva a análise da primeira Mídia quando outra entra durante o trabalho. Só na 1ª tentativa: a espera da linha 147 viu `analyzing` ≠ `ready`.
+- Voltaram as já registradas acima:
+  - `pipeline-spawn-abort.additional.test.ts`, na 1ª tentativa;
+  - `drive-upload.test.ts` › expira download parado e conserva falha para retry explícito, na 2ª tentativa.
+- No sentido inverso, `media-admission.test.ts` › usa a mesma cota de validação para PATCH local e publicação, que está na lista do Windows, passou numa das tentativas.
