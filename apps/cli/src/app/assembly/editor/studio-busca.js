@@ -105,10 +105,11 @@ export function indiceDeBusca(project) {
 }
 
 /**
- * Ocorrências da consulta na ordem do documento (puro). Uma frase pode
- * atravessar os takes de uma cena, mas não sai da cena nem da sequência não
- * usada. `omitida` marca a ocorrência fora da montagem; `fonte` é a Mídia
- * da zona que o texto precisa abrir para mostrá-la.
+ * Ocorrências da consulta na ordem do documento (puro). A ocorrência começa
+ * no início de uma palavra ("mont" acha "montagem"; "acao" não acha
+ * "gravação"). Uma frase pode atravessar os takes de uma cena, mas não sai
+ * da cena nem da sequência não usada. `omitida` marca a ocorrência fora da
+ * montagem; `fonte` é a Mídia da zona que o texto precisa abrir para mostrá-la.
  * @returns {{ chaves: string[], omitida: boolean, fonte: string | null }[]}
  */
 export function ocorrencias(project, consulta) {
@@ -117,12 +118,19 @@ export function ocorrencias(project, consulta) {
   const out = [];
   for (const trecho of indiceDeBusca(project).trechos) {
     let k = 0;
-    for (let at = trecho.texto.indexOf(termo); at >= 0; at = trecho.texto.indexOf(termo, at + termo.length)) {
+    let at = trecho.texto.indexOf(termo);
+    while (at >= 0) {
+      // No meio de uma palavra não conta; a procura segue um caractere adiante.
+      if (at > 0 && trecho.texto[at - 1] !== " ") {
+        at = trecho.texto.indexOf(termo, at + 1);
+        continue;
+      }
       const fim = at + termo.length;
       while (trecho.ate[k] <= at) k += 1;
       const chaves = [];
       for (let i = k; i < trecho.chaves.length && trecho.de[i] < fim; i += 1) chaves.push(trecho.chaves[i]);
       out.push({ chaves, omitida: trecho.tipo === 1, fonte: trecho.sourceId });
+      at = trecho.texto.indexOf(termo, fim);
     }
   }
   return out;
