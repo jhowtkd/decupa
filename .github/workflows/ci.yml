@@ -99,3 +99,93 @@ jobs:
         run: |
           node scripts/setup.mjs --engine-only
           python -m unittest discover -s scripts -p "test_render_*.py"
+
+  e2e:
+    # Testes de navegador (Playwright) da jornada do studio contra o servidor
+    # real, só no Ubuntu. Cada teste sobe o CLI (`decupa serve`) sobre uma Raiz
+    # semeada: a transcrição vem pronta (os modelos de fala não são baixados
+    # aqui) e a prévia sai do motor real, clonado do bundle do repositório sem
+    # rede. O p95 medido é relatório; o teto de 100 ms vale no ambiente de
+    # referência (docs/superpowers/evidence/2026-10-23-studio-ensaios.md).
+    runs-on: ubuntu-24.04
+    # Acima do globalTimeout do Playwright (25 min): ele para sozinho e grava os
+    # relatórios antes de o job ser cancelado.
+    timeout-minutes: 40
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: instalar ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: motor de render (bundle do repositório)
+        run: node scripts/setup.mjs --engine-only
+
+      - name: navegador do Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: versões efetivas do ambiente
+        run: |
+          {
+            printf '### Ambiente do e2e\n\n```text\n'
+            node --version
+            python3 --version
+            ffmpeg -version | head -n 1
+            pnpm exec playwright --version
+            # O space.ts exige 15 GiB livres para exportar e receber mídia.
+            df -h / "${RUNNER_TEMP:-/tmp}"
+            printf '```\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Plano B, desligado: a variável do repositório DECUPA_E2E_MOTOR=sintetico
+      # troca só o compositor por um MP4 liso na duração da timeline
+      # (e2e/apoio/motor-sintetico), sem commit. Vazia = motor real.
+      - run: pnpm e2e
+        env:
+          DECUPA_E2E_MOTOR: ${{ vars.DECUPA_E2E_MOTOR }}
+
+      # Flaky (passou só na segunda tentativa) fica listado no summary, junto
+      # com o p95 de cada interação.
+      - name: resumo do e2e
+        if: always()
+        run: node --experimental-strip-types --no-warnings e2e/apoio/resumo-ci.ts >> "$GITHUB_STEP_SUMMARY"
+
+      # Sempre: um teste flaky deixa o trace da tentativa que falhou mesmo com
+      # o job verde. Execução sem falha só deixa as medidas e o relatório.
+      - name: evidências (trace, screenshot, relatório)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-evidencias
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: medidas de desempenho
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-desempenho
+          path: test-results/desempenho-*.json
+          if-no-files-found: ignore

@@ -8,7 +8,9 @@
 // (botão de desfazer no cabeçalho do texto + atalho Cmd/Ctrl+Z), desabilitado na revisão 0.
 // No studio a faixa separa vídeo, apoio, áudio e legenda em trilhas sob a
 // mesma régua, com zoom local; cada trilha mostra o dado real ou diz que
-// ele falta ("sem miniatura", "sem onda", "sem áudio").
+// ele falta ("sem miniatura", "sem onda", "sem áudio"). A alça de cada cena
+// leva a cena para outra posição (ponteiro ou teclado): a ordem inteira vai
+// num pedido só, que vira uma revisão e um passo de desfazer.
 import { ZOOMS, clock, clockPrecise, formatChip } from "./format.js";
 import { ICON } from "./icons.js";
 import { montageDuration, retainedSegments, timelineBlocks } from "./montage.js";
@@ -183,6 +185,51 @@ export function cuesDaFaixa(legendas, project) {
   });
 }
 
+/** Largura mínima (px) para uma fala ter bloco e rótulo próprios na trilha de legenda. */
+export const LEGENDA_CUE_MIN_PX = 24;
+
+/**
+ * Itens da trilha de legenda (puro). Cada fala com pelo menos `limiar` px na
+ * largura atual da trilha (zoom incluído) fica sozinha; falas seguidas mais
+ * estreitas, da mesma cena e sem um vão de `limiar` px entre elas, viram um
+ * bloco só, com a contagem (`falas`). O bloco nunca atravessa o começo de uma
+ * cena (`cortes`, em segundos da montagem): fica sob a cena dele. Uma fala
+ * estreita isolada segue sozinha. Largura desconhecida (0: a faixa está
+ * escondida) não agrupa nada; o redesenho por largura repinta quando ela
+ * aparece.
+ * @param {{start: number, end: number, text: string}[]} cues em ordem
+ * @param {number} duration segundos da montagem
+ * @param {number} larguraPx largura da trilha inteira, em px
+ * @param {number[]} [cortes] começos das cenas, em ordem
+ * @returns {({start: number, end: number, text: string} | {start: number, end: number, falas: number})[]}
+ */
+export function agruparCues(cues, duration, larguraPx, cortes = [], limiar = LEGENDA_CUE_MIN_PX) {
+  if (!(larguraPx > 0) || !(duration > 0)) return cues;
+  const px = (segundos) => (segundos / duration) * larguraPx;
+  const itens = [];
+  let grupo = null;
+  let cena = -1;
+  const fechar = () => {
+    if (grupo) itens.push(grupo.falas === 1 ? grupo.primeira : { start: grupo.start, end: grupo.end, falas: grupo.falas });
+    grupo = null;
+  };
+  for (const cue of cues) {
+    while (cena + 1 < cortes.length && cortes[cena + 1] <= cue.start) cena += 1;
+    if (px(cue.end - cue.start) >= limiar) {
+      fechar();
+      itens.push(cue);
+    } else if (grupo && grupo.cena === cena && px(cue.start - grupo.end) < limiar) {
+      grupo.end = Math.max(grupo.end, cue.end);
+      grupo.falas += 1;
+    } else {
+      fechar();
+      grupo = { start: cue.start, end: cue.end, falas: 1, primeira: cue, cena };
+    }
+  }
+  fechar();
+  return itens;
+}
+
 /** Estado da trilha de legenda sem cues (puro): o porquê, nunca vazio mudo. */
 export function legendaVazia(legendas, project) {
   if (!legendas || legendas.revision !== project?.revision || legendas.estado === "carregando") return "carregando legenda…";
@@ -190,6 +237,71 @@ export function legendaVazia(legendas, project) {
   if (legendas.estado === "indisponivel") return "legenda indisponível";
   if (legendas.estado === "erro") return "legenda não carregou";
   return "sem legenda";
+}
+
+/** Distância (px) que separa o clique na alça da cena do começo do arraste. */
+export const ARRASTE_LIMIAR_PX = 4;
+
+/** Faixa (px) junto à borda da vista que rola a sequência durante o arraste. */
+export const ARRASTE_BORDA_PX = 32;
+
+/**
+ * Ordem das cenas com `sceneId` levada à posição `destino` (pura), ou null
+ * quando nada muda: cena desconhecida, destino fora da lista ou o mesmo lugar.
+ * @param {string[]} ids
+ * @param {string} sceneId
+ * @param {number} destino
+ */
+export function ordemMovida(ids, sceneId, destino) {
+  const de = ids.indexOf(sceneId);
+  if (de < 0 || !Number.isInteger(destino) || destino < 0 || destino >= ids.length || destino === de) return null;
+  const ordem = ids.filter((id) => id !== sceneId);
+  ordem.splice(destino, 0, sceneId);
+  return ordem;
+}
+
+/**
+ * Posição final da cena `de` com o ponteiro no instante `t` (pura): conta as
+ * outras cenas cujo meio fica antes dele. `blocos` são as cenas na ordem atual.
+ * @param {{ start: number, end: number }[]} blocos
+ */
+export function destinoDoArraste(blocos, de, t) {
+  let destino = 0;
+  blocos.forEach((bloco, i) => {
+    if (i !== de && (bloco.start + bloco.end) / 2 < t) destino += 1;
+  });
+  return destino;
+}
+
+/**
+ * Instante da fronteira onde a cena `de` entra ao ir para `destino` (pura):
+ * antes da cena que hoje ocupa o lugar, ou depois dela; null no próprio lugar.
+ * @param {{ start: number, end: number }[]} blocos
+ */
+export function fronteiraDoDestino(blocos, de, destino) {
+  if (destino === de || !blocos[destino]) return null;
+  return destino < de ? blocos[destino].start : blocos[destino].end;
+}
+
+/** Anúncio do arraste pelo teclado (puro): "Cena 2 · posição 4 de 5". */
+export function anuncioDoArraste(numero, destino, total) {
+  return "Cena " + numero + " · posição " + (destino + 1) + " de " + total;
+}
+
+/**
+ * Reordena as cenas (studio): um POST project/edit com a ordem inteira, a
+ * partir da revisão que estava na tela. Arraste, teclado da faixa e menu da
+ * cena passam por aqui; o servidor confere a ordem contra essa revisão.
+ * @param {{ call: Function }} api
+ * @param {{ revision: number }} project
+ * @param {string[]} ordem
+ */
+export function enviarOrdem(api, project, ordem) {
+  return api.call("project/edit", {
+    method: "POST",
+    body: JSON.stringify({ baseRevision: project.revision, action: { type: "reorder-scenes", order: ordem } }),
+    label: "Movendo cena…",
+  });
 }
 
 /** Guarda do atalho global de desfazer (o módulo monta uma vez por página). */
@@ -372,11 +484,38 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
 
   const studio = ui === "studio";
   const zoom = () => zoomValido(state.get("zoomSequencia"));
+  // Largura da vista da faixa (no 1×), a última não nula: com a faixa
+  // escondida (Materiais, Entrega) a medida dá 0, e a legenda que chega então
+  // ainda sai agrupada, sem montar milhares de spans para a volta à Edição.
+  let vistaLembrada = 0;
+  /** Largura da trilha inteira no zoom atual, a partir da medida da vista agora. */
+  const larguraTrilha = (vista) => {
+    if (vista > 0) vistaLembrada = vista;
+    return vistaLembrada * zoom();
+  };
+
+  // Arraste de cena (studio): um gesto por vez, do pegar até a resposta do
+  // pedido. Enquanto existe, a faixa não se redesenha, a vista não segue o
+  // playhead e os atalhos de histórico calam.
+  let gesto = null;
+  // Anúncios do arraste pelo teclado; o mesmo nó volta a cada redesenho.
+  const anuncio = studio ? document.createElement("p") : null;
+  if (anuncio) {
+    anuncio.className = "faixa-anuncio";
+    anuncio.setAttribute("aria-live", "polite");
+  }
 
   let signature = "";
   function render(p) {
     // Os botões vivem fora da faixa: atualizam mesmo quando o desenho não muda.
     placeHistory(p);
+    // Arraste em curso: o fim do gesto redesenha com o projeto de então. A
+    // alça desabilitada no meio (Reserva perdida) solta o gesto de teclado
+    // mesmo onde o navegador não avisa a perda de foco.
+    if (gesto) {
+      if (gesto.modo === "teclado" && !gesto.enviando && gesto.alca.disabled) cancelarGesto("Movimento cancelado");
+      return;
+    }
     const next = JSON.stringify(p && (studio
       ? [p.revision, p.scenes, p.assembly.sources, zoom()]
       : [p.revision, p.scenes, p.assembly.sources, p.captions]));
@@ -562,7 +701,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     strip.setAttribute("aria-valuemax", String(duration));
     strip.setAttribute("tabindex", "0");
     const lane = (nome, inner) => '<div class="seq-lane lane-' + nome + '">' + inner + "</div>";
-    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration))
+    // Largura da trilha no zoom atual; a da vista anterior serve até o observador de largura repintar.
+    const largura = larguraTrilha(el.querySelector(".faixa-rolagem")?.clientWidth || el.clientWidth || 0);
+    strip.innerHTML = lane("video", video) + lane("apoio", apoio) + lane("audio", audio) + lane("legenda", legendaHtml(p, duration, largura))
       + '<div class="seq-playhead" hidden style="position:absolute;top:0;bottom:0;width:2px;"></div>';
     const rotulos = document.createElement("div");
     rotulos.className = "faixa-rotulos";
@@ -572,39 +713,94 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     trilhas.className = "faixa-trilhas";
     trilhas.style.width = z * 100 + "%";
     trilhas.append(ruler, strip);
+    if (cenas.length > 1) trilhas.append(alcasDasCenas(cenas, pct));
     const rolagem = document.createElement("div");
     rolagem.className = "faixa-rolagem";
     rolagem.append(trilhas);
     const corpo = document.createElement("div");
     corpo.className = "faixa-corpo";
     corpo.append(rotulos, rolagem);
-    // O redesenho (zoom, revisão nova) mantém o centro da vista e o foco do zoom.
+    // O redesenho (zoom, revisão nova) mantém o centro da vista e o foco do
+    // zoom ou da alça (a cena movida pelo teclado continua com o foco).
     const antes = el.querySelector(".faixa-rolagem");
     const centro = antes && antes.scrollWidth > 0 ? (antes.scrollLeft + antes.clientWidth / 2) / antes.scrollWidth : null;
     const foco = document.activeElement?.closest?.("[data-zoom]")?.dataset.zoom;
-    el.replaceChildren(head, corpo);
-    if (Number.isFinite(centro) && rolagem.scrollWidth > 0) {
+    const alcaFoco = document.activeElement?.closest?.(".bloco-alca")?.dataset.alca;
+    el.replaceChildren(head, corpo, anuncio);
+    // No 1× não há o que rolar: os poucos px da última marca da régua não contam.
+    if (z > 1 && Number.isFinite(centro) && rolagem.scrollWidth > 0) {
       rolagem.scrollLeft = Math.max(0, centro * rolagem.scrollWidth - rolagem.clientWidth / 2);
     }
     if (foco) {
       const botoes = [...el.querySelectorAll("[data-zoom]")];
       (botoes.find((item) => item.dataset.zoom === foco && !item.disabled) || botoes.find((item) => !item.disabled))?.focus();
     }
+    if (alcaFoco) focarAlca(alcaFoco);
     paint(state.get("playhead"));
     void hydrateWaves(p);
+  }
+
+  /**
+   * Alças de ordem das cenas (studio): uma por cena, numa camada sobre a
+   * trilha de vídeo e fora do slider, então o resto do bloco segue buscando
+   * e o leitor de tela enxerga cada alça. Uma parada de Tab só: a alça da
+   * cena selecionada (ou da primeira); as setas andam entre elas.
+   */
+  function alcasDasCenas(cenas, pct) {
+    const selecionada = state.get("selectedScene");
+    const noTab = cenas.some((block) => block.sceneId === selecionada) ? selecionada : cenas[0].sceneId;
+    const alcas = document.createElement("div");
+    alcas.className = "faixa-alcas";
+    alcas.setAttribute("role", "group");
+    alcas.setAttribute("aria-label", "Ordem das cenas");
+    alcas.innerHTML = cenas.map((block, i) => {
+      const nome = "Mover cena " + (i + 1) + ": " + block.label;
+      // Cena sem duração (tudo cortado): a alça fica na fronteira, por cima da vizinha (CSS).
+      const vazia = !(block.end > block.start);
+      return '<div class="alca-cena' + (vazia ? " vazia" : "") + '" data-scene="' + esc(block.sceneId) + '" style="left:'
+        + pct(block.start) + (vazia ? "" : ";width:" + pct(block.end - block.start)) + ';">'
+        + '<button type="button" class="bloco-alca" data-alca="' + esc(block.sceneId) + '" tabindex="' + (block.sceneId === noTab ? "0" : "-1") + '"'
+        + ' title="Arraste para mudar a ordem" aria-label="' + esc(nome) + '"'
+        + ' aria-describedby="faixaAlcaAjuda">' + ICON.grip + "</button></div>";
+    }).join("")
+      + '<div class="faixa-destino" hidden></div>'
+      + '<span id="faixaAlcaAjuda" hidden>Arraste para mudar a ordem. Pelo teclado: Espaço pega a cena, as setas escolhem o lugar, Espaço solta e Esc cancela.</span>';
+    return alcas;
+  }
+
+  /** Uma parada de Tab nas alças: a da cena `sceneId`; cena sem alça mantém a de agora. */
+  function alcaNoTab(sceneId) {
+    const alcas = [...(root()?.querySelectorAll(".bloco-alca") || [])];
+    if (!alcas.some((btn) => btn.dataset.alca === sceneId)) return;
+    for (const btn of alcas) btn.tabIndex = btn.dataset.alca === sceneId ? 0 : -1;
+  }
+
+  function focarAlca(sceneId) {
+    const btn = [...(root()?.querySelectorAll(".bloco-alca") || [])].find((item) => item.dataset.alca === sceneId);
+    if (!btn) return;
+    alcaNoTab(sceneId);
+    btn.focus();
   }
 
   /**
    * Conteúdo da trilha de legenda (studio): os cues da revisão atual ou o
    * porquê de não haver. "carregando legenda…" só aparece se demorar (CSS).
    */
-  function legendaHtml(p, duration) {
+  function legendaHtml(p, duration, larguraPx) {
     const pct = (t) => (duration > 0 ? (t / duration) * 100 : 0).toFixed(3) + "%";
     const legendas = state.get("legendasFaixa");
     const cues = cuesDaFaixa(legendas, p);
     if (cues.length) {
-      return cues.map((cue) => '<span class="seq-cue" title="' + esc(cue.text) + '" style="left:' + pct(cue.start)
-        + ";width:" + pct(Math.max(0, cue.end - cue.start)) + ';">' + esc(cue.text) + "</span>").join("");
+      // Fala estreita demais para ler vira parte de um bloco "N falas": milhares
+      // de spans de menos de 1 px pesavam em cada quadro da página.
+      const cortes = timelineBlocks(p).filter((block) => block.kind === "scene").map((block) => block.start);
+      return agruparCues(cues, duration, larguraPx, cortes).map((item) => {
+        const posicao = ' style="left:' + pct(item.start) + ";width:" + pct(Math.max(0, item.end - item.start)) + ';"';
+        if (!item.falas) return '<span class="seq-cue" title="' + esc(item.text) + '"' + posicao + ">" + esc(item.text) + "</span>";
+        const rotulo = item.falas + " falas, " + clock(item.start) + "–" + clock(item.end);
+        return '<span class="seq-cue seq-cue-grupo" title="' + rotulo + '"' + posicao + ">"
+          + item.falas + " falas</span>";
+      }).join("");
     }
     const texto = legendaVazia(legendas, p);
     const motivo = legendas?.revision === p.revision && legendas.motivo ? ' title="' + esc(legendas.motivo) + '"' : "";
@@ -615,8 +811,9 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   function pintarLegenda() {
     const p = state.get("project");
     const lane = root()?.querySelector(".seq-strip .lane-legenda");
-    if (!p || !lane) return;
-    lane.innerHTML = legendaHtml(p, montageDuration(p));
+    // Com o gesto, a faixa segura a ordem de quando pegou; o fim do gesto repinta.
+    if (!p || !lane || gesto) return;
+    lane.innerHTML = legendaHtml(p, montageDuration(p), larguraTrilha(root()?.querySelector(".faixa-rolagem")?.clientWidth || 0));
   }
 
   function mudarZoom(passo) {
@@ -758,7 +955,8 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     const el = root();
     const strip = el && el.querySelector(".seq-strip");
     if (!strip) return;
-    const p = state.get("project");
+    // Com o gesto, os blocos seguram a ordem de quando pegou: o realce segue eles.
+    const p = gesto?.projeto ?? state.get("project");
     const duration = p ? montageDuration(p) : 0;
     const line = strip.querySelector(".seq-playhead");
     const valid = p && Number.isFinite(playhead) && playhead != null && duration > 0;
@@ -783,7 +981,7 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     // O áudio que toca é o da cena, mesmo sob um apoio.
     const scene = valid ? activeScene(p, playhead) : null;
     for (const node of strip.querySelectorAll(".seq-audio")) node.classList.toggle("ativa", node.dataset.scene === scene);
-    if (acompanhar && valid && !scrubbing && player.el?.()?.paused === false) {
+    if (acompanhar && valid && !scrubbing && !gesto && player.el?.()?.paused === false) {
       seguir(strip, Math.min(1, Math.max(0, playhead / duration)));
     }
   }
@@ -821,6 +1019,228 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
   // Durante o arraste a faixa não rola sozinha atrás do playhead.
   let scrubbing = false;
 
+  /**
+   * Pega a cena da alça (ponteiro ou teclado). Só com a faixa parada, sem
+   * desfazer/refazer em voo e fora do Modo Leitura (alça desabilitada).
+   * Guarda a revisão e a geometria da tela: é delas que o pedido parte.
+   */
+  function pegar(alca, modo, extra = {}) {
+    const p = state.get("project");
+    if (!studio || gesto || scrubbing || alca.disabled || !p || undoEdit.busy() || redoEdit.busy()) return null;
+    const ids = p.scenes.map((scene) => scene.id);
+    const blocos = timelineBlocks(p).filter((block) => block.kind === "scene");
+    const duracao = montageDuration(p);
+    const de = ids.indexOf(alca.dataset.alca);
+    if (de < 0 || blocos.length !== ids.length || !(duracao > 0)) return null;
+    gesto = { modo, projeto: p, ids, blocos, duracao, de, destino: de, sceneId: ids[de], alca, ativo: modo === "teclado", enviando: false, ...extra };
+    document.addEventListener("keydown", escapeDoGesto, true);
+    return gesto;
+  }
+
+  /** Esc cancela o gesto antes de qualquer outro atalho (gaveta, menu). */
+  function escapeDoGesto(ev) {
+    if (ev.key !== "Escape" || !gesto || gesto.enviando) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelarGesto("Movimento cancelado");
+  }
+
+  /** Bloco levantado, deslocado com o ponteiro, e a barra na fronteira de destino. */
+  function pintarGesto() {
+    const el = root();
+    if (!gesto || !el) return;
+    el.classList.add("reordenando");
+    const bloco = [...el.querySelectorAll(".lane-video .seq-bloco")].find((node) => node.dataset.scene === gesto.sceneId);
+    const desloca = gesto.modo === "ponteiro" && gesto.ativo ? "translateX(" + gesto.dx + "px)" : "";
+    for (const node of [bloco, gesto.alca.closest(".alca-cena")]) {
+      if (!node) continue;
+      node.classList.add("arrastando");
+      node.style.transform = desloca;
+    }
+    const barra = el.querySelector(".faixa-destino");
+    const t = fronteiraDoDestino(gesto.blocos, gesto.de, gesto.destino);
+    if (!barra) return;
+    barra.hidden = t == null;
+    if (t != null) barra.style.left = ((t / gesto.duracao) * 100).toFixed(3) + "%";
+  }
+
+  function limparGesto() {
+    const el = root();
+    if (!el) return;
+    el.classList.remove("reordenando");
+    for (const node of el.querySelectorAll(".arrastando")) {
+      node.classList.remove("arrastando");
+      node.style.transform = "";
+    }
+    const barra = el.querySelector(".faixa-destino");
+    if (barra) barra.hidden = true;
+  }
+
+  /** Fim do gesto (cancelado, solto no lugar ou com a resposta): solta a guarda e redesenha. */
+  function encerrarGesto() {
+    const fim = gesto;
+    if (!fim) return;
+    gesto = null;
+    document.removeEventListener("keydown", escapeDoGesto, true);
+    if (fim.quadro && typeof cancelAnimationFrame === "function") cancelAnimationFrame(fim.quadro);
+    if (fim.modo === "ponteiro" && fim.alca.hasPointerCapture?.(fim.pointerId)) fim.alca.releasePointerCapture(fim.pointerId);
+    limparGesto();
+    render(state.get("project"));
+    // Sem redesenho (mesma assinatura), legenda e playhead seguram o que chegou no meio.
+    pintarLegenda();
+    paint(state.get("playhead"));
+  }
+
+  function cancelarGesto(aviso) {
+    if (!gesto || gesto.enviando) return;
+    const teclado = gesto.modo === "teclado";
+    encerrarGesto();
+    if (teclado && aviso) anunciar(aviso);
+  }
+
+  function anunciar(texto) {
+    if (anuncio) anuncio.textContent = texto;
+  }
+
+  /**
+   * Solta a cena: no mesmo lugar não envia nada; senão um pedido só, com a
+   * ordem inteira e a revisão da tela (um 409 cai na reconciliação do
+   * call()). A faixa segura o desenho até a resposta: sem prévia no estado.
+   */
+  async function soltar() {
+    if (!gesto || gesto.enviando) return;
+    const ordem = ordemMovida(gesto.ids, gesto.sceneId, gesto.destino);
+    // Desfazer/refazer em voo mudam a base da tela: o pedido cairia num 409.
+    if (!ordem || undoEdit.busy() || redoEdit.busy()) {
+      cancelarGesto(ordem ? "Movimento cancelado" : "Cena no mesmo lugar");
+      return;
+    }
+    gesto.enviando = true;
+    const teclado = gesto.modo === "teclado";
+    const movida = "Cena " + (gesto.de + 1) + " movida para a posição " + (gesto.destino + 1) + " de " + gesto.ids.length;
+    let ok = false;
+    try {
+      ok = (await enviarOrdem(api, gesto.projeto, ordem))?.res?.ok === true;
+    } catch {
+      // call() já mostrou o erro na pílula de status; a faixa volta à verdade.
+    } finally {
+      encerrarGesto();
+    }
+    // Só a resposta do servidor diz que a cena mudou de lugar (409 e erro não).
+    if (teclado) anunciar(ok ? movida : "A cena não mudou de lugar");
+  }
+
+  /** Destino e deslocamento a partir do último x do ponteiro (a rolagem na borda também chama). */
+  function acompanharPonteiro() {
+    const el = root();
+    const strip = el?.querySelector(".seq-strip");
+    if (!gesto || !strip) return;
+    const rolagem = el.querySelector(".faixa-rolagem");
+    const ratio = Math.min(1, Math.max(0, ratioOfEvent(strip, { clientX: gesto.clientX })));
+    gesto.destino = destinoDoArraste(gesto.blocos, gesto.de, ratio * gesto.duracao);
+    gesto.dx = gesto.clientX - gesto.x0 + (rolagem?.scrollLeft || 0) - gesto.rolagem0;
+    pintarGesto();
+  }
+
+  /**
+   * Com zoom, o ponteiro a ARRASTE_BORDA_PX da borda da vista rola a faixa,
+   * mais rápido quanto mais perto, só para o lado em que ele anda desde que
+   * pegou e nunca além de `maxRolagem` (medido no pegar: o bloco deslocado
+   * alarga o scrollWidth e não pode puxar a vista para o vazio). Sem zoom
+   * não há o que rolar.
+   */
+  function rolarNaBorda() {
+    if (!gesto || gesto.modo !== "ponteiro" || gesto.enviando) return;
+    const rolagem = root()?.querySelector(".faixa-rolagem");
+    if (rolagem && gesto.maxRolagem > 0) {
+      const rect = rolagem.getBoundingClientRect();
+      const esquerda = gesto.clientX - rect.left;
+      const direita = rect.right - gesto.clientX;
+      const lado = gesto.clientX > gesto.x0 && direita < ARRASTE_BORDA_PX ? 1
+        : gesto.clientX < gesto.x0 && esquerda < ARRASTE_BORDA_PX ? -1 : 0;
+      if (lado) {
+        const antes = rolagem.scrollLeft;
+        const forca = Math.min(1, (ARRASTE_BORDA_PX - (lado > 0 ? direita : esquerda)) / ARRASTE_BORDA_PX);
+        rolagem.scrollLeft = Math.min(gesto.maxRolagem, Math.max(0, antes + lado * Math.ceil(forca * 14)));
+        if (rolagem.scrollLeft !== antes) acompanharPonteiro();
+      }
+    }
+    gesto.quadro = requestAnimationFrame(rolarNaBorda);
+  }
+
+  function pegarComPonteiro(alca, ev) {
+    if (ev.button !== 0) return;
+    // Sem o padrão: nada de seleção de texto nem foco no meio do gesto.
+    ev.preventDefault();
+    const rolagem = root()?.querySelector(".faixa-rolagem");
+    const trilhas = root()?.querySelector(".faixa-trilhas");
+    // Limite da rolagem: a largura das trilhas, não o scrollWidth (a última
+    // marca da régua já transborda alguns px no 1×).
+    const maxRolagem = trilhas && rolagem ? trilhas.offsetWidth - rolagem.clientWidth : 0;
+    if (!pegar(alca, "ponteiro", { pointerId: ev.pointerId, x0: ev.clientX, clientX: ev.clientX, dx: 0, rolagem0: rolagem?.scrollLeft || 0, maxRolagem })) return;
+    alca.setPointerCapture?.(ev.pointerId);
+  }
+
+  function moverPonteiro(ev) {
+    gesto.clientX = ev.clientX;
+    if (!gesto.ativo) {
+      if (Math.abs(ev.clientX - gesto.x0) < ARRASTE_LIMIAR_PX) return;
+      gesto.ativo = true;
+      if (typeof requestAnimationFrame === "function") gesto.quadro = requestAnimationFrame(rolarNaBorda);
+    }
+    acompanharPonteiro();
+  }
+
+  function soltarPonteiro(ev) {
+    if (gesto.ativo) {
+      gesto.clientX = ev.clientX;
+      acompanharPonteiro();
+      void soltar();
+      return;
+    }
+    // Clique na alça sem arrastar: seleciona a cena, e a alça fica com o foco.
+    const sceneId = gesto.sceneId;
+    encerrarGesto();
+    state.set("selectedScene", sceneId);
+    state.set("selectedSupport", null);
+    focarAlca(sceneId);
+  }
+
+  /**
+   * Teclado na alça. Sem cena pega, as setas andam entre as alças e Espaço/
+   * Enter pega; com ela, as setas, Home e End escolhem o destino e Espaço/
+   * Enter solta (um pedido, por mais posições que ande). Esc cancela.
+   */
+  function teclaNaAlca(alca, ev) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End", "Enter", " "].includes(ev.key) || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    ev.preventDefault();
+    const soltarOuPegar = ev.key === "Enter" || ev.key === " ";
+    if (gesto) {
+      if (gesto.modo !== "teclado" || gesto.enviando) return;
+      if (soltarOuPegar) {
+        void soltar();
+        return;
+      }
+      const ultimo = gesto.ids.length - 1;
+      gesto.destino = ev.key === "Home" ? 0 : ev.key === "End" ? ultimo
+        : Math.min(ultimo, Math.max(0, gesto.destino + (ev.key === "ArrowRight" ? 1 : -1)));
+      pintarGesto();
+      anunciar(anuncioDoArraste(gesto.de + 1, gesto.destino, gesto.ids.length));
+      return;
+    }
+    if (soltarOuPegar) {
+      if (!pegar(alca, "teclado")) return;
+      pintarGesto();
+      anunciar(anuncioDoArraste(gesto.de + 1, gesto.destino, gesto.ids.length) + ". Setas escolhem o lugar, Espaço solta, Esc cancela.");
+      return;
+    }
+    const alcas = [...root().querySelectorAll(".bloco-alca")];
+    const i = alcas.indexOf(alca);
+    const j = ev.key === "Home" ? 0 : ev.key === "End" ? alcas.length - 1
+      : Math.min(alcas.length - 1, Math.max(0, i + (ev.key === "ArrowRight" ? 1 : -1)));
+    focarAlca(alcas[j].dataset.alca);
+  }
+
   function bind() {
     const el = root();
     if (!el || el.dataset.seqBound) return;
@@ -828,6 +1248,11 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     let scrubMoved = false;
     let lastScrub = 0;
     el.addEventListener("keydown", (ev) => {
+      const alca = studio ? ev.target.closest(".bloco-alca") : null;
+      if (alca) {
+        teclaNaAlca(alca, ev);
+        return;
+      }
       if (!ev.target.closest(".seq-strip") || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
       ev.preventDefault();
       const p = state.get("project");
@@ -866,6 +1291,12 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       if(block) {state.set("selectedScene",block.dataset.scene);state.set("selectedSupport",block.dataset.group||null);}
     });
     el.addEventListener("pointerdown", (ev) => {
+      // A alça da cena é do arraste: não busca nem faz scrub.
+      const alca = studio ? ev.target.closest(".bloco-alca") : null;
+      if (alca) {
+        pegarComPonteiro(alca, ev);
+        return;
+      }
       const strip = ev.target.closest(".seq-strip");
       if (!strip) return;
       scrubbing = true;
@@ -878,6 +1309,10 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       if (block) { state.set("selectedScene", block.dataset.scene); state.set("selectedSupport", block.dataset.group || null); }
     });
     el.addEventListener("pointermove", (ev) => {
+      if (gesto?.modo === "ponteiro" && ev.pointerId === gesto.pointerId) {
+        if (!gesto.enviando) moverPonteiro(ev);
+        return;
+      }
       if (!scrubbing) return;
       const now = Date.now();
       if (now - lastScrub < SCRUB_THROTTLE_MS) return;
@@ -892,6 +1327,22 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
     };
     el.addEventListener("pointerup", stop);
     el.addEventListener("pointercancel", stop);
+    if (!studio) return;
+    const doGesto = (ev) => gesto?.modo === "ponteiro" && ev.pointerId === gesto.pointerId;
+    el.addEventListener("pointerup", (ev) => {
+      if (doGesto(ev) && !gesto.enviando) soltarPonteiro(ev);
+    });
+    // Captura perdida ou ponteiro cancelado (toque virou rolagem do sistema): cancela.
+    el.addEventListener("pointercancel", (ev) => {
+      if (doGesto(ev)) cancelarGesto();
+    });
+    el.addEventListener("lostpointercapture", (ev) => {
+      if (doGesto(ev)) cancelarGesto();
+    });
+    // Tab ou clique fora tiram o foco da alça com a cena pega: cancela.
+    el.addEventListener("focusout", (ev) => {
+      if (gesto?.modo === "teclado" && ev.target === gesto.alca) cancelarGesto("Movimento cancelado");
+    });
   }
 
   /**
@@ -919,6 +1370,8 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       }
       ev.preventDefault();
+      // Arraste de cena em curso: o histórico espera o gesto acabar.
+      if (gesto) return;
       void (kind === "redo" ? redoEdit() : undoEdit());
     });
   }
@@ -941,13 +1394,21 @@ export function mountSequencia({ state, api, player, ui = "legacy" }) {
       const next = Math.round(entries[0]?.contentRect.width || 0);
       if (next === width) return;
       width = next;
-      if (next > 0) redrawCachedWaves();
+      if (next > 0) {
+        redrawCachedWaves();
+        // A faixa apareceu ou mudou de largura: o agrupamento da legenda acompanha.
+        pintarLegenda();
+      }
     }).observe(root());
   }
 
   bind();
   if (studio) {
     state.subscribe("legendasFaixa", () => pintarLegenda());
+    // A parada de Tab das alças acompanha a cena selecionada (texto, faixa ou playhead).
+    state.subscribe("selectedScene", (sceneId) => {
+      if (!gesto) alcaNoTab(sceneId);
+    });
     state.subscribe("zoomSequencia", () => render(state.get("project")));
     // Fim da preparação: a onda que faltava pode ter sido gerada.
     let preparo = state.get("project")?.preparation?.status ?? null;

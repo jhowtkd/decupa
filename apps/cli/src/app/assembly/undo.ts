@@ -11,6 +11,7 @@ const EDIT_LABEL: Record<EditAction["type"], string> = {
   include: "Incluir trecho",
   correct: "Corrigir texto",
   "move-scene": "Mover cena",
+  "reorder-scenes": "Mover cena",
   "delete-scene": "Apagar cena",
   "set-support": "Alterar apoio",
 };

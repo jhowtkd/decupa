@@ -437,6 +437,18 @@ describe("rolagem da faixa com zoom", () => {
     expect(rolagem(t.faixa).scrollLeft).toBe(500);
   });
 
+  it("no 1× o redesenho não restaura rolagem: o transbordo da última marca da régua não conta", async () => {
+    const t = monta({ ui: "studio", zoom: 1, peaks: { a: "real" } });
+    await esperar();
+    const antes = rolagem(t.faixa);
+    antes.clientWidth = 1000;
+    antes.scrollLeft = 3;
+    t.state.set("project", projeto({ revision: 4 }));
+    await esperar();
+    expect(rolagem(t.faixa)).not.toBe(antes);
+    expect(rolagem(t.faixa).scrollLeft ?? 0).toBe(0);
+  });
+
   it("o playhead que anda com o player tocando segue; pausado ou sem player, não", async () => {
     const el = { paused: false };
     const t = monta({ ui: "studio", zoom: 4, player: { seek: vi.fn(), el: () => el } });

@@ -120,6 +120,8 @@ export type EditAction =
   | { type: "correct"; sourceId: string; start: number; end: number; text: string }
   | { type: "include"; sceneId: string; sourceId: string; wordIds: string[] }
   | { type: "move-scene"; sceneId: string; direction: "up" | "down" }
+  /** Ordem completa das cenas (studio): todas as da revisão base, uma vez cada. */
+  | { type: "reorder-scenes"; order: string[] }
   | { type: "delete-scene"; sceneId: string };
 
 /** Intervalo semiaberto em segundos: [start, end). */

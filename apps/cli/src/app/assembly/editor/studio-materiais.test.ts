@@ -328,6 +328,79 @@ it("equipe: remover durante o POST de criação apaga a sessão e a impressão d
   expect(Object.keys(salvos)).toEqual([]);
 });
 
+it("equipe: selecionar de novo durante o cancelamento preserva Pausar e a retomada (cliente real)", async () => {
+  const store = storage();
+  const { document, mat } = montar({ teamMode: true, store });
+  const criacoes: Array<(valor: ReturnType<typeof respostaOk>) => void> = [];
+  const sinais: AbortSignal[] = [];
+  const removidos: string[] = [];
+  let terminarLimpeza = () => {};
+  const fetchImpl = vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/uploads" && init?.method === "POST") {
+      return new Promise<ReturnType<typeof respostaOk>>((resolve) => criacoes.push(resolve));
+    }
+    if (init?.method === "DELETE") {
+      removidos.push(url);
+      if (url === "/api/uploads/antigo") {
+        return new Promise<ReturnType<typeof respostaOk>>((resolve) => {
+          terminarLimpeza = () => resolve(respostaOk());
+        });
+      }
+      return Promise.resolve(respostaOk());
+    }
+    if (url === "/api/uploads/novo" && init?.method === "PATCH") {
+      const signal = init.signal!;
+      sinais.push(signal);
+      return new Promise<ReturnType<typeof respostaOk>>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }
+    if (url === "/api/uploads/novo" && !init?.method) {
+      return Promise.resolve(respostaOk({ id: "novo", offset: 0, tamanhoParte: 5 }));
+    }
+    throw new Error("Pedido inesperado: " + init?.method + " " + url);
+  });
+  vi.stubGlobal("fetch", fetchImpl);
+  const arq = arquivo("a.mp4", 12);
+  const salvo = () => JSON.parse(store.getItem("decupa.uploads.v1") ?? "{}")[uploadFingerprint(arq)];
+
+  mat.adicionar([arq]);
+  lis(document)[0]!.querySelector('button[data-acao="remover"]')!.click();
+  mat.adicionar([arq]);
+  // A identidade continua ocupada enquanto o POST antigo ainda não respondeu.
+  expect(criacoes).toHaveLength(1);
+  expect(lis(document)[0]!.dataset.estado).toBe("aguardando");
+  criacoes[0]!(respostaOk({ id: "antigo", offset: 0, tamanhoParte: 5 }, 201));
+  await flush();
+  expect(removidos).toEqual(["/api/uploads/antigo"]);
+  // Nem a resposta de criação basta: a exclusão também precisa terminar.
+  expect(criacoes).toHaveLength(1);
+  terminarLimpeza();
+  await flush();
+  expect(criacoes).toHaveLength(2);
+  criacoes[1]!(respostaOk({ id: "novo", offset: 0, tamanhoParte: 5 }, 201));
+  await flush();
+  expect(salvo()?.id).toBe("novo");
+  expect(sinais).toHaveLength(1);
+
+  document.getElementById("filaPausar")!.click();
+  expect(sinais[0]!.aborted).toBe(true);
+  await flush();
+  expect(lis(document)[0]!.dataset.estado).toBe("pausado");
+  expect(salvo()?.id).toBe("novo");
+  document.getElementById("filaPausar")!.click();
+  await flush();
+  // Retomar consulta a sessão nova, sem criar outro envio.
+  expect(criacoes).toHaveLength(2);
+  expect(sinais).toHaveLength(2);
+  expect(sinais[1]!.aborted).toBe(false);
+  lis(document)[0]!.querySelector('button[data-acao="remover"]')!.click();
+  expect(sinais[1]!.aborted).toBe(true);
+  await flush();
+  expect(removidos).toEqual(["/api/uploads/antigo", "/api/uploads/novo"]);
+  expect(salvo()).toBeUndefined();
+});
+
 it("equipe: o botão Pausar chama o pausar do cliente de envio e o clique em Remover cancela", async () => {
   const envio = envioFalso();
   const { document, mat } = montar({ teamMode: true, criarEnvio: envio.criarEnvio });

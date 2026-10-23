@@ -12,7 +12,10 @@ export const ICON = {
   down: stroke(14, '<path d="M4 6l4 4 4-4"/>'),
   file: stroke(18, '<path d="M4 1.5h5.5L12.5 4.5v10h-8.5z"/><path d="M9.5 1.5v3h3"/>'),
   image: stroke(11, '<rect x="2" y="3" width="12" height="10" rx="2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/>'),
-  importMedia: '<svg class="i" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  grip: '<svg class="i" width="8" height="14" viewBox="0 0 8 14" fill="currentColor" aria-hidden="true">'
+    + '<circle cx="2" cy="2.5" r="1.2"/><circle cx="6" cy="2.5" r="1.2"/><circle cx="2" cy="7" r="1.2"/>'
+    + '<circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="11.5" r="1.2"/><circle cx="6" cy="11.5" r="1.2"/></svg>',
+  importMedia:'<svg class="i" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
     + ' stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M8 5v4M16 5v4M12 12v5M9.5 14.5L12 12l2.5 2.5"/></svg>',
   lock: stroke(13, '<rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'),

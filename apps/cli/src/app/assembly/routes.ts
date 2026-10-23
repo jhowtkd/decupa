@@ -52,7 +52,7 @@ import { drainProjectWrites, createProject, loadProject, mergeAnalyses, readHist
 import type { Assembly, Project, Source, UndoStep } from "./types.ts";
 import { editLabel, popRedo, popUndo, recordUndo, redoTop, undoTop } from "./undo.ts";
 import type { AlignmentOutcome } from "./words.ts";
-import { parseEditAction, settleCorrection, snapWordCuts } from "./words.ts";
+import { parseEditAction, sceneOrderChanged, settleCorrection, snapWordCuts } from "./words.ts";
 import { createFileCoordinator, type FileCoordinator } from "@decupa/coordinator";
 import { handleReservationRequest, requireEditReservation } from "../edit-reservation.ts";
 import type { IncomingMessage as ReservationRequest } from "node:http";
@@ -1844,6 +1844,25 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
             correctionId = created[0];
           } catch (err) {
             throw new HttpError(400, err instanceof Error ? err.message : String(err));
+          }
+        }
+        // Ordem completa (arraste do studio): confere contra a revisão base
+        // antes de gravar. A mesma ordem devolve o projeto como está, sem
+        // foto, sem passo de desfazer e sem revisão nova.
+        if (action.type === "reorder-scenes") {
+          const current = await loadProject(dir);
+          if (current.revision !== baseRevision) {
+            throw new HttpError(409, `revisão desatualizada: base ${baseRevision}, atual ${current.revision}`);
+          }
+          let changed: boolean;
+          try {
+            changed = sceneOrderChanged(current, action.order);
+          } catch (err) {
+            throw new HttpError(400, err instanceof Error ? err.message : String(err));
+          }
+          if (!changed) {
+            await sendSnapshot(res, { project: current, ...snapshot() });
+            return true;
           }
         }
         let project: Project;
