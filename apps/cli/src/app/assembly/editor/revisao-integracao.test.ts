@@ -7,6 +7,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mountCobertura } from "./cobertura.js";
 import { activityView } from "./progress.js";
 import { mountContexto, mountStage } from "./contexto.js";
+import { formatChip } from "./format.js";
+import { LEGENDA_FORA_DO_MP4, formatLabel } from "./rail.js";
+import { mountFormato } from "./studio-formato.js";
 import { createState } from "./state.js";
 import { mountBancada } from "./studio-bancada.js";
 import { mountRevisao } from "./studio-revisao.js";
@@ -69,6 +72,7 @@ function monta(ui?: "studio", delivery: unknown = null) {
   mountStage({ state, api, player });
   mountContexto({ state, api, player, ...(ui ? { ui } : {}) });
   if (ui) mountRevisao({ state, player });
+  if (ui) mountFormato({ state, api });
   return { document, state, api, video, player, adicionados };
 }
 
@@ -327,4 +331,66 @@ it("legacy: a Atividade mostra os segundos vistos da prévia e, no Original, cob
   const visao = textoCobertura(t.state);
   expect(acha(visao, /Prévia v3 · cobertura não confirmada nesta sessão/)).toBe(true);
   expect(acha(visao, /0:42|vistos/)).toBe(false);
+});
+
+// ---- Formato na Entrega: diálogo do PR 5 no studio, o antigo só na legacy ----
+
+const comFormato = () => projeto({
+  finalApprovedRevision: 3,
+  assembly: {
+    width: 1920, height: 1080, fps: { num: 30000, den: 1001 },
+    sources: [{ id: "a", name: "fala.mp4", included: true, hasVideo: true }], tracks: [],
+  },
+});
+type Dialogo = El & { open: boolean; showCount: number };
+
+it("studio: #editFormat tem data-acao=formato e abre só o #formatoDialog", () => {
+  const t = monta("studio");
+  t.state.set("project", comFormato());
+  const botao = t.document.getElementById("editFormat")!;
+  expect(botao.getAttribute("data-acao")).toBe("formato");
+  expect(t.document.getElementById("formatDialog")).toBeNull();
+  const dialogo = t.document.getElementById("formatoDialog") as Dialogo;
+  expect(dialogo.open).toBe(false);
+  botao.click();
+  expect(dialogo.open).toBe(true);
+  expect(dialogo.showCount).toBe(1);
+  expect(t.document.getElementById("formatDialog")).toBeNull();
+});
+
+it("legacy: #formatDialog existe, abre com largura, altura e fps do projeto; #editFormat sem data-acao", () => {
+  const t = monta();
+  t.state.set("project", comFormato());
+  const botao = t.document.getElementById("editFormat")!;
+  expect(botao.hasAttribute("data-acao")).toBe(false);
+  expect(t.document.getElementById("formatoDialog")).toBeNull();
+  const dialogo = t.document.getElementById("formatDialog") as Dialogo;
+  expect(dialogo.open).toBe(false);
+  botao.click();
+  expect(dialogo.open).toBe(true);
+  expect(dialogo.showCount).toBe(1);
+  expect(t.document.getElementById("formatWidth")!.value).toBe(1920);
+  expect(t.document.getElementById("formatHeight")!.value).toBe(1080);
+  expect(t.document.getElementById("formatFps")!.value).toBe("30000/1001");
+});
+
+it("#formatLine: formatChip no studio e formatLabel na legacy", () => {
+  const projetoComFormato = comFormato();
+  const studio = monta("studio");
+  studio.state.set("project", projetoComFormato);
+  expect(studio.document.getElementById("formatLine")!.textContent).toBe(formatChip(projetoComFormato.assembly as never));
+  expect(studio.document.getElementById("formatLine")!.textContent).toBe("16:9 · 1920×1080 · 29,97 fps");
+
+  const legacy = monta();
+  legacy.state.set("project", projetoComFormato);
+  expect(legacy.document.getElementById("formatLine")!.textContent).toBe(formatLabel(projetoComFormato.assembly as never));
+  expect(legacy.document.getElementById("formatLine")!.textContent).toBe("1920×1080 horizontal @ 30000/1001 fps");
+});
+
+it("a nota do item Legendas da Entrega é exatamente LEGENDA_FORA_DO_MP4", () => {
+  const t = monta("studio");
+  t.state.set("verificacao", verificacao(3));
+  t.state.set("project", comFormato());
+  const nota = t.document.querySelector('#entregaItens [data-item="legendas"] .entrega-nota')!;
+  expect(nota.textContent).toBe(LEGENDA_FORA_DO_MP4);
 });
