@@ -87,7 +87,7 @@ function studioModulos(): Record<string, string> {
 
 it("STUDIO_MODULOS liga cada nome a um editor/studio-*.js que existe", async () => {
   const modulos = studioModulos();
-  expect(Object.keys(modulos).sort()).toEqual(["bancada", "materiais", "renomear"]);
+  expect(Object.keys(modulos).sort()).toEqual(["bancada", "busca", "materiais", "renomear"]);
   for (const [nome, caminho] of Object.entries(modulos)) {
     expect(caminho, nome).toMatch(/^editor\/studio-[\w-]+\.js$/);
     await expect(access(new URL(caminho, ASSEMBLY)), caminho).resolves.toBeUndefined();
@@ -103,7 +103,7 @@ it("cada uso studio.<nome>.<função>( do page.js tem o nome em STUDIO_MODULOS e
     const fonte = await readFile(new URL(modulos[nome]!, ASSEMBLY), "utf8");
     expect(fonte, `${modulos[nome]} exporta ${funcao}`).toMatch(new RegExp(`export (?:async )?function ${funcao}\\(`));
   }
-  // Os três módulos têm pelo menos um uso: um nome sem uso seria import morto.
+  // Todo módulo do mapa tem pelo menos um uso: um nome sem uso seria import morto.
   expect(new Set(usos.map((uso) => uso.nome))).toEqual(new Set(Object.keys(modulos)));
 });
 
