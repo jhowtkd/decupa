@@ -1,8 +1,13 @@
-import { access, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { pruneProject } from "./retention.ts";
+
+const pastas: string[] = [];
+afterEach(async () => {
+  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true });
+});
 
 async function existe(path: string): Promise<boolean> {
   return access(path).then(() => true, () => false);
@@ -15,6 +20,7 @@ async function fixture(opcoes: {
   historico?: number[];
 }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "assembly-retention-"));
+  pastas.push(dir);
   for (const n of opcoes.revisoes) {
     await mkdir(join(dir, `rev-${n}`), { recursive: true });
     await writeFile(join(dir, `rev-${n}`, "reference.mp4"), `previa-${n}`);
@@ -114,6 +120,7 @@ it("history acompanha", async () => {
 it("recusa history simbólico sem remover arquivos externos", async () => {
   const dir = await fixture({ revisoes: [1], atual: 5, historico: [] });
   const outside = await mkdtemp(join(tmpdir(), "retention-outside-"));
+  pastas.push(outside);
   await writeFile(join(outside, "rev-1.json"), "{}");
   await symlink(outside, join(dir, "history"));
   await expect(pruneProject(dir, { revisions: 0 })).rejects.toThrow(/simbólico/);

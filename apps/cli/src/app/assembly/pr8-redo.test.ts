@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, readFile, writeFile, access } from "node:fs/promises";
+import { access, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -11,8 +11,11 @@ import { loadProject, saveProject } from "./store.ts";
 import type { Project, Word } from "./types.ts";
 
 const fechar: Array<() => Promise<void>> = [];
+const pastas: string[] = [];
 afterEach(async () => {
   for (const close of fechar.splice(0)) await close();
+  // Só as pastas que este arquivo criou, e só depois de fechar os apps.
+  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true });
 });
 
 type Corpo = { project: Project; undoRevision: number | null; redoRevision: number | null };
@@ -21,6 +24,7 @@ type Resposta = Corpo & { status: number };
 /** Sobe o app numa pasta; sem `dir`, cria uma com a fonte de teste. Reabrir a mesma pasta = reinício do servidor. */
 async function subir(dir?: string) {
   const pasta = dir ?? await mkdtemp(join(tmpdir(), "pr8-redo-"));
+  if (!dir) pastas.push(pasta);
   const clip = join(pasta, "fala.mp4");
   if (!dir) await copyFile(join(FIXTURES, "clip.mp4"), clip);
   const app = await startApp({ projectDir: pasta, port: 0, selectFn: async () => ({ paths: [clip] }) });
@@ -321,4 +325,44 @@ it("versão anterior: project.json sem o campo redo abre e só o Refazer some", 
     redo: depois.project.undo?.redo,
   }).toEqual({ cortes: ["w0"], redoRevision: null, undoRevision: antes.undoRevision, redo: undefined });
   expect((await desfazer(novo.base)).status).toBe(200);
+});
+
+/** Edita, desfaz e devolve o alvo do Refazer; o chamador estraga a foto dele. */
+async function prepararRefazer() {
+  const { dir, base } = await subir();
+  const takeId = await montar(dir, 2);
+  await tirarTodas(base, takeId, 2);
+  expect((await desfazer(base)).status).toBe(200);
+  const antes = await obter(base);
+  const alvo = antes.redoRevision!;
+  expect(alvo).not.toBeNull();
+  return { dir, base, antes, alvo, foto: join(dir, "history", `rev-${alvo}.json`) };
+}
+
+const existe = (path: string) => access(path).then(() => true, () => false);
+
+it.each([
+  ["ausente", async (foto: string) => rm(foto)],
+  ["corrompida", async (foto: string) => writeFile(foto, "{quebrado")],
+])("foto do Refazer %s: GET sem redoRevision, POST redo 404, revisão não muda e nenhuma foto nova", async (_nome, estragar) => {
+  const { dir, base, antes, alvo, foto } = await prepararRefazer();
+  await estragar(foto);
+  const g = await obter(base);
+  const res = await post(base, "redo", { baseRevision: g.project.revision, revision: alvo });
+  const depois = await obter(base);
+  expect({
+    redoRevision: g.redoRevision,
+    ramo: g.project.undo?.redo?.at(-1)?.revision,
+    status: res.status,
+    revision: depois.project.revision,
+    corte: cortadas(depois.project),
+    fotoDaAtual: await existe(join(dir, "history", `rev-${g.project.revision}.json`)),
+  }).toEqual({
+    redoRevision: null,
+    ramo: alvo,
+    status: 404,
+    revision: antes.project.revision,
+    corte: ["w0"],
+    fotoDaAtual: false,
+  });
 });

@@ -207,6 +207,48 @@ describe("studio", () => {
   });
 });
 
+describe("atalhos com o #undoSlot escondido", () => {
+  const ATALHOS: Array<[string, Record<string, unknown>]> = [
+    ["Ctrl+Z", { key: "z", ctrlKey: true }],
+    ["Cmd+Z", { key: "z", metaKey: true }],
+    ["Ctrl+Shift+Z", { key: "Z", ctrlKey: true, shiftKey: true }],
+    ["Cmd+Shift+Z", { key: "z", metaKey: true, shiftKey: true }],
+    ["Ctrl+Y", { key: "y", ctrlKey: true }],
+  ];
+  const aparencia = (document: ReturnType<typeof installDom>, visivel: boolean) => {
+    const slot = document.getElementById("undoSlot")! as unknown as { getClientRects: () => unknown[] };
+    slot.getClientRects = () => (visivel ? [{}] : []);
+  };
+
+  it("studio escondido: nenhum atalho chama a API", async () => {
+    const { document, tecla, chamadas } = await monta("studio");
+    aparencia(document, false);
+    for (const [, ev] of ATALHOS) tecla(ev);
+    expect(chamadas).toEqual([]);
+  });
+
+  it("studio visível: os atalhos chamam como antes", async () => {
+    const { document, tecla, chamadas } = await monta("studio");
+    aparencia(document, true);
+    tecla({ key: "z", ctrlKey: true });
+    expect(chamadas.map((c) => c.path)).toEqual(["project/undo"]);
+  });
+
+  it.each(ATALHOS.filter(([nome]) => nome.includes("Shift") || nome === "Ctrl+Y"))("studio visível: %s refaz", async (_nome, ev) => {
+    const { document, tecla, chamadas } = await monta("studio");
+    aparencia(document, true);
+    tecla(ev);
+    expect(chamadas.map((c) => c.path)).toEqual(["project/redo"]);
+  });
+
+  it("legacy escondido: Ctrl+Z continua desfazendo", async () => {
+    const { document, tecla, chamadas } = await monta("legacy");
+    aparencia(document, false);
+    tecla({ key: "z", ctrlKey: true });
+    expect(chamadas.map((c) => c.path)).toEqual(["project/undo"]);
+  });
+});
+
 describe("puras", () => {
   it("redoView espelha undoView", async () => {
     const { redoView } = await import("./sequencia.js");

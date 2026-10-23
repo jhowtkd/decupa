@@ -116,3 +116,26 @@ it("studio.css: o aviso de chaves pendentes reserva a altura no padding do body,
   const antes = limpo.slice(0, limpo.indexOf("body:has(> #visual-provider-notice"));
   expect((antes.match(/\{/g) ?? []).length).toBe((antes.match(/\}/g) ?? []).length);
 });
+
+/** Corpo do primeiro `@media (max-width: 700px) { ... }`, achado por contagem de chaves. */
+function blocoAte700(css: string): string {
+  const limpo = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const inicio = limpo.search(/@media\s*\(\s*max-width\s*:\s*700px\s*\)\s*\{/);
+  expect(inicio).toBeGreaterThanOrEqual(0);
+  const abre = limpo.indexOf("{", inicio);
+  let fundo = 1;
+  let i = abre + 1;
+  for (; i < limpo.length && fundo > 0; i++) {
+    if (limpo[i] === "{") fundo++;
+    else if (limpo[i] === "}") fundo--;
+  }
+  return limpo.slice(abre + 1, i - 1);
+}
+
+it("studio.css: até 700 px o Desfazer fica só com o ícone (32 px) e o passo some da tela", async () => {
+  const dentro = regras(blocoAte700(await read("studio.css")));
+  const undo = dentro.find((regra) => regra.seletor === "#undo.has-label");
+  const rotulo = dentro.find((regra) => regra.seletor === "#undo .undo-what");
+  expect(undo?.corpo).toMatch(/width\s*:\s*32px/);
+  expect(rotulo?.corpo).toMatch(/display\s*:\s*none/);
+});

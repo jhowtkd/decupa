@@ -1,13 +1,19 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { fixtureAssembly } from "./fixture.ts";
 import type { LegacyProject } from "./types.ts";
 import { createProject, loadProject } from "./store.ts";
 
+const pastas: string[] = [];
+afterEach(async () => {
+  for (const pasta of pastas.splice(0)) await rm(pasta, { recursive: true, force: true });
+});
+
 async function abrirComUndo(undo: unknown) {
   const dir = await mkdtemp(join(tmpdir(), "pr4b-undo-stack-"));
+  pastas.push(dir);
   const assembly = fixtureAssembly();
   const legacy: LegacyProject = {
     version: 1,
@@ -73,4 +79,22 @@ it("refazer válido é mantido e refazer vazio não é gravado", async () => {
 it("projeto no formato antigo (sem redo) abre com os passos intactos", async () => {
   const project = await abrirComUndo({ head: 5, steps: [passo(2, "a"), passo(4, "b")] });
   expect(project.undo).toEqual({ head: 5, steps: [passo(2, "a"), passo(4, "b")] });
+});
+
+const seq = (de: number, ate: number, rotulo: string) =>
+  Array.from({ length: ate - de + 1 }, (_, i) => passo(de + i, `${rotulo}${de + i}`));
+
+it("refazer que cruza com os passos do desfazer some e os passos ficam", async () => {
+  const project = await abrirComUndo({ head: 9, steps: [passo(2, "a"), passo(4, "b")], redo: [passo(4, "c"), passo(6, "d")] });
+  expect(project.undo).toEqual({ head: 9, steps: [passo(2, "a"), passo(4, "b")] });
+});
+
+it("passos + refazer acima de 20 descartam o refazer; exatamente 20 mantém os dois", async () => {
+  const passos = seq(1, 10, "s");
+  const demais = await abrirComUndo({ head: 99, steps: passos, redo: seq(11, 21, "r") });
+  const exato = await abrirComUndo({ head: 99, steps: passos, redo: seq(11, 20, "r") });
+  expect({ demais: demais.undo, exato: exato.undo }).toEqual({
+    demais: { head: 99, steps: passos },
+    exato: { head: 99, steps: passos, redo: seq(11, 20, "r") },
+  });
 });

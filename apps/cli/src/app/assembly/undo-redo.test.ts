@@ -51,3 +51,17 @@ it("readUndoStack descarta só o ramo inválido e normaliza campos extras", () =
     .toEqual({ head: 5, steps: [passo(2, "a")], redo: [passo(3, "b")] });
   expect(readUndoStack({ head: 5, steps: "x", redo: [passo(3, "b")] })).toBeUndefined();
 });
+
+it("readUndoStack: revisão nas duas listas, ou mais de 20 somados, descarta só o refazer", () => {
+  const seq = (de: number, ate: number) => Array.from({ length: ate - de + 1 }, (_, i) => passo(de + i, "x"));
+  const passos = seq(1, 10);
+  expect({
+    cruzada: readUndoStack({ head: 9, steps: [passo(2, "a")], redo: [passo(2, "b")] }),
+    vinteEUm: readUndoStack({ head: 99, steps: passos, redo: seq(11, 21) }),
+    vinte: readUndoStack({ head: 99, steps: passos, redo: seq(11, 20) }),
+  }).toEqual({
+    cruzada: { head: 9, steps: [passo(2, "a")] },
+    vinteEUm: { head: 99, steps: passos },
+    vinte: { head: 99, steps: passos, redo: seq(11, 20) },
+  });
+});
