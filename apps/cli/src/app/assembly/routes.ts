@@ -983,8 +983,12 @@ export function createAssemblyRuntime(dir: string, deps: AssemblyDeps) {
         const project=await loadProject(dir); await sendSnapshot(res,{delivery:await readDelivery(dir,project.revision), capabilities: await capabilities}); return true;
       }
       if (parts[1] === "resolve-drp" && req.method === "GET") {
-        const project=await loadProject(dir); const delivery=await readDelivery(dir,project.revision);
-        if (!delivery?.drpPath) throw new HttpError(404,"DRP não registrado");
+        // Sem revisão (legacy): o DRP da revisão atual. Com revisão (studio): o
+        // daquela revisão, a que a tela mostra, e nunca o de outra.
+        if (parts.length > 3 || (parts[2] !== undefined && !/^\d+$/.test(parts[2]))) throw new HttpError(404, "saída desconhecida");
+        const revision = parts[2] !== undefined ? Number(parts[2]) : (await loadProject(dir)).revision;
+        const delivery = await readDelivery(dir, revision);
+        if (!delivery?.drpPath || delivery.revision !== revision) throw new HttpError(404, "DRP não registrado");
         await serveMedia(req,res,delivery.drpPath,"application/octet-stream");return true;
       }
       if (parts[1] === "preview" && req.method === "GET") {
