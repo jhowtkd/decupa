@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { cleanupError, confirmProjectCleanup, planProjectCleanup, planProjectCleanupBatch } from "../project-cleanup.ts";
 import type { ResourceLedger } from "../resource-ledger.ts";
 import { PROJECT_ID_PATTERN } from "../project-root.ts";
+import type { EditorUi } from "../assembly/editor-ui.ts";
 const HERE = dirname(fileURLToPath(import.meta.url));
 function json(res: ServerResponse, value: unknown, status = 200) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); res.end(JSON.stringify(value));
@@ -16,8 +17,12 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("pedido inválido");
   return value as Record<string, unknown>;
 }
-export function createProjectCleanupRoutes(opts: { ledger: ResourceLedger; projectsRoot: string; now?: () => number; env?: Record<string, string | undefined> }) {
+export function createProjectCleanupRoutes(opts: { ledger: ResourceLedger; projectsRoot: string; now?: () => number; env?: Record<string, string | undefined>; editorUi?: EditorUi }) {
   const active = new Set<Promise<unknown>>(); let closed = false;
+  // DECUPA_EDITOR_UI (lida pelo server.ts) escolhe o shell; o script e a API são os mesmos.
+  const assets: Record<string, [string, string]> = opts.editorUi === "studio"
+    ? { "/cleanup": ["cleanup-studio.html", "text/html"], "/hub/cleanup.js": ["cleanup.js", "application/javascript"], "/hub/cleanup.css": ["cleanup.css", "text/css"], "/hub/cleanup-studio.css": ["cleanup-studio.css", "text/css"] }
+    : { "/cleanup": ["cleanup.html", "text/html"], "/hub/cleanup.js": ["cleanup.js", "application/javascript"], "/hub/cleanup.css": ["cleanup.css", "text/css"] };
   const options = { ledger: opts.ledger, now: opts.now, env: opts.env };
   async function project(id: string) {
     if (!PROJECT_ID_PATTERN.test(id)) return null;
@@ -29,7 +34,6 @@ export function createProjectCleanupRoutes(opts: { ledger: ResourceLedger; proje
     return manifest?.isFile() && !manifest.isSymbolicLink() ? dir : null;
   }
   async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
-    const assets: Record<string, [string, string]> = { "/cleanup": ["cleanup.html", "text/html"], "/hub/cleanup.js": ["cleanup.js", "application/javascript"], "/hub/cleanup.css": ["cleanup.css", "text/css"] };
     const asset = assets[url.pathname];
     if (asset) {
       if (req.method !== "GET") { json(res, { error: "método inválido" }, 405); return true; }
@@ -71,7 +75,7 @@ export function createProjectCleanupRoutes(opts: { ledger: ResourceLedger; proje
   }
   return {
     handle(req: IncomingMessage, res: ServerResponse, url: URL) {
-      if (url.pathname !== "/cleanup" && !url.pathname.startsWith("/hub/cleanup.") && !url.pathname.startsWith("/api/cleanup/")) return Promise.resolve(false);
+      if (url.pathname !== "/cleanup" && !url.pathname.startsWith("/hub/cleanup.") && url.pathname !== "/hub/cleanup-studio.css" && !url.pathname.startsWith("/api/cleanup/")) return Promise.resolve(false);
       const pending = handle(req, res, url); active.add(pending);
       void pending.finally(() => active.delete(pending)).catch(() => {});
       return pending;

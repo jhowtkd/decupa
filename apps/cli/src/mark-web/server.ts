@@ -6,6 +6,7 @@ import { DEFAULT_SAMPLE_RATE, probe, readPcm } from "@decupa/media";
 import { serveMedia } from "../http/media.ts";
 import { assertSafeBind, guardLocalRequest, hostConfig, originAllowed, resolveHostConfig } from "../http/origin.ts";
 import { createAuthRuntime } from "../app/auth.ts";
+import { editorUiFromEnv, withStudioShell } from "../app/assembly/editor-ui.ts";
 import { computePeaks } from "./peaks.ts";
 import { ensureProxy } from "./proxy.ts";
 
@@ -54,14 +55,18 @@ export async function runMarkWeb(opts: {
   const env = opts.env ?? process.env;
   const network = resolveHostConfig(hostConfig(env));
   assertSafeBind(network, Boolean(env.DECUPA_AUTH_PASSWORD));
-  const auth = await createAuthRuntime({ env, configDir: opts.configDir, network, now: opts.now });
+  // Mesma variável e mesmo env do app: o studio deriva o shell do page.html (script inline).
+  const editorUi = editorUiFromEnv(env);
+  const auth = await createAuthRuntime({ env, configDir: opts.configDir, network, now: opts.now, editorUi });
   const info = await probe(opts.input);
 
-  const [proxyPath, pcm, page] = await Promise.all([
+  const [proxyPath, pcm, legacyPage, studioCss] = await Promise.all([
     ensureProxy({ input: opts.input, cacheDir }),
     readPcm({ input: opts.input }),
     readFile(join(HERE, "page.html"), "utf8"),
+    editorUi === "studio" ? readFile(join(HERE, "studio.css"), "utf8") : undefined,
   ]);
+  const page = studioCss === undefined ? legacyPage : withStudioShell(legacyPage, "/studio.css");
 
   const peaks = computePeaks(pcm, {
     sampleRate: DEFAULT_SAMPLE_RATE,
@@ -100,6 +105,11 @@ export async function runMarkWeb(opts: {
         if (url.pathname === "/") {
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           res.end(page);
+          return;
+        }
+        if (studioCss !== undefined && url.pathname === "/studio.css") {
+          res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+          res.end(studioCss);
           return;
         }
         if (url.pathname === "/meta") {

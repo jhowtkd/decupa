@@ -4,6 +4,7 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ResolvedHostConfig } from "../http/origin.ts";
+import type { EditorUi } from "./assembly/editor-ui.ts";
 
 export const SESSION_COOKIE = "decupa_session";
 export const MAX_DISPLAY_NAME_LENGTH = 80;
@@ -36,6 +37,8 @@ export interface AuthRuntimeOptions {
   configDir?: string;
   network: ResolvedHostConfig;
   now?: () => number;
+  /** Shell do login; o servidor lê `DECUPA_EDITOR_UI` uma vez e repassa. */
+  editorUi?: EditorUi;
 }
 
 function sendJson(res: ServerResponse, body: unknown, status = 200): void {
@@ -253,6 +256,7 @@ function requestIp(req: IncomingMessage, network: ResolvedHostConfig): string {
 export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthRuntime> {
   const password = opts.env.DECUPA_AUTH_PASSWORD;
   const enabled = typeof password === "string" && password.length > 0;
+  const studio = opts.editorUi === "studio";
   const now = opts.now ?? Date.now;
   const configDir = opts.configDir ?? homedir();
   const secret = enabled
@@ -320,7 +324,7 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
       return true;
     }
     if (url.pathname === "/login" && req.method === "GET") {
-      const page = await readFile(new URL("./login/page.html", import.meta.url), "utf8");
+      const page = await readFile(new URL(studio ? "./login/studio.html" : "./login/page.html", import.meta.url), "utf8");
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(page.replaceAll("__DECUPA_NEXT__", encoded(localNext(url.searchParams.get("next")))));
       return true;
@@ -328,6 +332,12 @@ export async function createAuthRuntime(opts: AuthRuntimeOptions): Promise<AuthR
     if (url.pathname === "/login.css" && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
       res.end(await readFile(new URL("./login/page.css", import.meta.url), "utf8"));
+      return true;
+    }
+    // Só o studio tem esta CSS; a legacy segue com /login.css e mais nada.
+    if (studio && url.pathname === "/login/studio.css" && req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+      res.end(await readFile(new URL("./login/studio.css", import.meta.url), "utf8"));
       return true;
     }
     if (url.pathname === "/login.js" && req.method === "GET") {

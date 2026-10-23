@@ -1,0 +1,20 @@
+/* studio.css — Limpeza de fala (page.html ao lado) no studio
+   (DECUPA_EDITOR_UI=studio). O script da página é inline, então o studio é o
+   mesmo HTML com esta folha no fim do <head> (withStudioShell): muda só por
+   CSS, nunca por marcação. A página já declara os tokens da bancada; aqui não
+   se declara token, só se alinha o que ainda destoa da bancada do studio. */
+
+/* A engrenagem não tinha cor própria e saía no azul de link do navegador; na
+   bancada ela é dourada. */
+.topbar-actions > a[href="/settings"] { display: inline-flex; padding: 4px; border-radius: 50%; color: var(--accent); }
+.topbar-actions > a[href="/settings"]:hover { background: var(--tint); color: #F6DC9A; }
+
+/* Foco visível em todo controle, como na bancada (a página só cobria botão e link). */
+input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, video:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* O aviso fixo de chaves de IA (withVisualNotice) cobria o fim dos cartões:
+   como na bancada, a grade termina acima dele (--visual-notice-height vem do
+   visual-notice.js). */
+body:has(> #visual-provider-notice:not([hidden])) {
+  padding-bottom: calc(var(--visual-notice-height, 64px) + 16px + var(--gap));
+}

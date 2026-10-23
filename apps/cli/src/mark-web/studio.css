@@ -1,0 +1,16 @@
+/* studio.css — marcação manual no studio (DECUPA_EDITOR_UI=studio). O script
+   de page.html é inline, então o studio é o mesmo HTML com esta folha no fim do
+   <head> (withStudioShell): muda só por CSS, nunca por marcação, e a medição
+   continua às cegas. A página já declara os tokens da bancada; aqui não se
+   declara token, só se alinha o que ainda destoa da bancada do studio. */
+
+/* Foco visível em todo controle, como na bancada (a página só cobria botão). */
+a:focus-visible, video:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 700px) {
+  /* Como o topo da bancada no celular: as três ações dividem uma linha em vez
+     de cair uma por linha. O atalho ⌘S sai do botão (o rodapé segue com ele). */
+  header { gap: 8px; }
+  header #mark, header #undo, header #save { flex: 1 1 auto; padding: 0 10px; }
+  header .kbd-hint { display: none; }
+}

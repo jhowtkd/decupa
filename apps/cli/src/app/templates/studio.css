@@ -1,11 +1,89 @@
 /* studio.css — receitas no studio (DECUPA_EDITOR_UI=studio), carregada depois
-   de page.css: só composição. A biblioteca vem antes do formulário de nova
-   receita; a linguagem visual das outras telas é do PR 7, sem tokens aqui. */
-aside { display: flex; flex-direction: column; }
-aside > h1 { margin-bottom: 4px; }
-.library-title, .create-title { margin: 22px 0 0; font-size: 13px; font-weight: 600; color: #929cab; letter-spacing: .02em; }
+   de page.css, com os mesmos ids e o mesmo page.js. Os tokens vêm de
+   /settings/tokens.css (os da bancada); aqui não se declara token, só se troca
+   a paleta azul antiga pela da bancada. Seções: casca, topo, biblioteca,
+   detalhe, mensagens. */
+
+/* == casca == */
+:root { background: var(--ground); color: var(--ink); font: 14px/1.5 var(--sans-ui); }
+body { min-height: 100dvh; background: var(--ground); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+p { color: var(--muted); }
+button { min-height: 36px; padding: 0 16px; border: 0; border-radius: var(--radius-pill); background: rgb(255 255 255 / .07); color: var(--ink); font-weight: 600; font-size: 13px; }
+button:hover { background: var(--tint-strong); }
+.primary, #create button { background: var(--accent); color: var(--on-accent); font-weight: 700; box-shadow: 0 5px 16px rgb(240 202 110 / .16); }
+.primary:hover:enabled, #create button:hover:enabled { background: #F4D688; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input:not([type=checkbox]), textarea { min-height: 40px; padding: 0 13px; border: 1px solid var(--hairline); border-radius: var(--radius-sub); background: var(--card-2); color: var(--ink); }
+textarea { padding: 10px 13px; line-height: 1.5; }
+input[type=checkbox] { accent-color: var(--accent); }
+label { color: var(--ink); font-size: 13px; }
+main { grid-template-columns: 300px minmax(0, 900px); gap: 24px; padding: 28px clamp(18px, 4vw, 48px); }
+
+/* == topo == */
+/* O mesmo topo da Limpeza de arquivos e das Configurações no studio: voltar, marca, engrenagem. */
+header { min-height: 58px; gap: 12px 20px; padding: 0 clamp(18px, 4vw, 48px); border-bottom: 1px solid var(--hairline); background: #0f1012; }
+header .back { padding: 7px 12px; margin-left: -12px; border-radius: var(--radius-pill); color: var(--muted); font-size: 13px; text-decoration: none; }
+header .back:hover { background: var(--tint); color: var(--ink); }
+header .brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; white-space: nowrap; }
+header .brand-mark { color: var(--accent); font-size: 15px; }
+header span:not(.brand-mark) { color: var(--muted); }
+header a[href="/settings"] { display: inline-flex; margin-left: auto; padding: 6px; border-radius: 50%; color: var(--muted); }
+header a[href="/settings"]:hover { background: var(--tint); color: var(--ink); }
+
+/* == biblioteca == */
+/* A biblioteca vem antes do formulário de nova receita. */
+aside { display: flex; flex-direction: column; align-self: start; padding: 20px; border-right: 0; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow-card); }
+aside > h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -.02em; }
+aside > p { margin: 6px 0 0; font-size: 13px; }
+.library-title, .create-title { margin: 22px 0 0; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 /* Biblioteca vazia: sem título solto; o formulário assume o lugar. */
 .library-title:has(+ nav:empty) { display: none; }
-nav { margin-top: 10px; }
-#create { margin-top: 6px; padding-top: 4px; border-top: 1px solid #303741; }
-.library-title:has(+ nav:empty) + nav + #create { border-top: 0; }
+nav { gap: 4px; margin-top: 10px; }
+nav button { min-height: 38px; padding: 8px 12px; border-radius: var(--radius-sub); background: transparent; color: var(--ink); font-weight: 500; line-height: 1.35; }
+nav button:hover { background: var(--tint); }
+nav button[aria-current=true] { background: var(--accent-tint); box-shadow: inset 0 0 0 1px rgb(240 202 110 / .35); color: var(--accent); }
+#create { margin-top: 14px; padding-top: 4px; border-top: 1px solid var(--hairline); }
+.library-title:has(+ nav:empty) + nav + #create { margin-top: 0; border-top: 0; }
+#create label { margin: 14px 0 12px; }
+#create input { margin-top: 7px; }
+
+/* == detalhe == */
+#detail, #empty { align-self: start; padding: 24px; border-radius: var(--radius-card); background: var(--card); box-shadow: var(--shadow-card); }
+#empty { padding: 56px 40px; }
+#empty h2 { font-size: clamp(24px, 3.4vw, 32px); letter-spacing: -.03em; }
+.heading { margin-top: 0; }
+.heading h2 { font-size: 22px; letter-spacing: -.02em; }
+.heading p { margin: 4px 0 0; }
+video { border-radius: var(--radius-sub); background: #0E0F11; }
+.limitation { margin: 14px 0; padding: 12px 14px; border-radius: var(--radius-sub); background: rgb(255 255 255 / .03); font-size: 12.5px; }
+.consent { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+.consent input { margin-top: 3px; flex: none; }
+.rule { border-top: 1px solid var(--hairline); }
+.rule h3 { font-size: 14px; }
+.rule p { margin: 6px 0 10px; }
+.rule label { display: flex; gap: 8px; align-items: center; }
+.evidence button { min-height: 28px; padding: 0 10px; font: 500 12px var(--mono); }
+#analysisProgress { border: 1px solid var(--hairline); border-radius: var(--radius-sub); background: var(--card-2); }
+#analysisProgress progress { accent-color: var(--accent); }
+#analysisDetail { color: var(--muted); }
+/* Seletor do vídeo base (criado pelo page.js como <dialog> sem classe). */
+dialog { padding: 24px; border: 0; border-radius: var(--radius-card); background: var(--card); color: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline), 0 24px 70px rgb(0 0 0 / .55); }
+dialog::backdrop { background: rgb(0 0 0 / .62); }
+dialog select { min-height: 40px; padding: 0 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sub); background: var(--card-2); color: var(--ink); }
+
+/* == mensagens == */
+#message { padding: 12px clamp(18px, 4vw, 48px); background: var(--card); box-shadow: 0 -1px 0 var(--hairline); color: var(--muted); font-size: 13px; }
+
+@media (max-width: 750px) {
+  main { grid-template-columns: minmax(0, 1fr); padding: 18px; }
+  aside { border-bottom: 0; padding-bottom: 20px; }
+  #empty { padding: 24px 20px; }
+}
+@media (max-width: 600px) {
+  /* Topo em duas linhas: marca e engrenagem em cima, voltar embaixo. */
+  header { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-top: 10px; padding-bottom: 10px; }
+  header .brand { grid-row: 1; min-width: 0; }
+  header a[href="/settings"] { grid-row: 1; grid-column: 2; }
+  header .back { grid-row: 2; grid-column: 1 / -1; justify-self: start; }
+}

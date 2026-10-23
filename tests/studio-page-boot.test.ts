@@ -53,13 +53,14 @@ it("a legacy chama mountLegacyMonitor() e abre em Materiais; o studio usa a banc
   expect(js).toContain("const showStage = bancada ? bancada.show : applyStageDom;");
 });
 
-it("só mountRail, mountContexto, mountTexto e mountSequencia recebem ui", () => {
+it("só mountContexto, mountRail, mountTemplates, mountTexto e mountSequencia recebem ui", () => {
   const chamadas = [...js.matchAll(/^mount[A-Z]\w*\((\{[^}]*\})?\)/gm)];
   expect(chamadas.length).toBeGreaterThan(4);
   const comUi = chamadas.filter((chamada) => /\bui\b/.test(chamada[0]));
   expect(comUi.map((chamada) => chamada[0])).toEqual([
     "mountContexto({ state, api, player, ui: editorUi })",
     "mountRail({ state, api, player, ui: editorUi })",
+    "mountTemplates({ state, api, ui: editorUi })",
     "mountTexto({ state, api, player, ui: editorUi })",
     "mountSequencia({ state, api, player, ui: editorUi })",
   ]);

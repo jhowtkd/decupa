@@ -529,7 +529,7 @@ export function mountRail({ state, api, player, ui = "legacy", confirm: confirmA
 
   const templateSlot = document.createElement("details");
   templateSlot.id = "templateSlot";
-  templateSlot.innerHTML = "<summary>Template editorial</summary>";
+  templateSlot.innerHTML = ui === "studio" ? "<summary>Receita</summary>" : "<summary>Template editorial</summary>";
   root.appendChild(templateSlot);
 
   const brief = document.createElement("section");

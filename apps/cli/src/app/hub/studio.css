@@ -1,6 +1,6 @@
 /* studio.css — hub no studio (DECUPA_EDITOR_UI=studio), carregada depois de
    page.css: só composição, com os mesmos ids e o mesmo page.js. Cores e
-   componentes vêm de page.css; a linguagem visual das outras telas é do PR 7.
+   componentes vêm de page.css, que já fala a linguagem da bancada.
    Seções: lista, gaveta. */
 
 /* == lista == */
@@ -33,6 +33,12 @@ details.origem { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(
 details.origem > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 details.origem > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 details.origem[open] > summary { margin-bottom: 8px; }
+/* page.css estica todo `dialog input` (largura cheia, 40 px de altura): nos
+   rádios do Fluxo isso dava um círculo enorme. Aqui eles voltam ao tamanho de
+   controle; a legacy segue com o defeito. */
+/* A legenda "Fluxo" encostava no anel de foco do nome. */
+.drawer-body fieldset { margin-top: 18px; }
+dialog input:is([type="radio"], [type="checkbox"]) { flex: none; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; padding: 0; border: 0; }
 @media (max-width: 680px) {
   /* Empilhada (page.css), a barra volta a esticar busca, filtro e botão. */
   .toolbar { align-items: stretch; }
