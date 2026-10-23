@@ -46,7 +46,11 @@ export function mountCobertura({ state, video }) {
     return ranges;
   }
 
-  /** Publica a cobertura da prévia no player; só notifica quando algo que se mostra muda. */
+  /**
+   * Publica a cobertura da prévia no player; só notifica quando algo muda.
+   * `ratio` e `label` são o que o anel e os painéis mostram; `covered`,
+   * `duration` e `complete` são os fatos brutos da mesma leitura.
+   */
   function publish() {
     const project = state.get("project");
     const revision = coverage.source == null ? null : Number(coverage.source);
@@ -58,7 +62,7 @@ export function mountCobertura({ state, video }) {
     const complete = coverageComplete(coverage, video.duration);
     const previous = state.get("watchCoverage");
     if (previous?.revision === revision && previous?.ratio === progress.ratio && previous?.label === progress.label
-      && previous?.complete === complete && previous?.duration === duration) return;
+      && previous?.covered === covered && previous?.complete === complete && previous?.duration === duration) return;
     state.set("watchCoverage", { revision, covered, duration, complete, ...progress });
   }
 
