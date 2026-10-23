@@ -179,7 +179,7 @@ it("aplicar 9:16 faz POST project/settings com resolução nova e o fps atual, e
 
 // DEFEITO (reportado ao implementador): o finally de aplicar() chama pintarEscolha(),
 // que limpa #formatoErro logo depois de mostrá-lo. Troque it.fails por it quando corrigir.
-it.fails("aplicar com resposta de erro mantém o diálogo aberto e o motivo visível", async () => {
+it("aplicar com resposta de erro mantém o diálogo aberto e o motivo visível", async () => {
   const falha = monta({ ok: false, body: { error: "revisão desatualizada" } });
   falha.document.getElementById("abrir")!.click();
   falha.escolhe("1:1");

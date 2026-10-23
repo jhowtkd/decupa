@@ -139,7 +139,6 @@ export function mountFormato({ state, api }) {
     }
     const atual = escolha && opcoesDeFormato(p.assembly).find((item) => item.id === escolha)?.atual;
     $("formatoAplicar").disabled = busy || !escolha || Boolean(atual);
-    mostrarErro("");
   }
 
   function preencher(p) {
@@ -159,6 +158,7 @@ export function mountFormato({ state, api }) {
     $("formatoLargura").value = assembly.width;
     $("formatoAltura").value = assembly.height;
     $("formatoFps").value = assembly.fps.num + "/" + assembly.fps.den;
+    mostrarErro("");
     pintarEscolha();
   }
 
@@ -211,6 +211,8 @@ export function mountFormato({ state, api }) {
     if (["formatoLargura", "formatoAltura", "formatoFps"].includes(event.target.id)) {
       escolhas().find((input) => input.value === "personalizado").checked = true;
     }
+    // Mudar a escolha apaga o erro da tentativa anterior; o erro do POST fica até lá.
+    mostrarErro("");
     pintarEscolha();
   });
   $("formatoForm").addEventListener("submit", aplicar);
