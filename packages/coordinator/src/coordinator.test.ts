@@ -287,7 +287,9 @@ describe("createFileCoordinator", () => {
     const prefix = `/${"pasta com acentuação/".repeat(20)}`;
     const id = `${prefix}a.wav#1-2#small#pt`;
     const other = `${prefix}b.wav#1-2#small#pt`;
-    await expect(coordinator.run({ id, stage: "speech", build: async () => "primeira" })).resolves.toBe("primeira");
+    const finished = `${prefix}c.wav#1-2#small#pt`;
+    await expect(coordinator.run({ id: finished, stage: "speech", build: async () => "primeira" })).resolves.toBe("primeira");
+    await expect(coordinator.run({ id: finished, stage: "speech", build: async () => "repetida" })).resolves.toBe("primeira");
 
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
