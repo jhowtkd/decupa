@@ -1,0 +1,43 @@
+name: diag-windows-ab
+
+on:
+  push:
+    branches: ['diag/windows-ab']
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [a72b17b880b887ca88e2aa41d219e6194d66b3fb, 56f7f4b03aea7b5808ea4d90823545682b1c9f08]
+        attempt: [1, 2]
+    runs-on: windows-latest
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - name: instalar ffmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y
+          Add-Content $env:GITHUB_PATH 'C:\ProgramData\chocolatey\bin'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm smoke
+      - run: pnpm test --maxWorkers=2
