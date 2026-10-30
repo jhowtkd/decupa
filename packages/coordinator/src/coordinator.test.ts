@@ -281,6 +281,37 @@ describe("createFileCoordinator", () => {
     expect(ran).toBe(false);
   });
 
+  it("id que passaria do limite de nome de arquivo roda e mantém o single-flight", async () => {
+    const root = dir();
+    const coordinator = createFileCoordinator(root, { limit: 2, pollMs: 5 });
+    const prefix = `/${"pasta com acentuação/".repeat(20)}`;
+    const id = `${prefix}a.wav#1-2#small#pt`;
+    const other = `${prefix}b.wav#1-2#small#pt`;
+    await expect(coordinator.run({ id, stage: "speech", build: async () => "primeira" })).resolves.toBe("primeira");
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const builds: string[] = [];
+    const build = (value: string) => async () => {
+      builds.push(value);
+      await held;
+      return value;
+    };
+    const controller = new AbortController();
+    const first = coordinator.run({ id, stage: "speech", build: build("a") });
+    const second = coordinator.run({ id: other, stage: "speech", build: build("b") });
+    await waitUntil("dois builds", async () => builds.length === 2);
+    const follower = coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") });
+    const settled = Promise.allSettled([first, second, follower]);
+    try {
+      await waitUntil("seguidor observado", async () => builds.length > 2 || getEventListeners(controller.signal, "abort").length > 0);
+    } finally {
+      release();
+    }
+    expect((await settled).map((result) => (result.status === "fulfilled" ? result.value : result.reason))).toEqual(["a", "b", "a"]);
+    expect(builds.sort()).toEqual(["a", "b"]);
+  });
+
   it("libera o slot quando a função lança", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });

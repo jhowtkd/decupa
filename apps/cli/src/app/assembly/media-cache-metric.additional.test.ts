@@ -82,7 +82,7 @@ it("reports proxy failures as errors and preserves the original rejection", asyn
   expect(events[0]!.durationMs).toBeGreaterThanOrEqual(0);
 });
 
-it("reports a concurrent proxy follower as hit-or-shared while building the proxy once", async () => {
+it("reports a concurrent proxy follower as hit-or-shared while building the proxy once", { repeats: 150 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "proxy-cache-single-flight-metric-"));
   dirs.push(dir);
   const sourcePath = join(dir, "clip.mp4");
