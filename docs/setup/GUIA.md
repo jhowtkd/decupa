@@ -95,12 +95,13 @@ Para chamar o CLI diretamente sem o launcher (`pnpm decupa ...`), aponte `DECUPA
 Para o servidor Linux/VPS e a certificação atual do CI, consulte a
 [política de plataformas suportadas](../plataformas-suportadas.md). A tabela
 abaixo preserva o aceite histórico do setup local; a matriz ordinária atual
-inclui Linux, macOS e Windows, com pendências por sistema documentadas na política.
+inclui Linux e macOS, com pendências por sistema documentadas na política; Windows
+nativo não é suportado e o job dele roda só como sinal informativo.
 
 | Sistema | Situação nesta referência |
 |---|---|
 | macOS arm64 | Aceite real em 14/09/2026 (commit `5c9bd89`): **aprovados** setup novo (44 s com caches quentes) e repetido (4 s, idempotente), proteção do motor com recusa WIP, caminhos com espaços, servidor de montagem (GET 200, SIGINT/Ctrl+C com porta fechada, porta ocupada com erro claro, reabertura), fala local PT-BR (ingestão de vídeo de 107 s em 158 s, sem chamada remota) e MP4 baseline do `assembly-proof`. Pendências: a asserção do `assembly-proof` em 29,97 fps falha por 1 frame (achado preexistente, código não mudado nesta branch) e a suíte completa/CI remota não rodaram no clone de aceite. Na 1ª rodada (`029bd6e`) o setup falhava ao localizar o npm do Node Homebrew — corrigido em `5c9bd89`. Detalhes na [evidência](../superpowers/evidence/2026-09-14-setup-simplificado.md). |
-| Windows x64 nativo | Código portátil nesta referência (abertura de navegador, Python do motor e encerramento de árvore por plataforma em `apps/cli/src/runtime.ts`; suíte sem `say`; matriz CI macOS+Windows configurada). **Não homologado**: sem aceite em máquina Windows real, embora testes e typecheck tenham passado na [CI Windows/macOS](https://github.com/jhowtkd/decupa/actions/runs/34837104426) antes da adição do preparo de modelos. |
+| Windows x64 nativo | Código portátil nesta referência (abertura de navegador, Python do motor e encerramento de árvore por plataforma em `apps/cli/src/runtime.ts`; suíte sem `say`; matriz CI macOS+Windows configurada). **Não suportado**: sem aceite em máquina Windows real, embora testes e typecheck tenham passado na [CI Windows/macOS](https://github.com/jhowtkd/decupa/actions/runs/34837104426) antes da adição do preparo de modelos. |
 | Windows com WSL2/Linux | Possível caminho de avaliação, ainda sem validação deste produto. Não misture Python/Node do Windows com ambientes Linux nem copie `.venv` entre eles; no DaVinci/Resolve do Windows, religue a mídia se o OTIO conter caminhos Linux. [Instalação oficial do WSL](https://learn.microsoft.com/en-us/windows/wsl/install). |
 
 Se encontrar um bloqueio de plataforma, registre o erro concreto e peça a decisão necessária antes de instalar WSL, reiniciar ou portar código. Não crie executáveis falsos `open`/`say` para ocultar falhas.

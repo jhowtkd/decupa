@@ -6,13 +6,14 @@ typecheck, smoke, a suíte JavaScript/TypeScript completa e os testes Python
 com mocks em Linux, macOS e Windows a cada PR e push em `main`. Os testes
 Python do render também rodam em Linux e macOS (dependem de `ps` e sinais
 POSIX). A certificação exige o job correspondente verde; configurar um job
-não é evidência de aprovação.
+não é evidência de aprovação. O job do Windows roda só como sinal informativo:
+Windows nativo não é suportado e a falha desse job não reprova o run.
 
 | Ambiente | Estatuto | Cobertura e pendências |
 | --- | --- | --- |
 | Linux / Ubuntu 24.04 | Alvo certificado do servidor VPS/Docker | Node 22 e FFmpeg do Ubuntu, mesma base do Dockerfile. A suíte ordinária inclui sincronismo AV, Drive/R2 e sidecars com mocks. Cada run registra as versões efetivas de Node, pnpm, Python, FFmpeg e ffprobe no log e no resumo do job. |
 | macOS | Uso local, com pendência conhecida | Mantém o job completo. O aceite histórico do setup está no [guia](setup/GUIA.md#6-situação-por-plataforma). A fila de preparação falhou no SHA auditado; isso continua pendente, sem diagnóstico de causa e sem dispensa do teste. |
-| Windows nativo | Uso local ainda não homologado | Mantém o job completo. Drive/R2 e o caminho funcional do sidecar de fala não estão certificados até correção e revalidação das falhas abaixo. |
+| Windows nativo | Não suportado | O job roda a suíte completa só como sinal informativo (`continue-on-error`). Para uso em máquina Windows, ver os limites no [guia de setup](setup/GUIA.md#6-situação-por-plataforma). |
 | WSL2 | Avaliação sem homologação própria | O job Linux não certifica integração de caminhos, Python ou Resolve com o host Windows. Ver os limites no [guia de setup](setup/GUIA.md#6-situação-por-plataforma). |
 
 O CI básico usa fixtures FFmpeg/lavfi e mocks de fala/visão, sem credenciais
@@ -31,11 +32,13 @@ testou `22bfd8a1e823fd026d91b4d07f931c82ee1d054f` em 17/10/2026:
 | Job | Falhas observadas | Tratamento |
 | --- | --- | --- |
 | macOS | 1 em `project-new-http.test.ts`: preparo não entrou na fila global | Pendência conhecida de preparação. Não foi demonstrado que seja exclusiva do macOS; se reproduzir no Linux, é falha do alvo de produção também. |
-| Windows | 1 em `drive-upload.test.ts`, 6 em `r2-upload.test.ts`, 1 em `pipeline-sidecar.test.ts` | Lacunas de compatibilidade/certificação Windows. O resultado desse job sozinho não demonstra oito defeitos de produção na VPS. Drive/R2 e sidecar continuam obrigatórios e bloqueantes no job Linux. |
+| Windows | 1 em `drive-upload.test.ts`, 6 em `r2-upload.test.ts`, 1 em `pipeline-sidecar.test.ts` | Registro histórico: lacunas de compatibilidade Windows, hoje fora do suporte. O resultado desse job sozinho não demonstra oito defeitos de produção na VPS. Drive/R2 e sidecar continuam obrigatórios e bloqueantes no job Linux. |
 
 Não se removem testes, não se usa `continue-on-error` e não se relaxa a
-tolerância AV para tornar um sistema verde. Falhas também reproduzidas no
-Linux são tratadas como falhas do alvo suportado. Um job vermelho permanece
+tolerância AV para tornar verde um sistema suportado. A única exceção é o job
+do Windows nativo, que saiu do suporte por decisão de 30/10/2026: ele continua
+rodando, mas não reprova o run. Falhas também reproduzidas no Linux são tratadas
+como falhas do alvo suportado. Nos sistemas suportados, um job vermelho permanece
 vermelho até correção; a triagem acima delimita a evidência e não o isenta.
 
 ## Sincronismo no corte duro
