@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -11,7 +11,7 @@ import { confirmProjectCleanup, planProjectCleanup } from "./project-cleanup.ts"
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function setup() {
-  const root = await mkdtemp(join(tmpdir(), "f4-t4-source-boundary-")); roots.push(root);
+  const root = await realpath(await mkdtemp(join(tmpdir(), "f4-t4-source-boundary-"))); roots.push(root);
   const a = join(root, "a"); const b = join(root, "b"); const now = 100 * 86_400_000;
   for (const dir of [a, b]) await mkdir(join(dir, "imports"), { recursive: true });
   const path = join(a, "imports", "original.mp4"); await writeFile(path, "original source");
