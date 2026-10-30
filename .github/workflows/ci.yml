@@ -20,6 +20,10 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Windows nativo está fora do suporte: o job continua rodando como sinal,
+    # mas a falha dele não reprova o run. Política em
+    # docs/plataformas-suportadas.md.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     # Chaves de IA vazias de propósito: nenhum teste pode depender de credencial
     # real, e tests/assembly-flow.test.ts exige que elas sejam falsy.
     env:
