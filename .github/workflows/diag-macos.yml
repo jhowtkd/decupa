@@ -1,6 +1,6 @@
 name: diag-macos
 
-# Temporário: diagnóstico do timeout de project-new-http.test.ts no macOS.
+# Temporário: confirma a correção do nome de arquivo de tarefa.
 # Branch de diagnóstico; nunca mesclar.
 on:
   push:
@@ -30,22 +30,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: regressão do coordenador sem correção
+      - name: A - TMPDIR padrão com a correção
+        continue-on-error: true
+        shell: bash
+        run: pnpm exec vitest run apps/cli/src/app/project-new-http.test.ts -t "aguarda a análise" --testTimeout=20000 --reporter=verbose
+
+      - name: regressão do coordenador com a correção
         continue-on-error: true
         shell: bash
         run: pnpm exec vitest run packages/coordinator/src/coordinator.test.ts -t "limite de nome de arquivo" --reporter=verbose
-
-      - name: media-cache-metric sob carga
-        continue-on-error: true
-        shell: bash
-        run: |
-          for i in 1 2 3 4 5 6 7 8; do (timeout 240 yes >/dev/null 2>&1 || gtimeout 240 yes >/dev/null 2>&1) & done
-          failed=0
-          for i in 1 2 3 4 5 6 7 8; do
-            pnpm exec vitest run apps/cli/src/app/assembly/media-cache-metric.additional.test.ts -t "concurrent proxy follower" --reporter=dot >/tmp/m.log 2>&1 || { failed=$((failed+1)); grep -E "AssertionError|expected|^\s+[-+] +\"" /tmp/m.log | head -6; }
-          done
-          echo "media-cache-metric sob carga: $failed de 8 lotes de 150 repetições com falha"
-          pkill yes || true
 
   diag-linux:
     runs-on: ubuntu-latest
@@ -62,19 +55,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: ambiente
-        shell: bash
-        run: |
-          uname -a
-          getconf NAME_MAX /tmp
-          df -T /tmp
-
-      - name: A - TMPDIR padrão
-        continue-on-error: true
-        shell: bash
-        run: pnpm exec vitest run apps/cli/src/app/project-new-http.test.ts -t "aguarda a análise" --testTimeout=20000 --reporter=verbose
-
-      - name: B - TMPDIR longo, 80 caracteres
+      - name: B - TMPDIR longo com a correção
         continue-on-error: true
         shell: bash
         run: |
@@ -82,19 +63,7 @@ jobs:
           mkdir -p "$T"
           TMPDIR="$T" pnpm exec vitest run apps/cli/src/app/project-new-http.test.ts -t "aguarda a análise" --testTimeout=20000 --reporter=verbose
 
-      - name: regressão do coordenador sem correção
+      - name: regressão do coordenador com a correção
         continue-on-error: true
         shell: bash
         run: pnpm exec vitest run packages/coordinator/src/coordinator.test.ts -t "limite de nome de arquivo" --reporter=verbose
-
-      - name: media-cache-metric sob carga
-        continue-on-error: true
-        shell: bash
-        run: |
-          for i in 1 2 3 4 5 6 7 8; do (timeout 240 yes >/dev/null 2>&1 || gtimeout 240 yes >/dev/null 2>&1) & done
-          failed=0
-          for i in 1 2 3 4 5 6 7 8; do
-            pnpm exec vitest run apps/cli/src/app/assembly/media-cache-metric.additional.test.ts -t "concurrent proxy follower" --reporter=dot >/tmp/m.log 2>&1 || { failed=$((failed+1)); grep -E "AssertionError|expected|^\s+[-+] +\"" /tmp/m.log | head -6; }
-          done
-          echo "media-cache-metric sob carga: $failed de 8 lotes de 150 repetições com falha"
-          pkill yes || true
