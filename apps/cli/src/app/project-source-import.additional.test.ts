@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -83,7 +83,7 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "f4-t4-source-import-additional-")); roots.push(root);
+  const root = await realpath(await mkdtemp(join(tmpdir(), "f4-t4-source-import-additional-"))); roots.push(root);
   const a = join(root, "source-hub");
   const b = join(root, "consumer-hub");
   for (const dir of [join(a, "imports"), join(b, "imports")]) await mkdir(dir, { recursive: true });

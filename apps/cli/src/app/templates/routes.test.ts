@@ -1,12 +1,12 @@
 import {expect,it,afterEach} from "vitest";
-import {createServer} from "node:http";import {copyFile,mkdtemp,mkdir,readFile,rm} from "node:fs/promises";import {tmpdir} from "node:os";import {join} from "node:path";
+import {createServer} from "node:http";import {copyFile,mkdtemp,mkdir,readFile,realpath,rm} from "node:fs/promises";import {tmpdir} from "node:os";import {join} from "node:path";
 import {createTemplateRuntime} from "./routes.ts";import {loadRecipe,saveRecipe} from "./store.ts";
 import {FIXTURES} from "../../../../../tests/fixtures/global-setup.ts";
 import {startApp} from "../server.ts";
 import {hashFile} from "@decupa/media";
 const closes:Array<()=>Promise<void>>=[];const tempDirs:string[]=[];
 afterEach(async()=>{for(const close of closes.splice(0))await close();for(const dir of tempDirs.splice(0))await rm(dir,{recursive:true,force:true});});
-async function tempDir(prefix:string){const path=await mkdtemp(join(tmpdir(),prefix));tempDirs.push(path);return path;}
+async function tempDir(prefix:string){const path=await realpath(await mkdtemp(join(tmpdir(),prefix)));tempDirs.push(path);return path;}
 async function boot(){const root=await mkdtemp(join(tmpdir(),"template-routes-"));let port=0;let calls=0;
  const runtime=createTemplateRuntime(root,{port:()=>port,selectFn:async()=>({paths:[join(FIXTURES,"clip.mp4")]}),exec:{run:async()=>{calls++;throw Error("external blocked");}},send:async()=>{calls++;return "{}";},modelKey:"test",allowModel:false,allowVisual:false});
  const server=createServer((req,res)=>{void runtime.handleTemplates(req,res).then(handled=>{if(!handled){res.writeHead(404);res.end();}});});await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));port=(server.address() as {port:number}).port;closes.push(()=>new Promise(r=>server.close(()=>r())));
