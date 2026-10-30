@@ -54,6 +54,26 @@ async function seedMedia(root: string, nome = "gravacao.mp4", fixture = "clip.mp
   return { mediaRoot, mediaId, bytes };
 }
 
+async function diagDump(label: string, projectsRoot: string, base: string, url: string): Promise<void> {
+  const say = (line: string) => console.error(`[diag:${label}] ${line}`);
+  say(`tmpdir=${tmpdir()} (${tmpdir().length}) node=${process.version} platform=${process.platform}`);
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      const full = join(dir, entry.name);
+      say(`fs ${entry.isDirectory() ? "d" : "f"} nameBytes=${Buffer.byteLength(entry.name)} pathChars=${full.length} ${full.slice(projectsRoot.length)}`);
+      if (entry.isDirectory()) await walk(full);
+      else if (/\.jsonl$|analysis\.json$|project\.json$|waiters\.json$|\/tasks\/|\/slots\//.test(full)) {
+        say(`content ${(await readFile(full, "utf8").catch((error: unknown) => `erro ${String(error)}`)).slice(0, 1500)}`);
+      }
+    }
+  };
+  await walk(projectsRoot);
+  if (base && url) {
+    const state = await fetch(`${base}${url}project`).then((response) => response.text()).catch((error: unknown) => `erro ${String(error)}`);
+    say(`GET project ${state.slice(0, 1500)}`);
+  }
+}
+
 it("cria uma Montagem nomeada na Raiz e devolve sua URL no mesmo servidor", async () => {
   const root = await mkdtemp(join(tmpdir(), "project-new-http-"));
   const app = await startApp({ projectsRoot: root, port: 0, executor, env: {} });
@@ -201,6 +221,12 @@ it("aguarda a análise de Mídia e o journal antes de fechar e apagar a Montagem
   const root = await mkdtemp(join(tmpdir(), "project-new-analysis-close-http-"));
   const projectsRoot = join(root, "projects");
   const { mediaRoot, mediaId } = await seedMedia(root, "fala.wav", "tone-gap.wav");
+  const diagStart = Date.now();
+  const diag = (step: string) => console.error(`[diag +${Date.now() - diagStart}ms] ${step}`);
+  let diagBase = "";
+  let diagUrl = "";
+  const watchdog = setInterval(() => { void diagDump("watchdog", projectsRoot, diagBase, diagUrl); }, 8_000);
+  diag(`mediaId=${mediaId}`);
   let signalEntered!: () => void;
   let releaseAnalysis!: () => void;
   const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
@@ -223,27 +249,34 @@ it("aguarda a análise de Mídia e o journal antes de fechar e apagar a Montagem
     env: { DECUPA_MEDIA_ROOT: mediaRoot },
     speech: {
       worker: async () => {
+        diag("worker: entrou");
         signalEntered();
         await blocked;
+        diag("worker: liberado");
         return { language: "pt", words: [], unaligned: [] };
       },
-      extract: async () => undefined,
-      detectSilence: async () => [],
+      extract: async (o: { input: string; output: string }) => { diag(`extract: chamado input=${o.input}`); },
+      detectSilence: async () => { diag("detectSilence: chamado"); return []; },
     },
   });
   try {
     const base = `http://127.0.0.1:${app.port}`;
+    diagBase = base;
     const created = await (await fetch(`${base}/project/new`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ nome: "Análise em andamento", fluxo: "montagem" }),
     })).json() as { id: string; url: string };
+    diagUrl = created.url;
+    diag(`projeto criado ${created.id}`);
     const empty = await (await fetch(`${base}${created.url}project`)).json() as { project: { revision: number } };
     const added = await fetch(`${base}${created.url}project/media`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ baseRevision: empty.project.revision, mediaId }),
     });
     expect(added.status).toBe(202);
+    diag("POST project/media 202; aguardando entered");
     await entered;
+    diag("entered ok");
 
     let closeFinished = false;
     const closing = app.close().then(() => { closeFinished = true; });
@@ -251,14 +284,19 @@ it("aguarda a análise de Mídia e o journal antes de fechar e apagar a Montagem
     const closeFinishedWhileBlocked = closeFinished;
 
     releaseAnalysis();
+    diag("análise liberada; aguardando metricsCloseEntered");
     await metricsCloseEntered;
+    diag("metricsCloseEntered ok");
     let closeFinishedWhileJournalBlocked = false;
     void closing.then(() => { closeFinishedWhileJournalBlocked = true; });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const journalStillBlocking = !closeFinishedWhileJournalBlocked;
     releaseMetricsClose();
+    diag("journal liberado; aguardando metricsCloseFinished");
     await metricsCloseFinished;
+    diag("metricsCloseFinished ok; aguardando closing");
     await closing;
+    diag("closing ok");
     // Só dê tempo para a gravação antiga terminar se as capturas já provaram
     // que close resolveu antes do worker ou do journal. No caminho correto,
     // a remoção acontece imediatamente após confirmar o flush abaixo.
@@ -275,6 +313,8 @@ it("aguarda a análise de Mídia e o journal antes de fechar e apagar a Montagem
     expect(closeFinishedWhileBlocked).toBe(false);
     expect(journalStillBlocking).toBe(true);
   } finally {
+    clearInterval(watchdog);
+    await diagDump("finally", projectsRoot, "", "").catch(() => undefined);
     releaseAnalysis();
     releaseMetricsClose();
     analysisMetricsClose.active = false;

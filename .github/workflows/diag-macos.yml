@@ -1,0 +1,63 @@
+name: diag-macos
+
+# Temporário: diagnóstico do timeout de project-new-http.test.ts no macOS.
+# Branch de diagnóstico; nunca mesclar.
+on:
+  push:
+    branches: ['diag/**']
+
+jobs:
+  diag:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ffmpeg
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: ambiente
+        shell: bash
+        run: |
+          node -p "require('os').tmpdir()"
+          echo "TMPDIR=$TMPDIR"
+          getconf NAME_MAX /tmp || true
+          getconf NAME_MAX "$TMPDIR" || true
+          sw_vers || true
+          df -h "$TMPDIR" /tmp || true
+          mount | head -5 || true
+
+      - name: A - TMPDIR padrão do runner
+        continue-on-error: true
+        shell: bash
+        run: pnpm exec vitest run apps/cli/src/app/project-new-http.test.ts -t "aguarda a análise" --testTimeout=25000 --reporter=verbose
+
+      - name: B - TMPDIR curto e canônico
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p /private/tmp/d
+          TMPDIR=/private/tmp/d pnpm exec vitest run apps/cli/src/app/project-new-http.test.ts -t "aguarda a análise" --testTimeout=25000 --reporter=verbose
+
+      - name: C - media-cache-metric repetido 10 vezes
+        continue-on-error: true
+        shell: bash
+        run: |
+          failed=0
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            pnpm exec vitest run apps/cli/src/app/assembly/media-cache-metric.additional.test.ts --reporter=dot >/tmp/m.log 2>&1 || { failed=$((failed+1)); grep -E "AssertionError" /tmp/m.log | head -2; }
+          done
+          echo "media-cache-metric: $failed falhas em 10 rodadas"
