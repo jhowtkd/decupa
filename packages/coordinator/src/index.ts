@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -126,6 +127,21 @@ function lockIsStale(content: string, mtimeMs: number, staleMs: number): boolean
   return !pidAlive(pid);
 }
 
+/**
+ * O nome do arquivo ainda recebe `.json` e o sufixo temporário de `publishAtomic`,
+ * e NAME_MAX é 255 bytes. Um caminho longo como id estouraria esse limite; `=`
+ * não sai de `encodeURIComponent`, então o resumo não coincide com um id curto.
+ */
+const MAX_ENCODED_TASK_ID = 200;
+
+function taskFileName(id: string): string {
+  const encoded = encodeURIComponent(id);
+  const name = encoded.length <= MAX_ENCODED_TASK_ID
+    ? encoded
+    : `sha256=${createHash("sha256").update(id).digest("hex")}`;
+  return `${name}.json`;
+}
+
 export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions = {}): FileCoordinator & Required<Pick<FileCoordinator, "queue" | "holders">> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 1) {
@@ -202,7 +218,7 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
     }
   };
 
-  const taskPath = (id: string): string => join(paths.tasks, `${encodeURIComponent(id)}.json`);
+  const taskPath = (id: string): string => join(paths.tasks, taskFileName(id));
 
   const readTask = async (id: string): Promise<TaskRecord | null> => {
     const inspection = await inspectArtifact(taskPath(id));
