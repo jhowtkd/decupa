@@ -220,10 +220,13 @@ export function createFileCoordinator(dir: string, opts: FileCoordinatorOptions 
 
   const taskPath = (id: string): string => join(paths.tasks, taskFileName(id));
 
+  // Tarefas gravadas antes do limite continuam no nome sem resumo; perdê-las refaria a transcrição.
   const readTask = async (id: string): Promise<TaskRecord | null> => {
-    const inspection = await inspectArtifact(taskPath(id));
-    if (inspection.status !== "ready") return null;
-    return inspection.value as TaskRecord;
+    for (const path of new Set([taskPath(id), join(paths.tasks, `${encodeURIComponent(id)}.json`)])) {
+      const inspection = await inspectArtifact(path);
+      if (inspection.status === "ready") return inspection.value as TaskRecord;
+    }
+    return null;
   };
 
   const writeTask = async (record: TaskRecord): Promise<void> => {

@@ -300,18 +300,27 @@ describe("createFileCoordinator", () => {
       return value;
     };
     const controller = new AbortController();
-    const first = coordinator.run({ id, stage: "speech", build: build("a") });
-    const second = coordinator.run({ id: other, stage: "speech", build: build("b") });
-    await waitUntil("dois builds", async () => builds.length === 2);
-    const follower = coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") });
-    const settled = Promise.allSettled([first, second, follower]);
+    const runs = [coordinator.run({ id, stage: "speech", build: build("a") }), coordinator.run({ id: other, stage: "speech", build: build("b") })];
+    const settled = async () => (await Promise.allSettled(runs)).map((result) => (result.status === "fulfilled" ? result.value : result.reason));
     try {
+      await waitUntil("dois builds", async () => builds.length === 2);
+      runs.push(coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") }));
       await waitUntil("seguidor observado", async () => builds.length > 2 || getEventListeners(controller.signal, "abort").length > 0);
     } finally {
       release();
     }
-    expect((await settled).map((result) => (result.status === "fulfilled" ? result.value : result.reason))).toEqual(["a", "b", "a"]);
+    expect(await settled()).toEqual(["a", "b", "a"]);
     expect(builds.sort()).toEqual(["a", "b"]);
+  });
+
+  it("id longo reaproveita a tarefa concluída gravada antes do limite de nome", async () => {
+    const root = dir();
+    const id = `/${"a".repeat(205)}.wav#1-2#small#pt`;
+    const coordinator = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const record = { id, stage: "speech", status: "completed", priority: "interactive", leaseId: null, leaseUntil: 0, result: "antigo" };
+    await mkdir(join(root, "tasks"), { recursive: true });
+    await writeFile(join(root, "tasks", `${encodeURIComponent(id)}.json`), `${JSON.stringify(record)}\n`);
+    await expect(coordinator.run({ id, stage: "speech", build: async () => "novo" })).resolves.toBe("antigo");
   });
 
   it("libera o slot quando a função lança", async () => {
