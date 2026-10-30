@@ -300,22 +300,23 @@ describe("createFileCoordinator", () => {
       return value;
     };
     const controller = new AbortController();
-    const runs = [coordinator.run({ id, stage: "speech", build: build("a") }), coordinator.run({ id: other, stage: "speech", build: build("b") })];
-    const settled = async () => (await Promise.allSettled(runs)).map((result) => (result.status === "fulfilled" ? result.value : result.reason));
+    const outcome = (run: Promise<string>): Promise<unknown> => run.catch((error: unknown) => error);
+    const runs = [outcome(coordinator.run({ id, stage: "speech", build: build("a") })), outcome(coordinator.run({ id: other, stage: "speech", build: build("b") }))];
     try {
       await waitUntil("dois builds", async () => builds.length === 2);
-      runs.push(coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") }));
+      runs.push(outcome(coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") })));
       await waitUntil("seguidor observado", async () => builds.length > 2 || getEventListeners(controller.signal, "abort").length > 0);
     } finally {
       release();
     }
-    expect(await settled()).toEqual(["a", "b", "a"]);
+    expect(await Promise.all(runs)).toEqual(["a", "b", "a"]);
     expect(builds.sort()).toEqual(["a", "b"]);
   });
 
   it("id longo reaproveita a tarefa concluída gravada antes do limite de nome", async () => {
     const root = dir();
-    const id = `/${"a".repeat(205)}.wav#1-2#small#pt`;
+    const id = `/${"a".repeat(190)}.wav#1-2#small#pt`;
+    expect(encodeURIComponent(id).length).toBe(216);
     const coordinator = createFileCoordinator(root, { limit: 1, pollMs: 5 });
     const record = { id, stage: "speech", status: "completed", priority: "interactive", leaseId: null, leaseUntil: 0, result: "antigo" };
     await mkdir(join(root, "tasks"), { recursive: true });
