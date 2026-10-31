@@ -114,9 +114,12 @@ it("reports a concurrent proxy follower as hit-or-shared while building the prox
   const settled = Promise.all([first, follower]);
   try {
     // O primeiro check do seguidor corre fora do single-flight: liberar antes faria o outcome depender do rename.
-    await vi.waitFor(() => { expect(getEventListeners(followerSignal, "abort").length).toBeGreaterThan(0); }, { timeout: 30_000, interval: 5 });
+    await vi.waitFor(() => {
+      expect(getEventListeners(followerSignal, "abort").length, "seguidor não entrou no single-flight do proxy").toBeGreaterThan(0);
+    }, { timeout: 30_000, interval: 5 });
   } finally {
     releaseBuild.resolve();
+    await settled.catch(() => undefined);
   }
   const results = await settled;
 
