@@ -281,6 +281,49 @@ describe("createFileCoordinator", () => {
     expect(ran).toBe(false);
   });
 
+  it("id que passaria do limite de nome de arquivo roda e mantém o single-flight", async () => {
+    const root = dir();
+    const coordinator = createFileCoordinator(root, { limit: 2, pollMs: 5 });
+    const prefix = `/${"pasta com acentuação/".repeat(20)}`;
+    const id = `${prefix}a.wav#1-2#small#pt`;
+    const other = `${prefix}b.wav#1-2#small#pt`;
+    const finished = `${prefix}c.wav#1-2#small#pt`;
+    await expect(coordinator.run({ id: finished, stage: "speech", build: async () => "primeira" })).resolves.toBe("primeira");
+    await expect(coordinator.run({ id: finished, stage: "speech", build: async () => "repetida" })).resolves.toBe("primeira");
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const builds: string[] = [];
+    const build = (value: string) => async () => {
+      builds.push(value);
+      await held;
+      return value;
+    };
+    const controller = new AbortController();
+    const outcome = (run: Promise<string>): Promise<unknown> => run.catch((error: unknown) => error);
+    const runs = [outcome(coordinator.run({ id, stage: "speech", build: build("a") })), outcome(coordinator.run({ id: other, stage: "speech", build: build("b") }))];
+    try {
+      await waitUntil("dois builds", async () => builds.length === 2);
+      runs.push(outcome(coordinator.run({ id, stage: "speech", signal: controller.signal, build: build("repetido") })));
+      await waitUntil("seguidor observado", async () => builds.length > 2 || getEventListeners(controller.signal, "abort").length > 0);
+    } finally {
+      release();
+    }
+    expect(await Promise.all(runs)).toEqual(["a", "b", "a"]);
+    expect(builds.sort()).toEqual(["a", "b"]);
+  });
+
+  it("id longo reaproveita a tarefa concluída gravada antes do limite de nome", async () => {
+    const root = dir();
+    const id = `/${"a".repeat(190)}.wav#1-2#small#pt`;
+    expect(encodeURIComponent(id).length).toBe(216);
+    const coordinator = createFileCoordinator(root, { limit: 1, pollMs: 5 });
+    const record = { id, stage: "speech", status: "completed", priority: "interactive", leaseId: null, leaseUntil: 0, result: "antigo" };
+    await mkdir(join(root, "tasks"), { recursive: true });
+    await writeFile(join(root, "tasks", `${encodeURIComponent(id)}.json`), `${JSON.stringify(record)}\n`);
+    await expect(coordinator.run({ id, stage: "speech", build: async () => "novo" })).resolves.toBe("antigo");
+  });
+
   it("libera o slot quando a função lança", async () => {
     const root = dir();
     await mkdir(root, { recursive: true });
