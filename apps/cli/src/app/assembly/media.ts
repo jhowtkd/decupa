@@ -139,6 +139,7 @@ async function buildProxyWith(
     throw new ProxyError(`proxy inválido para a fonte ${source.id}: stream ou duração incompatível`);
   }
   await rename(tmp, proxyPath(dir, source.sha256));
+  (globalThis as any).__mediaTrace?.({ event: "proxy-published" });
   return proxyPath(dir, source.sha256);
 }
 
@@ -218,7 +219,12 @@ export async function ensurePlayback(
     await verifySourceIdentity(source);
     opts.signal?.throwIfAborted();
     // Cache validado responde mesmo enquanto um render ocupa mediaWork.
+    const diag = globalThis as any;
+    const call = diag.__mediaCall = (diag.__mediaCall ?? 0) + 1;
+    await diag.__mediaGate?.(call);
+    diag.__mediaTrace?.({ call, event: "first-check-start" });
     firstCheckHit = await proxyIsValid(proxy, source);
+    diag.__mediaTrace?.({ call, event: "first-check-end", hit: firstCheckHit });
     if (firstCheckHit) videoPath = proxy;
     else {
       // Detect outside the non-reentrant media slot, as before.

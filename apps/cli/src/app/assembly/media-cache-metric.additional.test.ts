@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { copyFile, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,7 +83,23 @@ it("reports proxy failures as errors and preserves the original rejection", asyn
   expect(events[0]!.durationMs).toBeGreaterThanOrEqual(0);
 });
 
-it("reports a concurrent proxy follower as hit-or-shared while building the proxy once", async () => {
+it("reports a concurrent proxy follower as hit-or-shared while building the proxy once", { repeats: 150 }, async () => {
+  // Diagnóstico: DIAG_MODE=natural mantém a ordem do teste; late atrasa o primeiro
+  // check do seguidor até o proxy sair; early só libera o build depois desse check.
+  const mode = process.env.DIAG_MODE ?? "natural";
+  const trace: Array<Record<string, unknown>> = [];
+  const t0 = performance.now();
+  const published = deferred<void>();
+  const followerChecked = deferred<void>();
+  const diag = globalThis as any;
+  diag.__mediaCall = 0;
+  diag.__mediaTrace = (entry: Record<string, unknown>) => {
+    trace.push({ ms: Number((performance.now() - t0).toFixed(1)), ...entry });
+    if (entry.event === "proxy-published") published.resolve();
+    if (entry.call === 2 && entry.event === "first-check-end") followerChecked.resolve();
+  };
+  diag.__mediaGate = async (call: number) => { if (mode === "late" && call === 2) await published.promise; };
+
   const dir = await mkdtemp(join(tmpdir(), "proxy-cache-single-flight-metric-"));
   dirs.push(dir);
   const sourcePath = join(dir, "clip.mp4");
@@ -109,9 +126,12 @@ it("reports a concurrent proxy follower as hit-or-shared while building the prox
   const first = ensurePlayback(source, dir, exec, options);
   await buildStarted.promise;
   const follower = ensurePlayback(source, dir, exec, options);
+  if (mode === "early") await followerChecked.promise;
+  diag.__mediaTrace({ event: "release-build" });
   releaseBuild.resolve();
   const results = await Promise.all([first, follower]);
 
+  if (process.env.DIAG_TRACE) appendFileSync(process.env.DIAG_TRACE, `${JSON.stringify({ mode, outcomes: events.map(event => event.outcome), builds: proxyBuilds, same: JSON.stringify(results[0]) === JSON.stringify(results[1]), trace })}\n`);
   expect(results[1]).toEqual(results[0]);
   expect(proxyBuilds).toBe(1);
   expect(events.map(event => event.outcome).sort()).toEqual(["built", "hit-or-shared"]);

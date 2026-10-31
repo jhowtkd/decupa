@@ -1,0 +1,37 @@
+name: diag-media-cache
+on:
+  push:
+    branches: ['diag/media-cache-metric']
+jobs:
+  causa:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Instalar ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Provar a ordem que decide o resultado
+        run: bash .github/diag/causa.sh
