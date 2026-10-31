@@ -1,7 +1,8 @@
+import { getEventListeners } from "node:events";
 import { copyFile, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { hashFile, probe } from "@decupa/media";
 import { FIXTURES } from "../../../../../tests/fixtures/global-setup.ts";
 import { type ExecCall, type Executor } from "../pipeline.ts";
@@ -108,9 +109,16 @@ it("reports a concurrent proxy follower as hit-or-shared while building the prox
 
   const first = ensurePlayback(source, dir, exec, options);
   await buildStarted.promise;
-  const follower = ensurePlayback(source, dir, exec, options);
-  releaseBuild.resolve();
-  const results = await Promise.all([first, follower]);
+  const followerSignal = new AbortController().signal;
+  const follower = ensurePlayback(source, dir, exec, { ...options, signal: followerSignal });
+  const settled = Promise.all([first, follower]);
+  try {
+    // O primeiro check do seguidor corre fora do single-flight: liberar antes faria o outcome depender do rename.
+    await vi.waitFor(() => { expect(getEventListeners(followerSignal, "abort").length).toBeGreaterThan(0); }, { timeout: 30_000, interval: 5 });
+  } finally {
+    releaseBuild.resolve();
+  }
+  const results = await settled;
 
   expect(results[1]).toEqual(results[0]);
   expect(proxyBuilds).toBe(1);
