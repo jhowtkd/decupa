@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
-        ref: ['8f3125d1633e86585d82bd2847af01382e759145', '66a8ccee906b18883f89e29a74b55555087b84e2']
+        ref: ['8f3125d1633e86585d82bd2847af01382e759145', 'f5b907ebcc0c47d1c4e425d73688f016cdd6f9dc']
     name: ab ${{ matrix.os }} ${{ matrix.ref }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45

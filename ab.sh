@@ -8,7 +8,7 @@ rodar() {
   rotulo=$1; out=/tmp/ab-$rotulo.jsonl; : > "$out"
   failed=0
   for i in 1 2 3 4 5 6 7 8; do
-    AB_TRACE=$out pnpm exec vitest run "$T" -t "concurrent proxy follower" --reporter=dot >/tmp/m.log 2>&1 || { failed=$((failed+1)); grep -E "AssertionError|Error:" /tmp/m.log | sort | uniq -c | head -3; }
+    NO_COLOR=1 AB_TRACE=$out pnpm exec vitest run --exclude "_diag/**" "$T" -t "concurrent proxy follower" --reporter=dot >/tmp/m.log 2>&1 || { failed=$((failed+1)); grep -E "AssertionError|Error:" /tmp/m.log | sort | uniq -c | head -3; }
   done
   echo "=== $rotulo: $failed de 8 lotes com falha; yes vivos=$(pgrep -x yes | wc -l | tr -d ' '); $(uptime)"
   pkill -x yes || true
