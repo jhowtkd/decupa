@@ -1,0 +1,50 @@
+name: diag-media-ab
+on:
+  push:
+    branches: ['diag/media-cache-ab']
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        ref: ['8f3125d1633e86585d82bd2847af01382e759145', '66a8ccee906b18883f89e29a74b55555087b84e2']
+    name: ab ${{ matrix.os }} ${{ matrix.ref }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      ZAI_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      MINIMAX_API_KEY: ""
+      DECUPA_API_KEY: ""
+      TYPESAFE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/checkout@v4
+        with:
+          ref: diag/media-cache-ab
+          path: _diag
+      - name: Instalar ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Instalar ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Medir falhas por execução
+        run: |
+          git rev-parse HEAD
+          perl -pi _diag/patch.pl apps/cli/src/app/assembly/media-cache-metric.additional.test.ts
+          git diff --stat
+          test "$(git diff | grep -c '^+')" = 4
+          bash _diag/ab.sh
